@@ -1,0 +1,24 @@
+id: 09-idempotent-retry
+title: Bearer mode, dropped refresh response; the retry resolves to the same rotation
+issues: [8, 14, 15]
+applies_to: [android, ios, flutter]
+mode: bearer
+fault_injection: [drop-response, network-partition]
+preconditions:
+  - The session is Authenticated in bearer mode, so refresh tokens rotate.
+steps:
+  - actor: harness
+    action: Allow the next refresh to reach the server but drop the response.
+  - actor: sdk
+    action: Refresh; observe no response.
+  - actor: sdk
+    action: Retry with the same Idempotency-Key.
+  - actor: auth
+    action: Resolve the retry to the rotation already performed.
+    expect: 200 carrying the same successor token as the dropped response.
+assertions:
+  - Both requests carry an identical Idempotency-Key.
+  - The server records one rotation, not two.
+  - No replay is detected and the token family is not revoked.
+  - The session remains Authenticated throughout.
+  - The successor token the SDK persists is the one the server considers live.

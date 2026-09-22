@@ -1,0 +1,25 @@
+id: 14-step-up
+title: Edge demands a stronger authentication context; the original call resumes
+issues: [9, 14, 15]
+applies_to: [android, ios, flutter]
+mode: any
+preconditions:
+  - The session is Authenticated with an access token whose acr does not satisfy the endpoint's requirement.
+steps:
+  - actor: app
+    action: Call the endpoint requiring step-up.
+  - actor: edge
+    action: Answer 401 with WWW-Authenticate Bearer error="insufficient_user_authentication", acr_values and max_age.
+  - actor: sdk
+    action: Surface StepUp carrying those parameters.
+  - actor: app
+    action: Call stepUp with the challenge.
+  - actor: sdk
+    action: Re-authorize with acr_values and max_age, exchange the code, resume the original call.
+    expect: 200 OK.
+assertions:
+  - No token refresh is attempted in response to the challenge.
+  - The error is parsed on its error value, not on the Bearer scheme, and the SDK is DPoP-bound throughout.
+  - acr_values and max_age reach the authorization request unmodified.
+  - The resumed call carries the new access token and a proof with the matching ath.
+  - A deployment that answers the step-up authorization with unmet_authentication_requirements yields Configuration, not a retry loop.

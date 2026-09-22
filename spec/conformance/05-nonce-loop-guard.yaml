@@ -1,0 +1,23 @@
+id: 05-nonce-loop-guard
+title: A server that always demands a nonce produces a terminating error
+issues: [6, 12, 15]
+applies_to: [android, ios, flutter]
+mode: dpop
+fault_injection: [always-demand-dpop-nonce]
+preconditions:
+  - The harness answers every request on the target origin with use_dpop_nonce, including retries that carry a nonce.
+steps:
+  - actor: app
+    action: Trigger a request against the affected origin.
+  - actor: sdk
+    action: Retry once with the supplied nonce.
+  - actor: harness
+    action: Answer use_dpop_nonce again.
+assertions:
+  - The SDK makes at most two requests for the operation.
+  - It surfaces Recoverable with cause NonceLoop.
+  - No third request is emitted within thirty seconds of the second response.
+  - The failure is bounded whether the origin is auth or edge.
+notes: >
+  This scenario exists because the failure mode it guards against is unbounded network traffic
+  from a shipped app. It must fail the build if regressed, not merely report.

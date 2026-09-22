@@ -1,0 +1,24 @@
+id: 18-logout
+title: RP-initiated logout clears local state and the server session
+issues: [10, 14, 15]
+applies_to: [android, ios, flutter]
+mode: any
+preconditions:
+  - The session is Authenticated and an id_token is held.
+steps:
+  - actor: app
+    action: Call logout.
+  - actor: sdk
+    action: POST the refresh token to the revocation endpoint.
+  - actor: sdk
+    action: Open auth's logout endpoint with id_token_hint and post_logout_redirect_uri.
+  - actor: auth
+    action: End the session and redirect back.
+  - actor: sdk
+    action: Wipe local state.
+assertions:
+  - The refresh token is rejected as invalid_grant if replayed after logout.
+  - A subsequent login prompts for authentication rather than silently reusing the server session.
+  - Refresh token, pending slot, pending authorization request and both nonce caches are gone from storage.
+  - The DPoP key is destroyed; the next login produces a proof with a different jkt.
+  - Dismissing the browser mid-logout still leaves the app Unauthenticated locally.

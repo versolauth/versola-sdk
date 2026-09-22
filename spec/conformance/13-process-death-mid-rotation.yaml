@@ -1,0 +1,25 @@
+id: 13-process-death-mid-rotation
+title: Killed after the server rotated but before the new token was persisted
+issues: [8, 14, 15]
+applies_to: [android, ios, flutter]
+mode: bearer
+fault_injection: [process-death, drop-response]
+preconditions:
+  - The session is Authenticated in bearer mode.
+steps:
+  - actor: sdk
+    action: Send a refresh; the server rotates.
+  - actor: os
+    action: Kill the process before the response is persisted.
+  - actor: app
+    action: Relaunch.
+  - actor: sdk
+    action: Find a populated pending slot and replay with the same Idempotency-Key.
+  - actor: auth
+    action: Resolve to the rotation already performed.
+assertions:
+  - The recovery request reuses the Idempotency-Key persisted before the kill.
+  - The server performs no second rotation.
+  - The SDK converges on the generation the server considers live.
+  - The session is Authenticated after relaunch without user interaction.
+  - The pending slot is empty once recovery completes.

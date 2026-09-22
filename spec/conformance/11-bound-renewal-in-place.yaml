@@ -1,0 +1,17 @@
+id: 11-bound-renewal-in-place
+title: DPoP mode renews the refresh token in place
+issues: [8, 14, 15]
+applies_to: [android, ios, flutter]
+mode: dpop
+preconditions:
+  - The session is Authenticated with a sender-constrained refresh token.
+steps:
+  - actor: sdk
+    action: Refresh.
+  - actor: auth
+    action: Renew the bound token in place and return the value the client already holds.
+assertions:
+  - The stored refresh token value is byte-identical before and after the refresh.
+  - The pending slot is written and cleared but never carries a differing successor.
+  - Repeating the refresh ten times produces no rotation and no replay detection.
+  - A concurrent burst under DPoP therefore cannot revoke the family, which is the reason DPoP is the default.

@@ -1,0 +1,26 @@
+id: 04-edge-nonce-isolation
+title: Edge's nonce is cached per origin and never sent to auth
+issues: [6, 9, 12, 15]
+applies_to: [android, ios, flutter]
+mode: dpop
+fault_injection: [force-dpop-nonce]
+preconditions:
+  - The session is Authenticated.
+  - The SDK holds a cached nonce for the auth origin from an earlier token request.
+steps:
+  - actor: harness
+    action: Configure edge to demand a nonce on the next proxied call.
+  - actor: app
+    action: Issue a call to an edge resource.
+  - actor: edge
+    action: Answer 401 with WWW-Authenticate DPoP error="use_dpop_nonce" and a DPoP-Nonce header.
+  - actor: sdk
+    action: Retry once with a proof carrying edge's nonce.
+    expect: 200 OK.
+  - actor: harness
+    action: Force a token refresh.
+assertions:
+  - The retried edge request's proof carries edge's nonce, not auth's.
+  - The subsequent token request's proof carries auth's cached nonce, unchanged by the edge exchange.
+  - The nonce cache is keyed by scheme and host, so id.versola.kz and versola.kz hold independent entries.
+  - No token request is triggered by the edge 401, because a nonce challenge is not an expiry.

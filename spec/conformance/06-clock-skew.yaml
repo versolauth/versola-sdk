@@ -1,0 +1,22 @@
+id: 06-clock-skew
+title: Device clock offset by five minutes; proofs are still accepted
+issues: [6, 12, 15]
+applies_to: [android, ios, flutter]
+mode: dpop
+fault_injection: [clock-skew]
+preconditions:
+  - The device clock is offset from the server by plus five minutes in one run and minus five in another.
+  - The server enforces a bounded iat leeway smaller than the offset.
+steps:
+  - actor: harness
+    action: Set the device clock offset.
+  - actor: sdk
+    action: Make any request, observe the response's Date header, and learn the offset.
+  - actor: sdk
+    action: Mint the next proof with iat corrected by the learned offset.
+    expect: Accepted.
+assertions:
+  - The proof's iat is within the server's leeway of server time, in both offset directions.
+  - The learned offset is held in memory only and is re-learned after process death.
+  - No proof is minted with a raw device timestamp once an offset has been learned.
+  - A first request rejected for iat is retried once with the corrected offset before any error surfaces.

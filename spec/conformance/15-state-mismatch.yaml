@@ -1,0 +1,18 @@
+id: 15-state-mismatch
+title: state mismatch on redirect is a hard failure with no token request
+issues: [5, 11, 15]
+applies_to: [android, ios, flutter]
+mode: any
+preconditions:
+  - An authorization request is outstanding with a known persisted state.
+steps:
+  - actor: harness
+    action: Deliver a redirect carrying a valid-looking code and a state the SDK never issued.
+  - actor: sdk
+    action: Compare against the persisted state.
+assertions:
+  - No request reaches the token endpoint.
+  - Configuration surfaces, distinguishable from a network failure.
+  - The comparison is constant-time.
+  - The pending request is discarded, leaving Unauthenticated.
+  - A redirect carrying the correct state is still honoured afterwards only if the pending request was not consumed.

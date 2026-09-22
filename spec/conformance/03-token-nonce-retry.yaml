@@ -1,0 +1,24 @@
+id: 03-token-nonce-retry
+title: Token endpoint demands a DPoP nonce; the SDK retries once and succeeds
+issues: [6, 12, 15]
+applies_to: [android, ios, flutter]
+mode: dpop
+fault_injection: [force-dpop-nonce]
+preconditions:
+  - The SDK holds no cached nonce for the auth origin.
+steps:
+  - actor: harness
+    action: Configure auth to demand a nonce on the next token request.
+  - actor: sdk
+    action: POST to the token endpoint with a proof carrying no nonce claim.
+  - actor: auth
+    action: Answer 400 with error=use_dpop_nonce and a DPoP-Nonce response header.
+  - actor: sdk
+    action: Retry the same request with a fresh proof carrying that nonce.
+    expect: 200 OK.
+assertions:
+  - Exactly two token requests are made.
+  - The second proof's nonce claim equals the DPoP-Nonce header value from the first response.
+  - The second proof has a different jti from the first.
+  - The retry is invisible to the caller; no error surfaces.
+  - The nonce is cached under the auth origin and reused on the next request to that origin without another challenge.

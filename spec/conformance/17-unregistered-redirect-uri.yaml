@@ -1,0 +1,22 @@
+id: 17-unregistered-redirect-uri
+title: Unregistered redirect URI reports Configuration, not a network error
+issues: [5, 11, 15]
+applies_to: [android, ios, flutter]
+mode: any
+preconditions:
+  - The SDK is configured with a redirect URI the client is not registered for.
+steps:
+  - actor: app
+    action: Call login.
+  - actor: sdk
+    action: Open the authorization endpoint.
+  - actor: auth
+    action: Answer directly rather than redirecting, because an unregistered redirect URI is not a safe place to send a response.
+assertions:
+  - The SDK surfaces Configuration with a detail naming the redirect URI.
+  - It is not reported as a network failure, a timeout, or a user cancel.
+  - No token request is made.
+  - The same treatment applies to an unknown client id.
+notes: >
+  The single most common first-run integration mistake. Reporting it as a connection problem
+  costs the integrator an afternoon, which is why it has its own scenario.

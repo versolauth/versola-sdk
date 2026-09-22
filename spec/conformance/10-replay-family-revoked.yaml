@@ -1,0 +1,23 @@
+id: 10-replay-family-revoked
+title: Bearer mode, genuine replay of a retired token surfaces Reauthenticate
+issues: [8, 14, 15]
+applies_to: [android, ios, flutter]
+mode: bearer
+preconditions:
+  - The session is Authenticated in bearer mode.
+  - A refresh has completed, retiring generation N in favour of N+1.
+steps:
+  - actor: harness
+    action: Present the retired generation N token with a fresh Idempotency-Key, simulating a stolen copy.
+  - actor: auth
+    action: Detect the replay and revoke the family.
+  - actor: sdk
+    action: Attempt its next refresh with generation N+1.
+  - actor: auth
+    action: Answer 400 with error=invalid_grant.
+assertions:
+  - The SDK surfaces Reauthenticate, not Recoverable.
+  - No further token request is made after invalid_grant.
+  - Local credential state is wiped — refresh token, pending slot and both nonce caches.
+  - The observed session state reaches Unauthenticated rather than remaining in Refreshing.
+  - The SDK does not open the browser on its own.

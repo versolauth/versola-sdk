@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://versola.kz/schemas/mobile-sdk/conformance-scenario.json",
+  "title": "Versola mobile SDK conformance scenario",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "title", "issues", "applies_to", "mode", "preconditions", "steps", "assertions"],
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[0-9]{2}-[a-z0-9-]+$",
+      "description": "Matches the file name without its extension."
+    },
+    "title": { "type": "string", "minLength": 1 },
+    "issues": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "integer", "minimum": 1 },
+      "description": "Issues this scenario is acceptance criteria for."
+    },
+    "applies_to": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "enum": ["android", "ios", "flutter", "react-native"] }
+    },
+    "mode": {
+      "enum": ["dpop", "bearer", "any"],
+      "description": "Token binding the scenario runs under. 'any' means it must pass in both."
+    },
+    "fault_injection": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "drop-response",
+          "force-dpop-nonce",
+          "always-demand-dpop-nonce",
+          "clock-skew",
+          "process-death",
+          "omit-discovery-field",
+          "network-partition"
+        ]
+      },
+      "description": "Harness capabilities the scenario requires. See conformance/README.md."
+    },
+    "preconditions": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "steps": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["actor", "action"],
+        "properties": {
+          "actor": { "enum": ["app", "sdk", "auth", "edge", "harness", "user", "os"] },
+          "action": { "type": "string", "minLength": 1 },
+          "expect": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "assertions": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Observable, machine-checkable outcomes. Not prose about intent."
+    },
+    "notes": { "type": "string" }
+  }
+}
