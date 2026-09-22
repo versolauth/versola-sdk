@@ -1,0 +1,23 @@
+# Android / Gradle
+.gradle/
+build/
+local.properties
+*.iml
+
+# Xcode / SwiftPM
+.build/
+.swiftpm/
+DerivedData/
+*.xcuserstate
+
+# Flutter / Dart
+.dart_tool/
+.packages
+pubspec.lock
+
+# Node
+node_modules/
+
+# Editors, OS
+.idea/
+.DS_Store
