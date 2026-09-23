@@ -9,6 +9,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -366,6 +367,37 @@ class AuthorizationFlowTest {
         assertTrue(error.detail is VersolaError.Configuration.Detail.HardwareBindingUnavailable)
         assertNull(browser.launchedUri)
         assertNull(store.stored)
+    }
+
+    @Test
+    fun `a key-bound session wired without a key is refused at construction`() = runTest {
+        // Otherwise it authorizes with no dpop_jkt and skips the requireHardware check along
+        // with it: an app that asked to be bound to hardware gets an unbound code and is
+        // never told. The wiring is wrong, so it fails where the wiring happens.
+        val store = RecordingStore()
+        val browser = FakeBrowser(redirectFor(store), store)
+
+        val error = assertThrows(VersolaError.Configuration::class.java) {
+            flow(store, browser, tokenBinding = TokenBinding.Dpop(requireHardware = true), dpopKey = null)
+        }
+
+        assertTrue(error.detail is VersolaError.Configuration.Detail.InvalidConfiguration)
+    }
+
+    @Test
+    fun `a flow given no key is a Bearer flow rather than a broken DPoP one`() = runTest {
+        val store = RecordingStore()
+        val browser = FakeBrowser(redirectFor(store), store)
+        val flow = AuthorizationFlow(
+            configuration = configuration,
+            discovery = DiscoveryService(ISSUER, StaticDiscovery(metadata), MemoryMetadataCache()),
+            pendingStore = store,
+            browser = browser,
+        )
+
+        flow.authorize(setOf("openid"))
+
+        assertFalse(browser.launchedUri!!.contains("dpop_jkt"))
     }
 
     @Test

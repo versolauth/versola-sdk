@@ -23,16 +23,35 @@ public class AuthorizationFlow(
     private val discovery: DiscoveryService,
     private val pendingStore: PendingAuthorizationStore,
     private val browser: BrowserAuthorizationSession,
-    private val tokenBinding: TokenBinding = TokenBinding.Dpop(),
     /**
-     * The key `dpop_jkt` commits to, or null for a session that is not key-bound. The wiring
-     * layer supplies one exactly when [tokenBinding] is [TokenBinding.Dpop]; a key handed in
-     * alongside [TokenBinding.Bearer] is ignored rather than quietly overriding the
+     * The key `dpop_jkt` commits to, or null for a session that is not key-bound. A key
+     * handed in alongside [TokenBinding.Bearer] is ignored rather than quietly overriding the
      * integrator's choice.
      */
     private val dpopKey: DpopKeyBinding? = null,
+    /**
+     * Declared after [dpopKey] so the default cannot be the one pairing this class rejects.
+     * The policy default — DPoP unless the integrator refuses it — belongs to `configure()`;
+     * what this class defaults to is whatever the key it was handed can actually deliver.
+     */
+    private val tokenBinding: TokenBinding =
+        if (dpopKey == null) TokenBinding.Bearer else TokenBinding.Dpop(),
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
+
+    init {
+        // A key-bound session without a key would send no `dpop_jkt` and skip the
+        // `requireHardware` check with it, so an app that asked to be bound to hardware would
+        // authorize unbound and never be told. Wiring, not deployment: it fails here rather
+        // than at the first authorization.
+        if (tokenBinding is TokenBinding.Dpop && dpopKey == null) {
+            throw VersolaError.Configuration(
+                VersolaError.Configuration.Detail.InvalidConfiguration(
+                    "TokenBinding.Dpop needs a DpopKeyBinding; pass one or select TokenBinding.Bearer",
+                ),
+            )
+        }
+    }
 
     private val state = MutableStateFlow<SessionState>(SessionState.Unauthenticated)
     private val restoreLock = Mutex()
@@ -180,7 +199,8 @@ public class AuthorizationFlow(
             }
             return null
         }
-        return dpopKey?.jkt()
+        // Non-null under `Dpop` by construction; see `init`.
+        return checkNotNull(dpopKey).jkt()
     }
 
     private suspend fun ensureRestored() {

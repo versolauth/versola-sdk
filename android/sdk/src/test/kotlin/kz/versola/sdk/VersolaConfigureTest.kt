@@ -42,7 +42,7 @@ class VersolaConfigureTest {
         redirectUri: String = "https://app.example.com/oauth",
         tokenBinding: TokenBinding = TokenBinding.Dpop(),
         logger: VersolaLogger = CollectingLogger(),
-    ) = Versola.configure(application, issuer, clientId, redirectUri, tokenBinding, logger)
+    ) = Versola.configure(application, issuer, clientId, redirectUri, logger, tokenBinding = tokenBinding)
 
     @Test
     fun `configure keeps the validated configuration`() {

@@ -81,9 +81,11 @@ public class Versola internal constructor(
             issuer: String,
             clientId: String,
             redirectUri: String,
-            tokenBinding: TokenBinding = TokenBinding.Dpop(),
             logger: VersolaLogger = AndroidLogger(),
             httpClient: OkHttpClient = defaultHttpClient(),
+            // Appended rather than inserted: every parameter before this one keeps the
+            // position it had in #5, so a call written against that signature still compiles.
+            tokenBinding: TokenBinding = TokenBinding.Dpop(),
         ): Versola {
             val configuration = VersolaConfiguration.create(issuer, clientId, redirectUri)
             configuration.redirectUriWarning?.let(logger::warn)
