@@ -30,9 +30,12 @@ jobs:
       # in the current scheme is empty" - a device destination doesn't resolve cleanly
       # against the auto-generated Package scheme without an explicit per-target
       # platform. A concrete simulator destination (which also needs no code signing)
-      # works for both steps.
+      # works for both steps instead. The device name is whatever the runner image's
+      # Xcode ships as a default simulator and drifts on Xcode upgrades (this one
+      # replaced "iPhone 16" - no longer present - with "iPhone 17"); expect to bump
+      # it again when it next disappears.
       - name: Build
-        run: xcodebuild build -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 16"
+        run: xcodebuild build -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 17"
 
       - name: Unit tests
-        run: xcodebuild test -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 16"
+        run: xcodebuild test -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 17"
