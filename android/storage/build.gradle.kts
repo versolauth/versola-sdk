@@ -38,6 +38,12 @@ dependencies {
     // in #5: #7 rules EncryptedSharedPreferences out (deprecated at 1.1.0, no further
     // releases, main-thread violations and keyset corruption on some OEMs). The Keystore
     // AES-256-GCM key below is managed directly, with no Tink keyset to corrupt.
+    //
+    // DataStore is what #7 names in its place, and it is what the credential file needs that
+    // the pending slot did not: several fields, written from several places, on one
+    // consistent view. implementation, not api — no DataStore type is on this module's ABI,
+    // so a consumer never has to know it is there.
+    implementation("androidx.datastore:datastore:1.2.1")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")

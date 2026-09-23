@@ -2,7 +2,6 @@ package kz.versola.sdk.storage
 
 import java.io.File
 import kotlinx.coroutines.test.runTest
-import kz.versola.sdk.core.CredentialKeyProvider
 import kz.versola.sdk.core.PendingAuthorizationCodec
 import kz.versola.sdk.core.PendingAuthorizationRequest
 import org.junit.Assert.assertArrayEquals
@@ -14,22 +13,6 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
-
-/**
- * Stands in for the Keystore-backed provider, which needs a device. Reversible and obviously
- * not encryption — its only job is to prove the store never touches the plaintext it was
- * given, and that whatever the provider returns is what reaches the disk.
- */
-private class ReversingKeyProvider : CredentialKeyProvider {
-    var unwrapFailure: Throwable? = null
-
-    override suspend fun wrap(plaintext: ByteArray): ByteArray = plaintext.reversedArray()
-
-    override suspend fun unwrap(blob: ByteArray): ByteArray {
-        unwrapFailure?.let { throw it }
-        return blob.reversedArray()
-    }
-}
 
 class FilePendingAuthorizationStoreTest {
 
