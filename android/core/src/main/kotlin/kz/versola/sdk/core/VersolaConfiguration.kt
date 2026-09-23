@@ -45,6 +45,10 @@ public class RedirectUri internal constructor(
             val scheme = uri.scheme.lowercase()
             val host = uri.host?.lowercase()
             val kind = when {
+                // An opaque https value such as "https:callback" has no host and is not
+                // something Android can route as an HTTPS App Link redirect.
+                scheme == "https" && host.isNullOrEmpty() ->
+                    throw invalid("redirectUri must have a host: $raw")
                 scheme == "https" -> RedirectUriKind.AppLink
                 scheme == "http" && (host == "127.0.0.1" || host == "localhost" || host == "[::1]") ->
                     RedirectUriKind.Loopback
@@ -99,6 +103,12 @@ public class VersolaConfiguration internal constructor(
             }
             if (parsedIssuer.scheme?.lowercase() != "https") {
                 throw invalid("issuer must be https: $issuer")
+            }
+            if (parsedIssuer.host.isNullOrEmpty()) {
+                // An opaque value such as "https:issuer" passes the scheme check above but has
+                // no host to append the well-known path to; catch it here rather than letting
+                // discovery fail later outside the Configuration error contract.
+                throw invalid("issuer must have a host: $issuer")
             }
             if (!parsedIssuer.query.isNullOrEmpty() || !parsedIssuer.fragment.isNullOrEmpty()) {
                 // RFC 8414 §2: the issuer identifier carries no query or fragment, because the

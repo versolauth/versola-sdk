@@ -1,6 +1,7 @@
 package kz.versola.sdk.core
 
 import java.net.URI
+import java.net.URISyntaxException
 import java.net.URLDecoder
 
 /**
@@ -110,7 +111,19 @@ public object AuthorizationResponseValidator {
      * for the same reason (`AuthorizeRequestParser.getParam`), and last-wins is how a
      * smuggled parameter gets read.
      */
-    private fun parseQuery(redirect: String): Map<String, String> {
+    private fun parseQuery(redirect: String): Map<String, String> = try {
+        parseQueryOrThrowRaw(redirect)
+    } catch (e: URISyntaxException) {
+        // The redirect activity hands over whatever URI string the OS delivered; a
+        // malformed one is untrusted external input, not a place to let a raw exception
+        // escape past the `VersolaError` contract `complete()` cleans up after.
+        throw VersolaError.Configuration(VersolaError.Configuration.Detail.MalformedAuthorizationResponse, e)
+    } catch (e: IllegalArgumentException) {
+        // Thrown by `URLDecoder.decode` on an invalid percent-escape (e.g. a bare "%").
+        throw VersolaError.Configuration(VersolaError.Configuration.Detail.MalformedAuthorizationResponse, e)
+    }
+
+    private fun parseQueryOrThrowRaw(redirect: String): Map<String, String> {
         val query = URI(redirect).rawQuery ?: return emptyMap()
         val parameters = mutableMapOf<String, String>()
         for (pair in query.split('&')) {

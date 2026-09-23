@@ -183,6 +183,23 @@ class DiscoveryTest {
     }
 
     @Test
+    fun `a cached document differing only by a trailing slash is still a cache hit`() = runTest {
+        // `ProviderMetadata.validate` already accepts this on the way in (`<issuer>/` passes
+        // fetch validation); the cache-hit comparison must accept it the same way, or every
+        // metadata document saved with a trailing slash is unusable after the process restarts
+        // that DiscoveryService instance, defeating the disk cache entirely.
+        val cache = cache()
+        cache.save(
+            discoveryJson.decodeFromString(ProviderMetadata.serializer(), document("$issuer/")),
+        )
+
+        val metadata = DiscoveryService(issuer, client, cache).metadata()
+
+        assertEquals(0, server.requestCount)
+        assertEquals("$issuer/", metadata.issuer)
+    }
+
+    @Test
     fun `a cached document belonging to another issuer is ignored`() = runTest {
         val cache = cache()
         cache.save(
