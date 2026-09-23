@@ -35,6 +35,7 @@ kotlin {
 dependencies {
     api(project(":core"))
     api(project(":browser"))
+    api(project(":dpop"))
     api(project(":storage"))
 
     testImplementation("junit:junit:4.13.2")

@@ -5,9 +5,12 @@ import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import kz.versola.sdk.core.SessionState
+import kz.versola.sdk.core.TokenBinding
 import kz.versola.sdk.core.VersolaError
 import kz.versola.sdk.core.VersolaLogger
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -37,8 +40,9 @@ class VersolaConfigureTest {
         issuer: String = "https://id.versola.kz",
         clientId: String = "mobile-app",
         redirectUri: String = "https://app.example.com/oauth",
+        tokenBinding: TokenBinding = TokenBinding.Dpop(),
         logger: VersolaLogger = CollectingLogger(),
-    ) = Versola.configure(application, issuer, clientId, redirectUri, logger)
+    ) = Versola.configure(application, issuer, clientId, redirectUri, tokenBinding, logger)
 
     @Test
     fun `configure keeps the validated configuration`() {
@@ -80,5 +84,21 @@ class VersolaConfigureTest {
     @Test
     fun `a fresh install starts Unauthenticated`() = runTest {
         assertSame(SessionState.Unauthenticated, configure().sessionState.first())
+    }
+
+    @Test
+    fun `DPoP is wired by default and Bearer is the only way out of it`() {
+        // #1 §4: on and invisible. The integrator's one lever is refusing key binding
+        // outright, and taking it is what makes `dpop` null rather than any discovery result.
+        assertNotNull(configure().dpop)
+        assertNull(configure(tokenBinding = TokenBinding.Bearer).dpop)
+    }
+
+    @Test
+    fun `configure touches no keystore`() = runTest {
+        // The key is generated on first use, off the main thread. Generating it here would
+        // put a StrongBox keygen inside a synchronous call an app makes during startup — and
+        // Robolectric has no Keystore to generate it in, so this passing at all is the check.
+        assertNotNull(configure(tokenBinding = TokenBinding.Dpop(requireHardware = true)).dpop)
     }
 }

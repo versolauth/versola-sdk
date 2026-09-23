@@ -1,6 +1,6 @@
 public final class kz/versola/sdk/core/AuthorizationFlow {
-	public fun <init> (Lkz/versola/sdk/core/VersolaConfiguration;Lkz/versola/sdk/core/DiscoveryService;Lkz/versola/sdk/core/PendingAuthorizationStore;Lkz/versola/sdk/core/BrowserAuthorizationSession;Lkotlin/jvm/functions/Function0;)V
-	public synthetic fun <init> (Lkz/versola/sdk/core/VersolaConfiguration;Lkz/versola/sdk/core/DiscoveryService;Lkz/versola/sdk/core/PendingAuthorizationStore;Lkz/versola/sdk/core/BrowserAuthorizationSession;Lkotlin/jvm/functions/Function0;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Lkz/versola/sdk/core/VersolaConfiguration;Lkz/versola/sdk/core/DiscoveryService;Lkz/versola/sdk/core/PendingAuthorizationStore;Lkz/versola/sdk/core/BrowserAuthorizationSession;Lkz/versola/sdk/core/TokenBinding;Lkz/versola/sdk/core/DpopKeyBinding;Lkotlin/jvm/functions/Function0;)V
+	public synthetic fun <init> (Lkz/versola/sdk/core/VersolaConfiguration;Lkz/versola/sdk/core/DiscoveryService;Lkz/versola/sdk/core/PendingAuthorizationStore;Lkz/versola/sdk/core/BrowserAuthorizationSession;Lkz/versola/sdk/core/TokenBinding;Lkz/versola/sdk/core/DpopKeyBinding;Lkotlin/jvm/functions/Function0;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun authorize (Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun authorize$default (Lkz/versola/sdk/core/AuthorizationFlow;Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun getConfiguration ()Lkz/versola/sdk/core/VersolaConfiguration;
@@ -78,6 +78,10 @@ public final class kz/versola/sdk/core/DiscoveryService {
 	public fun <init> (Ljava/lang/String;Lkz/versola/sdk/core/DiscoveryClient;Lkz/versola/sdk/core/ProviderMetadataCache;)V
 	public final fun metadata (ZLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun metadata$default (Lkz/versola/sdk/core/DiscoveryService;ZLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public abstract interface class kz/versola/sdk/core/DpopKeyBinding {
+	public abstract fun jkt (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class kz/versola/sdk/core/FileProviderMetadataCache : kz/versola/sdk/core/ProviderMetadataCache {
@@ -265,6 +269,29 @@ public final class kz/versola/sdk/core/SessionState$Unauthenticated : kz/versola
 	public fun toString ()Ljava/lang/String;
 }
 
+public abstract class kz/versola/sdk/core/TokenBinding {
+}
+
+public final class kz/versola/sdk/core/TokenBinding$Bearer : kz/versola/sdk/core/TokenBinding {
+	public static final field INSTANCE Lkz/versola/sdk/core/TokenBinding$Bearer;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class kz/versola/sdk/core/TokenBinding$Dpop : kz/versola/sdk/core/TokenBinding {
+	public fun <init> ()V
+	public fun <init> (Z)V
+	public synthetic fun <init> (ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Z
+	public final fun copy (Z)Lkz/versola/sdk/core/TokenBinding$Dpop;
+	public static synthetic fun copy$default (Lkz/versola/sdk/core/TokenBinding$Dpop;ZILjava/lang/Object;)Lkz/versola/sdk/core/TokenBinding$Dpop;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getRequireHardware ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class kz/versola/sdk/core/VersolaConfiguration {
 	public static final field Companion Lkz/versola/sdk/core/VersolaConfiguration$Companion;
 	public final fun getClientId ()Ljava/lang/String;
@@ -333,6 +360,17 @@ public final class kz/versola/sdk/core/VersolaError$Configuration$Detail$Discove
 	public final fun component1 ()Ljava/lang/String;
 	public final fun copy (Ljava/lang/String;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$DiscoveryMalformed;
 	public static synthetic fun copy$default (Lkz/versola/sdk/core/VersolaError$Configuration$Detail$DiscoveryMalformed;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$DiscoveryMalformed;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDetail ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class kz/versola/sdk/core/VersolaError$Configuration$Detail$HardwareBindingUnavailable : kz/versola/sdk/core/VersolaError$Configuration$Detail {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$HardwareBindingUnavailable;
+	public static synthetic fun copy$default (Lkz/versola/sdk/core/VersolaError$Configuration$Detail$HardwareBindingUnavailable;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$HardwareBindingUnavailable;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getDetail ()Ljava/lang/String;
 	public fun hashCode ()I
@@ -433,6 +471,17 @@ public final class kz/versola/sdk/core/VersolaError$Recoverable$Cause$Network : 
 	public static synthetic fun copy$default (Lkz/versola/sdk/core/VersolaError$Recoverable$Cause$Network;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/VersolaError$Recoverable$Cause$Network;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getDetail ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class kz/versola/sdk/core/VersolaError$Recoverable$Cause$NonceLoop : kz/versola/sdk/core/VersolaError$Recoverable$Cause {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lkz/versola/sdk/core/VersolaError$Recoverable$Cause$NonceLoop;
+	public static synthetic fun copy$default (Lkz/versola/sdk/core/VersolaError$Recoverable$Cause$NonceLoop;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/VersolaError$Recoverable$Cause$NonceLoop;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getOrigin ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }

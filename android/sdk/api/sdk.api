@@ -11,13 +11,15 @@ public final class kz/versola/sdk/Versola {
 	public final fun authorize (Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun authorize$default (Lkz/versola/sdk/Versola;Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public final fun getConfiguration ()Lkz/versola/sdk/core/VersolaConfiguration;
+	public final fun getDpop ()Lkz/versola/sdk/dpop/DpopProofFactory;
 	public final fun getSessionState ()Lkotlinx/coroutines/flow/Flow;
+	public final fun keyAttestation (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun metadata (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun resumePendingAuthorization (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class kz/versola/sdk/Versola$Companion {
-	public final fun configure (Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkz/versola/sdk/core/VersolaLogger;Lokhttp3/OkHttpClient;)Lkz/versola/sdk/Versola;
-	public static synthetic fun configure$default (Lkz/versola/sdk/Versola$Companion;Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkz/versola/sdk/core/VersolaLogger;Lokhttp3/OkHttpClient;ILjava/lang/Object;)Lkz/versola/sdk/Versola;
+	public final fun configure (Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkz/versola/sdk/core/TokenBinding;Lkz/versola/sdk/core/VersolaLogger;Lokhttp3/OkHttpClient;)Lkz/versola/sdk/Versola;
+	public static synthetic fun configure$default (Lkz/versola/sdk/Versola$Companion;Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkz/versola/sdk/core/TokenBinding;Lkz/versola/sdk/core/VersolaLogger;Lokhttp3/OkHttpClient;ILjava/lang/Object;)Lkz/versola/sdk/Versola;
 }
 

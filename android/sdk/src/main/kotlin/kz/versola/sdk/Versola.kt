@@ -12,8 +12,12 @@ import kz.versola.sdk.core.FileProviderMetadataCache
 import kz.versola.sdk.core.HttpDiscoveryClient
 import kz.versola.sdk.core.ProviderMetadata
 import kz.versola.sdk.core.SessionState
+import kz.versola.sdk.core.TokenBinding
 import kz.versola.sdk.core.VersolaConfiguration
 import kz.versola.sdk.core.VersolaLogger
+import kz.versola.sdk.dpop.DpopProofFactory
+import kz.versola.sdk.dpop.KeyAttestation
+import kz.versola.sdk.dpop.KeystoreDpopKey
 import kz.versola.sdk.storage.FilePendingAuthorizationStore
 import kz.versola.sdk.storage.HardwareKeyProvider
 import okhttp3.OkHttpClient
@@ -29,9 +33,22 @@ import okhttp3.OkHttpClient
  */
 public class Versola internal constructor(
     private val flow: AuthorizationFlow,
+    /**
+     * Null under [TokenBinding.Bearer], and the one place that difference is visible: every
+     * caller that needs a proof already has to ask whether the session is key-bound.
+     */
+    public val dpop: DpopProofFactory?,
+    private val dpopKey: KeystoreDpopKey?,
 ) {
 
     public val configuration: VersolaConfiguration get() = flow.configuration
+
+    /**
+     * Which keystore tier the DPoP key actually reached, or null under
+     * [TokenBinding.Bearer]. Suspending because the key is generated on first use rather than
+     * inside [configure]; asking this is what generates it.
+     */
+    public suspend fun keyAttestation(): KeyAttestation? = dpopKey?.attestation()
 
     /** The state machine of `spec/state-machine.md`, observable. */
     public val sessionState: Flow<SessionState> get() = flow.sessionState
@@ -64,6 +81,7 @@ public class Versola internal constructor(
             issuer: String,
             clientId: String,
             redirectUri: String,
+            tokenBinding: TokenBinding = TokenBinding.Dpop(),
             logger: VersolaLogger = AndroidLogger(),
             httpClient: OkHttpClient = defaultHttpClient(),
         ): Versola {
@@ -75,8 +93,19 @@ public class Versola internal constructor(
             // be restored onto a different device out of a cloud backup.
             val directory = File(applicationContext.noBackupFilesDir, "versola")
 
+            // Constructed, not generated: nothing touches the Keystore until the first call
+            // that needs a thumbprint or a proof, so configure() stays a cheap main-thread
+            // call even on a device where a StrongBox keygen takes a noticeable moment.
+            val dpopKey = when (tokenBinding) {
+                is TokenBinding.Dpop -> KeystoreDpopKey(
+                    requireHardware = tokenBinding.requireHardware,
+                    logger = logger,
+                )
+                TokenBinding.Bearer -> null
+            }
+
             return Versola(
-                AuthorizationFlow(
+                flow = AuthorizationFlow(
                     configuration = configuration,
                     discovery = DiscoveryService(
                         issuer = configuration.issuer,
@@ -88,7 +117,11 @@ public class Versola internal constructor(
                         keyProvider = HardwareKeyProvider(),
                     ),
                     browser = CustomTabsAuthorizationSession(applicationContext, logger),
+                    tokenBinding = tokenBinding,
+                    dpopKey = dpopKey,
                 ),
+                dpop = dpopKey?.let { DpopProofFactory(it) },
+                dpopKey = dpopKey,
             )
         }
 

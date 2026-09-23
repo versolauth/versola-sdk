@@ -18,6 +18,13 @@ public class AuthorizationRequest internal constructor(
     internal val codeVerifier: CodeVerifier,
     public val acrValues: List<String>,
     public val maxAge: Long?,
+    /**
+     * RFC 9449 §10, and null whenever the session is not key-bound. Committing to the key
+     * here, before a code exists, is what stops a stolen code being redeemed against a
+     * different key: `AuthorizeRequestParser` stores it and the token endpoint compares it
+     * against the redeeming proof's thumbprint.
+     */
+    internal val dpopJkt: String? = null,
 ) {
 
     /**
@@ -36,6 +43,7 @@ public class AuthorizationRequest internal constructor(
             add("code_challenge_method" to "S256")
             if (acrValues.isNotEmpty()) add("acr_values" to acrValues.joinToString(" "))
             maxAge?.let { add("max_age" to it.toString()) }
+            dpopJkt?.let { add("dpop_jkt" to it) }
         }
         val query = parameters.joinToString("&") { (name, value) -> "${encode(name)}=${encode(value)}" }
         val separator = if (authorizationEndpoint.contains('?')) "&" else "?"
@@ -65,6 +73,7 @@ public class AuthorizationRequest internal constructor(
             scopes: Set<String>,
             acrValues: List<String> = emptyList(),
             maxAge: Long? = null,
+            dpopJkt: String? = null,
             random: SecureRandom = SecureRandom(),
         ): AuthorizationRequest = AuthorizationRequest(
             configuration = configuration,
@@ -74,6 +83,7 @@ public class AuthorizationRequest internal constructor(
             codeVerifier = CodeVerifier.generate(random),
             acrValues = acrValues,
             maxAge = maxAge,
+            dpopJkt = dpopJkt,
         )
     }
 }

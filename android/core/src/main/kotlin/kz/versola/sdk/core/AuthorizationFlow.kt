@@ -23,6 +23,14 @@ public class AuthorizationFlow(
     private val discovery: DiscoveryService,
     private val pendingStore: PendingAuthorizationStore,
     private val browser: BrowserAuthorizationSession,
+    private val tokenBinding: TokenBinding = TokenBinding.Dpop(),
+    /**
+     * The key `dpop_jkt` commits to, or null for a session that is not key-bound. The wiring
+     * layer supplies one exactly when [tokenBinding] is [TokenBinding.Dpop]; a key handed in
+     * alongside [TokenBinding.Bearer] is ignored rather than quietly overriding the
+     * integrator's choice.
+     */
+    private val dpopKey: DpopKeyBinding? = null,
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
 
@@ -72,6 +80,7 @@ public class AuthorizationFlow(
             scopes = scopes,
             acrValues = acrValues,
             maxAge = maxAge,
+            dpopJkt = dpopJkt(metadata),
         )
         val pending = request.toPending(clock())
         pendingStore.save(pending)
@@ -149,6 +158,29 @@ public class AuthorizationFlow(
             state.value = SessionState.Unauthenticated
             throw e
         }
+    }
+
+    /**
+     * The thumbprint to commit to, and the point at which `requireHardware` is enforced
+     * against the deployment: before the browser opens, so an app that cannot be served finds
+     * out at the first `authorize()` rather than at the first API call (scenario 07).
+     *
+     * A deployment that does not advertise DPoP gets no `dpop_jkt`. Sending one anyway would
+     * bind a code the token endpoint will redeem without a proof.
+     */
+    private suspend fun dpopJkt(metadata: ProviderMetadata): String? {
+        val binding = tokenBinding as? TokenBinding.Dpop ?: return null
+        if (!metadata.supportsDpop) {
+            if (binding.requireHardware) {
+                throw VersolaError.Configuration(
+                    VersolaError.Configuration.Detail.HardwareBindingUnavailable(
+                        "the provider does not advertise dpop_signing_alg_values_supported",
+                    ),
+                )
+            }
+            return null
+        }
+        return dpopKey?.jkt()
     }
 
     private suspend fun ensureRestored() {
