@@ -26,8 +26,13 @@ jobs:
       - name: SPM resolution from a clean checkout
         run: swift package resolve
 
+      # `generic/platform=iOS` fails here with "Supported platforms for the buildables
+      # in the current scheme is empty" - a device destination doesn't resolve cleanly
+      # against the auto-generated Package scheme without an explicit per-target
+      # platform. A concrete simulator destination (which also needs no code signing)
+      # works for both steps.
       - name: Build
-        run: xcodebuild build -scheme Versola-Package -destination "generic/platform=iOS"
+        run: xcodebuild build -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 16"
 
       - name: Unit tests
         run: xcodebuild test -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 16"
