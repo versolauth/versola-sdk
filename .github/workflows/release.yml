@@ -1,0 +1,76 @@
+name: release
+
+# Wired but dormant per #4: every job below is gated off with `if: false` until phase 1
+# (Android) actually ships something worth publishing. Flip a job's condition on when
+# its platform is ready, once the corresponding publishing credentials exist as repo
+# secrets — none are configured yet.
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  maven-central:
+    # kz.versola:versola-android (#4's package-coordinates decision — reverse-DNS,
+    # forced by Maven Central's namespace verification).
+    if: false
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Publish
+        run: ./gradlew publish
+        env:
+          ORG_GRADLE_PROJECT_signingKey: ${{ secrets.MAVEN_SIGNING_KEY }}
+          ORG_GRADLE_PROJECT_signingPassword: ${{ secrets.MAVEN_SIGNING_PASSWORD }}
+          ORG_GRADLE_PROJECT_sonatypeUsername: ${{ secrets.SONATYPE_USERNAME }}
+          ORG_GRADLE_PROJECT_sonatypePassword: ${{ secrets.SONATYPE_PASSWORD }}
+
+  swiftpm-cocoapods:
+    # SwiftPM consumers resolve the release tag directly — no publish step needed
+    # beyond the tag itself. CocoaPods trunk still needs an explicit push.
+    if: false
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Push podspec to CocoaPods trunk
+        run: pod trunk push Versola.podspec --allow-warnings
+        env:
+          COCOAPODS_TRUNK_TOKEN: ${{ secrets.COCOAPODS_TRUNK_TOKEN }}
+
+  pub-dev:
+    # versola on pub.dev (#4's package-coordinates decision). Phase 3 per README.
+    if: false
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: flutter
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+      - run: flutter pub publish --force
+
+  npm:
+    # @versola/react-native. #20 may never be built — see #1 §1 (React Native is
+    # last, conditional on demand). Kept here only so the pipeline shape exists.
+    if: false
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: react-native
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+      - run: npm publish --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

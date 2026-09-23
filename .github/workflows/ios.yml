@@ -1,0 +1,41 @@
+name: ios
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "ios/**"
+      - "Package.swift"
+      - ".github/workflows/ios.yml"
+  pull_request:
+    paths:
+      - "ios/**"
+      - "Package.swift"
+      - ".github/workflows/ios.yml"
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The acceptance criterion in #4 this exists to verify: SPM cannot resolve
+      # Package.swift from a subdirectory, which is why it sits at the repo root with
+      # targets whose path: points into ios/ (#1 §3). A bare `git clone` + this step,
+      # with no other setup, is the actual test.
+      - name: SPM resolution from a clean checkout
+        run: swift package resolve
+
+      # `generic/platform=iOS` fails here with "Supported platforms for the buildables
+      # in the current scheme is empty" - a device destination doesn't resolve cleanly
+      # against the auto-generated Package scheme without an explicit per-target
+      # platform. A concrete simulator destination (which also needs no code signing)
+      # works for both steps instead. The device name is whatever the runner image's
+      # Xcode ships as a default simulator and drifts on Xcode upgrades (this one
+      # replaced "iPhone 16" - no longer present - with "iPhone 17"); expect to bump
+      # it again when it next disappears.
+      - name: Build
+        run: xcodebuild build -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 17"
+
+      - name: Unit tests
+        run: xcodebuild test -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 17"
