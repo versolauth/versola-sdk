@@ -30,6 +30,7 @@ not describe intent — intent belongs in [`../state-machine.md`](../state-machi
 | 16 | `iss` mismatch | any | 5, 11 |
 | 17 | Unregistered redirect URI | any | 5, 11 |
 | 18 | RP-initiated logout | any | 10, 14 |
+| 19 | Retry budget is bounded and backed off | any | 8, 9, 14 |
 
 ## Fault injection
 
@@ -47,7 +48,7 @@ Most scenarios are unreachable without the harness being able to misbehave on pu
 
 ## Validating
 
-```
+```shell
 python3 tools/validate-scenarios.py
 ```
 

@@ -32,7 +32,7 @@ every other issue assumes; read it before opening a pull request.
 
 ## Layout
 
-```
+```text
 spec/            state machine, errors, conformance scenarios
 android/         Gradle multi-project
 ios/Sources/     Swift targets

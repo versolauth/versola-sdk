@@ -24,6 +24,9 @@ Rules that hold across all four:
   an oracle; an SDK that branched on the text would branch on nothing.
 - **`Reauthenticate` is a diagnosis, not a command.** The SDK never opens the browser on its
   own. The app decides when.
+- **Retries are budgeted.** Every `Recoverable` path has a ceiling, and the ceiling is the
+  SDK's alone to enforce — see [`server-dependencies.md`](server-dependencies.md) on
+  versola#310.
 
 ## Token endpoint — `POST /token`
 

@@ -1,0 +1,29 @@
+id: 19-retry-budget
+title: Every retry the SDK performs is bounded and backed off
+issues: [8, 9, 14, 15]
+applies_to: [android, ios, flutter]
+mode: any
+fault_injection: [network-partition, drop-response, always-demand-dpop-nonce]
+preconditions:
+  - Edge has no request rate limiter, so no server-side mechanism bounds client retries.
+  - The session is Authenticated.
+steps:
+  - actor: harness
+    action: Answer every proxied call with 503 for sixty seconds.
+  - actor: app
+    action: Issue one call through the SDK's HTTP client.
+  - actor: sdk
+    action: Retry under its own policy, then give up.
+  - actor: harness
+    action: Repeat with 401, then with use_dpop_nonce, then with a dropped response.
+assertions:
+  - A single application call never produces more than four requests to the same origin, counting the original.
+  - Successive retries are separated by a strictly increasing delay with jitter.
+  - A 401 produces at most one refresh and at most one replay of the call.
+  - A use_dpop_nonce produces at most one retry per origin per operation.
+  - Once the budget is exhausted the SDK surfaces Recoverable and emits no further request for that operation.
+  - Total requests emitted during the sixty-second window are bounded and recorded in the conformance report.
+notes: >
+  versola#310 leaves edge with no rate limiting of any kind, so the client-side budget is the
+  only limiter in the system. A regression here is unbounded traffic from a shipped app against
+  an unprotected proxy, which is why it is a build-failing scenario rather than a metric.

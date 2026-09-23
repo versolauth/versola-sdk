@@ -138,7 +138,7 @@ follows the logout rule (below).
 
 Edge answers a call it will not serve with `401` and
 
-```
+```http
 WWW-Authenticate: Bearer error="insufficient_user_authentication", acr_values="…", max_age="…"
 ```
 
