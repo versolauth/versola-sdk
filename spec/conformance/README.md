@@ -30,7 +30,7 @@ not describe intent — intent belongs in [`../state-machine.md`](../state-machi
 | 16 | `iss` mismatch | any | 5, 11 |
 | 17 | Unregistered redirect URI | any | 5, 11 |
 | 18 | RP-initiated logout | any | 10, 14 |
-| 19 | Retry budget is bounded and backed off | any | 8, 9, 14 |
+| 19 | Retry budget bounded, backed off, configurable within maxima | any | 8, 9, 14 |
 
 ## Fault injection
 
@@ -57,7 +57,8 @@ above lists each scenario exactly once. CI runs the same command.
 
 ## Adding a scenario
 
-1. Derive it from a rule in `state-machine.md` or `errors.md`. A scenario with no rule behind it
+1. Derive it from a rule in `state-machine.md`, `errors.md` or `retry-policy.md`. A scenario
+   with no rule behind it
    means the rule is missing; add it there first.
 2. Give assertions that a machine can check. "Handles X correctly" is not an assertion.
 3. Add the row to the index.

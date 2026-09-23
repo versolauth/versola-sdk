@@ -24,9 +24,8 @@ Rules that hold across all four:
   an oracle; an SDK that branched on the text would branch on nothing.
 - **`Reauthenticate` is a diagnosis, not a command.** The SDK never opens the browser on its
   own. The app decides when.
-- **Retries are budgeted.** Every `Recoverable` path has a ceiling, and the ceiling is the
-  SDK's alone to enforce — see [`server-dependencies.md`](server-dependencies.md) on
-  versola#310.
+- **Retries are budgeted.** Every `Recoverable` path has a ceiling, configurable within fixed
+  bounds and never unbounded. See [`retry-policy.md`](retry-policy.md).
 
 ## Token endpoint — `POST /token`
 
@@ -100,6 +99,7 @@ From `EdgeService`'s failure outcomes. Note the `WWW-Authenticate` scheme differ
 | 401, `WWW-Authenticate: DPoP error="use_dpop_nonce"` + `DPoP-Nonce` | RFC 9449 §9 | handled internally, edge's nonce cache only |
 | 401, bare | | refresh once, then `Reauthenticate` |
 | 403 | | `Recoverable` with a permission cause — the call will not succeed, but the session is fine |
+| 429 | | `Recoverable`. No server component emits one yet; `Retry-After` handling is #22 |
 | 404 | | `Configuration` if the resource ID is unknown to the deployment |
 | 5xx | | `Recoverable` |
 

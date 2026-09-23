@@ -1,11 +1,11 @@
 id: 19-retry-budget
-title: Every retry the SDK performs is bounded and backed off
+title: Retries are bounded, backed off, and configurable only within fixed maxima
 issues: [8, 9, 14, 15]
 applies_to: [android, ios, flutter]
 mode: any
 fault_injection: [network-partition, drop-response, always-demand-dpop-nonce]
 preconditions:
-  - Edge has no request rate limiter, so no server-side mechanism bounds client retries.
+  - The SDK is configured with the default RetryPolicy.
   - The session is Authenticated.
 steps:
   - actor: harness
@@ -13,17 +13,22 @@ steps:
   - actor: app
     action: Issue one call through the SDK's HTTP client.
   - actor: sdk
-    action: Retry under its own policy, then give up.
+    action: Retry under its policy, then give up.
   - actor: harness
-    action: Repeat with 401, then with use_dpop_nonce, then with a dropped response.
+    action: Repeat the window with 401, then with use_dpop_nonce, then with a dropped response.
+  - actor: app
+    action: Reconfigure with maxAttemptsPerOrigin set above its hard maximum.
 assertions:
-  - A single application call never produces more than four requests to the same origin, counting the original.
-  - Successive retries are separated by a strictly increasing delay with jitter.
-  - A 401 produces at most one refresh and at most one replay of the call.
-  - A use_dpop_nonce produces at most one retry per origin per operation.
-  - Once the budget is exhausted the SDK surfaces Recoverable and emits no further request for that operation.
-  - Total requests emitted during the sixty-second window are bounded and recorded in the conformance report.
+  - Under the default policy one application call produces at most three requests to one origin and at most four in total, originals included.
+  - Successive delays increase by the configured multiplier, are capped at maxBackoff, and carry jitter — two runs do not produce identical delay sequences.
+  - The operation gives up within totalBudget including delays.
+  - A refresh triggered by a 401 is counted inside the originating call's budget, not given a budget of its own.
+  - A use_dpop_nonce produces exactly one retry per origin per operation, independent of the configured budget.
+  - An invalid_dpop_proof produces exactly one retry, independent of the configured budget.
+  - Once the budget is exhausted the SDK surfaces Recoverable carrying the attempt count and elapsed time, and emits no further request for that operation.
+  - A RetryPolicy value above its hard maximum fails at configure time with Configuration, and is not silently clamped.
+  - A policy cannot be constructed that permits unbounded attempts; there is no sentinel value meaning "forever".
 notes: >
-  versola#310 leaves edge with no rate limiting of any kind, so the client-side budget is the
-  only limiter in the system. A regression here is unbounded traffic from a shipped app against
-  an unprotected proxy, which is why it is a build-failing scenario rather than a metric.
+  Edge has no rate limiter yet (versola#310), but the ceiling is not contingent on that: a
+  retry loop in a shipped app runs on every installed device until the next release reaches
+  them. 429 and Retry-After handling is tracked separately in #22.

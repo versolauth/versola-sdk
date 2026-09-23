@@ -25,7 +25,7 @@ every other issue assumes; read it before opening a pull request.
 
 | Phase | Contents |
 |---|---|
-| 0 | `spec/` — state machine, error taxonomy, conformance catalogue |
+| 0 | `spec/` — state machine, error taxonomy, retry policy, conformance catalogue |
 | 1 | Android |
 | 2 | iOS |
 | 3 | Conformance harness, Flutter, `mobile-demo` migration |
@@ -33,7 +33,7 @@ every other issue assumes; read it before opening a pull request.
 ## Layout
 
 ```text
-spec/            state machine, errors, conformance scenarios
+spec/            state machine, errors, retry policy, conformance scenarios
 android/         Gradle multi-project
 ios/Sources/     Swift targets
 Package.swift    at the repo root; SPM cannot resolve a manifest from a subdirectory
