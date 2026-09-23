@@ -23,8 +23,35 @@ public class AuthorizationFlow(
     private val discovery: DiscoveryService,
     private val pendingStore: PendingAuthorizationStore,
     private val browser: BrowserAuthorizationSession,
+    /**
+     * The key `dpop_jkt` commits to, or null for a session that is not key-bound. A key
+     * handed in alongside [TokenBinding.Bearer] is ignored rather than quietly overriding the
+     * integrator's choice.
+     */
+    private val dpopKey: DpopKeyBinding? = null,
+    /**
+     * Declared after [dpopKey] so the default cannot be the one pairing this class rejects.
+     * The policy default — DPoP unless the integrator refuses it — belongs to `configure()`;
+     * what this class defaults to is whatever the key it was handed can actually deliver.
+     */
+    private val tokenBinding: TokenBinding =
+        if (dpopKey == null) TokenBinding.Bearer else TokenBinding.Dpop(),
     private val clock: () -> Long = System::currentTimeMillis,
 ) {
+
+    init {
+        // A key-bound session without a key would send no `dpop_jkt` and skip the
+        // `requireHardware` check with it, so an app that asked to be bound to hardware would
+        // authorize unbound and never be told. Wiring, not deployment: it fails here rather
+        // than at the first authorization.
+        if (tokenBinding is TokenBinding.Dpop && dpopKey == null) {
+            throw VersolaError.Configuration(
+                VersolaError.Configuration.Detail.InvalidConfiguration(
+                    "TokenBinding.Dpop needs a DpopKeyBinding; pass one or select TokenBinding.Bearer",
+                ),
+            )
+        }
+    }
 
     private val state = MutableStateFlow<SessionState>(SessionState.Unauthenticated)
     private val restoreLock = Mutex()
@@ -72,6 +99,7 @@ public class AuthorizationFlow(
             scopes = scopes,
             acrValues = acrValues,
             maxAge = maxAge,
+            dpopJkt = dpopJkt(metadata),
         )
         val pending = request.toPending(clock())
         pendingStore.save(pending)
@@ -149,6 +177,30 @@ public class AuthorizationFlow(
             state.value = SessionState.Unauthenticated
             throw e
         }
+    }
+
+    /**
+     * The thumbprint to commit to, and the point at which `requireHardware` is enforced
+     * against the deployment: before the browser opens, so an app that cannot be served finds
+     * out at the first `authorize()` rather than at the first API call (scenario 07).
+     *
+     * A deployment that does not advertise DPoP gets no `dpop_jkt`. Sending one anyway would
+     * bind a code the token endpoint will redeem without a proof.
+     */
+    private suspend fun dpopJkt(metadata: ProviderMetadata): String? {
+        val binding = tokenBinding as? TokenBinding.Dpop ?: return null
+        if (!metadata.supportsDpop) {
+            if (binding.requireHardware) {
+                throw VersolaError.Configuration(
+                    VersolaError.Configuration.Detail.HardwareBindingUnavailable(
+                        "the provider does not advertise dpop_signing_alg_values_supported",
+                    ),
+                )
+            }
+            return null
+        }
+        // Non-null under `Dpop` by construction; see `init`.
+        return checkNotNull(dpopKey).jkt()
     }
 
     private suspend fun ensureRestored() {

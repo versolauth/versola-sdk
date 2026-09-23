@@ -44,6 +44,15 @@ public sealed class VersolaError(
 
             /** Transport failure, timeout or DNS, surfaced only once the retry budget is exhausted. */
             public data class Network(public val detail: String) : Cause
+
+            /**
+             * RFC 9449 §9: a `use_dpop_nonce` challenge answered with the nonce it supplied
+             * was challenged again. **Terminating** — `spec/retry-policy.md` allows exactly
+             * one nonce retry per origin per operation, because a server that will never be
+             * satisfied must not turn into unbounded traffic from a shipped app
+             * (scenario 05).
+             */
+            public data class NonceLoop(public val origin: String) : Cause
         }
     }
 
@@ -139,6 +148,14 @@ public sealed class VersolaError(
 
             /** No browser on the device can handle the authorization request. */
             public data object NoBrowserAvailable : Detail
+
+            /**
+             * `TokenBinding.Dpop(requireHardware = true)` cannot be honoured here: either the
+             * device produced only a software-backed key, or the deployment does not
+             * advertise DPoP at all. The app asked for a guarantee this pairing cannot give,
+             * and it is told so before any authorization request is made (scenario 07).
+             */
+            public data class HardwareBindingUnavailable(public val detail: String) : Detail
         }
     }
 }

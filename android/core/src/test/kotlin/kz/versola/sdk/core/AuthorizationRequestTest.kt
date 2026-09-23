@@ -81,6 +81,21 @@ class AuthorizationRequestTest {
 
         assertNull(parameters["acr_values"])
         assertNull(parameters["max_age"])
+        assertNull(parameters["dpop_jkt"])
+    }
+
+    @Test
+    fun `dpop_jkt is carried verbatim, since the server compares it as a string`() {
+        // `Dpop.Jkt.parse` refuses anything that is not a canonical 43-character thumbprint,
+        // and the token endpoint compares byte-for-byte rather than decoding — so a value
+        // altered in transit strands the code rather than failing the request.
+        val thumbprint = "0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I"
+        val request = AuthorizationRequest.create(configuration, setOf("openid"), dpopJkt = thumbprint)
+
+        val uri = request.toUri("https://id.versola.kz/authorize")
+
+        assertEquals(thumbprint, query(uri)["dpop_jkt"])
+        assertTrue(uri.contains("dpop_jkt=$thumbprint"))
     }
 
     @Test

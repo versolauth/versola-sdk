@@ -6,8 +6,10 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -54,6 +56,15 @@ private class FakeBrowser(
     }
 }
 
+/**
+ * Stands in for the Keystore key of `:dpop`, which this module deliberately cannot see: the
+ * only thing the protocol core needs from it is a thumbprint.
+ */
+private object StaticDpopKey : DpopKeyBinding {
+    const val thumbprint: String = "0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I"
+    override suspend fun jkt(): String = thumbprint
+}
+
 private class StaticDiscovery(private val metadata: ProviderMetadata) : DiscoveryClient {
     override suspend fun fetch(issuer: String): ProviderMetadata = metadata
 }
@@ -89,13 +100,21 @@ class AuthorizationFlowTest {
         store: RecordingStore,
         browser: BrowserAuthorizationSession,
         now: Long = 0,
+        metadata: ProviderMetadata = this.metadata,
+        tokenBinding: TokenBinding = TokenBinding.Dpop(),
+        dpopKey: DpopKeyBinding? = StaticDpopKey,
     ) = AuthorizationFlow(
         configuration = configuration,
         discovery = DiscoveryService(ISSUER, StaticDiscovery(metadata), MemoryMetadataCache()),
         pendingStore = store,
         browser = browser,
+        tokenBinding = tokenBinding,
+        dpopKey = dpopKey,
         clock = { now },
     )
+
+    /** A provider of the previous generation: everything but `dpop_signing_alg_values_supported`. */
+    private fun withoutDpop() = metadata.copy(dpopSigningAlgValuesSupported = emptyList())
 
     private fun redirectFor(store: RecordingStore, extra: String = "&iss=$ISSUER"): (String) -> BrowserOutcome =
         { BrowserOutcome.Redirect("https://app.example.com/oauth?code=the-code&state=${store.stored!!.state}$extra") }
@@ -292,6 +311,93 @@ class AuthorizationFlowTest {
         flow(store, browser).authorize(setOf("openid"))
 
         assertTrue(browser.launchedUri!!.startsWith("$ISSUER/authorize?"))
+    }
+
+    @Test
+    fun `dpop_jkt commits the request to the key the code will be redeemed against`() = runTest {
+        // RFC 9449 §10. Without it the commitment happens only at redemption, so a stolen
+        // code can be redeemed against the thief's key instead of this device's.
+        val store = RecordingStore()
+        val browser = FakeBrowser(redirectFor(store), store)
+
+        flow(store, browser).authorize(setOf("openid"))
+
+        assertTrue(browser.launchedUri!!.contains("dpop_jkt=${StaticDpopKey.thumbprint}"))
+    }
+
+    @Test
+    fun `a provider that does not advertise DPoP gets no dpop_jkt`() = runTest {
+        // Scenario 07. Committing to a key the token endpoint will then redeem without a
+        // proof binds nothing, and `AuthorizeRequestParser` is entitled to refuse the
+        // parameter outright.
+        val store = RecordingStore()
+        val browser = FakeBrowser(redirectFor(store), store)
+
+        flow(store, browser, metadata = withoutDpop()).authorize(setOf("openid"))
+
+        assertFalse(browser.launchedUri!!.contains("dpop_jkt"))
+    }
+
+    @Test
+    fun `Bearer sends no dpop_jkt even where the provider supports DPoP`() = runTest {
+        val store = RecordingStore()
+        val browser = FakeBrowser(redirectFor(store), store)
+
+        flow(store, browser, tokenBinding = TokenBinding.Bearer).authorize(setOf("openid"))
+
+        assertFalse(browser.launchedUri!!.contains("dpop_jkt"))
+    }
+
+    @Test
+    fun `requireHardware against a provider without DPoP fails before the browser opens`() = runTest {
+        // Scenario 07's last assertion. The app asked for a guarantee this deployment cannot
+        // give; finding that out at the first API call instead would be worse, and finding it
+        // out after a user has already signed in worse still.
+        val store = RecordingStore()
+        val browser = FakeBrowser(redirectFor(store), store)
+        val flow = flow(
+            store,
+            browser,
+            metadata = withoutDpop(),
+            tokenBinding = TokenBinding.Dpop(requireHardware = true),
+        )
+
+        val error = failure { flow.authorize(setOf("openid")) } as VersolaError.Configuration
+
+        assertTrue(error.detail is VersolaError.Configuration.Detail.HardwareBindingUnavailable)
+        assertNull(browser.launchedUri)
+        assertNull(store.stored)
+    }
+
+    @Test
+    fun `a key-bound session wired without a key is refused at construction`() = runTest {
+        // Otherwise it authorizes with no dpop_jkt and skips the requireHardware check along
+        // with it: an app that asked to be bound to hardware gets an unbound code and is
+        // never told. The wiring is wrong, so it fails where the wiring happens.
+        val store = RecordingStore()
+        val browser = FakeBrowser(redirectFor(store), store)
+
+        val error = assertThrows(VersolaError.Configuration::class.java) {
+            flow(store, browser, tokenBinding = TokenBinding.Dpop(requireHardware = true), dpopKey = null)
+        }
+
+        assertTrue(error.detail is VersolaError.Configuration.Detail.InvalidConfiguration)
+    }
+
+    @Test
+    fun `a flow given no key is a Bearer flow rather than a broken DPoP one`() = runTest {
+        val store = RecordingStore()
+        val browser = FakeBrowser(redirectFor(store), store)
+        val flow = AuthorizationFlow(
+            configuration = configuration,
+            discovery = DiscoveryService(ISSUER, StaticDiscovery(metadata), MemoryMetadataCache()),
+            pendingStore = store,
+            browser = browser,
+        )
+
+        flow.authorize(setOf("openid"))
+
+        assertFalse(browser.launchedUri!!.contains("dpop_jkt"))
     }
 
     @Test
