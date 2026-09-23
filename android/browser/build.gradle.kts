@@ -22,6 +22,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
 }
 
 kotlin {
@@ -33,4 +37,10 @@ dependencies {
     implementation("androidx.browser:browser:1.10.0")
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
+    // Custom Tabs launch, the redirect activity and the foreground-return detector are all
+    // framework interactions; Robolectric runs them in a plain JVM test rather than needing
+    // an emulator, which CI does not have.
+    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("androidx.test:core:1.7.0")
 }

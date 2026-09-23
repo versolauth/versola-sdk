@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <!--
+      Declared without an intent filter: the redirect URI belongs to the integrator, not to
+      the SDK. The app re-declares this activity with its own filter and the manifest merger
+      unions the two. See VersolaRedirectActivity's documentation for the snippet.
+
+      singleTask so a redirect arriving while the activity already exists reuses it rather
+      than stacking a second copy behind the browser.
+    -->
+    <application>
+        <activity
+            android:name="kz.versola.sdk.browser.VersolaRedirectActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@android:style/Theme.NoDisplay" />
+    </application>
+
+    <!--
+      Android 11+ package visibility: without this the SDK cannot see which browsers are
+      installed, CustomTabsClient.getPackageName returns null on every device, and the flow
+      silently degrades to the ACTION_VIEW fallback. Mirrors the query androidx.browser's own
+      documentation prescribes.
+    -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+        <intent>
+            <action android:name="android.support.customtabs.action.CustomTabsService" />
+        </intent>
+    </queries>
+
+</manifest>
