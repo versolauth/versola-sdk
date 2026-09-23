@@ -26,10 +26,11 @@ import kz.versola.sdk.core.VersolaLogger
  * is exactly what P-256 hardware produces. There is no algorithm parameter anywhere in this
  * module.
  *
- * **Not user-authentication-gated**, and that is platform-enforced rather than a preference:
- * Android fails biometric authentication while the app is not in the foreground, so a gated
- * key would break background refresh outright (#1 §4). Only `UnlockPolicy.OnEveryCall` gates
- * this key, and that combination is documented as disabling background operation.
+ * **Not user-authentication-gated under any `UnlockPolicy`**, and that is platform-enforced
+ * rather than a preference: Android fails biometric authentication while the app is not in the
+ * foreground, so a gated key would break background refresh outright (#1 §4). A policy moves
+ * the storage key alone — gating a key that signs a proof on every request is a prompt per
+ * request under another name, which `spec/state-machine.md` rules out.
  *
  * Distinct from `HardwareKeyProvider`'s storage key: two keys, two purposes, one knob.
  * Encrypting a refresh token at rest and proving possession of a device are different

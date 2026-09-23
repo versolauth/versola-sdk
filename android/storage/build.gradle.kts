@@ -22,6 +22,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
 }
 
 kotlin {
@@ -37,4 +41,8 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
+    // The Keystore itself has no JVM implementation, but KeyGenParameterSpec is a plain
+    // framework class: Robolectric is enough to assert what the storage key is asked for,
+    // per API level, without the emulator CI does not have. Same version as :browser.
+    testImplementation("org.robolectric:robolectric:4.17")
 }

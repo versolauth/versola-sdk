@@ -18,7 +18,7 @@ and transitions by the names used below.
 | `Authenticated` | A refresh token is held and an access token is available or derivable. |
 | `Refreshing` | A token request is in flight. Concurrent callers coalesce onto it; they do not each enter this state. |
 | `StepUpRequired` | Edge refused a call with `insufficient_user_authentication`. The grant is valid; its authentication context is not sufficient. |
-| `Locked` | Credentials are present but the key protecting them needs user authentication. Only reachable under `UnlockPolicy.OnAppUnlock` or `OnEveryCall`. |
+| `Locked` | Credentials are present but the key protecting them needs user authentication. Only reachable under `UnlockPolicy.OnAppUnlock`. |
 | `LoggingOut` | RP-initiated logout is in flight. |
 
 `Refreshing`, `StepUpRequired`, `Locked` and `LoggingOut` are sub-states of holding a grant:
@@ -175,17 +175,61 @@ the app is expected to re-issue the call.
 
 ### `Authenticated → Locked → Authenticated`
 
-Under `UnlockPolicy.OnAppUnlock` the *storage* key requires user authentication; the DPoP key
-does not. Entering `Locked` means the refresh token cannot currently be unwrapped. The access
-token already in memory stays usable until it expires.
+Reachable only under `UnlockPolicy.OnAppUnlock`. Under the default, `UnlockPolicy.None`, no
+transition into `Locked` exists.
 
-Under `OnEveryCall` the DPoP key is gated too, and background operation is disabled. That
-combination is documented, not silently accepted.
+**The refresh token is unwrapped for the duration of one token request and no longer.** It is
+read inside the request that consumes it, used to build the request body, and the plaintext
+buffer is zeroed once the body is formed. No layer caches the unwrapped value between requests:
+holding it for a session would widen the exposure window from one network call to the lifetime
+of the process, which leaves encrypting it at rest doing very little.
 
-The unlock prompt must be bound to the crypto operation (`BiometricPrompt.CryptoObject`,
-`LAContext` reuse) rather than gating on a boolean returned by a biometric API. A boolean gates
-nothing: a patched binary returns `true`. `mobile-demo`'s `device_lock.dart` is the worked
-example of the wrong version.
+A policy gates the *storage* key and nothing else. The DPoP key is never gated under any
+policy — it signs a proof on every request, so gating it is a prompt per request under another
+name, and Android fails biometric authentication outside the foreground, which would end
+background refresh outright.
+
+Gating is a **time-bound** authorization of the key, not an auth-per-use binding:
+
+| Platform | Mechanism |
+|---|---|
+| Android | `setUserAuthenticationParameters(300, AUTH_BIOMETRIC_STRONG or AUTH_DEVICE_CREDENTIAL)`, or `setUserAuthenticationValidityDurationSeconds(300)` below API 30 |
+| iOS | `LAContext.touchIDAuthenticationAllowableReuseDuration = 300` |
+
+300 seconds is iOS's own ceiling for that window. Android permits a longer one; matching the
+stricter platform keeps this one machine rather than two. Any matching OS authentication inside
+the window satisfies the key — including the device unlock the user performed to open the app —
+so a typical session raises no prompt of the SDK's own.
+
+Once the window has elapsed, unwrapping fails: the SDK enters `Locked` and surfaces
+`Recoverable(UnlockRequired)`. The app presents the prompt and retries. The SDK does not present
+it, because it holds no `Activity` and a prompt is a UI decision. The access token already in
+memory stays usable until it expires, so `Locked` blocks refresh rather than every call.
+
+Because nothing is cached, this can occur mid-session rather than once per launch. It is bounded
+by refresh cadence — at most one prompt per access-token lifetime, never one per API call — and
+that bound is what is paid for never holding the credential in memory. Neither platform offers
+both at once.
+
+The prompt must be bound to the crypto operation (`BiometricPrompt.CryptoObject`, `LAContext`
+reuse) rather than gating on a boolean returned by a biometric API. A boolean gates nothing: a
+patched binary returns `true`. `mobile-demo`'s `device_lock.dart` is the worked example of the
+wrong version.
+
+**There is no per-call tier.** An earlier revision of this document specified `OnEveryCall`,
+which gated the DPoP key as well. It is removed rather than left unimplemented, because no
+implementation of it is usable:
+
+- Android's guidance scopes auth-per-use keys to "high-value transactions, such as making a
+  large payment" — per sensitive operation, not per request.
+- NIST SP 800-63B drives reauthentication off inactivity and overall session age (AAL2: 12 h /
+  30 min in rev 3, 24 h / 1 h in rev 4), never off a request count.
+- PSD2 requires SCA per *payment initiation*, and the EBA extended account-information
+  reauthentication from 90 days to 180. Even regulated banking does not reprompt per call.
+
+What that tier was reaching for — authenticate *this* operation — already exists one layer up as
+`StepUpRequired`, where the server names the ACR it requires. That is the correct layer: a
+client-side key configuration cannot tell a balance check from a transfer, and the server can.
 
 ### `Locked → Unauthenticated`
 
@@ -210,6 +254,7 @@ one grant to one device-installation; reusing it across users on a shared device
 | Item | Storage | Survives process death | Survives logout |
 |---|---|---|---|
 | Refresh token | Encrypted, `CredentialKeyProvider` | yes | no |
+| Refresh token, unwrapped | Memory, one token request, zeroed after | no | no |
 | Pending refresh generation | Encrypted | yes | no |
 | Pending authorization request | Encrypted | yes, ≤10 min | no |
 | Access token | Memory | no | no |

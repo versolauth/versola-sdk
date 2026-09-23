@@ -1,0 +1,39 @@
+id: 20-unlock-required
+title: An elapsed unlock window locks refresh without losing the grant or caching the token
+issues: [7, 14]
+applies_to: [android, ios, flutter]
+mode: any
+preconditions:
+  - The session is Authenticated under UnlockPolicy.OnAppUnlock.
+  - The last matching OS authentication was more than 300 seconds ago.
+steps:
+  - actor: os
+    action: Advance past the storage key's authentication window without any matching authentication.
+  - actor: app
+    action: Call an endpoint while the access token is still valid.
+    expect: 200 OK, with no prompt and no unwrap of the refresh token.
+  - actor: harness
+    action: Expire the access token.
+  - actor: app
+    action: Call the endpoint again.
+    expect: Recoverable with cause UnlockRequired, and session state Locked.
+  - actor: user
+    action: Satisfy the prompt the app presents, bound to the crypto operation.
+  - actor: app
+    action: Retry the call.
+    expect: 200 OK, and session state Authenticated.
+assertions:
+  - The SDK presents no authentication UI of its own at any point.
+  - No refresh is attempted while the window is elapsed; the grant is not wiped and no
+    Reauthenticate is surfaced.
+  - The DPoP key signs throughout the locked interval, proving no policy gated it.
+  - The refresh token is unwrapped only within the token request that consumes it, and is not
+    readable from SDK memory before or after that request.
+  - A second call inside the refreshed window completes without a further prompt.
+  - An enrolment change during the locked interval yields Reauthenticate with cause
+    CredentialsInvalidated, not UnlockRequired.
+notes: >-
+  The window is 300 seconds because that is iOS's ceiling for
+  touchIDAuthenticationAllowableReuseDuration; Android matches it rather than diverging. There
+  is deliberately no per-call scenario: state-machine.md records why that tier does not exist,
+  and scenario 14 covers the per-operation requirement it was mistaken for.

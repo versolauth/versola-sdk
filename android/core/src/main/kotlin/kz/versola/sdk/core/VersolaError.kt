@@ -46,6 +46,14 @@ public sealed class VersolaError(
             public data class Network(public val detail: String) : Cause
 
             /**
+             * Under [UnlockPolicy.OnAppUnlock], the storage key's authentication window has
+             * elapsed and the refresh token cannot currently be unwrapped. The grant is
+             * intact: the app presents a prompt bound to the crypto operation and retries.
+             * The access token already in memory stays usable until it expires.
+             */
+            public data object UnlockRequired : Cause
+
+            /**
              * RFC 9449 §9: a `use_dpop_nonce` challenge answered with the nonce it supplied
              * was challenged again. **Terminating** — `spec/retry-policy.md` allows exactly
              * one nonce retry per origin per operation, because a server that will never be

@@ -132,6 +132,7 @@ Not every error comes from a server.
 | Network failure, timeout, DNS | `Recoverable` | Surfaced only after the SDK's retry policy is exhausted. |
 | Nonce demanded on a retry that already carried one | `Recoverable`, cause `NonceLoop` | **Terminating.** A server that always demands a nonce must produce an error, never an unbounded retry. |
 | Storage key invalidated by biometric enrolment change | `Reauthenticate` | Indistinguishable from tampering; treated as sign-out. |
+| Storage key's authentication window has elapsed | `Recoverable`, cause `UnlockRequired` | `UnlockPolicy.OnAppUnlock` only. The app presents the prompt and retries; the grant is intact. |
 | Hardware key unavailable while `requireHardware = true` | `Configuration` | The app asked for a guarantee this device cannot provide. |
 | Discovery document missing a required field | `Configuration` | A missing `dpop_signing_alg_values_supported` is **not** this: it means bearer mode, logged, not failed. |
 | Pending authorization request older than 10 minutes | `Recoverable`, cause `Expired` | Discarded on restore. |
