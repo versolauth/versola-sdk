@@ -70,6 +70,21 @@ public abstract interface class kz/versola/sdk/core/CredentialKeyProvider {
 	public abstract fun wrap ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
+public abstract interface class kz/versola/sdk/core/CredentialStore {
+	public abstract fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun hasGrant (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun pendingRotation (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun rawIdToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun save ([BLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun save$default (Lkz/versola/sdk/core/CredentialStore;[BLjava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public abstract fun savePendingRotation (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun useRefreshToken (Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class kz/versola/sdk/core/CredentialStore$DefaultImpls {
+	public static synthetic fun save$default (Lkz/versola/sdk/core/CredentialStore;[BLjava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
 public abstract interface class kz/versola/sdk/core/DiscoveryClient {
 	public abstract fun fetch (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }

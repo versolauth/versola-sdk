@@ -1,3 +1,15 @@
+public final class kz/versola/sdk/storage/DataStoreCredentialStore : kz/versola/sdk/core/CredentialStore {
+	public fun <init> (Ljava/io/File;Lkz/versola/sdk/core/CredentialKeyProvider;Lkotlinx/coroutines/CoroutineScope;)V
+	public synthetic fun <init> (Ljava/io/File;Lkz/versola/sdk/core/CredentialKeyProvider;Lkotlinx/coroutines/CoroutineScope;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun hasGrant (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun pendingRotation (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun rawIdToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun save ([BLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun savePendingRotation (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun useRefreshToken (Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
 public final class kz/versola/sdk/storage/FilePendingAuthorizationStore : kz/versola/sdk/core/PendingAuthorizationStore {
 	public fun <init> (Ljava/io/File;Lkz/versola/sdk/core/CredentialKeyProvider;)V
 	public fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
