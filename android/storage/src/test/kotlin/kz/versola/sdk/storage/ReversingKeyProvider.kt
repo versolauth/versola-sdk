@@ -12,8 +12,12 @@ import kz.versola.sdk.core.CredentialKeyProvider
  */
 internal class ReversingKeyProvider : CredentialKeyProvider {
     var unwrapFailure: Throwable? = null
+    var wrapFailure: Throwable? = null
 
-    override suspend fun wrap(plaintext: ByteArray): ByteArray = plaintext.reversedArray()
+    override suspend fun wrap(plaintext: ByteArray): ByteArray {
+        wrapFailure?.let { throw it }
+        return plaintext.reversedArray()
+    }
 
     override suspend fun unwrap(blob: ByteArray): ByteArray {
         unwrapFailure?.let { throw it }

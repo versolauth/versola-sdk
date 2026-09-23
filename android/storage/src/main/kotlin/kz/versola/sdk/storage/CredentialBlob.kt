@@ -61,7 +61,15 @@ internal class CredentialBlob(
             }
 
             fun take(count: Int): ByteArray {
-                require(offset + count <= bytes.size, "truncated")
+                // Not `offset + count <= bytes.size`: a forged length near Int.MAX_VALUE
+                // overflows that sum to a negative number, which then passes the check
+                // vacuously and reaches `copyOfRange` with a corrupt range it throws
+                // `IllegalArgumentException` for — not a `CorruptionException`, so DataStore
+                // would never invoke the corruption handler and every later read fails
+                // instead of resetting to an empty grant. `bytes.size - offset` cannot
+                // overflow (both are within array-size bounds), so the comparison is safe
+                // for any `count`.
+                require(count in 0..(bytes.size - offset), "truncated")
                 return bytes.copyOfRange(offset, offset + count).also { offset += count }
             }
 
@@ -102,7 +110,16 @@ internal object CredentialBlobSerializer : Serializer<CredentialBlob> {
     override val defaultValue: CredentialBlob = CredentialBlob.EMPTY
 
     override suspend fun readFrom(input: InputStream): CredentialBlob =
-        CredentialBlob.decode(input.readBytes())
+        try {
+            CredentialBlob.decode(input.readBytes())
+        } catch (e: CorruptionException) {
+            throw e
+        } catch (e: Exception) {
+            // Belt and braces alongside the overflow fix in `take`: whatever a future bug in
+            // `decode` throws, it must still reach the corruption handler rather than
+            // wedging this store into throwing on every call for the rest of the install.
+            throw CorruptionException("credential file is not readable: ${e.message}", e)
+        }
 
     override suspend fun writeTo(t: CredentialBlob, output: OutputStream) {
         output.write(t.encode())

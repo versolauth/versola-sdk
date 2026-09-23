@@ -95,6 +95,23 @@ class DataStoreCredentialStoreTest {
     }
 
     @Test
+    fun `save zeroes the caller's array even when wrap throws`() = runTest {
+        // A locked key above all: `save` owns the buffer regardless of whether the wrap it
+        // was handed to succeeds, so a failed save must not leave it readable.
+        val caller = refreshToken.toByteArray()
+        keyProvider.wrapFailure = IllegalStateException("the key is locked")
+
+        try {
+            store.save(caller)
+            fail("wrap's failure should reach the caller")
+        } catch (e: IllegalStateException) {
+            assertEquals("the key is locked", e.message)
+        }
+
+        assertArrayEquals(ByteArray(refreshToken.length), caller)
+    }
+
+    @Test
     fun `the plaintext never reaches the disk`() = runTest {
         store.save(refreshToken.toByteArray(), idToken)
         store.savePendingRotation("idem-key-1")
@@ -199,6 +216,21 @@ class DataStoreCredentialStoreTest {
         // Its own file and its own store: DataStore permits exactly one instance per file.
         val corrupt = File(folder.newFolder(), "credentials")
         corrupt.writeBytes(byteArrayOf(1, 2, 3))
+
+        assertFalse(DataStoreCredentialStore(corrupt, keyProvider, scope).hasGrant())
+    }
+
+    @Test
+    fun `a forged field length near Int MAX VALUE reads as no grant rather than wedging the store`() = runTest {
+        // offset (3, after magic + version) + this length overflows a signed Int to a
+        // negative number. The old bounds check read that as "within range" and reached
+        // `copyOfRange` with a corrupt range, which throws `IllegalArgumentException` — not
+        // `CorruptionException` — so DataStore never resets the file and every later call
+        // throws instead of reading as no grant.
+        val corrupt = File(folder.newFolder(), "credentials")
+        corrupt.writeBytes(
+            byteArrayOf('V'.code.toByte(), 'C'.code.toByte(), 1, 0x7F, 0xFF.toByte(), 0xFF.toByte(), 0xFF.toByte()),
+        )
 
         assertFalse(DataStoreCredentialStore(corrupt, keyProvider, scope).hasGrant())
     }

@@ -47,8 +47,15 @@ public class DataStoreCredentialStore(
     )
 
     override suspend fun save(refreshToken: ByteArray, rawIdToken: String?) {
-        val wrappedToken = keyProvider.wrap(refreshToken)
-        refreshToken.fill(0)
+        // `keyProvider.wrap` can throw — a locked key above all — and `save`'s contract is
+        // that it takes ownership of `refreshToken` regardless of outcome. Zeroing has to run
+        // whether or not the wrap succeeded, or a failed save leaves the caller's buffer
+        // readable for as long as whatever holds the reference keeps holding it.
+        val wrappedToken = try {
+            keyProvider.wrap(refreshToken)
+        } finally {
+            refreshToken.fill(0)
+        }
         val wrappedIdToken = rawIdToken?.let { keyProvider.wrap(it.toByteArray(Charsets.UTF_8)) }
 
         dataStore.updateData { current ->
