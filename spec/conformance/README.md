@@ -31,6 +31,7 @@ not describe intent — intent belongs in [`../state-machine.md`](../state-machi
 | 17 | Unregistered redirect URI | any | 5, 11 |
 | 18 | RP-initiated logout | any | 10, 14 |
 | 19 | Retry budget bounded, backed off, configurable within maxima | any | 8, 9, 14 |
+| 20 | Elapsed unlock window locks refresh, not the session | any | 7, 14 |
 
 ## Fault injection
 

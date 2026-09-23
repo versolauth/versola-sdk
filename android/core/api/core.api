@@ -292,6 +292,19 @@ public final class kz/versola/sdk/core/TokenBinding$Dpop : kz/versola/sdk/core/T
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class kz/versola/sdk/core/UnlockPolicy : java/lang/Enum {
+	public static final field Companion Lkz/versola/sdk/core/UnlockPolicy$Companion;
+	public static final field None Lkz/versola/sdk/core/UnlockPolicy;
+	public static final field OnAppUnlock Lkz/versola/sdk/core/UnlockPolicy;
+	public static final field UNLOCK_WINDOW_SECONDS I
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lkz/versola/sdk/core/UnlockPolicy;
+	public static fun values ()[Lkz/versola/sdk/core/UnlockPolicy;
+}
+
+public final class kz/versola/sdk/core/UnlockPolicy$Companion {
+}
+
 public final class kz/versola/sdk/core/VersolaConfiguration {
 	public static final field Companion Lkz/versola/sdk/core/VersolaConfiguration$Companion;
 	public final fun getClientId ()Ljava/lang/String;
@@ -495,6 +508,13 @@ public final class kz/versola/sdk/core/VersolaError$Recoverable$Cause$PendingReq
 
 public final class kz/versola/sdk/core/VersolaError$Recoverable$Cause$SystemCancelled : kz/versola/sdk/core/VersolaError$Recoverable$Cause {
 	public static final field INSTANCE Lkz/versola/sdk/core/VersolaError$Recoverable$Cause$SystemCancelled;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class kz/versola/sdk/core/VersolaError$Recoverable$Cause$UnlockRequired : kz/versola/sdk/core/VersolaError$Recoverable$Cause {
+	public static final field INSTANCE Lkz/versola/sdk/core/VersolaError$Recoverable$Cause$UnlockRequired;
 	public fun equals (Ljava/lang/Object;)Z
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
