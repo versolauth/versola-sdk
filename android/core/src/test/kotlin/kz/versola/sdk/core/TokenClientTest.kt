@@ -9,6 +9,7 @@ import org.junit.After
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
@@ -217,6 +218,18 @@ class TokenClientTest {
     }
 
     @Test
+    fun `a key-bound client without a proof source is refused at construction`() = runTest {
+        // Otherwise the request goes out unbound and `requireHardware` checks a token type
+        // the server can answer with whether or not a proof was ever presented.
+        val failure = failure {
+            client(binding = TokenBinding.Dpop(requireHardware = true), dpop = null)
+        } as VersolaError.Configuration
+
+        assertTrue(failure.detail is VersolaError.Configuration.Detail.InvalidConfiguration)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
     fun `every response is observed, not only a challenge`() = runTest {
         // The Date header of a *success* is the cheapest place to learn the clock offset.
         server.enqueue(
@@ -247,6 +260,19 @@ class TokenClientTest {
         // The nonce reached the proof source off the challenge, which is what the second
         // proof is minted from.
         assertEquals(listOf(null to "nonce-1", null to null), proofSource.observed)
+    }
+
+    @Test
+    fun `a nonce challenge carrying no nonce is not retried at all`() = runTest {
+        // `observe` cached nothing, so a second proof would go out without the nonce the
+        // server demands — the same unbounded loop by another route, and for a code exchange
+        // a second request that can only burn the grant.
+        server.enqueue(error("use_dpop_nonce", nonce = null))
+
+        val failure = failure { client().exchange(grant()) } as VersolaError.Recoverable
+
+        assertTrue(failure.reason is VersolaError.Recoverable.Cause.NonceLoop)
+        assertEquals(1, server.requestCount)
     }
 
     @Test
@@ -336,6 +362,26 @@ class TokenClientTest {
     }
 
     @Test
+    fun `a response without token_type is malformed rather than assumed to be Bearer`() = runTest {
+        // RFC 6749 §5.1 makes it REQUIRED, and it is the field that says whether the grant is
+        // key-bound — the last one to guess a default for.
+        server.enqueue(
+            MockResponse.Builder()
+                .code(200)
+                .setHeader("Content-Type", "application/json")
+                .body("""{"access_token":"at","expires_in":3600}""")
+                .build(),
+        )
+
+        val failure = failure { client().exchange(grant()) } as VersolaError.Configuration
+
+        assertEquals(
+            VersolaError.Configuration.Detail.TokenResponseMalformed("token_type is missing"),
+            failure.detail,
+        )
+    }
+
+    @Test
     fun `a 200 that is not a token response is a deployment fault, not a retry`() = runTest {
         server.enqueue(
             MockResponse.Builder()
@@ -370,5 +416,27 @@ class TokenClientTest {
         val failure = failure { client().exchange(grant()) } as VersolaError.Recoverable
 
         assertTrue(failure.reason is VersolaError.Recoverable.Cause.Network)
+    }
+
+    @Test
+    fun `the form builder keeps no readable copy once cleared`() {
+        val form = FormBody().addBytes("refresh_token", refreshToken.toByteArray())
+
+        form.clear()
+
+        assertTrue(form.backingBytes().all { it == 0.toByte() })
+    }
+
+    @Test
+    fun `an outgrown buffer is zeroed rather than abandoned`() {
+        // Growth copies the encoded token into a larger array; the array left behind holds
+        // exactly the same bytes and is unreachable to zero later.
+        val form = FormBody().addBytes("refresh_token", refreshToken.toByteArray())
+        val outgrown = form.backingBytes()
+
+        form.add("padding", "x".repeat(outgrown.size))
+
+        assertNotSame(outgrown, form.backingBytes())
+        assertTrue(outgrown.all { it == 0.toByte() })
     }
 }

@@ -64,6 +64,20 @@ public class HttpTokenClient(
     private val tokenBinding: TokenBinding = if (dpop == null) TokenBinding.Bearer else TokenBinding.Dpop(),
 ) : TokenClient {
 
+    init {
+        // The same pairing `AuthorizationFlow` refuses, for the same reason: with no proof
+        // source, a key-bound request goes out unbound and `requireHardware` then checks a
+        // `DPoP` token type the server can hand back regardless of whether a proof was ever
+        // presented. Wiring, not deployment — it fails here rather than at the first exchange.
+        if (tokenBinding is TokenBinding.Dpop && dpop == null) {
+            throw VersolaError.Configuration(
+                VersolaError.Configuration.Detail.InvalidConfiguration(
+                    "TokenBinding.Dpop needs a DpopProofSource; pass one or select TokenBinding.Bearer",
+                ),
+            )
+        }
+    }
+
     override suspend fun exchange(grant: AuthorizationGrant): TokenResponse {
         val form = FormBody()
             .add("grant_type", "authorization_code")
@@ -89,6 +103,10 @@ public class HttpTokenClient(
     private suspend fun post(form: FormBody, idempotencyKey: String?): TokenResponse {
         val url = discovery.metadata().tokenEndpoint
         val body = form.toByteArray()
+        // The encoded token exists twice for as long as the builder is alive; the copy it
+        // keeps is as spendable as the one on the wire, so it goes now rather than at the
+        // next collection.
+        form.clear()
         try {
             var nonceRetried = false
             var proofRetried = false
@@ -99,7 +117,13 @@ public class HttpTokenClient(
                     is Attempt.UseDpopNonce -> {
                         // The nonce is already in the cache by now: `observe` stored it off
                         // the same response, so the retry's proof picks it up by itself.
-                        if (nonceRetried) {
+                        //
+                        // Unless the challenge carried none, which `observe` cannot cache and
+                        // no retry can answer — the same unbounded loop by another route, and
+                        // the line `DpopNonceRetry.accept` already draws. Terminating here
+                        // also spares a code exchange a second request that can only burn the
+                        // grant.
+                        if (nonceRetried || outcome.nonce.isNullOrEmpty()) {
                             throw VersolaError.Recoverable(
                                 VersolaError.Recoverable.Cause.NonceLoop(originOf(url)),
                             )
@@ -134,8 +158,13 @@ public class HttpTokenClient(
             try {
                 httpClient.newCall(builder.build()).execute().use { response ->
                     val payload = response.body.string()
-                    dpop?.observe(url, response.header("Date"), response.header("DPoP-Nonce"))
-                    if (response.isSuccessful) Attempt.Issued(issued(payload)) else rejected(response.code, payload)
+                    val nonce = response.header("DPoP-Nonce")
+                    dpop?.observe(url, response.header("Date"), nonce)
+                    if (response.isSuccessful) {
+                        Attempt.Issued(issued(payload))
+                    } else {
+                        rejected(response.code, payload, nonce)
+                    }
                 }
             } catch (e: IOException) {
                 throw VersolaError.Recoverable(
@@ -190,7 +219,7 @@ public class HttpTokenClient(
      * status: the status is 400 for nearly all of them, and the one that matters —
      * `invalid_grant` — shares it with six codes that mean the opposite.
      */
-    private fun rejected(status: Int, payload: String): Attempt {
+    private fun rejected(status: Int, payload: String, nonce: String?): Attempt {
         // 5xx is the provider having a bad moment, and its body is as likely to be an HTML
         // error page as JSON. Transport-shaped, retried under the caller's budget.
         if (status >= 500) {
@@ -214,7 +243,7 @@ public class HttpTokenClient(
         }
 
         return when (error.error) {
-            "use_dpop_nonce" -> Attempt.UseDpopNonce
+            "use_dpop_nonce" -> Attempt.UseDpopNonce(nonce)
             "invalid_dpop_proof" -> Attempt.InvalidProof
 
             "invalid_grant" -> throw VersolaError.Reauthenticate(
@@ -235,8 +264,12 @@ public class HttpTokenClient(
     private sealed interface Attempt {
         class Issued(val response: TokenResponse) : Attempt
 
-        /** RFC 9449 §8. The nonce is on the response and already cached by the time this is read. */
-        data object UseDpopNonce : Attempt
+        /**
+         * RFC 9449 §8. The nonce the challenge carried is already cached by the time this is
+         * read; it travels here as well because a challenge that carried none is answerable
+         * by nothing and must not be retried.
+         */
+        class UseDpopNonce(val nonce: String?) : Attempt
 
         data object InvalidProof : Attempt
     }
@@ -252,20 +285,36 @@ public class HttpTokenClient(
  * OkHttp's own `FormBody` takes `String`s, which is the one thing the refresh token must not
  * become. Percent-encoding is applied per byte here for the same reason — `URLEncoder` would
  * want a `String` back.
+ *
+ * The buffer is grown by hand rather than delegated to `ByteArrayOutputStream`, whose backing
+ * array is neither reachable nor zeroable: it would hold the encoded refresh token until a
+ * collection nobody controls, which is the copy this whole path exists to avoid. Here every
+ * array that ever held a byte of it is zeroed — the one in hand by [clear], and each one
+ * outgrown along the way.
  */
-private class FormBody {
-    private val out = ByteArrayOutputStream()
+internal class FormBody {
+    private var buffer = ByteArray(256)
+    private var length = 0
 
     fun add(name: String, value: String): FormBody = addBytes(name, value.toByteArray(Charsets.UTF_8))
 
     fun addBytes(name: String, value: ByteArray): FormBody = apply {
-        if (out.size() > 0) out.write('&'.code)
+        if (length > 0) write('&'.code)
         encode(name.toByteArray(Charsets.UTF_8))
-        out.write('='.code)
+        write('='.code)
         encode(value)
     }
 
-    fun toByteArray(): ByteArray = out.toByteArray()
+    fun toByteArray(): ByteArray = buffer.copyOf(length)
+
+    /** Zeroes the encoded copy this builder holds. The caller owns what [toByteArray] gave it. */
+    fun clear() {
+        buffer.fill(0)
+        length = 0
+    }
+
+    /** The array currently in use, so the zeroization test can watch one being discarded. */
+    internal fun backingBytes(): ByteArray = buffer
 
     /**
      * HTML5's form encoding, which RFC 6749 §4.1.3 points at: unreserved characters pass,
@@ -276,13 +325,24 @@ private class FormBody {
         for (byte in bytes) {
             val c = byte.toInt().toChar()
             if (c in 'A'..'Z' || c in 'a'..'z' || c in '0'..'9' || c in "-._~") {
-                out.write(byte.toInt())
+                write(byte.toInt())
             } else {
-                out.write('%'.code)
-                out.write(HEX[(byte.toInt() ushr 4) and 0xF].code)
-                out.write(HEX[byte.toInt() and 0xF].code)
+                write('%'.code)
+                write(HEX[(byte.toInt() ushr 4) and 0xF].code)
+                write(HEX[byte.toInt() and 0xF].code)
             }
         }
+    }
+
+    private fun write(byte: Int) {
+        if (length == buffer.size) {
+            val grown = ByteArray(buffer.size * 2)
+            buffer.copyInto(grown)
+            // The array being replaced holds the same bytes as the one replacing it.
+            buffer.fill(0)
+            buffer = grown
+        }
+        buffer[length++] = byte.toByte()
     }
 
     private companion object {

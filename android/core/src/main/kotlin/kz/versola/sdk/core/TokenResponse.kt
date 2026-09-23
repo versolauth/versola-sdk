@@ -43,6 +43,14 @@ public class TokenResponse internal constructor(
                     VersolaError.Configuration.Detail.TokenResponseMalformed("access_token is missing"),
                 )
             }
+            // RFC 6749 §5.1 makes `token_type` REQUIRED, and it is what decides whether the
+            // token is presented as `Bearer` or `DPoP`. Assuming `Bearer` for a response that
+            // omits it would guess the one field that says whether the grant is key-bound.
+            if (payload.tokenType.isNullOrBlank()) {
+                throw VersolaError.Configuration(
+                    VersolaError.Configuration.Detail.TokenResponseMalformed("token_type is missing"),
+                )
+            }
             return TokenResponse(
                 accessToken = payload.accessToken,
                 tokenType = payload.tokenType,
@@ -64,7 +72,7 @@ public class TokenResponse internal constructor(
 @Serializable
 internal class TokenResponsePayload(
     @SerialName("access_token") val accessToken: String = "",
-    @SerialName("token_type") val tokenType: String = "Bearer",
+    @SerialName("token_type") val tokenType: String? = null,
     @SerialName("expires_in") val expiresIn: Long = 0,
     @SerialName("refresh_token") val refreshToken: String? = null,
     @SerialName("id_token") val idToken: String? = null,
