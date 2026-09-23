@@ -2,7 +2,10 @@ package kz.versola.sdk.core
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -449,8 +452,8 @@ class AuthorizationFlowTest {
 
         val firstResult = async { flow.authorize(setOf("openid")) }
         firstEnteredBrowser.await()
-        // The first call now holds authorizeLock, suspended inside browser.authorize(). A
-        // second call must not be able to reach pendingStore.save() while that holds.
+        // The first call now holds the authorize lock, suspended inside browser.authorize().
+        // A second call must not be able to reach pendingStore.save() while that holds.
         val secondResult = async { flow.authorize(setOf("profile")) }
         runCurrent()
         assertEquals(1, store.saves)
@@ -463,5 +466,129 @@ class AuthorizationFlowTest {
         assertEquals("call-1", first.code)
         assertEquals("call-2", second.code)
         assertEquals(2, store.saves)
+    }
+
+    @Test
+    fun `two flows over one store are serialized, not only two calls on one flow`() = runTest {
+        // Nothing stops an app calling Versola.configure() twice, and the second result is not
+        // a second slot: the default store is one file under noBackupFilesDir and the redirect
+        // arrives through one process-wide dispatcher. An instance-scoped lock would leave the
+        // two free to overwrite each other's pending request and consume each other's redirect,
+        // so the lock has to be as wide as the resource it protects.
+        val store = RecordingStore()
+        val firstEnteredBrowser = CompletableDeferred<Unit>()
+        val releaseFirst = CompletableDeferred<Unit>()
+        val browser = object : BrowserAuthorizationSession {
+            var calls = 0
+            override suspend fun authorize(uri: String): BrowserOutcome {
+                calls++
+                val state = Regex("state=([^&]+)").find(uri)!!.groupValues[1]
+                if (calls == 1) {
+                    firstEnteredBrowser.complete(Unit)
+                    releaseFirst.await()
+                }
+                return BrowserOutcome.Redirect(
+                    "https://app.example.com/oauth?code=call-$calls&state=$state&iss=$ISSUER",
+                )
+            }
+            override suspend fun awaitPendingRedirect(): BrowserOutcome = error("not used")
+        }
+
+        val firstResult = async { flow(store, browser).authorize(setOf("openid")) }
+        firstEnteredBrowser.await()
+        val secondResult = async { flow(store, browser).authorize(setOf("profile")) }
+        runCurrent()
+        assertEquals(1, store.saves)
+
+        releaseFirst.complete(Unit)
+
+        assertEquals("call-1", firstResult.await().code)
+        assertEquals("call-2", secondResult.await().code)
+    }
+
+    @Test
+    fun `a cancelled caller leaves the pending request for a later resume`() = runTest {
+        // CancellationException is an Exception, so the launch-failure cleanup above would
+        // otherwise run for it too. The browser is already in the foreground by then and its
+        // redirect can still arrive — wiping the slot loses an authorization the user may have
+        // completed, and leaves resumePendingAuthorization() nothing to finish.
+        val store = RecordingStore()
+        val entered = CompletableDeferred<Unit>()
+        val browser = object : BrowserAuthorizationSession {
+            override suspend fun authorize(uri: String): BrowserOutcome {
+                entered.complete(Unit)
+                awaitCancellation()
+            }
+            override suspend fun awaitPendingRedirect(): BrowserOutcome =
+                BrowserOutcome.Redirect(
+                    "https://app.example.com/oauth?code=resumed&state=${store.stored!!.state}&iss=$ISSUER",
+                )
+        }
+        val flow = flow(store, browser)
+
+        val caller = launch { flow.authorize(setOf("openid")) }
+        entered.await()
+        caller.cancelAndJoin()
+
+        assertEquals(0, store.clears)
+        assertSame(SessionState.Authorizing, flow.sessionState.first())
+        assertEquals("resumed", flow.resumePendingAuthorization()!!.code)
+    }
+
+    @Test
+    fun `the tab a cancelled caller abandoned cannot fail the authorization that replaced it`() = runTest {
+        // Releasing the lock on cancellation lets a new authorize() start while the old tab is
+        // still open, and that tab can redirect after the new call has drained whatever was
+        // buffered. Its state is one this process issued, so treating it as a mismatch would
+        // lose a live authorization to a tab the user had already walked away from.
+        val store = RecordingStore()
+        val entered = CompletableDeferred<Unit>()
+        val abandonedBrowser = object : BrowserAuthorizationSession {
+            override suspend fun authorize(uri: String): BrowserOutcome {
+                entered.complete(Unit)
+                awaitCancellation()
+            }
+            override suspend fun awaitPendingRedirect(): BrowserOutcome = error("not used")
+        }
+        val flow = flow(store, abandonedBrowser)
+        val caller = launch { flow.authorize(setOf("openid")) }
+        entered.await()
+        caller.cancelAndJoin()
+        val abandonedState = store.stored!!.state
+
+        // The replacement opens its own tab; the abandoned one redirects into it first.
+        val replacement = object : BrowserAuthorizationSession {
+            var pendingRedirects = 0
+            override suspend fun authorize(uri: String): BrowserOutcome = BrowserOutcome.Redirect(
+                "https://app.example.com/oauth?code=stale&state=$abandonedState&iss=$ISSUER",
+            )
+            override suspend fun awaitPendingRedirect(): BrowserOutcome {
+                pendingRedirects++
+                return BrowserOutcome.Redirect(
+                    "https://app.example.com/oauth?code=mine&state=${store.stored!!.state}&iss=$ISSUER",
+                )
+            }
+        }
+
+        val grant = flow(store, replacement).authorize(setOf("openid"))
+
+        assertEquals("mine", grant.code)
+        assertEquals(1, replacement.pendingRedirects)
+    }
+
+    @Test
+    fun `a redirect for a state this process never issued is still a mismatch`() = runTest {
+        // The stale-redirect skip is not a relaxation of the state check: only a state this
+        // process itself abandoned is stepped over, and only once.
+        val store = RecordingStore()
+        val browser = FakeBrowser(
+            { BrowserOutcome.Redirect("https://app.example.com/oauth?code=c&state=someone-elses&iss=$ISSUER") },
+            store,
+        )
+        val flow = flow(store, browser)
+
+        val error = failure { flow.authorize(setOf("openid")) } as VersolaError.Configuration
+
+        assertSame(VersolaError.Configuration.Detail.StateMismatch, error.detail)
     }
 }

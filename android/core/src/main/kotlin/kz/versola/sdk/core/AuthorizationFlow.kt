@@ -1,5 +1,6 @@
 package kz.versola.sdk.core
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emitAll
@@ -55,12 +56,6 @@ public class AuthorizationFlow(
 
     private val state = MutableStateFlow<SessionState>(SessionState.Unauthenticated)
     private val restoreLock = Mutex()
-    // There is exactly one persisted slot and one process-wide redirect channel behind
-    // `browser`; a second concurrent `authorize()` would keep its own local `pending` while
-    // both share that slot and channel, so a redirect can wake the wrong caller and its
-    // state-mismatch cleanup can clear the other flow's slot. Serializing here is what makes
-    // "one slot" true rather than just persisted that way.
-    private val authorizeLock = Mutex()
     private var restored = false
     private var expiredOnRestore = false
 
@@ -85,12 +80,18 @@ public class AuthorizationFlow(
      *
      * The pending request is persisted **before** the browser opens — the app can be killed
      * between the two, and on Android that is not a rare case.
+     *
+     * A slot left behind by a cancelled caller is **superseded**, not protected: the app is
+     * asking for a new authorization and cannot be made to wait out the old slot's ten
+     * minutes, and the tab behind it may never redirect at all. The abandoned tab can still
+     * redirect, so its `state` is remembered and that redirect is discarded rather than
+     * allowed to fail this call as a mismatch.
      */
     public suspend fun authorize(
         scopes: Set<String>,
         acrValues: List<String> = emptyList(),
         maxAge: Long? = null,
-    ): AuthorizationGrant = authorizeLock.withLock {
+    ): AuthorizationGrant = AUTHORIZE_LOCK.withLock {
         ensureRestored()
         val metadata = discovery.metadata()
 
@@ -105,13 +106,26 @@ public class AuthorizationFlow(
         pendingStore.save(pending)
         state.value = SessionState.Authorizing
 
-        // If launching or awaiting the browser throws (notably `NoBrowserAvailable`, before
-        // any browser ever opened), the pending request and the `Authorizing` state must not
-        // survive it: nothing is actually pending, so a later cold start must not look
-        // resumable and wait forever for a redirect that can never arrive.
         val outcome = try {
-            browser.authorize(request.toUri(metadata.authorizationEndpoint))
+            belongingTo(pending, browser.authorize(request.toUri(metadata.authorizationEndpoint)))
+        } catch (e: CancellationException) {
+            // The *caller* was cancelled, not the authorization. The browser may already be
+            // in the foreground and its redirect may still arrive, so the slot and the
+            // `Authorizing` state are left exactly as a process death would leave them and
+            // `resumePendingAuthorization()` can still finish the flow.
+            //
+            // Cancellation before the launch intent actually fired leaves a slot nothing
+            // will ever answer, which expires by itself within ten minutes. That is the safe
+            // direction to be wrong in: a stale slot costs one expiry, while wiping a live
+            // one loses an authorization the user has already completed.
+            rememberAbandoned(pending.state)
+            throw e
         } catch (e: Exception) {
+            // Launching or awaiting the browser failed outright (notably
+            // `NoBrowserAvailable`, before any browser ever opened). Nothing is pending, so
+            // the request and the `Authorizing` state must not survive: a later cold start
+            // would otherwise look resumable and wait forever for a redirect that can never
+            // arrive.
             pendingStore.clear()
             state.value = SessionState.Unauthenticated
             throw e
@@ -130,7 +144,7 @@ public class AuthorizationFlow(
      * pending request with no live caller, which is exactly what this call is for. A *user*
      * cancel wipes the request, so there is nothing here to resume.
      */
-    public suspend fun resumePendingAuthorization(): AuthorizationGrant? = authorizeLock.withLock {
+    public suspend fun resumePendingAuthorization(): AuthorizationGrant? = AUTHORIZE_LOCK.withLock {
         ensureRestored()
         val pending = pendingStore.load()
             // Restoring already discarded it, and "expired" is not "nothing was pending":
@@ -147,35 +161,68 @@ public class AuthorizationFlow(
             throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.PendingRequestExpired)
         }
         state.value = SessionState.Authorizing
-        complete(browser.awaitPendingRedirect(), pending, discovery.metadata())
+        val outcome = belongingTo(pending, browser.awaitPendingRedirect())
+        complete(outcome, pending, discovery.metadata())
+    }
+
+    /**
+     * Consumes redirects until one answers [pending].
+     *
+     * A tab abandoned by a cancelled caller can redirect after this call has already drained
+     * whatever was buffered. That redirect carries a `state` this process issued itself, so
+     * failing on it would lose a live authorization to a tab the user forgot about. Each
+     * abandoned `state` is discarded exactly once, which is also what bounds this loop;
+     * everything else — an unknown `state` included — still reaches the validator.
+     */
+    private suspend fun belongingTo(
+        pending: PendingAuthorizationRequest,
+        first: BrowserOutcome,
+    ): BrowserOutcome {
+        var outcome = first
+        while (isAbandoned(outcome, pending)) {
+            outcome = browser.awaitPendingRedirect()
+        }
+        return outcome
+    }
+
+    private fun isAbandoned(outcome: BrowserOutcome, pending: PendingAuthorizationRequest): Boolean {
+        val redirect = outcome as? BrowserOutcome.Redirect ?: return false
+        val state = AuthorizationResponseValidator.stateOf(redirect.uri) ?: return false
+        return state != pending.state && forgetAbandoned(state)
     }
 
     private suspend fun complete(
         outcome: BrowserOutcome,
         pending: PendingAuthorizationRequest,
         metadata: ProviderMetadata,
-    ): AuthorizationGrant = when (outcome) {
-        is BrowserOutcome.UserCancelled -> {
-            pendingStore.clear()
-            state.value = SessionState.Unauthenticated
-            throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.UserCancelled)
-        }
+    ): AuthorizationGrant {
+        // Being answered is what stops this request being anyone's leftover, whichever way
+        // it ends: a resumed one is no longer abandoned, and a rejected one never will be.
+        forgetAbandoned(pending.state)
+        return when (outcome) {
+            is BrowserOutcome.UserCancelled -> {
+                pendingStore.clear()
+                state.value = SessionState.Unauthenticated
+                throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.UserCancelled)
+            }
 
-        is BrowserOutcome.Redirect -> try {
-            AuthorizationResponseValidator.validate(
-                redirect = outcome.uri,
-                pending = pending,
-                issuer = configuration.issuer,
-                issParameterSupported = metadata.authorizationResponseIssParameterSupported,
-            )
-            // Deliberately still Authorizing, and the pending request deliberately still
-            // stored: the machine reaches Authenticated only once a refresh token is durably
-            // held, and the slot is wiped only after that (#8).
-        } catch (e: VersolaError) {
-            // A rejected response is unsafe to continue from, whichever way it was rejected.
-            pendingStore.clear()
-            state.value = SessionState.Unauthenticated
-            throw e
+            is BrowserOutcome.Redirect -> try {
+                AuthorizationResponseValidator.validate(
+                    redirect = outcome.uri,
+                    pending = pending,
+                    issuer = configuration.issuer,
+                    issParameterSupported = metadata.authorizationResponseIssParameterSupported,
+                )
+                // Deliberately still Authorizing, and the pending request deliberately still
+                // stored: the machine reaches Authenticated only once a refresh token is
+                // durably held, and the slot is wiped only after that (#8).
+            } catch (e: VersolaError) {
+                // A rejected response is unsafe to continue from, whichever way it was
+                // rejected.
+                pendingStore.clear()
+                state.value = SessionState.Unauthenticated
+                throw e
+            }
         }
     }
 
@@ -219,5 +266,43 @@ public class AuthorizationFlow(
             }
             restored = true
         }
+    }
+
+    private companion object {
+        /**
+         * Process-wide, not per instance, because everything it protects is process-wide: the
+         * default [PendingAuthorizationStore] is one file under `noBackupFilesDir`, and the
+         * redirect arrives through a single `RedirectDispatcher` fed by one exported
+         * activity. Two `Versola.configure()` results therefore contend for the same slot and
+         * the same channel, and an instance-scoped lock would leave them free to overwrite
+         * each other's pending request and consume each other's redirect.
+         *
+         * Serializing across instances costs nothing real: the resource underneath is the
+         * foreground browser, and a device has one of those. Two authorizations genuinely in
+         * flight at once is not a case worth supporting — it is the bug.
+         */
+        private val AUTHORIZE_LOCK = Mutex()
+
+        /**
+         * `state` values of authorizations whose caller was cancelled while their tab was
+         * open — the redirects a later call may have to step over. Process-wide and guarded
+         * by [AUTHORIZE_LOCK], for the same reason the lock itself is: the tabs and the
+         * dispatcher they redirect into are not per instance either.
+         *
+         * Bounded, because an app that cancels repeatedly without ever redirecting would
+         * otherwise grow this without end. Eight is far more open tabs than a user has, and
+         * dropping the oldest only restores the old behaviour for it: a mismatch.
+         */
+        private val ABANDONED_STATES = LinkedHashSet<String>()
+        private const val MAX_ABANDONED_STATES = 8
+
+        private fun rememberAbandoned(state: String) {
+            ABANDONED_STATES += state
+            while (ABANDONED_STATES.size > MAX_ABANDONED_STATES) {
+                ABANDONED_STATES.remove(ABANDONED_STATES.first())
+            }
+        }
+
+        private fun forgetAbandoned(state: String): Boolean = ABANDONED_STATES.remove(state)
     }
 }

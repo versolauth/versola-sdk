@@ -85,6 +85,19 @@ public object AuthorizationResponseValidator {
     }
 
     /**
+     * The `state` a redirect carries, or null when it carries none or cannot be parsed.
+     *
+     * Only for telling *which* of this process's own authorizations a redirect answers. It
+     * decides nothing: a redirect that reaches [validate] is still compared against the
+     * pending request in constant time, absent `state` included.
+     */
+    internal fun stateOf(redirect: String): String? = try {
+        parseQueryOrThrowRaw(redirect)["state"]
+    } catch (e: Exception) {
+        null
+    }
+
+    /**
      * `spec/errors.md`, authorization endpoint table. Everything reachable without
      * `prompt=none` is a `Configuration` fault; the four that mean "the user has to sign in
      * again" are `Reauthenticate`. An unrecognised code is `Configuration` rather than a
