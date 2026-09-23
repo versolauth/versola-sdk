@@ -534,4 +534,61 @@ class AuthorizationFlowTest {
         assertSame(SessionState.Authorizing, flow.sessionState.first())
         assertEquals("resumed", flow.resumePendingAuthorization()!!.code)
     }
+
+    @Test
+    fun `the tab a cancelled caller abandoned cannot fail the authorization that replaced it`() = runTest {
+        // Releasing the lock on cancellation lets a new authorize() start while the old tab is
+        // still open, and that tab can redirect after the new call has drained whatever was
+        // buffered. Its state is one this process issued, so treating it as a mismatch would
+        // lose a live authorization to a tab the user had already walked away from.
+        val store = RecordingStore()
+        val entered = CompletableDeferred<Unit>()
+        val abandonedBrowser = object : BrowserAuthorizationSession {
+            override suspend fun authorize(uri: String): BrowserOutcome {
+                entered.complete(Unit)
+                awaitCancellation()
+            }
+            override suspend fun awaitPendingRedirect(): BrowserOutcome = error("not used")
+        }
+        val flow = flow(store, abandonedBrowser)
+        val caller = launch { flow.authorize(setOf("openid")) }
+        entered.await()
+        caller.cancelAndJoin()
+        val abandonedState = store.stored!!.state
+
+        // The replacement opens its own tab; the abandoned one redirects into it first.
+        val replacement = object : BrowserAuthorizationSession {
+            var pendingRedirects = 0
+            override suspend fun authorize(uri: String): BrowserOutcome = BrowserOutcome.Redirect(
+                "https://app.example.com/oauth?code=stale&state=$abandonedState&iss=$ISSUER",
+            )
+            override suspend fun awaitPendingRedirect(): BrowserOutcome {
+                pendingRedirects++
+                return BrowserOutcome.Redirect(
+                    "https://app.example.com/oauth?code=mine&state=${store.stored!!.state}&iss=$ISSUER",
+                )
+            }
+        }
+
+        val grant = flow(store, replacement).authorize(setOf("openid"))
+
+        assertEquals("mine", grant.code)
+        assertEquals(1, replacement.pendingRedirects)
+    }
+
+    @Test
+    fun `a redirect for a state this process never issued is still a mismatch`() = runTest {
+        // The stale-redirect skip is not a relaxation of the state check: only a state this
+        // process itself abandoned is stepped over, and only once.
+        val store = RecordingStore()
+        val browser = FakeBrowser(
+            { BrowserOutcome.Redirect("https://app.example.com/oauth?code=c&state=someone-elses&iss=$ISSUER") },
+            store,
+        )
+        val flow = flow(store, browser)
+
+        val error = failure { flow.authorize(setOf("openid")) } as VersolaError.Configuration
+
+        assertSame(VersolaError.Configuration.Detail.StateMismatch, error.detail)
+    }
 }
