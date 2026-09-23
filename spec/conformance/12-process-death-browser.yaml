@@ -1,0 +1,28 @@
+id: 12-process-death-browser
+title: Killed while the browser is foreground; the redirect still completes
+issues: [5, 11, 15]
+applies_to: [android, ios, flutter]
+mode: any
+fault_injection: [process-death]
+preconditions:
+  - Authorization has started and the system browser is in the foreground.
+  - The pending authorization request has been persisted.
+steps:
+  - actor: os
+    action: Kill the app process while the browser is foreground.
+  - actor: user
+    action: Complete authentication in the browser.
+  - actor: os
+    action: Deliver the redirect, cold-starting the app.
+  - actor: sdk
+    action: Restore the pending request and validate the redirect against it.
+    expect: Token exchange succeeds.
+assertions:
+  - The restored code_verifier produces a successful exchange, proving it survived the kill.
+  - state is validated against the restored value, not regenerated.
+  - The app observes Authorizing on cold start, never Unauthenticated.
+  - The pending request is wiped only after the refresh token is durably stored.
+  - A pending request older than ten minutes is instead discarded, leaving Unauthenticated.
+notes: >
+  This is the flutter_appauth failure recorded in mobile-demo's pubspec.yaml. It is the reason
+  that dependency was rejected, and regressing it regresses to a known-broken baseline.

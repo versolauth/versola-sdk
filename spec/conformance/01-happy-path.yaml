@@ -1,0 +1,39 @@
+id: 01-happy-path
+title: Discovery, authorize, token exchange, authenticated call through edge
+issues: [5, 9, 11, 15]
+applies_to: [android, ios, flutter]
+mode: dpop
+preconditions:
+  - A client is registered through Central with the SDK's redirect URI and the openid and profile scopes.
+  - A resource is registered on edge and the test user holds a role granting access to one of its endpoints.
+  - No credentials are present on the device.
+steps:
+  - actor: app
+    action: Versola.configure with the issuer, client id and redirect URI, then login with scopes openid and profile.
+  - actor: sdk
+    action: GET the issuer's /.well-known/openid-configuration.
+    expect: 200 with authorization_endpoint, token_endpoint and dpop_signing_alg_values_supported present.
+  - actor: sdk
+    action: Open the authorization endpoint in the system browser.
+    expect: Query carries response_type=code, code_challenge_method=S256, a code_challenge, state, nonce and the registered redirect_uri.
+  - actor: user
+    action: Authenticate in the browser.
+  - actor: auth
+    action: Redirect to the registered redirect URI with code, state and iss.
+  - actor: sdk
+    action: POST the code to the token endpoint with code_verifier and a DPoP proof.
+    expect: 200 with access_token, refresh_token, id_token and token_type=DPoP.
+  - actor: app
+    action: Issue a GET through the SDK's HTTP client to the registered edge endpoint.
+  - actor: edge
+    action: Serve the proxied response.
+    expect: 200 OK.
+assertions:
+  - The authorization request's code_challenge is the base64url SHA-256 of the code_verifier later presented.
+  - state and nonce are each at least 128 bits of CSPRNG output and differ between two consecutive runs.
+  - The token request carries exactly one DPoP header and no client_secret parameter.
+  - The DPoP proof on the token request has htm=POST, htu equal to the token endpoint without query or fragment, a jti unique across the run, and no ath claim.
+  - The DPoP proof on the edge request has htm and htu matching that request and an ath equal to the base64url SHA-256 of the access token.
+  - Every request the SDK emits is equivalent to the reference client's, ignoring jti, iat and nonce values.
+  - Session state observed by the app is Unauthenticated then Authorizing then Authenticated, with no other value in between.
+  - No access token value appears in any log the SDK emits at its default level.

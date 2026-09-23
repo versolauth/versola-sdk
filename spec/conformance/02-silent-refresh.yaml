@@ -1,0 +1,25 @@
+id: 02-silent-refresh
+title: Silent refresh before expiry, followed by a successful call
+issues: [8, 14, 15]
+applies_to: [android, ios, flutter]
+mode: any
+preconditions:
+  - Scenario 01 has completed and the session is Authenticated.
+  - The access token lifetime is short enough for the harness to reach its refresh skew within the test.
+steps:
+  - actor: harness
+    action: Advance to within the SDK's refresh skew of the access token's exp.
+  - actor: app
+    action: Issue a call through the SDK's HTTP client.
+  - actor: sdk
+    action: Refresh before sending the call.
+    expect: One POST to the token endpoint with grant_type=refresh_token.
+  - actor: edge
+    action: Serve the proxied response.
+    expect: 200 OK.
+assertions:
+  - Exactly one token request is made.
+  - The application call is sent with the new access token, never the expired one.
+  - The refresh request carries an Idempotency-Key header.
+  - The app observes Authenticated, Refreshing, Authenticated and never Unauthenticated.
+  - The proxied call is not retried, because it never failed.

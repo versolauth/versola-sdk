@@ -1,0 +1,20 @@
+id: 08-single-flight-refresh
+title: Concurrent 401s produce exactly one token request
+issues: [8, 14, 15]
+applies_to: [android, ios, flutter]
+mode: any
+preconditions:
+  - The session is Authenticated with an expired access token.
+steps:
+  - actor: app
+    action: Issue five calls concurrently through the SDK's HTTP client.
+  - actor: edge
+    action: Answer each with 401 until a valid token is presented.
+  - actor: sdk
+    action: Coalesce the refreshes.
+assertions:
+  - Exactly one POST to the token endpoint is observed for the burst.
+  - All five calls complete successfully with the same access token.
+  - No caller receives an error.
+  - Repeating with fifty concurrent calls still produces exactly one token request.
+  - In bearer mode no rotation beyond the single one occurs, so no replay is recorded server-side.

@@ -1,0 +1,34 @@
+id: 19-retry-budget
+title: Retries are bounded, backed off, and configurable only within fixed maxima
+issues: [8, 9, 14, 15]
+applies_to: [android, ios, flutter]
+mode: any
+fault_injection: [network-partition, drop-response, always-demand-dpop-nonce]
+preconditions:
+  - The SDK is configured with the default RetryPolicy.
+  - The session is Authenticated.
+steps:
+  - actor: harness
+    action: Answer every proxied call with 503 for sixty seconds.
+  - actor: app
+    action: Issue one call through the SDK's HTTP client.
+  - actor: sdk
+    action: Retry under its policy, then give up.
+  - actor: harness
+    action: Repeat the window with 401, then with use_dpop_nonce, then with a dropped response.
+  - actor: app
+    action: Reconfigure with maxAttemptsPerOrigin set above its hard maximum.
+assertions:
+  - Under the default policy one application call produces at most three requests to one origin and at most four in total, originals included.
+  - Successive delays increase by the configured multiplier, are capped at maxBackoff, and carry jitter — two runs do not produce identical delay sequences.
+  - The operation gives up within totalBudget including delays.
+  - A refresh triggered by a 401 is counted inside the originating call's budget, not given a budget of its own.
+  - A use_dpop_nonce produces exactly one retry per origin per operation, independent of the configured budget.
+  - An invalid_dpop_proof produces exactly one retry, independent of the configured budget.
+  - Once the budget is exhausted the SDK surfaces Recoverable carrying the attempt count and elapsed time, and emits no further request for that operation.
+  - A RetryPolicy value above its hard maximum fails at configure time with Configuration, and is not silently clamped.
+  - A policy cannot be constructed that permits unbounded attempts; there is no sentinel value meaning "forever".
+notes: >
+  Edge has no rate limiter yet (versola#310), but the ceiling is not contingent on that: a
+  retry loop in a shipped app runs on every installed device until the next release reaches
+  them. 429 and Retry-After handling is tracked separately in #22.

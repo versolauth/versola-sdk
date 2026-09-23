@@ -1,0 +1,22 @@
+id: 07-bearer-fallback
+title: Discovery omits dpop_signing_alg_values_supported; the SDK falls back to bearer
+issues: [5, 6, 11, 12, 15]
+applies_to: [android, ios, flutter]
+mode: bearer
+fault_injection: [omit-discovery-field]
+preconditions:
+  - The harness serves a discovery document with no dpop_signing_alg_values_supported member.
+  - The app did not set TokenBinding.Dpop(requireHardware = true).
+steps:
+  - actor: sdk
+    action: Fetch discovery and derive capabilities.
+  - actor: sdk
+    action: Complete authorization and token exchange.
+  - actor: app
+    action: Issue a call through the SDK's HTTP client.
+assertions:
+  - No request carries a DPoP header.
+  - The access token is presented with the Bearer scheme.
+  - The SDK logs, once, that DPoP was unavailable and bearer was used.
+  - No error surfaces to the app; the deployment is valid, merely older.
+  - With requireHardware = true the same discovery document instead produces Configuration before any authorization request is made.

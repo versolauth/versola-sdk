@@ -1,0 +1,31 @@
+id: 17-unregistered-redirect-uri
+title: Unregistered redirect URI or unknown client_id is indistinguishable from user cancel
+issues: [5, 11, 15]
+applies_to: [android, ios, flutter]
+mode: any
+preconditions:
+  - The SDK is configured with a redirect URI the client is not registered for.
+steps:
+  - actor: app
+    action: Call login.
+  - actor: sdk
+    action: Open the authorization endpoint.
+  - actor: auth
+    action: Answer directly with an error page rather than redirecting, because an unregistered redirect URI is not a safe place to send a response.
+  - actor: user
+    action: Close the browser — the only way to leave that page.
+assertions:
+  - The SDK reports the same outcome it reports for a user cancel. Neither Custom Tabs nor ASWebAuthenticationSession exposes the error page's status or body to the host app, so the SDK has no `redirect_uri` or `client_id` to name and cannot tell this apart from the user simply closing the tab.
+  - No token request is made.
+  - "The same applies to an unknown client_id, for the same reason: the server cannot safely redirect either."
+notes: >
+  This is a limitation of every browser-based mobile OAuth client, AppAuth included, not
+  something #5 can fix: the browser sandbox that makes the flow safe is exactly what hides the
+  error page from the host app. A `Configuration` result naming the URI would require seeing a
+  response the platform APIs do not expose.
+
+  The one way out is validating the request before any browser opens, over plain HTTPS from the
+  app itself — pushing it via PAR (RFC 9126), whose error response is JSON the SDK can parse
+  directly. PAR is explicitly out of scope for #5 ("Explicitly not in scope"); this scenario
+  stays at "same as cancel" until a follow-up brings PAR in scope, at which point it should be
+  rewritten to require the precise `Configuration` result.
