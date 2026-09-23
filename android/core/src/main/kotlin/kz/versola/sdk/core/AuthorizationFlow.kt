@@ -1,5 +1,6 @@
 package kz.versola.sdk.core
 
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emitAll
@@ -55,12 +56,6 @@ public class AuthorizationFlow(
 
     private val state = MutableStateFlow<SessionState>(SessionState.Unauthenticated)
     private val restoreLock = Mutex()
-    // There is exactly one persisted slot and one process-wide redirect channel behind
-    // `browser`; a second concurrent `authorize()` would keep its own local `pending` while
-    // both share that slot and channel, so a redirect can wake the wrong caller and its
-    // state-mismatch cleanup can clear the other flow's slot. Serializing here is what makes
-    // "one slot" true rather than just persisted that way.
-    private val authorizeLock = Mutex()
     private var restored = false
     private var expiredOnRestore = false
 
@@ -90,7 +85,7 @@ public class AuthorizationFlow(
         scopes: Set<String>,
         acrValues: List<String> = emptyList(),
         maxAge: Long? = null,
-    ): AuthorizationGrant = authorizeLock.withLock {
+    ): AuthorizationGrant = AUTHORIZE_LOCK.withLock {
         ensureRestored()
         val metadata = discovery.metadata()
 
@@ -105,13 +100,25 @@ public class AuthorizationFlow(
         pendingStore.save(pending)
         state.value = SessionState.Authorizing
 
-        // If launching or awaiting the browser throws (notably `NoBrowserAvailable`, before
-        // any browser ever opened), the pending request and the `Authorizing` state must not
-        // survive it: nothing is actually pending, so a later cold start must not look
-        // resumable and wait forever for a redirect that can never arrive.
         val outcome = try {
             browser.authorize(request.toUri(metadata.authorizationEndpoint))
+        } catch (e: CancellationException) {
+            // The *caller* was cancelled, not the authorization. The browser may already be
+            // in the foreground and its redirect may still arrive, so the slot and the
+            // `Authorizing` state are left exactly as a process death would leave them and
+            // `resumePendingAuthorization()` can still finish the flow.
+            //
+            // Cancellation before the launch intent actually fired leaves a slot nothing
+            // will ever answer, which expires by itself within ten minutes. That is the safe
+            // direction to be wrong in: a stale slot costs one expiry, while wiping a live
+            // one loses an authorization the user has already completed.
+            throw e
         } catch (e: Exception) {
+            // Launching or awaiting the browser failed outright (notably
+            // `NoBrowserAvailable`, before any browser ever opened). Nothing is pending, so
+            // the request and the `Authorizing` state must not survive: a later cold start
+            // would otherwise look resumable and wait forever for a redirect that can never
+            // arrive.
             pendingStore.clear()
             state.value = SessionState.Unauthenticated
             throw e
@@ -130,7 +137,7 @@ public class AuthorizationFlow(
      * pending request with no live caller, which is exactly what this call is for. A *user*
      * cancel wipes the request, so there is nothing here to resume.
      */
-    public suspend fun resumePendingAuthorization(): AuthorizationGrant? = authorizeLock.withLock {
+    public suspend fun resumePendingAuthorization(): AuthorizationGrant? = AUTHORIZE_LOCK.withLock {
         ensureRestored()
         val pending = pendingStore.load()
             // Restoring already discarded it, and "expired" is not "nothing was pending":
@@ -219,5 +226,21 @@ public class AuthorizationFlow(
             }
             restored = true
         }
+    }
+
+    private companion object {
+        /**
+         * Process-wide, not per instance, because everything it protects is process-wide: the
+         * default [PendingAuthorizationStore] is one file under `noBackupFilesDir`, and the
+         * redirect arrives through a single `RedirectDispatcher` fed by one exported
+         * activity. Two `Versola.configure()` results therefore contend for the same slot and
+         * the same channel, and an instance-scoped lock would leave them free to overwrite
+         * each other's pending request and consume each other's redirect.
+         *
+         * Serializing across instances costs nothing real: the resource underneath is the
+         * foreground browser, and a device has one of those. Two authorizations genuinely in
+         * flight at once is not a case worth supporting — it is the bug.
+         */
+        private val AUTHORIZE_LOCK = Mutex()
     }
 }

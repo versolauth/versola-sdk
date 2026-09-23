@@ -2,7 +2,10 @@ package kz.versola.sdk.core
 
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -449,8 +452,8 @@ class AuthorizationFlowTest {
 
         val firstResult = async { flow.authorize(setOf("openid")) }
         firstEnteredBrowser.await()
-        // The first call now holds authorizeLock, suspended inside browser.authorize(). A
-        // second call must not be able to reach pendingStore.save() while that holds.
+        // The first call now holds the authorize lock, suspended inside browser.authorize().
+        // A second call must not be able to reach pendingStore.save() while that holds.
         val secondResult = async { flow.authorize(setOf("profile")) }
         runCurrent()
         assertEquals(1, store.saves)
@@ -463,5 +466,72 @@ class AuthorizationFlowTest {
         assertEquals("call-1", first.code)
         assertEquals("call-2", second.code)
         assertEquals(2, store.saves)
+    }
+
+    @Test
+    fun `two flows over one store are serialized, not only two calls on one flow`() = runTest {
+        // Nothing stops an app calling Versola.configure() twice, and the second result is not
+        // a second slot: the default store is one file under noBackupFilesDir and the redirect
+        // arrives through one process-wide dispatcher. An instance-scoped lock would leave the
+        // two free to overwrite each other's pending request and consume each other's redirect,
+        // so the lock has to be as wide as the resource it protects.
+        val store = RecordingStore()
+        val firstEnteredBrowser = CompletableDeferred<Unit>()
+        val releaseFirst = CompletableDeferred<Unit>()
+        val browser = object : BrowserAuthorizationSession {
+            var calls = 0
+            override suspend fun authorize(uri: String): BrowserOutcome {
+                calls++
+                val state = Regex("state=([^&]+)").find(uri)!!.groupValues[1]
+                if (calls == 1) {
+                    firstEnteredBrowser.complete(Unit)
+                    releaseFirst.await()
+                }
+                return BrowserOutcome.Redirect(
+                    "https://app.example.com/oauth?code=call-$calls&state=$state&iss=$ISSUER",
+                )
+            }
+            override suspend fun awaitPendingRedirect(): BrowserOutcome = error("not used")
+        }
+
+        val firstResult = async { flow(store, browser).authorize(setOf("openid")) }
+        firstEnteredBrowser.await()
+        val secondResult = async { flow(store, browser).authorize(setOf("profile")) }
+        runCurrent()
+        assertEquals(1, store.saves)
+
+        releaseFirst.complete(Unit)
+
+        assertEquals("call-1", firstResult.await().code)
+        assertEquals("call-2", secondResult.await().code)
+    }
+
+    @Test
+    fun `a cancelled caller leaves the pending request for a later resume`() = runTest {
+        // CancellationException is an Exception, so the launch-failure cleanup above would
+        // otherwise run for it too. The browser is already in the foreground by then and its
+        // redirect can still arrive — wiping the slot loses an authorization the user may have
+        // completed, and leaves resumePendingAuthorization() nothing to finish.
+        val store = RecordingStore()
+        val entered = CompletableDeferred<Unit>()
+        val browser = object : BrowserAuthorizationSession {
+            override suspend fun authorize(uri: String): BrowserOutcome {
+                entered.complete(Unit)
+                awaitCancellation()
+            }
+            override suspend fun awaitPendingRedirect(): BrowserOutcome =
+                BrowserOutcome.Redirect(
+                    "https://app.example.com/oauth?code=resumed&state=${store.stored!!.state}&iss=$ISSUER",
+                )
+        }
+        val flow = flow(store, browser)
+
+        val caller = launch { flow.authorize(setOf("openid")) }
+        entered.await()
+        caller.cancelAndJoin()
+
+        assertEquals(0, store.clears)
+        assertSame(SessionState.Authorizing, flow.sessionState.first())
+        assertEquals("resumed", flow.resumePendingAuthorization()!!.code)
     }
 }
