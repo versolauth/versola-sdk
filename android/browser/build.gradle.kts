@@ -1,0 +1,36 @@
+// System browser launch: Chrome Custom Tabs with a fallback chain to the default
+// browser. Embedded WebView is deliberately unreachable from this module's public API
+// — see #1 §4 and #5's scope note on why.
+plugins {
+    id("com.android.library")
+    id("org.jetbrains.kotlin.android")
+    id("org.jetbrains.kotlinx.binary-compatibility-validator")
+}
+
+android {
+    namespace = "kz.versola.sdk.browser"
+    compileSdk = 36
+
+    defaultConfig {
+        minSdk = 26
+        // No targetSdk on a library module: AGP requires libraries with a
+        // targetSdk value to match consumers' compileSdk, which only tightens
+        // things pointlessly here. Target 36 (#1 SS4) is the app's decision.
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+kotlin {
+    explicitApi()
+}
+
+dependencies {
+    api(project(":core"))
+    implementation("androidx.browser:browser:1.10.0")
+
+    testImplementation("junit:junit:4.13.2")
+}
