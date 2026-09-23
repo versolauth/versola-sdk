@@ -64,8 +64,22 @@ class VersolaConfigurationTest {
     }
 
     @Test
+    fun `an opaque https redirect with no host is refused rather than treated as an App Link`() {
+        // "https:callback" has a scheme and is absolute, but no host: Android cannot route it
+        // as an HTTPS App Link redirect, so it must not silently pass as one.
+        assertThrows(VersolaError.Configuration::class.java) { configure(redirectUri = "https:callback") }
+    }
+
+    @Test
     fun `a non-https issuer is refused`() {
         assertThrows(VersolaError.Configuration::class.java) { configure(issuer = "http://id.versola.kz") }
+    }
+
+    @Test
+    fun `an opaque issuer with no host is refused rather than passing the scheme check`() {
+        // "https:issuer" passes a scheme-only check, then has no host to append the
+        // well-known path to — which must fail here, not later inside discovery.
+        assertThrows(VersolaError.Configuration::class.java) { configure(issuer = "https:issuer") }
     }
 
     @Test

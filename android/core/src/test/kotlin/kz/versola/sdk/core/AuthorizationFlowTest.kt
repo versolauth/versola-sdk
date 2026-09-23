@@ -1,6 +1,9 @@
 package kz.versola.sdk.core
 
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -289,5 +292,70 @@ class AuthorizationFlowTest {
         flow(store, browser).authorize(setOf("openid"))
 
         assertTrue(browser.launchedUri!!.startsWith("$ISSUER/authorize?"))
+    }
+
+    @Test
+    fun `a browser that fails to launch leaves nothing pending for a later cold start`() = runTest {
+        // If browser.authorize() throws (notably NoBrowserAvailable) before any browser ever
+        // opened, the persisted request and Authorizing state must not survive it — otherwise a
+        // later cold start looks resumable and waits forever for a redirect that cannot exist.
+        val store = RecordingStore()
+        val launchFailure = VersolaError.Configuration(VersolaError.Configuration.Detail.NoBrowserAvailable)
+        val browser = object : BrowserAuthorizationSession {
+            override suspend fun authorize(uri: String): BrowserOutcome = throw launchFailure
+            override suspend fun awaitPendingRedirect(): BrowserOutcome = error("not used")
+        }
+        val flow = flow(store, browser)
+
+        val thrown = failure { flow.authorize(setOf("openid")) }
+
+        assertSame(launchFailure, thrown)
+        assertNull(store.stored)
+        assertEquals(1, store.clears)
+        assertSame(SessionState.Unauthenticated, flow.sessionState.first())
+    }
+
+    @Test
+    fun `concurrent authorize calls are serialized rather than racing on the shared slot`() = runTest {
+        // There is exactly one persisted slot and one process-wide redirect channel behind a
+        // real BrowserAuthorizationSession. If two authorize() calls interleaved, the second's
+        // save could overwrite the first's pending request before the first's redirect arrives,
+        // corrupting whichever flow resolves second. Serializing is what keeps "one slot" true.
+        val store = RecordingStore()
+        val firstEnteredBrowser = CompletableDeferred<Unit>()
+        val releaseFirst = CompletableDeferred<Unit>()
+        val browser = object : BrowserAuthorizationSession {
+            var calls = 0
+            override suspend fun authorize(uri: String): BrowserOutcome {
+                calls++
+                val state = Regex("state=([^&]+)").find(uri)!!.groupValues[1]
+                if (calls == 1) {
+                    firstEnteredBrowser.complete(Unit)
+                    releaseFirst.await()
+                }
+                return BrowserOutcome.Redirect(
+                    "https://app.example.com/oauth?code=call-$calls&state=$state&iss=$ISSUER",
+                )
+            }
+            override suspend fun awaitPendingRedirect(): BrowserOutcome = error("not used")
+        }
+        val flow = flow(store, browser)
+
+        val firstResult = async { flow.authorize(setOf("openid")) }
+        firstEnteredBrowser.await()
+        // The first call now holds authorizeLock, suspended inside browser.authorize(). A
+        // second call must not be able to reach pendingStore.save() while that holds.
+        val secondResult = async { flow.authorize(setOf("profile")) }
+        runCurrent()
+        assertEquals(1, store.saves)
+        assertEquals(1, browser.calls)
+
+        releaseFirst.complete(Unit)
+        val first = firstResult.await()
+        val second = secondResult.await()
+
+        assertEquals("call-1", first.code)
+        assertEquals("call-2", second.code)
+        assertEquals(2, store.saves)
     }
 }

@@ -135,7 +135,10 @@ public class DiscoveryService(
             cache.load()?.let { cached ->
                 // A cached document from a different issuer belongs to a previous
                 // configuration of this app; treat it as absent rather than trusting it.
-                if (cached.issuer == issuer) {
+                // Trailing-slash-insensitive, matching `ProviderMetadata.validate` — otherwise
+                // metadata saved as "<issuer>/" would pass validation on first fetch but never
+                // be recognised as a cache hit again, silently defeating the disk cache.
+                if (cached.issuer.trimEnd('/') == issuer.trimEnd('/')) {
                     inMemory = cached
                     return@withLock cached
                 }

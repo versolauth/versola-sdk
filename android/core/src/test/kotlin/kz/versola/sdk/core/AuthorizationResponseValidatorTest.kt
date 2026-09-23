@@ -205,6 +205,27 @@ class AuthorizationResponseValidatorTest {
     }
 
     @Test
+    fun `a malformed percent-escape is Configuration rather than a raw decoder exception`() {
+        // The redirect activity hands over whatever URI string the OS delivered — untrusted
+        // external input. `URLDecoder.decode` throws `IllegalArgumentException` on a bare
+        // "%", which must not escape past the `VersolaError` contract `complete()` cleans up
+        // after (it only catches `VersolaError`).
+        val error = assertThrows(VersolaError.Configuration::class.java) {
+            AuthorizationResponseValidator.validate(
+                redirect = "https://app.example.com/oauth?state=the-state&code=%",
+                pending = pending(),
+                issuer = ISSUER,
+                issParameterSupported = false,
+            )
+        }
+
+        assertEquals(
+            VersolaError.Configuration.Detail.MalformedAuthorizationResponse,
+            error.detail,
+        )
+    }
+
+    @Test
     fun `a repeated parameter is malformed rather than last-wins`() {
         // Last-wins is how a smuggled parameter gets read; the server refuses duplicates for
         // the same reason (AuthorizeRequestParser.getParam).

@@ -28,6 +28,12 @@ public class AuthorizationFlow(
 
     private val state = MutableStateFlow<SessionState>(SessionState.Unauthenticated)
     private val restoreLock = Mutex()
+    // There is exactly one persisted slot and one process-wide redirect channel behind
+    // `browser`; a second concurrent `authorize()` would keep its own local `pending` while
+    // both share that slot and channel, so a redirect can wake the wrong caller and its
+    // state-mismatch cleanup can clear the other flow's slot. Serializing here is what makes
+    // "one slot" true rather than just persisted that way.
+    private val authorizeLock = Mutex()
     private var restored = false
     private var expiredOnRestore = false
 
@@ -57,7 +63,7 @@ public class AuthorizationFlow(
         scopes: Set<String>,
         acrValues: List<String> = emptyList(),
         maxAge: Long? = null,
-    ): AuthorizationGrant {
+    ): AuthorizationGrant = authorizeLock.withLock {
         ensureRestored()
         val metadata = discovery.metadata()
 
@@ -71,8 +77,18 @@ public class AuthorizationFlow(
         pendingStore.save(pending)
         state.value = SessionState.Authorizing
 
-        val outcome = browser.authorize(request.toUri(metadata.authorizationEndpoint))
-        return complete(outcome, pending, metadata)
+        // If launching or awaiting the browser throws (notably `NoBrowserAvailable`, before
+        // any browser ever opened), the pending request and the `Authorizing` state must not
+        // survive it: nothing is actually pending, so a later cold start must not look
+        // resumable and wait forever for a redirect that can never arrive.
+        val outcome = try {
+            browser.authorize(request.toUri(metadata.authorizationEndpoint))
+        } catch (e: Exception) {
+            pendingStore.clear()
+            state.value = SessionState.Unauthenticated
+            throw e
+        }
+        complete(outcome, pending, metadata)
     }
 
     /**
@@ -86,7 +102,7 @@ public class AuthorizationFlow(
      * pending request with no live caller, which is exactly what this call is for. A *user*
      * cancel wipes the request, so there is nothing here to resume.
      */
-    public suspend fun resumePendingAuthorization(): AuthorizationGrant? {
+    public suspend fun resumePendingAuthorization(): AuthorizationGrant? = authorizeLock.withLock {
         ensureRestored()
         val pending = pendingStore.load()
             // Restoring already discarded it, and "expired" is not "nothing was pending":
@@ -95,7 +111,7 @@ public class AuthorizationFlow(
                 expiredOnRestore = false
                 throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.PendingRequestExpired)
             } else {
-                return null
+                return@withLock null
             }
         if (pending.isExpired(clock())) {
             pendingStore.clear()
@@ -103,7 +119,7 @@ public class AuthorizationFlow(
             throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.PendingRequestExpired)
         }
         state.value = SessionState.Authorizing
-        return complete(browser.awaitPendingRedirect(), pending, discovery.metadata())
+        complete(browser.awaitPendingRedirect(), pending, discovery.metadata())
     }
 
     private suspend fun complete(
