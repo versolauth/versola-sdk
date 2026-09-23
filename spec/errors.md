@@ -17,7 +17,10 @@ Rules that hold across all four:
 
 - **Exhaustive.** Sealed hierarchy on every platform; adding a server error code is a
   compile-time break, not a silent `default:` branch.
-- **One category per code.** No error is "sometimes recoverable".
+- **One category per code, as seen by the app.** No error is "sometimes recoverable". A code
+  that the SDK retries internally before ever handing anything to the app (`use_dpop_nonce`,
+  `invalid_dpop_proof`) is not an exception to this — it surfaces exactly one category, once,
+  only if the internal retry also fails.
 - **No raw strings in the public API.** `error_description` from the server is attached for
   logging, never matched on. The server deliberately returns uniform descriptions across causes
   (`TokenEndpointError.InvalidGrant`, `UserInfoError.InvalidDpopProof`) so it cannot be used as
@@ -41,7 +44,7 @@ From `versola.oauth.token.model.ErrorCode` and `TokenEndpointError`.
 | `invalid_scope` | 400 | `Configuration` | The app asked for a scope the client is not registered for. |
 | `invalid_target` | 400 | `Configuration` | RFC 8707 `resource` unknown. |
 | `invalid_authorization_details` | 400 | `Configuration` | RFC 9396. |
-| `invalid_dpop_proof` | 400 | `Recoverable`, then `Reauthenticate` | Retry **once** with a freshly minted proof: the usual cause is clock skew the SDK can now correct from the `Date` header. A second failure means the key no longer matches the grant, which is a `Reauthenticate`. |
+| `invalid_dpop_proof` | 400 | handled internally, then `Reauthenticate` | Never surfaced on the first occurrence, the same treatment as `use_dpop_nonce` below. Retry once with a freshly minted proof: the usual cause is clock skew the SDK can now correct from the `Date` header. A second failure means the key no longer matches the grant — that is the one category the app sees, `Reauthenticate`. |
 | `use_dpop_nonce` | 400 | handled internally | Never surfaced on the first occurrence. Retry once with the `DPoP-Nonce` from the response. A second `use_dpop_nonce` for the same request is `Recoverable` with an exhausted-retries cause — never a third attempt. |
 
 `invalid_grant` deserves the emphasis: it is the *only* token-endpoint code that means the user
@@ -70,10 +73,14 @@ query parameters, or inside a JARM `response` JWT.
 | `unmet_authentication_requirements` | `Configuration` | The requested ACR cannot be satisfied by this deployment. Not a step-up: retrying with the same `acr_values` fails identically. |
 
 Errors returned directly rather than by redirect — `BadRequest` (unregistered `redirect_uri`,
-missing or duplicate `client_id`) and `invalid_request_object` — surface as `Configuration`
-without ever reaching the token endpoint. Distinguishing these from a network failure is
-required: an unregistered redirect URI is the single most common first-run mistake, and
-reporting it as "connection failed" wastes an afternoon of the integrator's time.
+missing or duplicate `client_id`) and `invalid_request_object` — answer with an error page in
+the browser itself, not a response the app's process ever sees. **This is not `Configuration`
+in practice: the SDK has no visibility into that page.** Custom Tabs and
+`ASWebAuthenticationSession` expose neither the page's status nor its body, so an unregistered
+redirect URI is indistinguishable from the user closing the tab — see scenario 17. An
+unregistered redirect URI is still the single most common first-run mistake; the SDK cannot
+fix the integrator's afternoon here, only PAR (RFC 9126, out of scope for #5) can, by moving
+the check to a plain HTTPS response the app makes itself.
 
 ## UserInfo — `GET /userinfo`
 
@@ -84,7 +91,7 @@ From `versola.oauth.userinfo.model.UserInfoError`.
 | `InvalidToken` | `Recoverable` → refresh → retry, else `Reauthenticate` | |
 | `InsufficientScope` | `Configuration` | The token was not issued with the scopes this call needs. |
 | `Unauthorized` | `Reauthenticate` | |
-| `InvalidDpopProof` | `Recoverable`, then `Reauthenticate` | Same one-retry rule as the token endpoint. Also covers the RFC 9449 §7.2 downgrade refusal: a `Bearer`-scheme request carrying a key-bound token. |
+| `InvalidDpopProof` | handled internally, then `Reauthenticate` | Same one-retry rule as the token endpoint; nothing reaches the app until the retry also fails. Also covers the RFC 9449 §7.2 downgrade refusal: a `Bearer`-scheme request carrying a key-bound token. |
 | `UseDpopNonce` | handled internally | Retry once against the **userinfo origin's** nonce cache. |
 
 ## Edge — `versola.kz`
@@ -95,7 +102,7 @@ From `EdgeService`'s failure outcomes. Note the `WWW-Authenticate` scheme differ
 | Response | Challenge | Category |
 |---|---|---|
 | 401, `WWW-Authenticate: Bearer error="insufficient_user_authentication", acr_values="…", max_age="…"` | RFC 9470 | `StepUp(acrValues, maxAge)` |
-| 401, `WWW-Authenticate: DPoP error="invalid_dpop_proof"` | RFC 9449 §7 | `Recoverable`, then `Reauthenticate` |
+| 401, `WWW-Authenticate: DPoP error="invalid_dpop_proof"` | RFC 9449 §7 | handled internally, then `Reauthenticate` |
 | 401, `WWW-Authenticate: DPoP error="use_dpop_nonce"` + `DPoP-Nonce` | RFC 9449 §9 | handled internally, edge's nonce cache only |
 | 401, bare | | refresh once, then `Reauthenticate` |
 | 403 | | `Recoverable` with a permission cause — the call will not succeed, but the session is fine |

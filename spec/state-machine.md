@@ -1,8 +1,10 @@
 # Session state machine
 
-Normative for every SDK. Android, iOS, Flutter and React Native implement *this* machine;
-they do not each invent one. Where a platform cannot express a rule, the deviation is recorded
-here rather than in platform code.
+Normative for every SDK. Android, iOS and Flutter implement *this* machine; they do not each
+invent one. React Native would too, if built — it is last in the order agreed in #1 §1 and
+conditional on demand, not yet a committed target, which is why it has no directory in #4's
+layout and no required behaviour in `conformance/`. Where a platform cannot express a rule, the
+deviation is recorded here rather than in platform code.
 
 Grounded by issue #1. Conformance scenarios in [`conformance/`](conformance/) reference states
 and transitions by the names used below.
@@ -62,14 +64,17 @@ between the two.
 On redirect, in this order, all before any network call:
 
 1. `state` matches the persisted value, compared in constant time
-2. `iss` matches the configured issuer (RFC 9207)
+2. `iss` matches the configured issuer (RFC 9207) if present; if absent, this is only a failure
+   when discovery advertises `authorization_response_iss_parameter_supported` — a deployment
+   that does not advertise it may legitimately omit `iss`
 3. the response carries `code`
 
 Then the code is exchanged. The token response is persisted **before** it is returned to the
 caller, and the pending request is wiped only after the refresh token is durably stored.
 
-Persisted: refresh token (encrypted), DPoP key reference, issuer metadata cache.
-Memory only: access token, ID token claims, both nonce caches.
+Persisted: refresh token (encrypted), raw ID token (encrypted, kept only for `logout()`'s
+`id_token_hint`), DPoP key reference, issuer metadata cache.
+Memory only: parsed ID token claims, both nonce caches.
 
 ### `Authorizing → Unauthenticated` — cancel
 
@@ -103,7 +108,9 @@ edge case on Android.
 ### `Authenticated → Refreshing → Authenticated`
 
 Entered when the access token is expired, within its refresh skew, or a call returned 401 that
-is *not* a step-up and *not* a nonce demand.
+is *not* a step-up, *not* a nonce demand, and *not* `invalid_dpop_proof` (below). A refresh
+cannot repair an invalid proof — it reuses the same DPoP key — so that case never reaches this
+state.
 
 **Exactly one** token request may be in flight per session. Concurrent callers await the
 winner's result; they do not queue further requests. In bearer mode this is a correctness
@@ -133,6 +140,18 @@ Only on `invalid_grant`. Network failures, `use_dpop_nonce` and 5xx leave the st
 
 Everything credential-shaped is wiped: refresh token, pending slot, nonce caches. The DPoP key
 follows the logout rule (below).
+
+### `Authenticated → Authenticated` — `invalid_dpop_proof`, then `Authenticated → Unauthenticated`
+
+A 401 with `invalid_dpop_proof` (token endpoint, UserInfo or edge — see
+[`errors.md`](errors.md)) is retried **once**, in place, with a freshly minted proof for the
+same access token: the usual cause is clock skew the SDK can now correct from the response's
+`Date` header. This is handled internally and never surfaced to the app, the same treatment as
+`use_dpop_nonce`.
+
+A second failure means the key no longer matches the grant, not a timing problem. Nothing
+retries it again: the SDK wipes credential state exactly as `Refreshing → Unauthenticated` does
+and surfaces `Reauthenticate`.
 
 ### `Authenticated → StepUpRequired → Authorizing`
 
@@ -194,7 +213,8 @@ one grant to one device-installation; reusing it across users on a shared device
 | Pending refresh generation | Encrypted | yes | no |
 | Pending authorization request | Encrypted | yes, ≤10 min | no |
 | Access token | Memory | no | no |
-| ID token claims | Memory | no | no |
+| ID token (raw, for `id_token_hint`) | Encrypted, `CredentialKeyProvider` | yes | no |
+| ID token claims (parsed) | Memory | no | no |
 | DPoP private key | Hardware keystore, non-exportable | yes | no (destroyed) |
 | DPoP nonce, per origin | Memory | no | no |
 | Clock skew offset | Memory | no | no |
