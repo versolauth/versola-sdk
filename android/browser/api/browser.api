@@ -1,0 +1,11 @@
+public final class kz/versola/sdk/browser/CustomTabsAuthorizationSession : kz/versola/sdk/core/BrowserAuthorizationSession {
+	public fun <init> (Landroid/content/Context;Lkz/versola/sdk/core/VersolaLogger;)V
+	public synthetic fun <init> (Landroid/content/Context;Lkz/versola/sdk/core/VersolaLogger;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun authorize (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun awaitPendingRedirect (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class kz/versola/sdk/browser/VersolaRedirectActivity : android/app/Activity {
+	public fun <init> ()V
+}
+

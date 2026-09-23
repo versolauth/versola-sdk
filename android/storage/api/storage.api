@@ -1,0 +1,20 @@
+public final class kz/versola/sdk/storage/FilePendingAuthorizationStore : kz/versola/sdk/core/PendingAuthorizationStore {
+	public fun <init> (Ljava/io/File;Lkz/versola/sdk/core/CredentialKeyProvider;)V
+	public fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun load (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun save (Lkz/versola/sdk/core/PendingAuthorizationRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class kz/versola/sdk/storage/HardwareKeyProvider : kz/versola/sdk/core/CredentialKeyProvider {
+	public static final field Companion Lkz/versola/sdk/storage/HardwareKeyProvider$Companion;
+	public static final field DEFAULT_ALIAS Ljava/lang/String;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun unwrap ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun wrap ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class kz/versola/sdk/storage/HardwareKeyProvider$Companion {
+}
+

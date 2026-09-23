@@ -30,7 +30,11 @@ kotlin {
 
 dependencies {
     api(project(":core"))
-    implementation("androidx.security:security-crypto:1.1.0")
+    // androidx.security:security-crypto was listed here by #4's scaffolding and is dropped
+    // in #5: #7 rules EncryptedSharedPreferences out (deprecated at 1.1.0, no further
+    // releases, main-thread violations and keyset corruption on some OEMs). The Keystore
+    // AES-256-GCM key below is managed directly, with no Tink keyset to corrupt.
 
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
 }

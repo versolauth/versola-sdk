@@ -17,10 +17,15 @@ dependencyResolutionManagement {
 rootProject.name = "versola-android"
 
 // Order matches the dependency direction: core has no internal dependents,
-// dpop/storage/browser depend only on core, okhttp depends on core and dpop.
+// dpop/storage/browser depend only on core, okhttp depends on core and dpop,
+// and sdk sits on top of all of them.
 // See #1 §4 for why DPoP and storage are separate modules from the transport.
 include(":core")
 include(":dpop")
 include(":storage")
 include(":browser")
 include(":okhttp")
+// The facade module. Added in #5 rather than #4 because the entry point in #1 §1 has to see
+// the browser and the store at once, and neither may depend on the other. It is also the
+// module the single published artifact (kz.versola:versola-android) maps to.
+include(":sdk")
