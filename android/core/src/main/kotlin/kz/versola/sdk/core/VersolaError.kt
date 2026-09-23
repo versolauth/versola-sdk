@@ -88,6 +88,17 @@ public sealed class VersolaError(
              * Treated as sign-out, with no error dialog beyond that.
              */
             public data object CredentialsInvalidated : Reason
+
+            /**
+             * The token endpoint answered `invalid_grant`. Code expiry, PKCE mismatch,
+             * redirect mismatch, refresh replay, family revocation and DPoP key mismatch all
+             * arrive as this one code, with an identical body, by design — so there is one
+             * reason here rather than six guesses.
+             *
+             * **Never retried.** A retry loop on `invalid_grant` against a rotating-refresh
+             * deployment is how clients silently log users out.
+             */
+            public data object GrantRejected : Reason
         }
     }
 
@@ -135,6 +146,28 @@ public sealed class VersolaError(
                 public val code: String,
                 public val description: String?,
             ) : Detail
+
+            /**
+             * The token endpoint refused the request for a reason no user action fixes:
+             * `invalid_request`, `invalid_client`, `unauthorized_client`,
+             * `unsupported_grant_type`, `invalid_scope`, `invalid_target`,
+             * `invalid_authorization_details` — or a code this SDK does not know, which is a
+             * deployment it cannot reason about rather than a silent success.
+             *
+             * `invalid_grant` is deliberately not here: it is the one token-endpoint code
+             * that means the user must sign in again.
+             */
+            public data class TokenRequestRejected(
+                public val code: String,
+                public val description: String?,
+            ) : Detail
+
+            /**
+             * The token endpoint answered 2xx with something that is not a token response —
+             * unparseable, or missing `access_token`. A deployment fault rather than a
+             * transient one: the next attempt returns the same thing.
+             */
+            public data class TokenResponseMalformed(public val detail: String) : Detail
 
             /** The discovery document omitted a field the SDK cannot proceed without. */
             public data class DiscoveryFieldMissing(public val field: String) : Detail

@@ -6,6 +6,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kz.versola.sdk.core.DpopProofSource
 
 /**
  * Mints RFC 9449 proofs: one per request, signed by the one [DpopKey] this installation holds.
@@ -19,7 +20,7 @@ public class DpopProofFactory(
     public val nonces: DpopNonceCache = DpopNonceCache(),
     public val clockSkew: ClockSkew = ClockSkew(),
     private val jti: () -> String = { UUID.randomUUID().toString() },
-) {
+) : DpopProofSource {
 
     /**
      * A proof for one request.
@@ -28,10 +29,10 @@ public class DpopProofFactory(
      *   impossible at the token endpoint, which has no token yet to hash — so its presence is
      *   decided by the caller having one, not by configuration.
      */
-    public suspend fun proof(
+    override suspend fun proof(
         method: String,
         url: String,
-        accessToken: String? = null,
+        accessToken: String?,
     ): String {
         val header = """{"typ":"dpop+jwt","alg":"ES256","jwk":${key.publicJwk()}}"""
         val claims = buildJsonObject {
@@ -56,7 +57,7 @@ public class DpopProofFactory(
      * response is the cheapest place to learn the offset, and waiting for a rejection to learn
      * it means paying for one rejection per process.
      */
-    public fun observe(url: String, dateHeader: String?, nonceHeader: String?) {
+    override fun observe(url: String, dateHeader: String?, nonceHeader: String?) {
         clockSkew.learn(dateHeader)
         if (!nonceHeader.isNullOrEmpty()) nonces.store(url, nonceHeader)
     }

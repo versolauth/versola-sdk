@@ -46,3 +46,30 @@ public interface DpopKeyBinding {
      */
     public suspend fun jkt(): String
 }
+
+/**
+ * Proofs, as far as the protocol core needs them: the second half of the seam
+ * [DpopKeyBinding] opens.
+ *
+ * Separate from the key because a proof is not only a signature — it carries the nonce the
+ * server last issued for this origin and an `iat` corrected for the server's clock, neither of
+ * which belongs to a key. `:dpop` owns both caches; this module owns *when* a proof goes on
+ * the wire and what a challenge to one means.
+ */
+public interface DpopProofSource {
+
+    /**
+     * A proof for one request.
+     *
+     * @param accessToken adds the RFC 9449 §4.2 `ath` binding. Absent at the token endpoint,
+     *   which has no token yet to hash.
+     */
+    public suspend fun proof(method: String, url: String, accessToken: String? = null): String
+
+    /**
+     * Hands back what a response says about the server's clock and its nonce. Called for
+     * every response, not only for challenges: the `Date` header on a success is the cheapest
+     * place to learn the offset.
+     */
+    public fun observe(url: String, dateHeader: String?, nonceHeader: String?)
+}
