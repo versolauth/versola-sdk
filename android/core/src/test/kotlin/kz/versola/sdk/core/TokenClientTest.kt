@@ -59,6 +59,7 @@ class TokenClientTest {
         dpopAdvertised: Boolean = true,
         binding: TokenBinding = TokenBinding.Dpop(),
         dpop: DpopProofSource? = proofSource,
+        discoveryFailure: Throwable? = null,
     ): HttpTokenClient {
         val metadata = ProviderMetadata(
             issuer = issuer,
@@ -75,7 +76,8 @@ class TokenClientTest {
             discovery = DiscoveryService(
                 issuer = issuer,
                 client = object : DiscoveryClient {
-                    override suspend fun fetch(issuer: String): ProviderMetadata = metadata
+                    override suspend fun fetch(issuer: String): ProviderMetadata =
+                        discoveryFailure?.let { throw it } ?: metadata
                 },
                 cache = FileProviderMetadataCache(File(folder.newFolder(), "metadata.json")),
             ),
@@ -410,12 +412,59 @@ class TokenClientTest {
     }
 
     @Test
+    fun `requireHardware refuses a deployment without DPoP before spending the code`() = runTest {
+        // Discovery already said this exchange cannot produce a bound grant. Redeeming the
+        // code first and refusing the result afterwards costs the user the code.
+        val failure = failure {
+            client(
+                dpopAdvertised = false,
+                binding = TokenBinding.Dpop(requireHardware = true),
+            ).exchange(grant())
+        } as VersolaError.Configuration
+
+        assertTrue(failure.detail is VersolaError.Configuration.Detail.HardwareBindingUnavailable)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `a refused response leaves no readable refresh token behind`() {
+        // Nothing downstream ever receives this response, so nothing downstream can zero what
+        // the parse copied out of it.
+        val refused = TokenResponse(
+            accessToken = "at",
+            tokenType = "Bearer",
+            expiresInSeconds = 3600,
+            refreshToken = "issued-refresh".toByteArray(),
+            idToken = null,
+            scopes = emptySet(),
+        )
+
+        runCatching { TokenBinding.Dpop(requireHardware = true).acceptIssued(refused) }
+
+        assertArrayEquals(ByteArray("issued-refresh".length), refused.refreshToken)
+    }
+
+    @Test
     fun `a transport failure is Recoverable rather than an IOException`() = runTest {
         server.close()
 
         val failure = failure { client().exchange(grant()) } as VersolaError.Recoverable
 
         assertTrue(failure.reason is VersolaError.Recoverable.Cause.Network)
+    }
+
+    @Test
+    fun `a failure before the request still clears the form builder`() = runTest {
+        // First-use discovery can fail with the builder already holding the encoded token,
+        // before there is any request body to zero.
+        val form = FormBody().addBytes("refresh_token", refreshToken.toByteArray())
+
+        failure {
+            client(discoveryFailure = IllegalStateException("discovery is unreachable"))
+                .post(form, "idem-key-1")
+        }
+
+        assertTrue(form.backingBytes().all { it == 0.toByte() })
     }
 
     @Test

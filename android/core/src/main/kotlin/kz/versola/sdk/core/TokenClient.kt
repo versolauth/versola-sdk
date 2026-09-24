@@ -100,8 +100,36 @@ public class HttpTokenClient(
         return post(form, idempotencyKey)
     }
 
-    private suspend fun post(form: FormBody, idempotencyKey: String?): TokenResponse {
-        val url = discovery.metadata().tokenEndpoint
+    /** Internal rather than private so the zeroization of [form] can be asserted directly. */
+    internal suspend fun post(form: FormBody, idempotencyKey: String?): TokenResponse = try {
+        val metadata = discovery.metadata()
+        // Before the request, not after one succeeds. A deployment that cannot bind the
+        // grant makes this exchange useless whatever it returns, and for an authorization
+        // code "useless" means spent: redeeming it first and refusing the result afterwards
+        // costs the user a code and a round trip to learn what discovery already said.
+        // `AuthorizationFlow` draws the same line before the browser opens (scenario 07).
+        val binding = tokenBinding
+        if (binding is TokenBinding.Dpop && binding.requireHardware && !metadata.supportsDpop) {
+            throw VersolaError.Configuration(
+                VersolaError.Configuration.Detail.HardwareBindingUnavailable(
+                    "the provider does not advertise dpop_signing_alg_values_supported",
+                ),
+            )
+        }
+        exchange(form, metadata, idempotencyKey)
+    } finally {
+        // Every exit, including the ones that never reached the request: first-use discovery
+        // failing and the deployment refusing the binding both leave the builder holding the
+        // encoded token. Idempotent with the eager clear below.
+        form.clear()
+    }
+
+    private suspend fun exchange(
+        form: FormBody,
+        metadata: ProviderMetadata,
+        idempotencyKey: String?,
+    ): TokenResponse {
+        val url = metadata.tokenEndpoint
         val body = form.toByteArray()
         // The encoded token exists twice for as long as the builder is alive; the copy it
         // keeps is as spendable as the one on the wire, so it goes now rather than at the
@@ -111,7 +139,7 @@ public class HttpTokenClient(
             var nonceRetried = false
             var proofRetried = false
             while (true) {
-                when (val outcome = attempt(url, body, idempotencyKey)) {
+                when (val outcome = attempt(url, metadata, body, idempotencyKey)) {
                     is Attempt.Issued -> return outcome.response
 
                     is Attempt.UseDpopNonce -> {
@@ -146,13 +174,18 @@ public class HttpTokenClient(
         }
     }
 
-    private suspend fun attempt(url: String, body: ByteArray, idempotencyKey: String?): Attempt {
+    private suspend fun attempt(
+        url: String,
+        metadata: ProviderMetadata,
+        body: ByteArray,
+        idempotencyKey: String?,
+    ): Attempt {
         val builder = Request.Builder()
             .url(url)
             .header("Accept", "application/json")
             .post(body.toRequestBody(FORM_MEDIA_TYPE))
         idempotencyKey?.let { builder.header("Idempotency-Key", it) }
-        proofFor(url)?.let { builder.header("DPoP", it) }
+        proofFor(url, metadata)?.let { builder.header("DPoP", it) }
 
         return withContext(Dispatchers.IO) {
             try {
@@ -179,12 +212,14 @@ public class HttpTokenClient(
      * A proof goes on the request exactly when the pairing can produce one the deployment
      * will honour. Sending one to a provider that does not advertise DPoP is not harmless:
      * the server is entitled to reject an unexpected proof, and the SDK's own fallback rule
-     * (#1 §4) is to run bearer there rather than to insist.
+     * (#1 §4) is to run bearer there rather than to insist. An app that cannot accept that
+     * fallback said so with `requireHardware`, and [post] has already refused the exchange.
      */
-    private suspend fun proofFor(url: String): String? {
+    private suspend fun proofFor(url: String, metadata: ProviderMetadata): String? {
         if (tokenBinding !is TokenBinding.Dpop) return null
-        if (!discovery.metadata().supportsDpop) return null
-        return dpop?.proof("POST", url)
+        if (!metadata.supportsDpop) return null
+        // Non-null under `Dpop` by construction; see `init`.
+        return checkNotNull(dpop).proof("POST", url)
     }
 
     private fun issued(payload: String): TokenResponse {
@@ -199,18 +234,7 @@ public class HttpTokenClient(
             )
         }
         val response = TokenResponse.from(parsed)
-
-        // A proof was sent and the server issued a bearer token anyway: the grant is not
-        // key-bound, whatever the app asked for. Silent only when the app said it could live
-        // without binding — `requireHardware` is the assertion that it cannot (scenario 07).
-        val binding = tokenBinding
-        if (binding is TokenBinding.Dpop && binding.requireHardware && !response.isDpopBound) {
-            throw VersolaError.Configuration(
-                VersolaError.Configuration.Detail.HardwareBindingUnavailable(
-                    "the token endpoint issued a ${response.tokenType} token for a DPoP-bound request",
-                ),
-            )
-        }
+        tokenBinding.acceptIssued(response)
         return response
     }
 
@@ -277,6 +301,26 @@ public class HttpTokenClient(
     private companion object {
         private val FORM_MEDIA_TYPE = "application/x-www-form-urlencoded".toMediaType()
     }
+}
+
+/**
+ * Takes delivery of an issued response, or refuses it.
+ *
+ * A proof was sent and the server issued a bearer token anyway: the grant is not key-bound,
+ * whatever the app asked for. Silent only when the app said it could live without binding —
+ * `requireHardware` is the assertion that it cannot (scenario 07).
+ *
+ * Refusing means discarding, and a discarded response holds the one refresh token nobody
+ * downstream will ever receive — so nobody downstream can zero it, and it is zeroed here.
+ */
+internal fun TokenBinding.acceptIssued(response: TokenResponse) {
+    if (this !is TokenBinding.Dpop || !requireHardware || response.isDpopBound) return
+    response.refreshToken?.fill(0)
+    throw VersolaError.Configuration(
+        VersolaError.Configuration.Detail.HardwareBindingUnavailable(
+            "the token endpoint issued a ${response.tokenType} token for a DPoP-bound request",
+        ),
+    )
 }
 
 /**
