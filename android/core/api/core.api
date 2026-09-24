@@ -99,6 +99,16 @@ public abstract interface class kz/versola/sdk/core/DpopKeyBinding {
 	public abstract fun jkt (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
+public abstract interface class kz/versola/sdk/core/DpopProofSource {
+	public abstract fun observe (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public abstract fun proof (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun proof$default (Lkz/versola/sdk/core/DpopProofSource;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class kz/versola/sdk/core/DpopProofSource$DefaultImpls {
+	public static synthetic fun proof$default (Lkz/versola/sdk/core/DpopProofSource;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
 public final class kz/versola/sdk/core/FileProviderMetadataCache : kz/versola/sdk/core/ProviderMetadataCache {
 	public fun <init> (Ljava/io/File;)V
 	public fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -109,6 +119,13 @@ public final class kz/versola/sdk/core/FileProviderMetadataCache : kz/versola/sd
 public final class kz/versola/sdk/core/HttpDiscoveryClient : kz/versola/sdk/core/DiscoveryClient {
 	public fun <init> (Lokhttp3/OkHttpClient;)V
 	public fun fetch (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class kz/versola/sdk/core/HttpTokenClient : kz/versola/sdk/core/TokenClient {
+	public fun <init> (Lkz/versola/sdk/core/VersolaConfiguration;Lkz/versola/sdk/core/DiscoveryService;Lokhttp3/OkHttpClient;Lkz/versola/sdk/core/DpopProofSource;Lkz/versola/sdk/core/TokenBinding;)V
+	public synthetic fun <init> (Lkz/versola/sdk/core/VersolaConfiguration;Lkz/versola/sdk/core/DiscoveryService;Lokhttp3/OkHttpClient;Lkz/versola/sdk/core/DpopProofSource;Lkz/versola/sdk/core/TokenBinding;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun exchange (Lkz/versola/sdk/core/AuthorizationGrant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun refresh ([BLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class kz/versola/sdk/core/PendingAuthorizationCodec {
@@ -307,6 +324,21 @@ public final class kz/versola/sdk/core/TokenBinding$Dpop : kz/versola/sdk/core/T
 	public fun toString ()Ljava/lang/String;
 }
 
+public abstract interface class kz/versola/sdk/core/TokenClient {
+	public abstract fun exchange (Lkz/versola/sdk/core/AuthorizationGrant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun refresh ([BLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class kz/versola/sdk/core/TokenResponse {
+	public final fun getAccessToken ()Ljava/lang/String;
+	public final fun getExpiresInSeconds ()J
+	public final fun getIdToken ()Ljava/lang/String;
+	public final fun getScopes ()Ljava/util/Set;
+	public final fun getTokenType ()Ljava/lang/String;
+	public final fun isDpopBound ()Z
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class kz/versola/sdk/core/UnlockPolicy : java/lang/Enum {
 	public static final field Companion Lkz/versola/sdk/core/UnlockPolicy$Companion;
 	public static final field None Lkz/versola/sdk/core/UnlockPolicy;
@@ -450,6 +482,30 @@ public final class kz/versola/sdk/core/VersolaError$Configuration$Detail$StateMi
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class kz/versola/sdk/core/VersolaError$Configuration$Detail$TokenRequestRejected : kz/versola/sdk/core/VersolaError$Configuration$Detail {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$TokenRequestRejected;
+	public static synthetic fun copy$default (Lkz/versola/sdk/core/VersolaError$Configuration$Detail$TokenRequestRejected;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$TokenRequestRejected;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCode ()Ljava/lang/String;
+	public final fun getDescription ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class kz/versola/sdk/core/VersolaError$Configuration$Detail$TokenResponseMalformed : kz/versola/sdk/core/VersolaError$Configuration$Detail {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$TokenResponseMalformed;
+	public static synthetic fun copy$default (Lkz/versola/sdk/core/VersolaError$Configuration$Detail$TokenResponseMalformed;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$TokenResponseMalformed;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDetail ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class kz/versola/sdk/core/VersolaError$Reauthenticate : kz/versola/sdk/core/VersolaError {
 	public fun <init> (Lkz/versola/sdk/core/VersolaError$Reauthenticate$Reason;)V
 	public final fun getReason ()Lkz/versola/sdk/core/VersolaError$Reauthenticate$Reason;
@@ -467,6 +523,13 @@ public final class kz/versola/sdk/core/VersolaError$Reauthenticate$Reason$Author
 
 public final class kz/versola/sdk/core/VersolaError$Reauthenticate$Reason$CredentialsInvalidated : kz/versola/sdk/core/VersolaError$Reauthenticate$Reason {
 	public static final field INSTANCE Lkz/versola/sdk/core/VersolaError$Reauthenticate$Reason$CredentialsInvalidated;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class kz/versola/sdk/core/VersolaError$Reauthenticate$Reason$GrantRejected : kz/versola/sdk/core/VersolaError$Reauthenticate$Reason {
+	public static final field INSTANCE Lkz/versola/sdk/core/VersolaError$Reauthenticate$Reason$GrantRejected;
 	public fun equals (Ljava/lang/Object;)Z
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
