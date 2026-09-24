@@ -71,12 +71,27 @@ private class FakeCredentialStore : CredentialStore {
     var pendingRotationSlot: String? = null
     var unwrapFailure: (() -> VersolaError)? = null
 
+    /** Injected into [save], simulating a key that locks or invalidates after the server
+     *  already answered — the request succeeded, but persisting its response did not. */
+    var saveFailure: (() -> VersolaError)? = null
+
+    /**
+     * Injected into [savePendingRotation] only when it is asked to *clear* the slot (a null
+     * key), never on the step-1 write before the request — this simulates the key locking or
+     * invalidating between [save] landing and step 3's clear.
+     */
+    var savePendingRotationClearFailure: (() -> VersolaError)? = null
+
+    /** Suspends [pendingRotation] until completed, so a caller can be cancelled mid-lookup. */
+    var pendingRotationDelay: CompletableDeferred<Unit>? = null
+
     val events = mutableListOf<String>()
     var clears = 0
     var unwraps = 0
 
     override suspend fun save(refreshToken: ByteArray, rawIdToken: String?) {
         events += "save"
+        saveFailure?.let { throw it() }
         this.refreshToken = refreshToken.copyOf()
         refreshToken.fill(0)
         if (rawIdToken != null) this.rawIdToken = rawIdToken
@@ -100,10 +115,14 @@ private class FakeCredentialStore : CredentialStore {
 
     override suspend fun savePendingRotation(idempotencyKey: String?) {
         events += "savePendingRotation($idempotencyKey)"
+        if (idempotencyKey == null) savePendingRotationClearFailure?.let { throw it() }
         pendingRotationSlot = idempotencyKey
     }
 
-    override suspend fun pendingRotation(): String? = pendingRotationSlot
+    override suspend fun pendingRotation(): String? {
+        pendingRotationDelay?.await()
+        return pendingRotationSlot
+    }
 
     override suspend fun clear() {
         clears++
@@ -279,6 +298,32 @@ class SessionCoordinatorTest {
     }
 
     @Test
+    fun `two coordinators built on the same store still coalesce onto a single request`() = runTest {
+        // A `SessionCoordinator`'s own `Mutex` only ever sees its own callers. Two instances
+        // wrongly built on top of the same `CredentialStore` — the only way that store's
+        // "one refresh in flight" invariant can be observed from outside — must still
+        // coalesce onto one request between them, or a bearer-bound token gets rotated twice
+        // and `detectReplay` revokes the family.
+        val credentialStore = FakeCredentialStore().apply {
+            refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        }
+        val tokenClient = FakeTokenClient()
+        val neverAnswers = CompletableDeferred<Unit>()
+        tokenClient.refreshActions = mutableListOf({ neverAnswers.await(); issued() })
+        val coordinatorA = SessionCoordinator(authFlow(RecordingPendingStore(), credentialStore), tokenClient, credentialStore)
+        val coordinatorB = SessionCoordinator(authFlow(RecordingPendingStore(), credentialStore), tokenClient, credentialStore)
+
+        val callers = listOf(
+            async(start = CoroutineStart.UNDISPATCHED) { coordinatorA.refresh() },
+            async(start = CoroutineStart.UNDISPATCHED) { coordinatorB.refresh() },
+        )
+        neverAnswers.complete(Unit)
+        callers.forEach { it.await() }
+
+        assertEquals(1, tokenClient.refreshCalls.size)
+    }
+
+    @Test
     fun `cancelling the caller that won the flight does not fail the callers waiting on it`() = runTest {
         val (coordinator, tokenClient, credentialStore) = coordinator()
         credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
@@ -314,6 +359,25 @@ class SessionCoordinatorTest {
         abandoned.cancelAndJoin()
 
         assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `cancelling a refresh that finds no grant does not resurrect a session that never existed`() = runTest {
+        // No refresh token seeded: this call can only ever discover `noGrantStored`. A
+        // cancellation that lands before that discovery must not publish `Authenticated` —
+        // there is nothing authenticated to revert to, and the state entered from was
+        // `Unauthenticated`, not `Authenticated`.
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        val gate = CompletableDeferred<Unit>()
+        credentialStore.pendingRotationDelay = gate
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+
+        val abandoned = async(start = CoroutineStart.UNDISPATCHED) { coordinator.refresh() }
+        assertEquals(SessionState.Refreshing, coordinator.sessionState.first())
+        abandoned.cancelAndJoin()
+
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+        assertEquals(0, tokenClient.refreshCalls.size)
     }
 
     @Test
@@ -440,6 +504,42 @@ class SessionCoordinatorTest {
         assertEquals("seed", credentialStore.refreshToken?.toString(Charsets.UTF_8))
         assertEquals(0, credentialStore.clears)
         assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a key that locks while persisting the refreshed response enters Locked rather than leaving Refreshing stuck`() = runTest {
+        // The server already rotated the token by the time this throws — persistence itself
+        // is what fails, not the request — so this must map onto the same catch the request's
+        // own `UnlockRequired` does, or the flow is left in `Refreshing` with no exception any
+        // caller can attribute to a known cause.
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        credentialStore.saveFailure = { VersolaError.Recoverable(VersolaError.Recoverable.Cause.UnlockRequired) }
+        tokenClient.refreshActions = mutableListOf({ issued(refreshToken = "rotated") })
+
+        failure { coordinator.refresh() }
+
+        assertEquals(SessionState.Locked, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a key invalidated while clearing the rotation slot after persistence still wipes and signs out`() = runTest {
+        // The response is already durably stored when step 3 throws: the grant is gone in
+        // substance regardless, so this must wipe and settle `Unauthenticated` exactly as a
+        // failure during the request itself does — not leave the session in `Refreshing`
+        // with a rotation slot pointing at a key from a generation that no longer exists.
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        credentialStore.savePendingRotationClearFailure = {
+            VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.CredentialsInvalidated)
+        }
+        tokenClient.refreshActions = mutableListOf({ issued(refreshToken = "rotated") })
+
+        failure { coordinator.refresh() }
+
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+        assertEquals(1, credentialStore.clears)
+        assertNull(coordinator.currentAccessToken())
     }
 
     @Test

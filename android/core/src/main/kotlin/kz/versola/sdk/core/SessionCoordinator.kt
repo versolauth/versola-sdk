@@ -120,14 +120,38 @@ public class SessionCoordinator(
         return response
     }
 
-    private val refreshMutex = Mutex()
-
     /**
-     * The refresh in flight, or null. Its value is the outcome every other caller takes
-     * delivery of — or null for a flight whose winner was cancelled, which is not an outcome
-     * and must not be delivered as one; see [refresh].
+     * Keyed on [credentialStore]'s own identity rather than owned by this instance:
+     * `DataStoreCredentialStore` already promises one instance per file per process, but
+     * nothing stops two [SessionCoordinator]s from being built on top of that one shared
+     * instance, and an instance-local [Mutex] cannot see across them. Two such coordinators
+     * would each run their own single-flight coalescing correctly in isolation, and still
+     * both win at once against the one store underneath — which is exactly the concurrent,
+     * unrelated refresh requests this class exists to rule out.
+     *
+     * A `WeakHashMap` so a [CredentialStore] that outlives no coordinator does not pin an
+     * entry here forever; `synchronized` rather than a suspend-friendly lock because every
+     * access is one non-suspending map lookup.
      */
-    private var pendingRefresh: CompletableDeferred<Result<TokenResponse>?>? = null
+    private class RefreshFlight {
+        val mutex = Mutex()
+
+        /**
+         * The refresh in flight, or null. Its value is the outcome every other caller takes
+         * delivery of — or null for a flight whose winner was cancelled, which is not an
+         * outcome and must not be delivered as one; see [refresh].
+         */
+        var pending: CompletableDeferred<Result<TokenResponse>?>? = null
+    }
+
+    private companion object {
+        private val flightsByStore = java.util.WeakHashMap<CredentialStore, RefreshFlight>()
+
+        private fun flightFor(store: CredentialStore): RefreshFlight =
+            synchronized(flightsByStore) { flightsByStore.getOrPut(store) { RefreshFlight() } }
+    }
+
+    private val refreshFlight = flightFor(credentialStore)
 
     /**
      * Exactly one `refresh_token` request per call that finds none already in flight; every
@@ -149,9 +173,9 @@ public class SessionCoordinator(
     public suspend fun refresh(): TokenResponse {
         while (true) {
             var winner = false
-            val flight = refreshMutex.withLock {
-                pendingRefresh ?: CompletableDeferred<Result<TokenResponse>?>().also {
-                    pendingRefresh = it
+            val flight = refreshFlight.mutex.withLock {
+                refreshFlight.pending ?: CompletableDeferred<Result<TokenResponse>?>().also {
+                    refreshFlight.pending = it
                     winner = true
                 }
             }
@@ -170,15 +194,24 @@ public class SessionCoordinator(
                 return outcome.getOrThrow()
             }
 
+            // Forces AuthorizationFlow's lazy restore before this flight pushes a state of
+            // its own onto the same stream, and captures the state `Refreshing` is entered
+            // from. Not assumed to be `Authenticated`: a cancellation can arrive before
+            // `performRefresh` has resolved whether a grant even exists, and `refresh()`
+            // called with none stored enters from `Unauthenticated`, not `Authenticated`.
+            val priorState = flow.sessionState.first()
+            flow.setState(SessionState.Refreshing)
+
             val result = try {
                 Result.success(performRefresh())
             } catch (e: CancellationException) {
                 withContext(NonCancellable) {
                     // `Refreshing` was pushed by this flight and nothing resolved it, so it
                     // would otherwise be the last state an app ever observes. Reverting to
-                    // the state the refresh was entered from costs a successor one extra
-                    // transition and leaves no stuck session behind if there is none.
-                    flow.setState(SessionState.Authenticated)
+                    // the state actually entered from — not a hardcoded `Authenticated` —
+                    // costs a successor one extra transition and never publishes a session
+                    // that was never there to begin with.
+                    flow.setState(priorState)
                     endFlight(flight, null)
                 }
                 throw e
@@ -199,17 +232,11 @@ public class SessionCoordinator(
         flight: CompletableDeferred<Result<TokenResponse>?>,
         outcome: Result<TokenResponse>?,
     ) {
-        refreshMutex.withLock { if (pendingRefresh === flight) pendingRefresh = null }
+        refreshFlight.mutex.withLock { if (refreshFlight.pending === flight) refreshFlight.pending = null }
         flight.complete(outcome)
     }
 
     private suspend fun performRefresh(): TokenResponse {
-        // Forces AuthorizationFlow's lazy restore before this class starts pushing states of
-        // its own onto the same stream; otherwise a `Refreshing` pushed before the first
-        // collector ever ran would be overwritten the moment restoration finally happened.
-        flow.sessionState.first()
-        flow.setState(SessionState.Refreshing)
-
         val response = try {
             // Step 1. Recorded once, from one unwrap that spends nothing — hashing does not
             // take ownership of what it reads, so this unwrap is independent of the one(s)
@@ -224,7 +251,7 @@ public class SessionCoordinator(
                 credentialStore.savePendingRotation(key)
                 key
             }
-            retryPolicy.newBudget().execute(tokenOrigin()) {
+            val issued = retryPolicy.newBudget().execute(tokenOrigin()) {
                 // A fresh unwrap per attempt, not one unwrap shared across retries:
                 // `TokenClient.refresh` takes ownership of the bytes it is given and zeroes
                 // them once the request body is formed, so a second attempt handed the same
@@ -234,6 +261,21 @@ public class SessionCoordinator(
                 // `spec/state-machine.md`'s `Locked` section states for every other caller.
                 credentialStore.useRefreshToken { tokenClient.refresh(it, idempotencyKey) } ?: noGrantStored()
             }
+            // Step 2. Persisted before returning to any caller — including the one whose call
+            // triggered this refresh. `BoundRenewal` omits `refresh_token` on the response
+            // because the stored value did not change; saving nothing in that case is what
+            // leaves it unchanged rather than overwriting it with an absence.
+            issued.refreshToken?.let { credentialStore.save(it, issued.idToken) }
+            // Step 3. Cleared only now. Under DPoP this clears a slot whose value never
+            // moved — inert, per the class doc, not skipped.
+            //
+            // Both writes run inside this same try: a key that locks or is invalidated
+            // between the server answering and either one landing is exactly what the
+            // catches below already map to `Locked` or `Unauthenticated`, and leaving them
+            // outside would let that failure escape as an uncaught exception with
+            // `Refreshing` never resolved — the one state this class must never leave stuck.
+            credentialStore.savePendingRotation(null)
+            issued
         } catch (e: CancellationException) {
             // Not an outcome of the refresh, and not this function's to settle: [refresh]
             // retires the abandoned flight and reverts the state where a successor can see
@@ -244,7 +286,9 @@ public class SessionCoordinator(
             // exhausting its retries, a nonce loop, or the storage key's unlock window having
             // elapsed. Only the last of those is a state change rather than a reversion — the
             // grant is out of reach, not gone, so the session enters `Locked` instead of
-            // settling back on `Authenticated`.
+            // settling back on `Authenticated`. The same is true whether the key locked
+            // during the request or during step 2/3's own wrap: [CredentialKeyProvider] is
+            // the same lock either way.
             flow.setState(
                 if (e.reason is VersolaError.Recoverable.Cause.UnlockRequired) {
                     SessionState.Locked
@@ -255,10 +299,11 @@ public class SessionCoordinator(
             throw e
         } catch (e: VersolaError.Reauthenticate) {
             // `GrantRejected` (the token endpoint's invalid_grant) and `CredentialsInvalidated`
-            // (the stored bytes no longer unwrap, from `useRefreshToken`) are the two ways the
-            // grant itself is gone rather than merely unreachable — `spec/state-machine.md`
-            // wipes everything credential-shaped for both (`Refreshing → Unauthenticated`,
-            // `Locked → Unauthenticated`), so both are handled identically here.
+            // (the stored bytes no longer unwrap, from `useRefreshToken` or, here, from step
+            // 2/3's own wrap) are the two ways the grant itself is gone rather than merely
+            // unreachable — `spec/state-machine.md` wipes everything credential-shaped for
+            // both (`Refreshing → Unauthenticated`, `Locked → Unauthenticated`), so both are
+            // handled identically here regardless of which step raised it.
             credentialStore.clear()
             cachedAccessToken = null
             flow.setState(SessionState.Unauthenticated)
@@ -270,14 +315,6 @@ public class SessionCoordinator(
             throw e
         }
 
-        // Step 2. Persisted before returning to any caller — including the one whose call
-        // triggered this refresh. `BoundRenewal` omits `refresh_token` on the response because
-        // the stored value did not change; saving nothing in that case is what leaves it
-        // unchanged rather than overwriting it with an absence.
-        response.refreshToken?.let { credentialStore.save(it, response.idToken) }
-        // Step 3. Cleared only now. Under DPoP this clears a slot whose value never moved —
-        // inert, per the class doc, not skipped.
-        credentialStore.savePendingRotation(null)
         cachedAccessToken = response
         flow.setState(SessionState.Authenticated)
         return response
