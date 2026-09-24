@@ -268,6 +268,16 @@ public final class kz/versola/sdk/core/RetryPolicy$Companion {
 	public final fun getPatient ()Lkz/versola/sdk/core/RetryPolicy;
 }
 
+public final class kz/versola/sdk/core/SessionCoordinator {
+	public fun <init> (Lkz/versola/sdk/core/AuthorizationFlow;Lkz/versola/sdk/core/TokenClient;Lkz/versola/sdk/core/CredentialStore;Lkz/versola/sdk/core/RetryPolicy;)V
+	public synthetic fun <init> (Lkz/versola/sdk/core/AuthorizationFlow;Lkz/versola/sdk/core/TokenClient;Lkz/versola/sdk/core/CredentialStore;Lkz/versola/sdk/core/RetryPolicy;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun currentAccessToken ()Lkz/versola/sdk/core/TokenResponse;
+	public final fun getSessionState ()Lkotlinx/coroutines/flow/Flow;
+	public final fun login (Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun login$default (Lkz/versola/sdk/core/SessionCoordinator;Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun refresh (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
 public abstract interface class kz/versola/sdk/core/SessionState {
 }
 

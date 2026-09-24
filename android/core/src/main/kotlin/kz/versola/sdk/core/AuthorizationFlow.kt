@@ -76,6 +76,33 @@ public class AuthorizationFlow(
     public suspend fun metadata(): ProviderMetadata = discovery.metadata()
 
     /**
+     * `Authorizing` → `Authenticated`: called once the session coordinator (#8) holds a
+     * durably stored refresh token, never before. Wipes the pending request — [authorize] and
+     * [resumePendingAuthorization] deliberately leave it in place until this point, so a
+     * process killed between redeeming the code and persisting the refresh token still finds
+     * an `Authorizing` session to resume rather than one that looks like it never started.
+     *
+     * Internal because redeeming a grant and persisting its result is not this class's job —
+     * this class stops at a validated [AuthorizationGrant] — but hosting the state every leg
+     * of the machine shares is, so the coordinator's transition has to land here rather than
+     * on a flow of its own.
+     */
+    internal suspend fun completeLogin() {
+        pendingStore.clear()
+        state.value = SessionState.Authenticated
+    }
+
+    /**
+     * Pushes a state the session coordinator (#8) owns — `Refreshing`, `Locked`, or a return
+     * to `Authenticated`/`Unauthenticated` once a refresh resolves. This class performs none
+     * of that itself; it only hosts the [MutableStateFlow] [sessionState] reads from, so the
+     * coordinator's transitions land on the same stream an app already observes.
+     */
+    internal fun setState(next: SessionState) {
+        state.value = next
+    }
+
+    /**
      * Opens the system browser, waits for the redirect, and validates it.
      *
      * The pending request is persisted **before** the browser opens — the app can be killed
