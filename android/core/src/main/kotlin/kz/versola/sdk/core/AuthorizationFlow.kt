@@ -38,7 +38,27 @@ public class AuthorizationFlow(
     private val tokenBinding: TokenBinding =
         if (dpopKey == null) TokenBinding.Bearer else TokenBinding.Dpop(),
     private val clock: () -> Long = System::currentTimeMillis,
+    /**
+     * Whether a refresh grant is durably stored — [CredentialStore.hasGrant], wired in by
+     * whoever owns both halves. A probe rather than the store itself: restoration needs one
+     * bit, and `hasGrant` is the one question a store answers without its key, so a cold
+     * start does not become an unlock prompt under [UnlockPolicy.OnAppUnlock].
+     *
+     * Defaulting to "no grant" keeps a flow constructed on its own — the browser leg in
+     * isolation, and every test of it — behaving exactly as before. Leaving it at the default
+     * underneath a [SessionCoordinator] would make a returning session read as signed out on
+     * every cold start, so that pairing is refused rather than defaulted; see
+     * [restoresStoredGrant].
+     */
+    private val hasStoredGrant: suspend () -> Boolean = NO_STORED_GRANT,
 ) {
+
+    /**
+     * Whether [hasStoredGrant] was actually supplied. Read by [SessionCoordinator], which
+     * cannot restore `Authenticated` without it and refuses the pairing at construction
+     * rather than signing users out one cold start at a time.
+     */
+    internal val restoresStoredGrant: Boolean get() = hasStoredGrant !== NO_STORED_GRANT
 
     init {
         // A key-bound session without a key would send no `dpop_jkt` and skip the
@@ -283,6 +303,24 @@ public class AuthorizationFlow(
             if (restored) return
             val pending = pendingStore.load()
             state.value = when {
+                // A stored grant outranks whatever the browser leg left behind, and it is
+                // read first for both directions of that: without it a returning session
+                // reports `Unauthenticated` on every cold start until something happens to
+                // call refresh, and with a pending request beside it the request is the
+                // residue of a login killed between persisting the token and clearing the
+                // slot — a code already redeemed, so the redirect it still waits for can no
+                // longer be spent and resuming it would only fail as `invalid_grant`.
+                //
+                // The cost is a re-authorization started *over* a live session (a step-up,
+                // an account switch) and then killed mid-browser: it is resolved in favour
+                // of the session that already exists rather than resumed. Nothing is lost
+                // that the next 401 does not ask for again, and the alternative — believing
+                // a pending request that may or may not have been redeemed — has no way to
+                // tell the two apart.
+                hasStoredGrant() -> {
+                    if (pending != null) pendingStore.clear()
+                    SessionState.Authenticated
+                }
                 pending == null -> SessionState.Unauthenticated
                 pending.isExpired(clock()) -> {
                     pendingStore.clear()
@@ -320,6 +358,9 @@ public class AuthorizationFlow(
          * otherwise grow this without end. Eight is far more open tabs than a user has, and
          * dropping the oldest only restores the old behaviour for it: a mismatch.
          */
+        /** The absent-probe sentinel; identity is what [restoresStoredGrant] compares. */
+        private val NO_STORED_GRANT: suspend () -> Boolean = { false }
+
         private val ABANDONED_STATES = LinkedHashSet<String>()
         private const val MAX_ABANDONED_STATES = 8
 

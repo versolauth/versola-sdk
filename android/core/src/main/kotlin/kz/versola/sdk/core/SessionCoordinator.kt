@@ -2,11 +2,14 @@ package kz.versola.sdk.core
 
 import java.net.URI
 import java.security.MessageDigest
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * The other half of the grant [AuthorizationFlow] deliberately stops short of, and all of
@@ -37,12 +40,29 @@ public class SessionCoordinator(
     private val retryPolicy: RetryPolicy = RetryPolicy.Default,
 ) {
 
+    init {
+        // Without the probe, restoration knows only what the browser leg left behind, and a
+        // returning session — a stored grant, no pending request — reads as `Unauthenticated`
+        // on every cold start until something happens to call [refresh]. Wiring, not
+        // deployment: it fails here rather than by signing users out one launch at a time.
+        if (!flow.restoresStoredGrant) {
+            throw VersolaError.Configuration(
+                VersolaError.Configuration.Detail.InvalidConfiguration(
+                    "AuthorizationFlow needs hasStoredGrant = credentialStore::hasGrant to restore a stored session",
+                ),
+            )
+        }
+    }
+
     /**
      * The state machine of `spec/state-machine.md`, observable — the full seven states, not
      * only the browser leg [AuthorizationFlow] hosts on its own. Delegates to
      * [AuthorizationFlow.sessionState] because that is where the underlying stream lives;
      * every state this class enters or leaves lands there too, through [AuthorizationFlow]'s
      * internal setters.
+     *
+     * Its first emission is the restored state, which is `Authenticated` whenever a grant is
+     * durably stored — [AuthorizationFlow] asks the probe this class's constructor insists on.
      */
     public val sessionState: Flow<SessionState> get() = flow.sessionState
 
@@ -77,7 +97,16 @@ public class SessionCoordinator(
         maxAge: Long? = null,
     ): TokenResponse {
         val grant = flow.authorize(scopes, acrValues, maxAge)
-        val response = retryPolicy.newBudget().execute(tokenOrigin()) { tokenClient.exchange(grant) }
+        // One attempt, with no retry budget around it. An authorization code is single-use
+        // and the token endpoint offers no idempotency for `authorization_code` —
+        // `Idempotency-Key` is honoured for the refresh family alone (`OAuthTokenService`) —
+        // so a retry after a dropped response replays a spent code, which RFC 6749 §4.1.2
+        // lets the server answer by revoking what it already issued from it. That trades a
+        // login that failed for one that cannot be completed, and `spec/retry-policy.md`
+        // draws exactly this line: a retry is only safe on an operation the server can
+        // recognise as a repeat. The nonce and clock-skew retries inside [TokenClient] still
+        // apply — those answer a challenge raised before the code was redeemed.
+        val response = tokenClient.exchange(grant)
         // RFC 6749 permits an authorization_code response to omit refresh_token, but the SDK's
         // whole session model has nothing to hold on to without one: there is no prior value
         // to fall back to the way a refresh's BoundRenewal omission falls back to the one
@@ -92,7 +121,13 @@ public class SessionCoordinator(
     }
 
     private val refreshMutex = Mutex()
-    private var pendingRefresh: CompletableDeferred<Result<TokenResponse>>? = null
+
+    /**
+     * The refresh in flight, or null. Its value is the outcome every other caller takes
+     * delivery of — or null for a flight whose winner was cancelled, which is not an outcome
+     * and must not be delivered as one; see [refresh].
+     */
+    private var pendingRefresh: CompletableDeferred<Result<TokenResponse>?>? = null
 
     /**
      * Exactly one `refresh_token` request per call that finds none already in flight; every
@@ -107,21 +142,65 @@ public class SessionCoordinator(
      * queued callers make five *sequential* requests, one per caller, each spending a refresh
      * token the previous one already rotated. What is shared here is the *result* of the one
      * request that was actually needed, not merely serialised access to making one each.
+     *
+     * Cancellation belongs to the caller that was cancelled and to nobody else: the callers
+     * waiting on an abandoned flight take it over rather than fail with it.
      */
     public suspend fun refresh(): TokenResponse {
-        var winner = false
-        val deferred = refreshMutex.withLock {
-            pendingRefresh ?: CompletableDeferred<Result<TokenResponse>>().also {
-                pendingRefresh = it
-                winner = true
+        while (true) {
+            var winner = false
+            val flight = refreshMutex.withLock {
+                pendingRefresh ?: CompletableDeferred<Result<TokenResponse>?>().also {
+                    pendingRefresh = it
+                    winner = true
+                }
             }
-        }
-        if (!winner) return deferred.await().getOrThrow()
+            if (!winner) {
+                // Null is the winner's caller having walked away rather than the refresh
+                // having resolved. That says nothing about this caller, whose own job is
+                // still very much alive, so it takes the flight over instead of inheriting a
+                // `CancellationException` raised in a coroutine it has nothing to do with —
+                // which would cancel it too, and abandoning one request would fail every
+                // concurrent refresh with it.
+                //
+                // Taking over is safe precisely because of the rotation slot: an abandoned
+                // winner that had already sent its request left its idempotency key behind,
+                // and the next winner replays with that key rather than deriving a new one.
+                val outcome = flight.await() ?: continue
+                return outcome.getOrThrow()
+            }
 
-        val result = runCatching { performRefresh() }
-        refreshMutex.withLock { pendingRefresh = null }
-        deferred.complete(result)
-        return result.getOrThrow()
+            val result = try {
+                Result.success(performRefresh())
+            } catch (e: CancellationException) {
+                withContext(NonCancellable) {
+                    // `Refreshing` was pushed by this flight and nothing resolved it, so it
+                    // would otherwise be the last state an app ever observes. Reverting to
+                    // the state the refresh was entered from costs a successor one extra
+                    // transition and leaves no stuck session behind if there is none.
+                    flow.setState(SessionState.Authenticated)
+                    endFlight(flight, null)
+                }
+                throw e
+            } catch (e: Throwable) {
+                Result.failure(e)
+            }
+            endFlight(flight, result)
+            return result.getOrThrow()
+        }
+    }
+
+    /**
+     * Retires [flight] before publishing [outcome], so a caller arriving between the two
+     * starts a fresh one rather than joining a flight that has already finished. Null is an
+     * abandoned flight, which its awaiters retry rather than adopt.
+     */
+    private suspend fun endFlight(
+        flight: CompletableDeferred<Result<TokenResponse>?>,
+        outcome: Result<TokenResponse>?,
+    ) {
+        refreshMutex.withLock { if (pendingRefresh === flight) pendingRefresh = null }
+        flight.complete(outcome)
     }
 
     private suspend fun performRefresh(): TokenResponse {
@@ -155,6 +234,11 @@ public class SessionCoordinator(
                 // `spec/state-machine.md`'s `Locked` section states for every other caller.
                 credentialStore.useRefreshToken { tokenClient.refresh(it, idempotencyKey) } ?: noGrantStored()
             }
+        } catch (e: CancellationException) {
+            // Not an outcome of the refresh, and not this function's to settle: [refresh]
+            // retires the abandoned flight and reverts the state where a successor can see
+            // it, under `NonCancellable`, which nothing here can do from a cancelled job.
+            throw e
         } catch (e: VersolaError.Recoverable) {
             // The grant is intact for everything this budget can throw: a network failure
             // exhausting its retries, a nonce loop, or the storage key's unlock window having

@@ -102,6 +102,19 @@ process is then validated against the restored `state` and completes normally.
 A pending request older than **10 minutes** is discarded and the SDK settles in
 `Unauthenticated`; authorization codes do not outlive that anyway.
 
+A **stored refresh grant outranks a pending request** on restore, and is read first: with no
+pending request the SDK restores `Authenticated` rather than reporting a returning user as
+signed out, and with one beside it the request is the residue of a login killed between
+persisting the token and clearing the slot — its code was already redeemed, so the redirect it
+waits for can no longer be spent. The request is discarded and the SDK restores
+`Authenticated`. Asked without the storage key (`hasGrant`), so a cold start does not become an
+unlock prompt under `OnAppUnlock`.
+
+The cost is a re-authorization started over a live session — a step-up, an account switch — and
+then killed mid-browser: it resolves in favour of the session that already exists rather than
+resuming. Nothing is lost that the next 401 does not ask for again, and the two cases are
+otherwise indistinguishable from what is on disk.
+
 This is the `flutter_appauth` failure recorded in `mobile-demo`'s `pubspec.yaml`. It is not an
 edge case on Android.
 
