@@ -42,8 +42,21 @@ public sealed class VersolaError(
              */
             public data object PendingRequestExpired : Cause
 
-            /** Transport failure, timeout or DNS, surfaced only once the retry budget is exhausted. */
-            public data class Network(public val detail: String) : Cause
+            /**
+             * Transport failure, timeout or DNS, surfaced only once the retry budget is
+             * exhausted.
+             *
+             * [attempts] and [elapsedMillis] are how an integrator tells a ceiling that was
+             * reached from a single request that failed: the same message carries both
+             * otherwise. They describe the operation rather than this request — the default
+             * of one attempt is the failure of a call made outside any [RetryBudget], which
+             * is the only attempt there was.
+             */
+            public data class Network(
+                public val detail: String,
+                public val attempts: Int = 1,
+                public val elapsedMillis: Long = 0,
+            ) : Cause
 
             /**
              * Under [UnlockPolicy.OnAppUnlock], the storage key's authentication window has
