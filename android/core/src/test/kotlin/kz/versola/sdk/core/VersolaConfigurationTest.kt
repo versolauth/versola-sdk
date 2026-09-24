@@ -102,6 +102,22 @@ class VersolaConfigurationTest {
     }
 
     @Test
+    fun `no public API anywhere in core can carry a client secret`() {
+        // Asserted against the published surface rather than against this class alone: a
+        // mobile client is public (#1 §2), and "we did not add a secret parameter" is not the
+        // property that matters — "an integrator cannot find one to fill in" is. The dump is
+        // what `apiCheck` gates, so a secret can only reach the API by passing through here.
+        val dump = java.io.File("api/core.api")
+        assertTrue("api/core.api should be readable from the module directory", dump.isFile)
+
+        val offending = dump.readLines().filter { line ->
+            line.contains("secret", ignoreCase = true) || line.contains("clientAssertion", ignoreCase = true)
+        }
+
+        assertEquals("no public member may name a client secret: $offending", emptyList<String>(), offending)
+    }
+
+    @Test
     fun `an issuer with a path keeps it`() {
         // Multi-tenant deployments put the tenant in the path; discovery appends to it.
         val configuration = configure(issuer = "https://id.example.com/tenants/acme")

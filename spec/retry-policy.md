@@ -54,6 +54,12 @@ budgets. None of them are affected by the numbers above.
   unknown scope. A retry cannot fix a deployment mistake.
 - `insufficient_user_authentication` — a step-up needs a new authorization, not another attempt
 - User cancel. A system cancel may be resumed, which is a resumption rather than a retry.
+- The `authorization_code` exchange, including on a dropped response. The code is single-use
+  and the server offers no idempotency for this grant type, so a second attempt is a replay
+  the server may answer by revoking what it already issued from the code (RFC 6749 §4.1.2) —
+  turning a login that failed into one that cannot complete. The user signs in again instead.
+  The nonce and clock-skew retries below still apply: both answer a challenge raised before
+  the code was redeemed.
 
 ## What is retried
 
