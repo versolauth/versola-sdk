@@ -346,6 +346,32 @@ class TokenClientTest {
     }
 
     @Test
+    fun `a redirect is refused rather than followed with the credential`() = runTest {
+        // 307 and 308 repeat the method and the body by definition, and OkHttp follows
+        // redirects by default: one Location header would repost the code — and the proof
+        // minted for this origin — somewhere discovery never named.
+        val elsewhere = MockWebServer()
+        elsewhere.start()
+        try {
+            elsewhere.enqueue(issued())
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(307)
+                    .setHeader("Location", elsewhere.url("/token").toString())
+                    .build(),
+            )
+
+            val failure = failure { client().exchange(grant()) } as VersolaError.Configuration
+
+            assertTrue(failure.detail is VersolaError.Configuration.Detail.TokenRequestRejected)
+            assertEquals(0, elsewhere.requestCount)
+            assertEquals(1, server.requestCount)
+        } finally {
+            elsewhere.close()
+        }
+    }
+
+    @Test
     fun `5xx is transport-shaped rather than a deployment fault`() = runTest {
         server.enqueue(MockResponse.Builder().code(503).body("<html>upstream is down</html>").build())
 

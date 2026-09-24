@@ -58,11 +58,30 @@ public interface TokenClient {
 public class HttpTokenClient(
     private val configuration: VersolaConfiguration,
     private val discovery: DiscoveryService,
-    private val httpClient: OkHttpClient,
+    httpClient: OkHttpClient,
     /** Null for a session that is not key-bound; see [TokenBinding]. */
     private val dpop: DpopProofSource? = null,
     private val tokenBinding: TokenBinding = if (dpop == null) TokenBinding.Bearer else TokenBinding.Dpop(),
 ) : TokenClient {
+
+    /**
+     * The injected client with redirects switched off, rather than the injected client as it
+     * came.
+     *
+     * OkHttp follows redirects by default, and a 307 or 308 is defined to repeat the method
+     * and the body: one `Location` header from anything able to answer as the token endpoint
+     * would repost an authorization code or a refresh token to another origin, along with the
+     * `DPoP` proof minted for this one. The endpoint came from discovery and is the only
+     * place this body may go, so following a redirect is never the right answer — and this is
+     * not left to whatever policy the integrator's client happens to carry.
+     *
+     * `newBuilder` shares the connection pool, dispatcher and cache, so the override costs
+     * nothing beyond the wrapper.
+     */
+    private val httpClient: OkHttpClient = httpClient.newBuilder()
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
 
     init {
         // The same pairing `AuthorizationFlow` refuses, for the same reason: with no proof
@@ -244,6 +263,19 @@ public class HttpTokenClient(
      * `invalid_grant` — shares it with six codes that mean the opposite.
      */
     private fun rejected(status: Int, payload: String, nonce: String?): Attempt {
+        // A redirect that was not followed. The `Location` is deliberately not reported: it
+        // is the one part of this response the deployment did not have to have any right to,
+        // and the answer is the same wherever it points — the token endpoint is whatever
+        // discovery said it was.
+        if (status in 300..399) {
+            throw VersolaError.Configuration(
+                VersolaError.Configuration.Detail.TokenRequestRejected(
+                    "(the token endpoint answered HTTP $status; redirects are not followed)",
+                    null,
+                ),
+            )
+        }
+
         // 5xx is the provider having a bad moment, and its body is as likely to be an HTML
         // error page as JSON. Transport-shaped, retried under the caller's budget.
         if (status >= 500) {
