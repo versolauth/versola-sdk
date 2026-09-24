@@ -52,9 +52,17 @@ public class RetryPolicy(
         }
     }
 
-    /** A fresh budget for one operation. Never shared: the counters are the operation. */
+    /**
+     * A fresh budget for one operation. Never shared: the counters are the operation.
+     *
+     * The default clock is [System.nanoTime], not wall-clock time: `totalBudget` bounds how
+     * long an operation is allowed to keep retrying, and a wall clock that a user or NTP can
+     * step backwards while the operation is in flight would let it keep retrying past that
+     * ceiling by exactly the size of the step. `nanoTime` is monotonic within one JVM run,
+     * which is all an elapsed-time measurement ever needs.
+     */
     internal fun newBudget(
-        clock: () -> Long = System::currentTimeMillis,
+        clock: () -> Long = { System.nanoTime() / NANOS_PER_MILLI },
         random: Random = Random.Default,
     ): RetryBudget = RetryBudget(this, clock, random)
 
@@ -64,6 +72,7 @@ public class RetryPolicy(
         private const val BACKOFF_MULTIPLIER_CEILING = 4.0
         private val MAX_BACKOFF_CEILING = 30.seconds
         private val TOTAL_BUDGET_CEILING = 60.seconds
+        private const val NANOS_PER_MILLI = 1_000_000L
 
         /** The defaults of `spec/retry-policy.md`, and what `configure()` uses unasked. */
         public val Default: RetryPolicy = RetryPolicy()
@@ -88,9 +97,16 @@ public class RetryPolicy(
             totalBudget = TOTAL_BUDGET_CEILING,
         )
 
+        // Written as .compareTo() rather than < and > so this stays correct independently of
+        // the Kotlin rule that makes it correct today: `T` here is a type parameter, not the
+        // concrete `Double`, so `<`/`>` already resolve to `Comparable.compareTo` rather than
+        // the IEEE 754 float comparison that treats every comparison with NaN as false — under
+        // Double.compareTo, NaN sorts above every other value including +Infinity, so
+        // `backoffMultiplier = Double.NaN` is already rejected by the upper-bound check.
+        // Spelling out .compareTo() says so without asking a future reader to know that.
         private fun <T : Comparable<T>> bounded(name: String, value: T, floor: T, ceiling: T) {
-            if (value < floor) throw invalid("$name must be at least $floor, was $value")
-            if (value > ceiling) throw invalid("$name must be at most $ceiling, was $value")
+            if (value.compareTo(floor) < 0) throw invalid("$name must be at least $floor, was $value")
+            if (value.compareTo(ceiling) > 0) throw invalid("$name must be at most $ceiling, was $value")
         }
 
         private fun invalid(detail: String) = VersolaError.Configuration(
@@ -137,6 +153,14 @@ internal class RetryBudget(
      * [origin] is a scheme-and-authority the per-origin cap is counted against; requests to
      * two different hosts within one operation do not spend each other's allowance, though
      * they do share [RetryPolicy.maxTotalAttempts].
+     *
+     * [RetryPolicy.totalBudget] bounds the gaps *between* attempts, not an attempt already in
+     * flight: the time [call] itself takes counts against the budget once it returns or
+     * throws — which is why a slow attempt leaves less room for the next one — but this
+     * method does not cancel [call] partway through. Bounding how long a single request may
+     * run is the HTTP client's job (a connect/read/call timeout on the `OkHttpClient` an
+     * integrator configures), because only the client knows which phase of the request is
+     * slow; a budget that cannot see inside [call] would have to guess.
      */
     suspend fun <T> execute(origin: String, call: suspend () -> T): T {
         while (true) {

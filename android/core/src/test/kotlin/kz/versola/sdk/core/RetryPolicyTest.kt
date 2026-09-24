@@ -36,6 +36,14 @@ class RetryPolicyTest {
     }
 
     @Test
+    fun `NaN is outside every bound`() {
+        // Regression guard for the generic-dispatch reasoning documented on `bounded`: this
+        // must keep throwing even if the check is ever rewritten in a way that resolves to
+        // the primitive IEEE 754 comparison, under which every comparison with NaN is false.
+        assertRefuses { RetryPolicy(backoffMultiplier = Double.NaN) }
+    }
+
+    @Test
     fun `a policy that cannot make a request is refused too`() {
         // Zero attempts is not "no retries", it is no request at all, and the call it was
         // meant to govern would fail without ever reaching the network.
