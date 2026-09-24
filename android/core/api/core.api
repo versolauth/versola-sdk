@@ -249,6 +249,25 @@ public final class kz/versola/sdk/core/RedirectUriKind : java/lang/Enum {
 	public static fun values ()[Lkz/versola/sdk/core/RedirectUriKind;
 }
 
+public final class kz/versola/sdk/core/RetryPolicy {
+	public static final field Companion Lkz/versola/sdk/core/RetryPolicy$Companion;
+	public fun <init> ()V
+	public synthetic fun <init> (IIJDJJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (IIJDJJLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getBackoffMultiplier ()D
+	public final fun getInitialBackoff-UwyO8pc ()J
+	public final fun getMaxAttemptsPerOrigin ()I
+	public final fun getMaxBackoff-UwyO8pc ()J
+	public final fun getMaxTotalAttempts ()I
+	public final fun getTotalBudget-UwyO8pc ()J
+}
+
+public final class kz/versola/sdk/core/RetryPolicy$Companion {
+	public final fun getConservative ()Lkz/versola/sdk/core/RetryPolicy;
+	public final fun getDefault ()Lkz/versola/sdk/core/RetryPolicy;
+	public final fun getPatient ()Lkz/versola/sdk/core/RetryPolicy;
+}
+
 public abstract interface class kz/versola/sdk/core/SessionState {
 }
 
@@ -556,12 +575,17 @@ public abstract interface class kz/versola/sdk/core/VersolaError$Recoverable$Cau
 }
 
 public final class kz/versola/sdk/core/VersolaError$Recoverable$Cause$Network : kz/versola/sdk/core/VersolaError$Recoverable$Cause {
-	public fun <init> (Ljava/lang/String;)V
+	public fun <init> (Ljava/lang/String;IJ)V
+	public synthetic fun <init> (Ljava/lang/String;IJILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;)Lkz/versola/sdk/core/VersolaError$Recoverable$Cause$Network;
-	public static synthetic fun copy$default (Lkz/versola/sdk/core/VersolaError$Recoverable$Cause$Network;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/VersolaError$Recoverable$Cause$Network;
+	public final fun component2 ()I
+	public final fun component3 ()J
+	public final fun copy (Ljava/lang/String;IJ)Lkz/versola/sdk/core/VersolaError$Recoverable$Cause$Network;
+	public static synthetic fun copy$default (Lkz/versola/sdk/core/VersolaError$Recoverable$Cause$Network;Ljava/lang/String;IJILjava/lang/Object;)Lkz/versola/sdk/core/VersolaError$Recoverable$Cause$Network;
 	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttempts ()I
 	public final fun getDetail ()Ljava/lang/String;
+	public final fun getElapsedMillis ()J
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
