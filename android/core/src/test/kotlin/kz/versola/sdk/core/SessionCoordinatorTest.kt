@@ -151,15 +151,18 @@ private class FakeTokenClient : TokenClient {
     }
 }
 
+private fun stored(): ByteArray = "grant".toByteArray(Charsets.UTF_8)
+
 private fun issued(
     accessToken: String = "access-1",
     refreshToken: String? = "rotated-refresh",
     idToken: String? = null,
+    expiresIn: Long = 3600,
 ) = TokenResponse.from(
     TokenResponsePayload(
         accessToken = accessToken,
         tokenType = "Bearer",
-        expiresIn = 3600,
+        expiresIn = expiresIn,
         refreshToken = refreshToken,
         idToken = idToken,
     ),
@@ -195,13 +198,22 @@ class SessionCoordinatorTest {
         hasStoredGrant = credentialStore::hasGrant,
     )
 
+    /** Advanced by hand, so a lifetime can elapse without a test sleeping through it. */
+    private var elapsed = 0L
+
     private fun coordinator(
         pendingStore: RecordingPendingStore = RecordingPendingStore(),
         tokenClient: FakeTokenClient = FakeTokenClient(),
         credentialStore: FakeCredentialStore = FakeCredentialStore(),
         retryPolicy: RetryPolicy = RetryPolicy.Conservative,
     ) = Triple(
-        SessionCoordinator(authFlow(pendingStore, credentialStore), tokenClient, credentialStore, retryPolicy),
+        SessionCoordinator(
+            authFlow(pendingStore, credentialStore),
+            tokenClient,
+            credentialStore,
+            retryPolicy,
+            elapsedMillis = { elapsed },
+        ),
         tokenClient,
         credentialStore,
     )
@@ -650,6 +662,96 @@ class SessionCoordinatorTest {
         }
 
         assertTrue(error.detail is VersolaError.Configuration.Detail.InvalidConfiguration)
+    }
+
+    // ---- accessToken() and the refresh skew --------------------------------------------
+
+    @Test
+    fun `a token outside its refresh skew is served from the cache, with no token request`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = stored()
+        tokenClient.refreshActions = mutableListOf({ issued(accessToken = "cached", expiresIn = 3600) })
+        coordinator.refresh()
+
+        // 3600 s less the 30 s cap leaves 3570 s of use; a second short of that is inside it.
+        elapsed += 3_569_000
+        val token = coordinator.accessToken()
+
+        assertEquals("cached", token.value)
+        assertEquals(1, tokenClient.refreshCalls.size)
+    }
+
+    @Test
+    fun `a token within its refresh skew is refreshed before it is handed out`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = stored()
+        tokenClient.refreshActions = mutableListOf(
+            { issued(accessToken = "first", expiresIn = 3600) },
+            { issued(accessToken = "second", expiresIn = 3600) },
+        )
+        coordinator.refresh()
+
+        elapsed += 3_570_000
+        val token = coordinator.accessToken()
+
+        assertEquals("second", token.value)
+        assertEquals(2, tokenClient.refreshCalls.size)
+    }
+
+    @Test
+    fun `a short lifetime gets a tenth of itself, not a cap that would expire it on arrival`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = stored()
+        tokenClient.refreshActions = mutableListOf({ issued(expiresIn = 20) })
+        coordinator.refresh()
+
+        // A flat 30 s skew against a 20 s token refreshes here, and before every call after.
+        elapsed += 17_999
+        coordinator.accessToken()
+        assertEquals(1, tokenClient.refreshCalls.size)
+
+        elapsed += 1
+        coordinator.accessToken()
+        assertEquals(2, tokenClient.refreshCalls.size)
+    }
+
+    @Test
+    fun `a response without expires_in is unknown rather than expired`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = stored()
+        tokenClient.refreshActions = mutableListOf({ issued(accessToken = "undated", expiresIn = 0) })
+        coordinator.refresh()
+
+        elapsed += 365L * 24 * 60 * 60 * 1000
+        val token = coordinator.accessToken()
+
+        assertEquals("undated", token.value)
+        assertEquals(1, tokenClient.refreshCalls.size)
+    }
+
+    @Test
+    fun `accessToken on a cold cache refreshes rather than answering with nothing`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = stored()
+        tokenClient.refreshActions = mutableListOf({ issued(accessToken = "restored") })
+
+        assertEquals("restored", coordinator.accessToken().value)
+        assertEquals(1, tokenClient.refreshCalls.size)
+    }
+
+    @Test
+    fun `the skew is a tenth of the lifetime until the thirty-second cap takes over`() {
+        assertEquals(18_000, RefreshSkew.usableForMillis(issued(expiresIn = 20)))
+        // 300 s is the crossover: a tenth of it is exactly the cap.
+        assertEquals(270_000, RefreshSkew.usableForMillis(issued(expiresIn = 300)))
+        assertEquals(570_000, RefreshSkew.usableForMillis(issued(expiresIn = 600)))
+        assertEquals(3_570_000, RefreshSkew.usableForMillis(issued(expiresIn = 3600)))
+    }
+
+    @Test
+    fun `a lifetime past what milliseconds can express does not wrap into an expired token`() {
+        assertEquals(Long.MAX_VALUE, RefreshSkew.usableForMillis(issued(expiresIn = Long.MAX_VALUE)))
+        assertEquals(Long.MAX_VALUE, RefreshSkew.usableForMillis(issued(expiresIn = -1)))
     }
 
     private suspend fun failure(block: suspend () -> Unit): VersolaError = try {

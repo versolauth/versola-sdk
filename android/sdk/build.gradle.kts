@@ -37,6 +37,7 @@ dependencies {
     api(project(":browser"))
     api(project(":dpop"))
     api(project(":storage"))
+    api(project(":okhttp"))
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")

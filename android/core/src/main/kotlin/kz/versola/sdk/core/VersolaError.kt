@@ -112,6 +112,19 @@ public sealed class VersolaError(
              * deployment is how clients silently log users out.
              */
             public data object GrantRejected : Reason
+
+            /**
+             * A call through the authenticated client was refused with a bare 401, and a
+             * refresh did not change that (`spec/errors.md`, edge table).
+             *
+             * Distinct from [GrantRejected], which is the token endpoint's own
+             * `invalid_grant`: here the token endpoint answered *successfully* and the
+             * resource server refused the token it issued anyway. Same instruction to the
+             * app, different fact about which server said what — and reusing the other
+             * reason would send an integrator reading a rotation bug into a resource-server
+             * audience or revocation problem.
+             */
+            public data object SessionRejected : Reason
         }
     }
 

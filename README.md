@@ -9,10 +9,12 @@ val versola = Versola.configure(
     issuer      = "https://id.versola.kz",
     clientId    = "mobile-app",
     redirectUri = "https://app.example.com/oauth",
+    // Separate configuration: edge's address is not in the OAuth metadata.
+    edgeBaseUrl = "https://versola.kz",
 )
 
 versola.login(scopes = setOf("openid", "profile"))
-val response = versola.httpClient().newCall(request).execute()
+val response = versola.call(request)
 ```
 
 DPoP, nonce handling, refresh coordination and secure storage are the SDK's job, not the
