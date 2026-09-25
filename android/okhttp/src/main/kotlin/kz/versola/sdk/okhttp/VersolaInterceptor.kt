@@ -125,7 +125,17 @@ public class VersolaInterceptor(
                         )
                     }
                     refreshed = true
-                    token = translating { tokens.renewAccessToken() }
+                    // A concurrent call on the same stale token may have already refreshed
+                    // and updated the cache while this response was in flight. Rotating
+                    // again here would spend a second rotation for a token that is already
+                    // usable, so the cache is checked first and a new grant is forced only
+                    // if it still holds the token that was just refused.
+                    val cached = translating { tokens.accessToken() }
+                    token = if (cached.value != token.value) {
+                        cached
+                    } else {
+                        translating { tokens.renewAccessToken() }
+                    }
                     // A one-shot or duplex body cannot be sent twice, so the refreshed token
                     // lands in the cache and this 401 is returned as it stands. The app's own
                     // retry of the operation then succeeds, having rebuilt the body it is the
@@ -156,8 +166,13 @@ public class VersolaInterceptor(
                 // `ath` over the token actually being sent, per §4.2. The factory derives
                 // `htu` from this URL and the nonce from its own cache, which is keyed by
                 // origin — so edge's nonce is used here and auth's is left untouched
-                // (scenario 04).
-                checkNotNull(dpop).proof(request.method, request.url.toString(), token.value),
+                // (scenario 04). Wrapped in `translating`: a `VersolaError` here (an
+                // unusable key, a signing failure) must reach the caller as a
+                // `VersolaHttpException` like every other taxonomy error this interceptor
+                // raises, not escape raw onto OkHttp's dispatcher thread.
+                translating {
+                    checkNotNull(dpop).proof(request.method, request.url.toString(), token.value)
+                },
             )
         }
         return builder.build()

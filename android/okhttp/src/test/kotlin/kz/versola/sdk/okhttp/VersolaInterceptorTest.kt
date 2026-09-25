@@ -27,8 +27,13 @@ private class FakeTokenSource(
     var renewals = 0
     var renewalFailure: VersolaError? = null
 
+    /** Runs on every accessToken() call, numbered from 1, so a test can simulate a
+     *  concurrent refresh landing in the cache between two calls within one operation. */
+    var onAccessToken: ((call: Int) -> Unit)? = null
+
     override suspend fun accessToken(): AccessToken {
         issued++
+        onAccessToken?.invoke(issued)
         return current
     }
 
@@ -38,15 +43,21 @@ private class FakeTokenSource(
         current = AccessToken("token-$renewals", isDpopBound = current.isDpopBound)
         return current
     }
+
+    fun forceCurrent(token: AccessToken) {
+        current = token
+    }
 }
 
 /** Records the `ath` input and the nonces it was handed, which is what scenario 04 asserts on. */
 private class RecordingProofSource : DpopProofSource {
     var proofs = 0
+    var failure: VersolaError? = null
     val boundTokens = mutableListOf<String?>()
     val observedNonces = mutableListOf<Pair<String, String?>>()
 
     override suspend fun proof(method: String, url: String, accessToken: String?): String {
+        failure?.let { throw it }
         boundTokens += accessToken
         return "proof-${++proofs}"
     }
@@ -342,5 +353,43 @@ class VersolaInterceptorTest {
         client(dpop = null).newCall(get()).execute().close()
 
         assertEquals("Bearer token-0", server.takeRequest().headers["Authorization"])
+    }
+
+    @Test
+    fun `a VersolaError raised while signing the request is wrapped, not thrown raw`() {
+        proofs.failure = VersolaError.Configuration(
+            VersolaError.Configuration.Detail.InvalidConfiguration("no key"),
+        )
+
+        val thrown = try {
+            client().newCall(get()).execute().close()
+            throw AssertionError("expected the call to fail")
+        } catch (e: java.io.IOException) {
+            e
+        }
+
+        // A raw VersolaError here would reach RealCall.AsyncCall as a non-IOException on
+        // an enqueued call, which OkHttp rethrows onto the dispatcher thread.
+        assertTrue(thrown is VersolaHttpException)
+        assertTrue((thrown as VersolaHttpException).error is VersolaError.Configuration)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `a 401 for a token another call already rotated retries the cache, not a second renewal`() {
+        server.enqueue(MockResponse.Builder().code(401).build())
+        server.enqueue(ok())
+        tokens.onAccessToken = { call ->
+            // Simulates a concurrent call's refresh landing in the cache between the token
+            // this request was sent with (call 1) and the point where this one re-checks
+            // the cache after its 401 (call 2).
+            if (call == 2) tokens.forceCurrent(AccessToken("racy-refresh", isDpopBound = true))
+        }
+
+        client().newCall(get()).execute().use { assertEquals(200, it.code) }
+
+        assertEquals(0, tokens.renewals)
+        server.takeRequest()
+        assertEquals("DPoP racy-refresh", server.takeRequest().headers["Authorization"])
     }
 }
