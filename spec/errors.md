@@ -104,15 +104,38 @@ From `EdgeService`'s failure outcomes. Note the `WWW-Authenticate` scheme differ
 | 401, `WWW-Authenticate: Bearer error="insufficient_user_authentication", acr_values="…", max_age="…"` | RFC 9470 | `StepUp(acrValues, maxAge)` |
 | 401, `WWW-Authenticate: DPoP error="invalid_dpop_proof"` | RFC 9449 §7 | handled internally, then `Reauthenticate` |
 | 401, `WWW-Authenticate: DPoP error="use_dpop_nonce"` + `DPoP-Nonce` | RFC 9449 §9 | handled internally, edge's nonce cache only |
-| 401, bare | | refresh once, then `Reauthenticate` |
-| 403 | | `Recoverable` with a permission cause — the call will not succeed, but the session is fine |
-| 429 | | `Recoverable`. No server component emits one yet; `Retry-After` handling is #22 |
-| 404 | | `Configuration` if the resource ID is unknown to the deployment |
-| 5xx | | `Recoverable` |
+| 401, bare | | refresh once, then one replay; a second 401 is `Reauthenticate`, reason `SessionRejected` |
+| 403, 404, 429, 5xx | | not converted — returned to the caller as the response it is |
 
 `insufficient_user_authentication` arriving under the `Bearer` scheme while the client is using
 DPoP is not a bug in edge and must not be treated as a downgrade attack. Issue #9's original
 text said `DPoP` here; the code says `Bearer`, and the code is ground truth.
+
+### Why only 401 is converted
+
+Edge is a reverse proxy. Its own rejections — `Outcome.Forbidden`, `Outcome.NotFound`,
+`Outcome.InternalServerError` — are built as bare `Response.status(...)` with no body and no
+marker header, and the response from a resource behind it is forwarded essentially verbatim.
+At 403, 404, 429 and 5xx the two are therefore **indistinguishable on the wire**: nothing tells
+a client whether the permission check in `checkPermissions` refused the call or whether the
+application refused it for reasons of its own.
+
+So the SDK does not guess. It converts a response into a `VersolaError` only where the response
+is *about the credential the SDK attached* — which is 401, in the four forms above, three of
+them carrying a `WWW-Authenticate` that no application would emit. Everything else is the
+application's answer to the application's call, and is handed back as a response.
+
+This is a narrowing of what earlier drafts of this table said, and it costs something: an app
+that wants "403 means the session lacks the permission" has to decide that itself, from a path
+it registered and therefore understands. The alternative costs more — an SDK that reports
+`Configuration` because a REST endpoint legitimately answered 404 sends an integrator hunting a
+deployment bug that does not exist.
+
+The residual ambiguity at 401 is accepted rather than solved: a bare 401 from an application
+behind edge is read as an expiry and spends one refresh before the call is replayed. It is
+bounded at exactly one refresh and one replay per operation, which is the same bound a genuine
+expiry gets, and the alternative is refusing to refresh on the one status that usually means
+the token is stale.
 
 The `Reauthenticate` outcome edge produces for browser sessions — 401 with a `Location` header
 and a cookie-clearing `Set-Cookie` — belongs to the cookie-session path and is not reachable by
