@@ -105,13 +105,18 @@ public class SessionCoordinator(
      * cache publishes no state transition at all.
      */
     override suspend fun accessToken(): AccessToken {
-        cachedAccessToken?.let { cached ->
-            if (elapsedMillis() - cached.receivedAt < RefreshSkew.usableForMillis(cached.response)) {
-                return AccessToken.of(cached.response)
-            }
-        }
-        return AccessToken.of(refresh())
+        val cached = cachedAccessToken
+        if (cached != null && cached.usable()) return AccessToken.of(cached.response)
+        // The entry judged stale is handed on, because this verdict was taken outside the
+        // lock that hands out a refresh flight and a flight can finish before this caller
+        // reaches it. [refresh] re-reads the cache under that lock and rotates only if it
+        // still holds what was rejected here.
+        return AccessToken.of(refresh(rejected = cached, onlyIfStale = true))
     }
+
+    /** Outside its refresh skew, measured on the monotonic clock this class was given. */
+    private fun Cached.usable(): Boolean =
+        elapsedMillis() - receivedAt < RefreshSkew.usableForMillis(response)
 
     override suspend fun renewAccessToken(): AccessToken = AccessToken.of(refresh())
 
@@ -205,10 +210,30 @@ public class SessionCoordinator(
      * Cancellation belongs to the caller that was cancelled and to nobody else: the callers
      * waiting on an abandoned flight take it over rather than fail with it.
      */
-    public suspend fun refresh(): TokenResponse {
+    public suspend fun refresh(): TokenResponse = refresh(rejected = null, onlyIfStale = false)
+
+    /**
+     * [refresh], with the staleness verdict of [accessToken] re-taken under the lock that
+     * hands out the flight.
+     *
+     * Reading the cache and acquiring a flight are two steps, and between them a flight
+     * started by somebody else can resolve and retire itself: its successor then finds no
+     * flight to join, wins one of its own, and rotates a grant that was refreshed moments
+     * earlier. Under bearer binding that second rotation is a second replay of one refresh
+     * token, which `detectReplay` answers by revoking the family. So a conditional caller
+     * re-reads the cache here, where no flight can be created or retired concurrently, and
+     * rotates only if what it rejected is still what the cache holds.
+     */
+    private suspend fun refresh(rejected: Cached?, onlyIfStale: Boolean): TokenResponse {
         while (true) {
             var winner = false
             val flight = refreshFlight.mutex.withLock {
+                if (onlyIfStale) {
+                    val current = cachedAccessToken
+                    if (current != null && current !== rejected && current.usable()) {
+                        return current.response
+                    }
+                }
                 refreshFlight.pending ?: CompletableDeferred<Result<TokenResponse>?>().also {
                     refreshFlight.pending = it
                     winner = true

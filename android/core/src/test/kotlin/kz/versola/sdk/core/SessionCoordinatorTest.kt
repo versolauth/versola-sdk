@@ -1,10 +1,14 @@
 package kz.versola.sdk.core
 
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
@@ -333,6 +337,67 @@ class SessionCoordinatorTest {
         callers.forEach { it.await() }
 
         assertEquals(1, tokenClient.refreshCalls.size)
+    }
+
+    @Test
+    fun `a stale-cache read that a concurrent refresh has already outrun does not force a second rotation`() {
+        // accessToken()'s staleness verdict is taken outside the lock that hands out a
+        // refresh flight. Between that read and this caller reaching the lock, a flight
+        // started by somebody else can resolve and retire itself -- its successor would then
+        // find no flight to join and win one of its own, rotating a grant that was refreshed
+        // moments earlier. Reproducing the gap needs real thread parallelism, since a
+        // coroutine test dispatcher has no suspension point between the two steps; the
+        // injected `elapsedMillis` clock is the seam used to park caller A exactly there.
+        val credentialStore = FakeCredentialStore().apply {
+            refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        }
+        val tokenClient = FakeTokenClient()
+        tokenClient.refreshActions = mutableListOf(
+            { issued(accessToken = "first") },
+            { issued(accessToken = "second") },
+            // Must stay unconsumed: a third call here is exactly the redundant rotation
+            // this test exists to rule out.
+            { issued(accessToken = "third") },
+        )
+
+        var clock = 0L
+        val aParked = CountDownLatch(1)
+        val resumeA = CountDownLatch(1)
+        val armedOnce = AtomicBoolean(true)
+        val coordinator = SessionCoordinator(
+            authFlow(RecordingPendingStore(), credentialStore),
+            tokenClient,
+            credentialStore,
+            elapsedMillis = {
+                // kotlinx.coroutines' debug agent suffixes the thread name with the running
+                // coroutine (" @coroutine#N"), so this matches on a prefix rather than equality.
+                if (Thread.currentThread().name.startsWith("caller-A") && armedOnce.compareAndSet(true, false)) {
+                    aParked.countDown()
+                    resumeA.await(10, TimeUnit.SECONDS)
+                }
+                clock
+            },
+        )
+
+        // Primes the cache with "first", then advances the clock past its refresh skew so
+        // caller A's next read judges it stale.
+        runBlocking { coordinator.refresh() }
+        clock = 3_600_000L
+
+        var aResult: AccessToken? = null
+        val callerA = Thread({ aResult = runBlocking { coordinator.accessToken() } }, "caller-A")
+        callerA.start()
+        assertTrue(aParked.await(10, TimeUnit.SECONDS))
+
+        // Runs to completion, on this thread, while caller A sits parked between reading the
+        // stale "first" entry and reaching the flight lock -- exactly the gap the fix closes.
+        val second = runBlocking { coordinator.refresh() }
+        resumeA.countDown()
+        callerA.join(10_000)
+
+        assertEquals("second", second.accessToken)
+        assertEquals("second", aResult?.value)
+        assertEquals(2, tokenClient.refreshCalls.size)
     }
 
     @Test
