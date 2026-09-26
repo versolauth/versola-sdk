@@ -38,7 +38,17 @@ public class SessionCoordinator(
     private val tokenClient: TokenClient,
     private val credentialStore: CredentialStore,
     private val retryPolicy: RetryPolicy = RetryPolicy.Default,
-) {
+    /**
+     * Monotonic milliseconds, used only to measure how long ago a token response arrived.
+     *
+     * Deliberately not the wall clock and not the skew-corrected clock [DpopProofSource]
+     * stamps `iat` from: those answer what time the *server* thinks it is, whereas the only
+     * question here is how much of a lifetime has elapsed since a response was received. A
+     * user or an NTP step moving the wall clock mid-session must not make a live token look
+     * expired, nor an expired one look live.
+     */
+    private val elapsedMillis: () -> Long = { System.nanoTime() / NANOS_PER_MILLI },
+) : AccessTokenSource {
 
     init {
         // Without the probe, restoration knows only what the browser leg left behind, and a
@@ -67,18 +77,48 @@ public class SessionCoordinator(
     public val sessionState: Flow<SessionState> get() = flow.sessionState
 
     @Volatile
-    private var cachedAccessToken: TokenResponse? = null
+    private var cachedAccessToken: Cached? = null
+
+    /** A response and the instant it arrived, which is the half [TokenResponse] cannot carry. */
+    private class Cached(val response: TokenResponse, val receivedAt: Long)
 
     /**
      * The most recently issued token response, held in memory only — `spec/state-machine.md`'s
      * persistence summary keeps the access token out of storage because it is short-lived and
      * re-derivable. Null before this process's first [login] or [refresh].
      *
-     * Whether it is still usable is the caller's question, not this class's: [TokenResponse]
-     * carries [TokenResponse.expiresInSeconds] and a clock does not belong inside a class whose
-     * job is persistence ordering rather than expiry policy.
+     * Returned whatever its age: this is the escape hatch, and [accessToken] is the method
+     * that applies the refresh skew.
      */
-    public fun currentAccessToken(): TokenResponse? = cachedAccessToken
+    public fun currentAccessToken(): TokenResponse? = cachedAccessToken?.response
+
+    /**
+     * A token fit to send: the cached one while it is outside its refresh skew, otherwise the
+     * result of a [refresh].
+     *
+     * The expiry policy lives here rather than in the HTTP client because the issuance instant
+     * does — [TokenResponse] carries a lifetime and no start, and the cache this class owns is
+     * the only thing that knows when the response arrived. Every caller that would otherwise
+     * have to re-derive that would have to be given the instant anyway.
+     *
+     * `Refreshing` is entered only when a refresh actually happens, so a call served from the
+     * cache publishes no state transition at all.
+     */
+    override suspend fun accessToken(): AccessToken {
+        val cached = cachedAccessToken
+        if (cached != null && cached.usable()) return AccessToken.of(cached.response)
+        // The entry judged stale is handed on, because this verdict was taken outside the
+        // lock that hands out a refresh flight and a flight can finish before this caller
+        // reaches it. [refresh] re-reads the cache under that lock and rotates only if it
+        // still holds what was rejected here.
+        return AccessToken.of(refresh(rejected = cached, onlyIfStale = true))
+    }
+
+    /** Outside its refresh skew, measured on the monotonic clock this class was given. */
+    private fun Cached.usable(): Boolean =
+        elapsedMillis() - receivedAt < RefreshSkew.usableForMillis(response)
+
+    override suspend fun renewAccessToken(): AccessToken = AccessToken.of(refresh())
 
     /**
      * `login()`, in full: [AuthorizationFlow.authorize] for the browser leg, the code exchange,
@@ -116,7 +156,7 @@ public class SessionCoordinator(
         )
         credentialStore.save(refreshToken, response.idToken)
         flow.completeLogin()
-        cachedAccessToken = response
+        cachedAccessToken = Cached(response, elapsedMillis())
         return response
     }
 
@@ -170,10 +210,30 @@ public class SessionCoordinator(
      * Cancellation belongs to the caller that was cancelled and to nobody else: the callers
      * waiting on an abandoned flight take it over rather than fail with it.
      */
-    public suspend fun refresh(): TokenResponse {
+    public suspend fun refresh(): TokenResponse = refresh(rejected = null, onlyIfStale = false)
+
+    /**
+     * [refresh], with the staleness verdict of [accessToken] re-taken under the lock that
+     * hands out the flight.
+     *
+     * Reading the cache and acquiring a flight are two steps, and between them a flight
+     * started by somebody else can resolve and retire itself: its successor then finds no
+     * flight to join, wins one of its own, and rotates a grant that was refreshed moments
+     * earlier. Under bearer binding that second rotation is a second replay of one refresh
+     * token, which `detectReplay` answers by revoking the family. So a conditional caller
+     * re-reads the cache here, where no flight can be created or retired concurrently, and
+     * rotates only if what it rejected is still what the cache holds.
+     */
+    private suspend fun refresh(rejected: Cached?, onlyIfStale: Boolean): TokenResponse {
         while (true) {
             var winner = false
             val flight = refreshFlight.mutex.withLock {
+                if (onlyIfStale) {
+                    val current = cachedAccessToken
+                    if (current != null && current !== rejected && current.usable()) {
+                        return current.response
+                    }
+                }
                 refreshFlight.pending ?: CompletableDeferred<Result<TokenResponse>?>().also {
                     refreshFlight.pending = it
                     winner = true
@@ -315,7 +375,7 @@ public class SessionCoordinator(
             throw e
         }
 
-        cachedAccessToken = response
+        cachedAccessToken = Cached(response, elapsedMillis())
         flow.setState(SessionState.Authenticated)
         return response
     }
@@ -342,4 +402,50 @@ public class SessionCoordinator(
 
     private suspend fun tokenOrigin(): String =
         with(URI(flow.metadata().tokenEndpoint)) { "$scheme://$authority" }
+}
+
+private const val NANOS_PER_MILLI = 1_000_000L
+
+/**
+ * How long before its stated expiry a token is treated as due for refresh
+ * (`spec/state-machine.md`).
+ *
+ * ```text
+ * skew = min(30 s, expires_in / 10)
+ * ```
+ *
+ * Proportional rather than a flat constant because `expires_in` is per-client configuration on
+ * the server (`OAuthClientRecord.accessTokenTtl`, 3600 s in the bootstrap default) and nothing
+ * stops a deployment from issuing twenty-second tokens. A flat 30 s — or AppAuth's 60 s —
+ * marks such a token stale at the instant it is issued, and the session then refreshes before
+ * every single call, which under bearer rotation is a rotation per call. The tenth is what
+ * makes that unrepresentable at any lifetime: proactive refresh can never add more than one
+ * token request per ten uses. The 30 s cap is the other end — an hour-long token refreshed six
+ * minutes early buys nothing.
+ */
+internal object RefreshSkew {
+
+    private const val MAX_SKEW_MILLIS = 30_000L
+    private const val LIFETIME_FRACTION = 10
+
+    /**
+     * Milliseconds a response may be used for after it arrives.
+     *
+     * A lifetime of zero is `expires_in` absent from the response ([TokenResponse] defaults it)
+     * — *unknown*, not *expired*. There is nothing to be early about, so the token is used
+     * until a 401 says otherwise; a response that declines to say when its token dies is not
+     * saying it is already dead. [Long.MAX_VALUE] rather than a flag because every caller's
+     * question is "how long", and "forever" answers it without a second branch.
+     *
+     * A lifetime past what milliseconds can express takes the same answer, for the same
+     * reason it is indistinguishable from one: a deployment claiming 300 million years is not
+     * making a statement about expiry either, and the multiplication below would wrap into a
+     * negative and expire the token immediately.
+     */
+    fun usableForMillis(response: TokenResponse): Long {
+        val lifetime = response.expiresInSeconds
+        if (lifetime <= 0 || lifetime > Long.MAX_VALUE / 1000) return Long.MAX_VALUE
+        val lifetimeMillis = lifetime * 1000
+        return lifetimeMillis - minOf(MAX_SKEW_MILLIS, lifetimeMillis / LIFETIME_FRACTION)
+    }
 }

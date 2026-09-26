@@ -65,6 +65,14 @@ budgets. None of them are affected by the numbers above.
 
 Transport failures, timeouts, DNS, 5xx, and 408. These consume the configurable budget above.
 
+Status-code retries apply to **requests the SDK originates** — discovery and the token
+endpoint — and not to an application request carried through edge. A 5xx there is the
+application's answer, returned to the caller rather than retried: the SDK does not know whether
+the call was idempotent, and a replayed `POST` that the server had in fact processed is a
+duplicate the user pays for. Transport failures on that request are still retried, because a
+request that never reached a server cannot have been processed by one. The only status-driven
+repeat on an application request is the single replay after a 401-triggered refresh, below.
+
 429 is not listed, because nothing in the server emits one yet. When edge's rate limiter lands
 ([versola#310](https://github.com/versolauth/versola/issues/310)) the SDK should treat 429 as
 its own cause and honour `Retry-After` in preference to its own backoff — clamped to

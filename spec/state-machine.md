@@ -125,6 +125,33 @@ is *not* a step-up, *not* a nonce demand, and *not* `invalid_dpop_proof` (below)
 cannot repair an invalid proof — it reuses the same DPoP key — so that case never reaches this
 state.
 
+#### The refresh skew
+
+```text
+skew = min(30 s, expires_in / 10)
+```
+
+A token is treated as due for refresh once `expires_in − skew` has elapsed since it was issued.
+
+Proportional rather than a flat constant, because `expires_in` is per-client configuration
+(`OAuthClientRecord.accessTokenTtl`, 3600 s in the bootstrap default) and nothing stops a
+deployment from issuing 20-second tokens. A flat 30 s against a 20 s token marks every token
+stale at the moment it is issued, and the session then refreshes before every single call —
+which under bearer [redacted] is a rotation per call. The `/ 10` term is what makes that
+unrepresentable: the skew can never exceed a tenth of the lifetime, so proactive refresh can
+never add more than one token request per ten uses, at any TTL. The 30 s cap is what stops a
+long-lived token from being refreshed six minutes early for no benefit.
+
+`expires_in` absent or zero is *unknown*, not *expired*: no proactive refresh happens, and the
+session waits for the 401. A response that does not say when its token dies is not saying it is
+already dead.
+
+Elapsed time here is measured on a **monotonic** clock, not the wall clock and not the
+skew-corrected clock the DPoP `iat` uses. Those two answer a different question — what time the
+server thinks it is — whereas this one is how long ago the response arrived, and a user or an
+NTP step moving the wall clock mid-session must not make a live token look expired or an
+expired one look live.
+
 **Exactly one** token request may be in flight per session. Concurrent callers await the
 winner's result; they do not queue further requests. In bearer mode this is a correctness
 requirement rather than an optimisation — concurrent rotations are replays, and a replay
