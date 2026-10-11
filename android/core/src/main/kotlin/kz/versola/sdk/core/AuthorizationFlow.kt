@@ -53,6 +53,12 @@ public class AuthorizationFlow(
      * [restoresStoredGrant].
      */
     private val hasStoredGrant: suspend () -> Boolean = NO_STORED_GRANT,
+    /**
+     * Present under [BackChannel.Edge]: the authorization request is pushed through edge and
+     * the browser opens on a `request_uri`, with PKCE and `state` edge's rather than this
+     * class's. Absent, the request is built here and sent to auth directly.
+     */
+    private val nativeStarter: NativeAuthorizationStarter? = null,
 ) {
 
     /**
@@ -73,6 +79,26 @@ public class AuthorizationFlow(
                     "TokenBinding.Dpop needs a DpopKeyBinding; pass one or select TokenBinding.Bearer",
                 ),
             )
+        }
+        if (nativeStarter != null) {
+            // Every native endpoint demands a proof, so there is no bearer variant of this
+            // flow to fall back to; and the server registers an edge-fronted native client
+            // with https redirect URIs only, so anything else fails at /par rather than here.
+            if (tokenBinding !is TokenBinding.Dpop) {
+                throw VersolaError.Configuration(
+                    VersolaError.Configuration.Detail.InvalidConfiguration(
+                        "BackChannel.Edge needs TokenBinding.Dpop: edge's native endpoints accept no bearer presentation",
+                    ),
+                )
+            }
+            if (configuration.redirectUri.kind != RedirectUriKind.AppLink) {
+                throw VersolaError.Configuration(
+                    VersolaError.Configuration.Detail.InvalidConfiguration(
+                        "BackChannel.Edge needs an https App Link redirectUri: " +
+                            "an edge-fronted native client is registered with https redirect URIs only",
+                    ),
+                )
+            }
         }
     }
 
@@ -226,12 +252,16 @@ public class AuthorizationFlow(
             maxAge = maxAge,
             dpopJkt = dpopJkt(metadata),
         )
-        val pending = request.toPending(clock())
+        val (pending, uri) = if (nativeStarter == null) {
+            request.toPending(clock()) to request.toUri(metadata.authorizationEndpoint)
+        } else {
+            startViaEdge(nativeStarter, request, metadata)
+        }
         pendingStore.save(pending)
         state.value = SessionState.Authorizing
 
         val outcome = try {
-            belongingTo(pending, browser.authorize(request.toUri(metadata.authorizationEndpoint)))
+            belongingTo(pending, browser.authorize(uri))
         } catch (e: CancellationException) {
             // The *caller* was cancelled, not the authorization. The browser may already be
             // in the foreground and its redirect may still arrive, so the slot and the
@@ -287,6 +317,49 @@ public class AuthorizationFlow(
         state.value = SessionState.Authorizing
         val outcome = belongingTo(pending, browser.awaitPendingRedirect())
         complete(outcome, pending, discovery.metadata())
+    }
+
+    /**
+     * [BackChannel.Edge]'s version of building the request: edge builds it, pushes it to
+     * `/par` with `dpop_jkt` set from the proof on this very call, and hands back the
+     * `request_uri` to open, the `state` to expect and the blob that stands in for the
+     * verifier. What is persisted before the browser opens is therefore edge's `state` and
+     * blob rather than a verifier of this class's own — the same moment, the same reason.
+     *
+     * The authorization endpoint comes from discovery, not from edge's answer: the issuer is
+     * the one URL the integrator vouched for, and `request_uri` is bound to the client at
+     * auth either way. Edge's `authorization_endpoint` is informational for this SDK.
+     */
+    private suspend fun startViaEdge(
+        starter: NativeAuthorizationStarter,
+        request: AuthorizationRequest,
+        metadata: ProviderMetadata,
+    ): Pair<PendingAuthorizationRequest, String> {
+        val started = starter.start(
+            NativeStartRequest(
+                redirectUri = configuration.redirectUri.value,
+                scopes = request.scopes,
+                nonce = request.nonce,
+                acrValues = request.acrValues,
+                maxAge = request.maxAge,
+            ),
+        )
+        val pending = PendingAuthorizationRequest(
+            state = started.state,
+            nonce = request.nonce,
+            codeVerifier = "",
+            scopes = request.scopes.toList(),
+            redirectUri = configuration.redirectUri.value,
+            acrValues = request.acrValues,
+            maxAge = request.maxAge,
+            createdAtEpochMillis = clock(),
+            blob = started.blob,
+            tokenEndpoint = started.tokenEndpoint,
+            revocationEndpoint = started.revocationEndpoint,
+        )
+        val query = "client_id=${encode(configuration.clientId)}&request_uri=${encode(started.requestUri)}"
+        val separator = if (metadata.authorizationEndpoint.contains('?')) "&" else "?"
+        return pending to (metadata.authorizationEndpoint + separator + query)
     }
 
     /**
@@ -360,6 +433,10 @@ public class AuthorizationFlow(
      */
     private suspend fun dpopJkt(metadata: ProviderMetadata): String? {
         val binding = tokenBinding as? TokenBinding.Dpop ?: return null
+        // Through edge the thumbprint reaches /par from the proof on /native/start, which is
+        // the only place it can come from: a `dpop_jkt` the device named itself would be a
+        // claim edge cannot verify, and edge sets the parameter from what it did verify.
+        if (nativeStarter != null) return null
         if (!metadata.supportsDpop) {
             if (binding.requireHardware) {
                 throw VersolaError.Configuration(

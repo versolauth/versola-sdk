@@ -26,7 +26,21 @@ public class PendingAuthorizationRequest public constructor(
     public val acrValues: List<String>,
     public val maxAge: Long?,
     public val createdAtEpochMillis: Long,
+    /**
+     * Under [BackChannel.Edge]: the sealed blob `/native/start` issued, which the exchange
+     * presents at `/native/complete`. It stands in for the `code_verifier`, which edge sealed
+     * inside it and the device never sees — [codeVerifier] is empty in that mode. Null for a
+     * request started directly against auth, and for anything persisted before this field
+     * existed, which is why every field below defaults.
+     */
+    public val blob: String? = null,
+    /** The `htu` the exchange's proof is signed for; see [NativeStart.tokenEndpoint]. */
+    public val tokenEndpoint: String? = null,
+    public val revocationEndpoint: String? = null,
 ) {
+
+    /** Whether this request was started through edge and must be completed there. */
+    public val viaEdge: Boolean get() = blob != null
 
     /**
      * A pending request older than [MAX_AGE_MILLIS] is discarded on restore, leaving

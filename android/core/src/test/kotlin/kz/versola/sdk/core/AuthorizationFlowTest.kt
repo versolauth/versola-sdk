@@ -83,6 +83,27 @@ private class MemoryMetadataCache : ProviderMetadataCache {
     }
 }
 
+/** Answers like edge's `/native/start`, recording what it was asked. */
+private class FakeStarter : NativeAuthorizationStarter {
+    val requests = mutableListOf<NativeStartRequest>()
+    var failure: (() -> VersolaError)? = null
+
+    override suspend fun start(request: NativeStartRequest): NativeStart {
+        requests += request
+        failure?.let { throw it() }
+        return NativeStart(
+            clientId = "mobile-app",
+            requestUri = "urn:ietf:params:oauth:request_uri:abc",
+            expiresIn = 60,
+            authorizationEndpoint = "https://edge-says/authorize",
+            state = "edge-state-${requests.size}",
+            blob = "sealed-${requests.size}",
+            tokenEndpoint = "https://id.versola.kz:9008/token",
+            revocationEndpoint = "https://id.versola.kz:9008/revoke",
+        )
+    }
+}
+
 class AuthorizationFlowTest {
 
     private val metadata = ProviderMetadata(
@@ -108,6 +129,8 @@ class AuthorizationFlowTest {
         metadata: ProviderMetadata = this.metadata,
         tokenBinding: TokenBinding = TokenBinding.Dpop(),
         dpopKey: DpopKeyBinding? = StaticDpopKey,
+        nativeStarter: NativeAuthorizationStarter? = null,
+        configuration: VersolaConfiguration = this.configuration,
     ) = AuthorizationFlow(
         configuration = configuration,
         discovery = DiscoveryService(ISSUER, StaticDiscovery(metadata), MemoryMetadataCache()),
@@ -116,6 +139,7 @@ class AuthorizationFlowTest {
         tokenBinding = tokenBinding,
         dpopKey = dpopKey,
         clock = { now },
+        nativeStarter = nativeStarter,
     )
 
     /** A provider of the previous generation: everything but `dpop_signing_alg_values_supported`. */
@@ -669,5 +693,107 @@ class AuthorizationFlowTest {
         assertSame(pending, store.stored)
         assertEquals(0, store.clears)
         assertEquals(SessionState.Authorizing, flow.sessionState.first())
+    }
+
+    // ---- BackChannel.Edge ----------------------------------------------------------------
+
+    @Test
+    fun `through edge the browser opens on a request_uri and the persisted request is edge's state and blob`() = runTest {
+        val store = RecordingStore()
+        val browser = FakeBrowser(redirectFor(store), store)
+        val starter = FakeStarter()
+
+        val grant = flow(store, browser, nativeStarter = starter).authorize(setOf("openid"), listOf("mfa"), 300)
+
+        // What edge was asked: the pass-through parameters, and nothing PKCE-shaped.
+        val asked = starter.requests.single()
+        assertEquals("https://app.example.com/oauth", asked.redirectUri)
+        assertEquals(setOf("openid"), asked.scopes)
+        assertEquals(listOf("mfa"), asked.acrValues)
+        assertEquals(300L, asked.maxAge)
+        // The browser opens on discovery's authorization endpoint — the issuer the integrator
+        // vouched for — with the request_uri and client_id only.
+        val uri = browser.launchedUri!!
+        assertTrue(uri.startsWith("$ISSUER/authorize?"))
+        assertTrue(uri.contains("request_uri=urn%3Aietf%3Aparams%3Aoauth%3Arequest_uri%3Aabc"))
+        assertTrue(uri.contains("client_id=mobile-app"))
+        assertFalse(uri.contains("code_challenge"))
+        assertFalse(uri.contains("dpop_jkt"))
+        assertFalse(uri.contains("edge-says"))
+        // Persisted before the browser opened, and it is edge's state the redirect is held to.
+        assertEquals(1, browser.savesAtLaunch)
+        assertEquals("edge-state-1", grant.state)
+        assertEquals("sealed-1", grant.blob)
+        assertEquals("https://id.versola.kz:9008/token", grant.tokenEndpoint)
+        assertEquals("https://id.versola.kz:9008/revoke", grant.revocationEndpoint)
+        assertEquals(ISSUER, grant.iss)
+        assertEquals("", grant.codeVerifier.value)
+        assertTrue(grant.viaEdge)
+    }
+
+    @Test
+    fun `through edge a redirect without iss is refused, whatever discovery advertises`() = runTest {
+        // /native/complete requires `iss`, and auth always sends it; a redirect without one
+        // did not come from auth.
+        val store = RecordingStore()
+        val browser = FakeBrowser(redirectFor(store, extra = ""), store)
+        val quiet = metadata.copy(authorizationResponseIssParameterSupported = false)
+
+        val error = failure {
+            flow(store, browser, metadata = quiet, nativeStarter = FakeStarter()).authorize(setOf("openid"))
+        } as VersolaError.Configuration
+
+        assertTrue(error.detail is VersolaError.Configuration.Detail.IssuerMismatch)
+        assertEquals(1, store.clears)
+    }
+
+    @Test
+    fun `a failed start leaves nothing pending and the session Unauthenticated`() = runTest {
+        val store = RecordingStore()
+        val browser = FakeBrowser(redirectFor(store), store)
+        val starter = FakeStarter().apply {
+            failure = { VersolaError.Configuration(VersolaError.Configuration.Detail.EdgeClientUnknown("mobile-app")) }
+        }
+        val flow = flow(store, browser, nativeStarter = starter)
+
+        failure { flow.authorize(setOf("openid")) }
+
+        assertNull(browser.launchedUri)
+        assertNull(store.stored)
+        assertEquals(SessionState.Unauthenticated, flow.sessionState.first())
+    }
+
+    @Test
+    fun `edge needs a key-bound session and an App Link redirect, refused at wiring time`() = runTest {
+        val store = RecordingStore()
+        val browser = FakeBrowser(redirectFor(store), store)
+
+        assertThrows(VersolaError.Configuration::class.java) {
+            flow(store, browser, tokenBinding = TokenBinding.Bearer, dpopKey = null, nativeStarter = FakeStarter())
+        }
+        assertThrows(VersolaError.Configuration::class.java) {
+            flow(
+                store, browser, nativeStarter = FakeStarter(),
+                configuration = VersolaConfiguration.create(ISSUER, "mobile-app", "com.example.app:/oauth"),
+            )
+        }
+    }
+
+    @Test
+    fun `a pending request persisted before the edge fields existed still decodes`() {
+        val legacy = """{"state":"s","nonce":"n","codeVerifier":"v","scopes":["openid"],""" +
+            """"redirectUri":"https://app.example.com/oauth","acrValues":[],"maxAge":null,"createdAtEpochMillis":1}"""
+
+        val decoded = PendingAuthorizationCodec.decode(legacy.toByteArray())
+
+        assertNull(decoded.blob)
+        assertFalse(decoded.viaEdge)
+        val edge = decoded.let {
+            PendingAuthorizationRequest(it.state, it.nonce, "", it.scopes, it.redirectUri, it.acrValues, it.maxAge, 1, "b", "t", "r")
+        }
+        val roundTrip = PendingAuthorizationCodec.decode(PendingAuthorizationCodec.encode(edge))
+        assertEquals("b", roundTrip.blob)
+        assertEquals("t", roundTrip.tokenEndpoint)
+        assertTrue(roundTrip.viaEdge)
     }
 }

@@ -28,7 +28,7 @@ public final class kz/versola/sdk/Versola {
 }
 
 public final class kz/versola/sdk/Versola$Companion {
-	public final fun configure (Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkz/versola/sdk/core/VersolaLogger;Lokhttp3/OkHttpClient;Lkz/versola/sdk/core/TokenBinding;Ljava/lang/String;Lkz/versola/sdk/core/RetryPolicy;Ljava/lang/String;)Lkz/versola/sdk/Versola;
-	public static synthetic fun configure$default (Lkz/versola/sdk/Versola$Companion;Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkz/versola/sdk/core/VersolaLogger;Lokhttp3/OkHttpClient;Lkz/versola/sdk/core/TokenBinding;Ljava/lang/String;Lkz/versola/sdk/core/RetryPolicy;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/Versola;
+	public final fun configure (Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkz/versola/sdk/core/VersolaLogger;Lokhttp3/OkHttpClient;Lkz/versola/sdk/core/TokenBinding;Ljava/lang/String;Lkz/versola/sdk/core/RetryPolicy;Ljava/lang/String;Lkz/versola/sdk/core/BackChannel;)Lkz/versola/sdk/Versola;
+	public static synthetic fun configure$default (Lkz/versola/sdk/Versola$Companion;Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkz/versola/sdk/core/VersolaLogger;Lokhttp3/OkHttpClient;Lkz/versola/sdk/core/TokenBinding;Ljava/lang/String;Lkz/versola/sdk/core/RetryPolicy;Ljava/lang/String;Lkz/versola/sdk/core/BackChannel;ILjava/lang/Object;)Lkz/versola/sdk/Versola;
 }
 

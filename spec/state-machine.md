@@ -59,6 +59,16 @@ authorization request**: PKCE `code_verifier`, `state`, `nonce`, requested scope
 Persisting before opening the browser, not after, is the whole point: the app can be killed
 between the two.
 
+**Through edge (`BackChannel.Edge`, #40)** the request is built by edge rather than by the
+SDK: `login()` first calls `POST {edge}/native/start/{clientId}` with a DPoP proof signed for
+that URL, and edge generates the PKCE pair and the `state`, pushes the request to `/par` with
+`dpop_jkt` taken from the proof, and answers with a `request_uri`, the `state`, a sealed blob
+holding the verifier, and the two auth endpoints later proofs are signed for. What the SDK
+persists before the browser opens is then edge's `state`, the blob, the nonce, the scopes, the
+redirect URI, the step-up parameters and those two endpoints — there is no `code_verifier` on
+the device in this mode, and the browser opens on discovery's `authorization_endpoint` with
+`client_id` and `request_uri` only. The persistence moment and its reason are unchanged.
+
 ### `Authorizing → Authenticated`
 
 On redirect, in this order, all before any network call:
@@ -71,6 +81,13 @@ On redirect, in this order, all before any network call:
 
 Then the code is exchanged. The token response is persisted **before** it is returned to the
 caller, and the pending request is wiped only after the refresh token is durably stored.
+
+Through edge, step 2 is not conditional: `/native/complete` requires `iss`, so a redirect
+without one is refused whatever discovery advertises. The exchange is
+`POST {edge}/native/complete/{clientId}` with `code`, `state`, `iss` and the blob, and a proof
+whose `htu` is the `token_endpoint` from `/native/start` — auth's mutual-TLS listener, where
+edge forwards the proof unchanged — not edge's own URL. Edge refuses a proof by any other key
+than the one the flow started with before auth is called, so the code is not spent on it.
 
 Persisted: refresh token (encrypted), raw ID token (encrypted, kept only for `logout()`'s
 `id_token_hint`), DPoP key reference, issuer metadata cache.
@@ -171,7 +188,13 @@ A process killed between 1 and 3 recovers by replaying with the same idempotency
 start; the server resolves which generation is live.
 
 Under DPoP the server renews the refresh token in place (`BoundRenewal`) and the stored value
-does not change — steps 1 and 3 are inert. The machinery exists for bearer mode.
+does not change — the response echoes the same `refresh_token`, which is stored again as it
+was — so steps 1 and 3 are inert. The machinery exists for bearer mode.
+
+Through edge the request is `POST {edge}/native/token/{clientId}`, carrying the same
+`Idempotency-Key` (edge forwards it) and a proof signed for the remembered `token_endpoint`.
+A `use_dpop_nonce` in the relayed answer is auth's nonce and is cached under auth's origin,
+not edge's: the next proof for that `htu` carries it, and edge's own cache is untouched.
 
 ### `Refreshing → Unauthenticated`
 
@@ -279,8 +302,15 @@ undecryptable. This is indistinguishable from tampering and is treated as sign-o
 
 ### `Authenticated → LoggingOut → Unauthenticated`
 
-`logout()` revokes the refresh token at `/revoke`, opens auth's `/logout` with `id_token_hint`
-and `post_logout_redirect_uri`, then wipes local state.
+`logout()` revokes the refresh token at `/revoke` (through `/native/revoke` under
+`BackChannel.Edge`, with a proof signed for the remembered `revocation_endpoint`), opens auth's
+`/logout` with `id_token_hint`, `post_logout_redirect_uri` and a `state`, then wipes local
+state. Revocation comes first: a user who dismisses the signed-out page has still had the grant
+killed at the server. The `id_token_hint` is the last ID token held, which every refresh
+renews; auth silently ignores an expired hint and then has no session to end, so a session
+that has not refreshed within one access-token lifetime ends locally and may survive at auth.
+`logout()` reports whether auth acknowledged — the redirect came back carrying the `state`
+sent — and the app decides whether that matters.
 
 Local state is wiped **even if the browser leg fails or is dismissed**. Reaching
 `Unauthenticated` locally is unconditional; only the server-side session teardown is
@@ -297,6 +327,8 @@ one grant to one device-installation; reusing it across users on a shared device
 | Refresh token, unwrapped | Memory, one token request, zeroed after | no | no |
 | Pending refresh generation | Encrypted | yes | no |
 | Pending authorization request | Encrypted | yes, ≤10 min | no |
+| Sealed blob from `/native/start` (edge mode) | Encrypted, inside the pending request | yes, ≤10 min | no |
+| `token_endpoint` and `revocation_endpoint` from `/native/start` (edge mode) | Disk, unencrypted | yes | yes |
 | Access token | Memory | no | no |
 | ID token (raw, for `id_token_hint`) | Encrypted, `CredentialKeyProvider` | yes | no |
 | ID token claims (parsed) | Memory | no | no |
@@ -306,7 +338,11 @@ one grant to one device-installation; reusing it across users on a shared device
 | Discovery metadata | Disk, unencrypted | yes | yes |
 
 Discovery metadata is not credential material and is cached across logout deliberately: a
-re-login should not need a round trip to `/.well-known/openid-configuration`.
+re-login should not need a round trip to `/.well-known/openid-configuration`. The two native
+endpoints are kept for the same reason: a refresh in a later process signs for them and has no
+`/native/start` of its own to learn them from. Without the file the SDK falls back to
+discovery's `mtls_endpoint_aliases`, then to the plain endpoints — inferences, where the file
+is edge's own answer.
 
 ## Observability
 
