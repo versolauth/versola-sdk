@@ -37,6 +37,17 @@ public interface TokenClient {
      *   to the same rotation instead of reading as a replay.
      */
     public suspend fun refresh(refreshToken: ByteArray, idempotencyKey: String): TokenResponse
+
+    /**
+     * RFC 7009: ends the grant at the server rather than at expiry. **Takes ownership of
+     * [refreshToken]** and zeroes it once the request body is formed, like [refresh].
+     *
+     * Best effort by contract — `logout()` wipes local state whether or not this succeeded —
+     * so a failure is raised as the taxonomy error it is and the caller decides how loudly to
+     * record it. A provider that advertises no `revocation_endpoint` is not a failure: there
+     * is nothing to call, and the grant dies at expiry as it would have anyway.
+     */
+    public suspend fun revoke(refreshToken: ByteArray)
 }
 
 /**
@@ -117,6 +128,75 @@ public class HttpTokenClient(
             .add("client_id", configuration.clientId)
         refreshToken.fill(0)
         return post(form, idempotencyKey)
+    }
+
+    /**
+     * `POST` to `revocation_endpoint`, as a public client: `token`, `token_type_hint` and
+     * `client_id`, nothing else. No `DPoP` header — RFC 9449 binds the token endpoint and
+     * resource access, not revocation, and auth's `RevocationController` reads none.
+     *
+     * RFC 7009 §2.2 answers 200 for an unknown or already-revoked token too, so a 2xx here
+     * says only that the server took the request; it does not say the token was live.
+     */
+    override suspend fun revoke(refreshToken: ByteArray) {
+        val form = FormBody()
+            .add("token_type_hint", "refresh_token")
+            .addBytes("token", refreshToken)
+            .add("client_id", configuration.clientId)
+        refreshToken.fill(0)
+        try {
+            val endpoint = discovery.metadata().revocationEndpoint
+            if (endpoint.isNullOrBlank()) return
+            val body = form.toByteArray()
+            form.clear()
+            try {
+                postRevocation(endpoint, body)
+            } finally {
+                body.fill(0)
+            }
+        } finally {
+            form.clear()
+        }
+    }
+
+    private suspend fun postRevocation(url: String, body: ByteArray) {
+        val request = Request.Builder()
+            .url(url)
+            .header("Accept", "application/json")
+            .post(body.toRequestBody(FORM_MEDIA_TYPE))
+            .build()
+        withContext(Dispatchers.IO) {
+            try {
+                httpClient.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) return@use
+                    val payload = response.body.string()
+                    // The same split `rejected` draws for the token endpoint: 5xx is the
+                    // provider having a bad moment, anything else is a request it understood
+                    // and refused — `invalid_client` above all, which is a registration fault.
+                    if (response.code >= 500) {
+                        throw VersolaError.Recoverable(
+                            VersolaError.Recoverable.Cause.Network("revocation endpoint returned HTTP ${response.code}"),
+                        )
+                    }
+                    val error = try {
+                        discoveryJson.decodeFromString(TokenErrorPayload.serializer(), payload)
+                    } catch (e: Exception) {
+                        TokenErrorPayload()
+                    }
+                    throw VersolaError.Configuration(
+                        VersolaError.Configuration.Detail.TokenRequestRejected(
+                            error.error.ifBlank { "(no error code in a HTTP ${response.code} response)" },
+                            error.errorDescription,
+                        ),
+                    )
+                }
+            } catch (e: IOException) {
+                throw VersolaError.Recoverable(
+                    VersolaError.Recoverable.Cause.Network("revocation request failed: ${e.message}"),
+                    e,
+                )
+            }
+        }
     }
 
     /** Internal rather than private so the zeroization of [form] can be asserted directly. */

@@ -52,6 +52,7 @@ public final class kz/versola/sdk/dpop/KeystoreDpopKey : kz/versola/sdk/dpop/Dpo
 	public fun <init> (Ljava/lang/String;ZLkz/versola/sdk/core/VersolaLogger;)V
 	public synthetic fun <init> (Ljava/lang/String;ZLkz/versola/sdk/core/VersolaLogger;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun attestation (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun destroy (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun jkt (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun publicJwk (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun sign ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;

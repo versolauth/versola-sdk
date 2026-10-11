@@ -75,6 +75,14 @@ public class VersolaConfiguration internal constructor(
     public val issuer: String,
     public val clientId: String,
     public val redirectUri: RedirectUri,
+    /**
+     * Where auth's `end_session_endpoint` sends the browser once the server session is over
+     * (OpenID Connect RP-Initiated Logout §2). Null means the parameter is not sent: the
+     * signed-out page then stays open until the user dismisses it, and `logout()` still
+     * completes locally. Must be registered on the tenant (`postLogoutRedirectUris`), which
+     * is a tenant-level list on the server rather than a per-client one.
+     */
+    public val postLogoutRedirectUri: RedirectUri? = null,
 ) {
     /**
      * The warning to emit on a redirect scheme the OS does not verify. Non-null exactly when
@@ -95,7 +103,12 @@ public class VersolaConfiguration internal constructor(
          * Public because [AuthorizationFlow] is: anything wiring the core directly needs a
          * validated configuration, and the validation is the reason this type exists.
          */
-        public fun create(issuer: String, clientId: String, redirectUri: String): VersolaConfiguration {
+        public fun create(
+            issuer: String,
+            clientId: String,
+            redirectUri: String,
+            postLogoutRedirectUri: String? = null,
+        ): VersolaConfiguration {
             val parsedIssuer = try {
                 URI(issuer)
             } catch (e: URISyntaxException) {
@@ -121,6 +134,10 @@ public class VersolaConfiguration internal constructor(
                 issuer = issuer.trimEnd('/'),
                 clientId = clientId,
                 redirectUri = RedirectUri.parse(redirectUri),
+                // Held to the same rules as the login redirect: it is delivered to the same
+                // activity, through the same dispatcher, and a cleartext or relative value
+                // fails in the same ways.
+                postLogoutRedirectUri = postLogoutRedirectUri?.let(RedirectUri::parse),
             )
         }
 

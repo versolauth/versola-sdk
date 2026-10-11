@@ -5,6 +5,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import java.net.URLEncoder
+import java.security.SecureRandom
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -111,6 +113,81 @@ public class AuthorizationFlow(
         pendingStore.clear()
         state.value = SessionState.Authenticated
     }
+
+    /**
+     * `LoggingOut → Unauthenticated`: the local half of `logout()` (#10), which is the half
+     * that is not best-effort. Wipes the pending request — a `login()` abandoned mid-browser
+     * must not survive a sign-out and resume into the next user's session — and settles
+     * `Unauthenticated` whatever the server leg did.
+     */
+    internal suspend fun completeLogout() {
+        pendingStore.clear()
+        state.value = SessionState.Unauthenticated
+    }
+
+    /**
+     * The server leg of `logout()`: auth's `end_session_endpoint` in the system browser, with
+     * `id_token_hint` so the session ends without a confirmation page and
+     * `post_logout_redirect_uri` so the browser comes back once it has.
+     *
+     * Returns whether the server acknowledged — the redirect came back carrying the `state`
+     * that was sent. False covers everything else: the user dismissed the page, the provider
+     * advertises no `end_session_endpoint`, the redirect carried the wrong `state`. None of
+     * those is raised, because `spec/state-machine.md` makes only the local teardown
+     * unconditional and the caller wipes regardless; what the browser did is reported, not
+     * enforced.
+     *
+     * Under [AUTHORIZE_LOCK] for the same reason [authorize] is: the browser and the redirect
+     * channel are one per process, and a `login()` racing a `logout()` for them is the bug,
+     * not a case to support.
+     */
+    public suspend fun endSession(idTokenHint: String?): Boolean = AUTHORIZE_LOCK.withLock {
+        ensureRestored()
+        val endpoint = discovery.metadata().endSessionEndpoint
+        if (endpoint.isNullOrBlank()) return@withLock false
+        val postLogoutRedirectUri = configuration.postLogoutRedirectUri?.value
+        val expectedState = SecureTokens.generate(SecureRandom())
+        val uri = endSessionUri(endpoint, idTokenHint, postLogoutRedirectUri, expectedState)
+
+        val outcome = try {
+            browser.authorize(uri)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // `NoBrowserAvailable`, or the browser failing to launch: the server session
+            // outlives this logout, which is exactly what the return value says.
+            return@withLock false
+        }
+        when (outcome) {
+            is BrowserOutcome.UserCancelled -> false
+            is BrowserOutcome.Redirect -> {
+                val state = AuthorizationResponseValidator.stateOf(outcome.uri)
+                state != null && SecureTokens.constantTimeEquals(expectedState, state)
+            }
+        }
+    }
+
+    /**
+     * OpenID Connect RP-Initiated Logout §2. `state` goes whether or not a redirect URI does:
+     * it costs nothing and is what lets the redirect be told apart from a stale one.
+     */
+    private fun endSessionUri(
+        endpoint: String,
+        idTokenHint: String?,
+        postLogoutRedirectUri: String?,
+        state: String,
+    ): String {
+        val parameters = buildList {
+            idTokenHint?.let { add("id_token_hint" to it) }
+            postLogoutRedirectUri?.let { add("post_logout_redirect_uri" to it) }
+            add("state" to state)
+        }
+        val query = parameters.joinToString("&") { (name, value) -> "${encode(name)}=${encode(value)}" }
+        val separator = if (endpoint.contains('?')) "&" else "?"
+        return endpoint + separator + query
+    }
+
+    private fun encode(value: String): String = URLEncoder.encode(value, "UTF-8").replace("+", "%20")
 
     /**
      * Pushes a state the session coordinator (#8) owns — `Refreshing`, `Locked`, or a return

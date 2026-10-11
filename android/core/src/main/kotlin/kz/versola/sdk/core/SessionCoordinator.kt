@@ -48,6 +48,15 @@ public class SessionCoordinator(
      * expired, nor an expired one look live.
      */
     private val elapsedMillis: () -> Long = { System.nanoTime() / NANOS_PER_MILLI },
+    /**
+     * What the platform wiring tears down alongside the stored grant: both nonce caches and
+     * the DPoP key, which live in `:dpop` and are out of this module's reach. Run on every
+     * path that ends the grant — `logout()` and `invalid_grant` alike, which
+     * `spec/state-machine.md` treats identically ("the DPoP key follows the logout rule").
+     * Never fails the caller: a teardown that throws would leave a sign-out half done.
+     */
+    private val onCredentialsWiped: suspend () -> Unit = {},
+    private val logger: VersolaLogger? = null,
 ) : AccessTokenSource {
 
     init {
@@ -364,9 +373,9 @@ public class SessionCoordinator(
             // unreachable — `spec/state-machine.md` wipes everything credential-shaped for
             // both (`Refreshing → Unauthenticated`, `Locked → Unauthenticated`), so both are
             // handled identically here regardless of which step raised it.
-            credentialStore.clear()
-            cachedAccessToken = null
-            flow.setState(SessionState.Unauthenticated)
+            // The same teardown `logout()` runs, DPoP key included: `spec/state-machine.md`'s
+            // `Refreshing → Unauthenticated` names the key as following the logout rule.
+            withContext(NonCancellable) { wipe() }
             throw e
         } catch (e: Throwable) {
             // A `Configuration` fault or anything unforeseen: a deployment or SDK defect, not
@@ -389,6 +398,74 @@ public class SessionCoordinator(
      */
     private fun noGrantStored(): Nothing =
         throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.GrantRejected)
+
+    /**
+     * `Authenticated → LoggingOut → Unauthenticated` (#10, scenario 18), in the order
+     * `spec/state-machine.md` fixes: revoke the refresh token, end the server session in the
+     * browser, wipe. The first two are best effort and the third is not — reaching
+     * `Unauthenticated` locally is unconditional, and happens even when this call is
+     * cancelled or either server leg throws.
+     *
+     * The refresh token is revoked *before* the browser opens: a user who dismisses the
+     * signed-out page has still had the grant killed at the server, which is the half of the
+     * teardown that matters on a shared device.
+     *
+     * Returns whether auth acknowledged the end of its session, so an app that cares can tell
+     * "signed out everywhere" from "signed out here". Most will not look.
+     */
+    public suspend fun logout(): Boolean {
+        flow.sessionState.first()
+        flow.setState(SessionState.LoggingOut)
+        var serverSessionEnded = false
+        try {
+            revokeQuietly()
+            // The hint is read, not required: under `OnAppUnlock` an elapsed window makes it
+            // unreadable, and the server then shows its own confirmation page rather than
+            // the SDK refusing to sign out at all.
+            val hint = try {
+                credentialStore.rawIdToken()
+            } catch (e: VersolaError) {
+                logger?.warn("logout: id_token_hint unavailable (${e.message}); ending the session without it")
+                null
+            }
+            serverSessionEnded = flow.endSession(hint)
+        } finally {
+            withContext(NonCancellable) { wipe() }
+        }
+        return serverSessionEnded
+    }
+
+    private suspend fun revokeQuietly() {
+        try {
+            credentialStore.useRefreshToken { tokenClient.revoke(it) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: VersolaError) {
+            logger?.warn("logout: revocation failed (${e.message}); the grant dies at expiry instead")
+        }
+    }
+
+    /**
+     * Everything credential-shaped goes, in one place, for both callers that end the grant.
+     * Teardown of the pieces this module cannot see — nonce caches, the DPoP key — runs
+     * through [onCredentialsWiped] and is not allowed to fail the sign-out: a Keystore that
+     * refuses to delete a key is a warning, not a session that cannot end.
+     */
+    private suspend fun wipe() {
+        cachedAccessToken = null
+        try {
+            credentialStore.clear()
+        } finally {
+            try {
+                onCredentialsWiped()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logger?.warn("logout: teardown of the DPoP key or nonce caches failed: ${e.message}")
+            }
+            flow.completeLogout()
+        }
+    }
 
     /**
      * RFC 7638-shaped, not RFC 7638 itself: this hashes the refresh token being spent rather

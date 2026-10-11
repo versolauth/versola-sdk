@@ -15,6 +15,7 @@ public final class kz/versola/sdk/core/AuthorizationFlow {
 	public synthetic fun <init> (Lkz/versola/sdk/core/VersolaConfiguration;Lkz/versola/sdk/core/DiscoveryService;Lkz/versola/sdk/core/PendingAuthorizationStore;Lkz/versola/sdk/core/BrowserAuthorizationSession;Lkz/versola/sdk/core/DpopKeyBinding;Lkz/versola/sdk/core/TokenBinding;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function1;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun authorize (Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun authorize$default (Lkz/versola/sdk/core/AuthorizationFlow;Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun endSession (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun getConfiguration ()Lkz/versola/sdk/core/VersolaConfiguration;
 	public final fun getSessionState ()Lkotlinx/coroutines/flow/Flow;
 	public final fun metadata (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -138,6 +139,7 @@ public final class kz/versola/sdk/core/HttpTokenClient : kz/versola/sdk/core/Tok
 	public synthetic fun <init> (Lkz/versola/sdk/core/VersolaConfiguration;Lkz/versola/sdk/core/DiscoveryService;Lokhttp3/OkHttpClient;Lkz/versola/sdk/core/DpopProofSource;Lkz/versola/sdk/core/TokenBinding;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun exchange (Lkz/versola/sdk/core/AuthorizationGrant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun refresh ([BLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun revoke ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class kz/versola/sdk/core/PendingAuthorizationCodec {
@@ -281,13 +283,14 @@ public final class kz/versola/sdk/core/RetryPolicy$Companion {
 }
 
 public final class kz/versola/sdk/core/SessionCoordinator : kz/versola/sdk/core/AccessTokenSource {
-	public fun <init> (Lkz/versola/sdk/core/AuthorizationFlow;Lkz/versola/sdk/core/TokenClient;Lkz/versola/sdk/core/CredentialStore;Lkz/versola/sdk/core/RetryPolicy;Lkotlin/jvm/functions/Function0;)V
-	public synthetic fun <init> (Lkz/versola/sdk/core/AuthorizationFlow;Lkz/versola/sdk/core/TokenClient;Lkz/versola/sdk/core/CredentialStore;Lkz/versola/sdk/core/RetryPolicy;Lkotlin/jvm/functions/Function0;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Lkz/versola/sdk/core/AuthorizationFlow;Lkz/versola/sdk/core/TokenClient;Lkz/versola/sdk/core/CredentialStore;Lkz/versola/sdk/core/RetryPolicy;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function1;Lkz/versola/sdk/core/VersolaLogger;)V
+	public synthetic fun <init> (Lkz/versola/sdk/core/AuthorizationFlow;Lkz/versola/sdk/core/TokenClient;Lkz/versola/sdk/core/CredentialStore;Lkz/versola/sdk/core/RetryPolicy;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function1;Lkz/versola/sdk/core/VersolaLogger;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun accessToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun currentAccessToken ()Lkz/versola/sdk/core/TokenResponse;
 	public final fun getSessionState ()Lkotlinx/coroutines/flow/Flow;
 	public final fun login (Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun login$default (Lkz/versola/sdk/core/SessionCoordinator;Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun logout (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun refresh (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun renewAccessToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
@@ -370,6 +373,7 @@ public final class kz/versola/sdk/core/TokenBinding$Dpop : kz/versola/sdk/core/T
 public abstract interface class kz/versola/sdk/core/TokenClient {
 	public abstract fun exchange (Lkz/versola/sdk/core/AuthorizationGrant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun refresh ([BLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun revoke ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class kz/versola/sdk/core/TokenResponse {
@@ -399,12 +403,14 @@ public final class kz/versola/sdk/core/VersolaConfiguration {
 	public static final field Companion Lkz/versola/sdk/core/VersolaConfiguration$Companion;
 	public final fun getClientId ()Ljava/lang/String;
 	public final fun getIssuer ()Ljava/lang/String;
+	public final fun getPostLogoutRedirectUri ()Lkz/versola/sdk/core/RedirectUri;
 	public final fun getRedirectUri ()Lkz/versola/sdk/core/RedirectUri;
 	public final fun getRedirectUriWarning ()Ljava/lang/String;
 }
 
 public final class kz/versola/sdk/core/VersolaConfiguration$Companion {
-	public final fun create (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lkz/versola/sdk/core/VersolaConfiguration;
+	public final fun create (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lkz/versola/sdk/core/VersolaConfiguration;
+	public static synthetic fun create$default (Lkz/versola/sdk/core/VersolaConfiguration$Companion;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/VersolaConfiguration;
 }
 
 public abstract class kz/versola/sdk/core/VersolaError : java/lang/Exception {

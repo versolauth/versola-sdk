@@ -89,6 +89,7 @@ class AuthorizationFlowTest {
         issuer = ISSUER,
         authorizationEndpoint = "$ISSUER/authorize",
         tokenEndpoint = "$ISSUER/token",
+        endSessionEndpoint = "$ISSUER/logout",
         dpopSigningAlgValuesSupported = listOf("ES256"),
         authorizationResponseIssParameterSupported = true,
     )
@@ -97,6 +98,7 @@ class AuthorizationFlowTest {
         issuer = ISSUER,
         clientId = "mobile-app",
         redirectUri = "https://app.example.com/oauth",
+        postLogoutRedirectUri = "https://app.example.com/signed-out",
     )
 
     private fun flow(
@@ -590,5 +592,82 @@ class AuthorizationFlowTest {
         val error = failure { flow.authorize(setOf("openid")) } as VersolaError.Configuration
 
         assertSame(VersolaError.Configuration.Detail.StateMismatch, error.detail)
+    }
+
+    // ---- endSession() ------------------------------------------------------------------
+
+    private fun stateOf(uri: String): String = Regex("[?&]state=([^&]+)").find(uri)!!.groupValues[1]
+
+    @Test
+    fun `endSession opens the end_session_endpoint with the hint, the redirect and a state`() = runTest {
+        val store = RecordingStore()
+        val browser = FakeBrowser({ uri -> BrowserOutcome.Redirect("https://app.example.com/signed-out?state=${stateOf(uri)}") }, store)
+
+        val acknowledged = flow(store, browser).endSession("the.id.token")
+
+        assertTrue(acknowledged)
+        val uri = browser.launchedUri!!
+        assertTrue(uri.startsWith("$ISSUER/logout?"))
+        assertTrue(uri.contains("id_token_hint=the.id.token"))
+        assertTrue(uri.contains("post_logout_redirect_uri=https%3A%2F%2Fapp.example.com%2Fsigned-out"))
+        assertTrue(stateOf(uri).length >= 22)
+    }
+
+    @Test
+    fun `endSession omits what it does not have rather than sending an empty parameter`() = runTest {
+        val store = RecordingStore()
+        val browser = FakeBrowser({ uri -> BrowserOutcome.Redirect("https://x?state=${stateOf(uri)}") }, store)
+        val withoutRedirect = AuthorizationFlow(
+            configuration = VersolaConfiguration.create(ISSUER, "mobile-app", "https://app.example.com/oauth"),
+            discovery = DiscoveryService(ISSUER, StaticDiscovery(metadata), MemoryMetadataCache()),
+            pendingStore = store,
+            browser = browser,
+            dpopKey = StaticDpopKey,
+        )
+
+        withoutRedirect.endSession(null)
+
+        val uri = browser.launchedUri!!
+        assertFalse(uri.contains("id_token_hint"))
+        assertFalse(uri.contains("post_logout_redirect_uri"))
+        assertTrue(uri.contains("state="))
+    }
+
+    @Test
+    fun `a provider without an end_session_endpoint has no server session to end`() = runTest {
+        val store = RecordingStore()
+        val browser = FakeBrowser({ BrowserOutcome.UserCancelled }, store)
+
+        val acknowledged = flow(store, browser, metadata = metadata.copy(endSessionEndpoint = null)).endSession("hint")
+
+        assertFalse(acknowledged)
+        assertNull(browser.launchedUri)
+    }
+
+    @Test
+    fun `a dismissed signed-out page and a stale redirect are both not acknowledged`() = runTest {
+        val store = RecordingStore()
+
+        assertFalse(flow(store, FakeBrowser({ BrowserOutcome.UserCancelled }, store)).endSession("hint"))
+        assertFalse(
+            flow(store, FakeBrowser({ BrowserOutcome.Redirect("https://app.example.com/signed-out?state=stale") }, store))
+                .endSession("hint"),
+        )
+    }
+
+    @Test
+    fun `endSession does not touch the pending request or the state machine`() = runTest {
+        // The wipe is the coordinator's and happens whatever this returns; the browser leg
+        // itself must not pre-empt it by clearing a slot or publishing a state of its own.
+        val pending = PendingAuthorizationRequest("s", "n", "v", listOf("openid"), "https://app.example.com/oauth", emptyList(), null, 0)
+        val store = RecordingStore(stored = pending)
+        val browser = FakeBrowser({ BrowserOutcome.UserCancelled }, store)
+        val flow = flow(store, browser)
+
+        flow.endSession("hint")
+
+        assertSame(pending, store.stored)
+        assertEquals(0, store.clears)
+        assertEquals(SessionState.Authorizing, flow.sessionState.first())
     }
 }

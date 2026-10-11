@@ -139,6 +139,18 @@ public class Versola internal constructor(
     }
 
     /**
+     * Signs out: revokes the refresh token, ends the server session through the system
+     * browser, and wipes everything credential-shaped — refresh token, pending slot, pending
+     * authorization request, both nonce caches, and the DPoP key, which the next [login]
+     * regenerates under a new `jkt`.
+     *
+     * The local wipe is unconditional: [SessionState.Unauthenticated] is reached even when the
+     * browser is dismissed mid-flow or either server call fails. Only the server-side teardown
+     * is best effort, and the return value says whether auth acknowledged it.
+     */
+    public suspend fun logout(): Boolean = coordinator.logout()
+
+    /**
      * A client that authenticates every call to edge: the access token, a DPoP proof over it,
      * one nonce retry, one proof retry, and one refresh-and-replay on a 401 that is neither.
      *
@@ -208,8 +220,16 @@ public class Versola internal constructor(
             tokenBinding: TokenBinding = TokenBinding.Dpop(),
             edgeBaseUrl: String? = null,
             retryPolicy: RetryPolicy = RetryPolicy.Default,
+            /**
+             * Where auth sends the browser once `logout()` has ended the server session.
+             * Optional: without it the signed-out page stays open until the user dismisses
+             * it, and the local sign-out completes regardless. Must be in the tenant's
+             * `postLogoutRedirectUris` and, like [redirectUri], should be a verified App Link
+             * delivered to `VersolaRedirectActivity`.
+             */
+            postLogoutRedirectUri: String? = null,
         ): Versola {
-            val configuration = VersolaConfiguration.create(issuer, clientId, redirectUri)
+            val configuration = VersolaConfiguration.create(issuer, clientId, redirectUri, postLogoutRedirectUri)
             configuration.redirectUriWarning?.let(logger::warn)
             // Parsed at configuration time, not at the first call: a base URL that is not a
             // URL is a deployment mistake, and `spec/errors.md` has those fail where they are
@@ -284,6 +304,13 @@ public class Versola internal constructor(
                     ),
                     credentialStore = credentialStore,
                     retryPolicy = retryPolicy,
+                    // What `:core` cannot reach and `spec/state-machine.md` wipes with the
+                    // grant: the per-origin nonce caches and the DPoP key (scenario 18).
+                    onCredentialsWiped = {
+                        proofFactory?.nonces?.clear()
+                        dpopKey?.destroy()
+                    },
+                    logger = logger,
                 ),
                 baseHttpClient = httpClient,
                 edgeBaseUrl = edge,

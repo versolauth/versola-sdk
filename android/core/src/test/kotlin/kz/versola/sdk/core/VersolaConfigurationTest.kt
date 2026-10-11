@@ -128,4 +128,23 @@ class VersolaConfigurationTest {
             wellKnownUrl(configuration.issuer),
         )
     }
+
+    @Test
+    fun `the post-logout redirect is optional and held to the login redirect's rules`() {
+        assertNull(configure().postLogoutRedirectUri)
+
+        val withRedirect = VersolaConfiguration.create(
+            "https://id.example.com", "mobile-app", "https://app.example.com/oauth",
+            postLogoutRedirectUri = "https://app.example.com/signed-out",
+        )
+        assertEquals("https://app.example.com/signed-out", withRedirect.postLogoutRedirectUri?.value)
+        assertEquals(RedirectUriKind.AppLink, withRedirect.postLogoutRedirectUri?.kind)
+
+        assertThrows(VersolaError.Configuration::class.java) {
+            VersolaConfiguration.create(
+                "https://id.example.com", "mobile-app", "https://app.example.com/oauth",
+                postLogoutRedirectUri = "http://app.example.com/signed-out",
+            )
+        }
+    }
 }

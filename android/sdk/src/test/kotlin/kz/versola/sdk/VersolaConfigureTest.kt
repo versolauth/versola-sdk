@@ -101,4 +101,20 @@ class VersolaConfigureTest {
         // Robolectric has no Keystore to generate it in, so this passing at all is the check.
         assertNotNull(configure(tokenBinding = TokenBinding.Dpop(requireHardware = true)).dpop)
     }
+
+    @Test
+    fun `a post-logout redirect is validated at configure time like the login redirect`() {
+        val versola = Versola.configure(
+            application, "https://id.versola.kz", "mobile-app", "https://app.example.com/oauth",
+            postLogoutRedirectUri = "https://app.example.com/signed-out",
+        )
+        assertEquals("https://app.example.com/signed-out", versola.configuration.postLogoutRedirectUri?.value)
+
+        assertThrows(VersolaError.Configuration::class.java) {
+            Versola.configure(
+                application, "https://id.versola.kz", "mobile-app", "https://app.example.com/oauth",
+                postLogoutRedirectUri = "signed-out",
+            )
+        }
+    }
 }
