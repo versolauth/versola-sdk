@@ -10,6 +10,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
@@ -83,6 +84,9 @@ class Scenario21EdgeNativeTest {
             backChannel = BackChannel.Edge,
             browser = browser,
         )
+        // Whatever a previous scenario left behind in the shared store ends here, through the
+        // SDK rather than by deleting files under a live DataStore.
+        if (versola.sessionState.first() != SessionState.Unauthenticated) versola.logout()
         val states = mutableListOf<SessionState>()
         val collecting = async(Dispatchers.IO, start = CoroutineStart.UNDISPATCHED) {
             versola.sessionState.collect { if (states.lastOrNull() != it) states += it }
@@ -91,7 +95,9 @@ class Scenario21EdgeNativeTest {
         // ---- start → authorize → complete ----------------------------------------------------
         loginUntilFronted(versola, central, setOf("openid"))
 
-        val document = transcript.matching("GET", "/.well-known/openid-configuration").single().responseJson!!
+        // Discovery is cached on disk across scenarios (deliberately: it is not credential
+        // material), so the document is read back from the SDK rather than off the wire.
+        val metadata = versola.metadata()
         val start = transcript.matching("POST", "/native/start/${fixture.clientId}").last { it.status == 200 }
         val startForm = start.form
         assertEquals(fixture.redirectUri, startForm["redirect_uri"])
@@ -109,7 +115,7 @@ class Scenario21EdgeNativeTest {
         val deviceJkt = thumbprint(start.proofHeader!!["jwk"]!!.jsonObject)
 
         val authorizeUri = browser.opened.first().toHttpUrl()
-        assertEquals(document["authorization_endpoint"]!!.jsonPrimitive.content, authorizeUri.toString().substringBefore('?'))
+        assertEquals(metadata.authorizationEndpoint, authorizeUri.toString().substringBefore('?'))
         assertEquals(setOf("client_id", "request_uri"), authorizeUri.queryParameterNames)
         assertEquals(fixture.clientId, authorizeUri.queryParameter("client_id"))
         assertEquals(started["request_uri"]!!.jsonPrimitive.content, authorizeUri.queryParameter("request_uri"))
@@ -184,7 +190,9 @@ class Scenario21EdgeNativeTest {
         assertEquals(started["revocation_endpoint"]!!.jsonPrimitive.content, revoke.proofClaims!!["htu"]!!.jsonPrimitive.content)
         val endSession = browser.opened.last().toHttpUrl()
         assertEquals(renewed["id_token"]!!.jsonPrimitive.content, endSession.queryParameter("id_token_hint"))
-        assertEquals(SessionState.Unauthenticated, states.last())
+        // The current value, not the collector's view: the collector runs on another
+        // dispatcher and may not have seen the last transition yet.
+        assertEquals(SessionState.Unauthenticated, versola.sessionState.first())
 
         val replay = http.newCall(
             Request.Builder().url("${stack.edgeUrl}/native/token/${fixture.clientId}")

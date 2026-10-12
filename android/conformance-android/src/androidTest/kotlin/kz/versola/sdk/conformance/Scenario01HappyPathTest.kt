@@ -8,6 +8,7 @@ import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.jsonObject
@@ -84,6 +85,9 @@ class Scenario01HappyPathTest {
             edgeBaseUrl = stack.edgeUrl,
             browser = browser,
         )
+        // Whatever a previous scenario left behind in the shared store ends here, through the
+        // SDK rather than by deleting files under a live DataStore.
+        if (versola.sessionState.first() != SessionState.Unauthenticated) versola.logout()
         val states = mutableListOf<SessionState>()
         val collecting = async(Dispatchers.IO, start = CoroutineStart.UNDISPATCHED) {
             versola.sessionState.collect { if (states.lastOrNull() != it) states += it }
@@ -92,12 +96,17 @@ class Scenario01HappyPathTest {
         // ---- 01: login ------------------------------------------------------------------
         versola.login(setOf("openid", "profile"))
 
-        val discovery = transcript.matching("GET", "/.well-known/openid-configuration").single()
-        assertEquals(200, discovery.status)
-        val document = discovery.responseJson!!
-        for (field in listOf("authorization_endpoint", "token_endpoint", "dpop_signing_alg_values_supported")) {
-            assertNotNull("discovery lacks $field", document[field])
+        // Fetched once per install and cached on disk across scenarios, so the wire entry is
+        // asserted when this scenario is the one that fetched it; the document itself comes
+        // from the SDK either way.
+        transcript.matching("GET", "/.well-known/openid-configuration").firstOrNull()?.let { discovery ->
+            assertEquals(200, discovery.status)
+            for (field in listOf("authorization_endpoint", "token_endpoint", "dpop_signing_alg_values_supported")) {
+                assertNotNull("discovery lacks $field", discovery.responseJson!![field])
+            }
         }
+        val metadata = versola.metadata()
+        assertTrue(metadata.supportsDpop)
 
         val authorizeUri = browser.opened.first()
         val query = authorizeUri.toHttpUrl()
@@ -126,7 +135,7 @@ class Scenario01HappyPathTest {
         assertNull(exchange.header("Idempotency-Key"))
         val exchangeProof = exchange.proofClaims!!
         assertEquals("POST", exchangeProof["htm"]!!.jsonPrimitive.content)
-        assertEquals(document["token_endpoint"]!!.jsonPrimitive.content, exchangeProof["htu"]!!.jsonPrimitive.content)
+        assertEquals(metadata.tokenEndpoint, exchangeProof["htu"]!!.jsonPrimitive.content)
         assertNull("no ath at the token endpoint", exchangeProof["ath"])
         assertNotNull(exchangeProof["jti"])
         assertEquals("dpop+jwt", exchange.proofHeader!!["typ"]!!.jsonPrimitive.content)
@@ -182,7 +191,7 @@ class Scenario01HappyPathTest {
         // A proof minted now, by the key the grant is bound to, for the replay below: logout
         // destroys the key, and a replay signed by a new one would be refused for the key
         // rather than for the revocation this is meant to prove. Unused, so not a jti replay.
-        val tokenEndpoint = document["token_endpoint"]!!.jsonPrimitive.content
+        val tokenEndpoint = metadata.tokenEndpoint
         val replayProof = versola.dpop!!.proof("POST", tokenEndpoint)
         transcript.clear()
         versola.logout()
@@ -192,13 +201,15 @@ class Scenario01HappyPathTest {
         assertEquals(fixture.clientId, revoke.form["client_id"])
         assertNull(revoke.header("DPoP"))
         val endSession = browser.opened.last()
-        assertTrue(endSession.startsWith(document["end_session_endpoint"]!!.jsonPrimitive.content))
+        assertTrue(endSession.startsWith(metadata.endSessionEndpoint!!))
         // The hint is the *last* ID token held: the refresh renewed it (auth issues one on every
         // grant with `openid`), and the stored copy followed, so the hint is as fresh as the session.
         assertNotNull(renewed["id_token"])
         assertEquals(renewed["id_token"]!!.jsonPrimitive.content, endSession.toHttpUrl().queryParameter("id_token_hint"))
         assertNotNull(endSession.toHttpUrl().queryParameter("state"))
-        assertEquals(SessionState.Unauthenticated, states.last())
+        // The current value, not the collector's view: the collector runs on another
+        // dispatcher and may not have seen the last transition yet.
+        assertEquals(SessionState.Unauthenticated, versola.sessionState.first())
         assertFalse(application.noBackupFilesDir.resolve("versola/pending-authorization").exists())
 
         // The grant is dead at the server: replaying the refresh token is invalid_grant.
@@ -216,6 +227,7 @@ class Scenario01HappyPathTest {
         versola.login(setOf("openid"))
         val secondJkt = browser.opened.last().toHttpUrl().queryParameter("dpop_jkt")
         assertNotEquals("the DPoP key is destroyed on logout", jkt, secondJkt)
+        versola.logout()
 
         collecting.cancelAndJoin()
     }
