@@ -1,10 +1,12 @@
 # Architecture review: Versola mobile SDKs
 
-Date: 2026-10-12. Reviewed: `versola-sdk` at branch `sdk/android-conformance-driver` (working tree,
-HEAD `eeb3e2b`), against `versolauth/versola` at the working tree of `versola-main`. Grounding
-document: issue #1 and its three addenda. Scope: the Android implementation (`android/*`,
-5,874 lines of main code, 6,716 lines of tests, 313 unit and 11 instrumented test methods), the
-normative spec (`spec/*`, 23 conformance scenarios), the iOS and Flutter placeholders, and the CI.
+Date: 2026-10-12. Reviewed: `versola-sdk` at branch `sdk/android-conformance-driver` (working tree;
+the review started at HEAD `eeb3e2b` and was reconciled against `d1b54c5`, which landed the
+conformance driver while the review was in progress), against `versolauth/versola` at the working
+tree of `versola-main`. Grounding document: issue #1 and its three addenda. Scope: the Android
+implementation (`android/*`, 5,874 lines of main code, 6,716 lines of tests, 313 unit and 11
+instrumented test methods, plus the 978-line `conformance-android` driver), the normative spec
+(`spec/*`, 23 conformance scenarios), the iOS and Flutter placeholders, and the CI.
 
 Every claim about the state of the art below is backed by a source that was fetched during this
 review; the list is in section 6. Nothing was taken from memory.
@@ -101,9 +103,14 @@ Stated once so the findings do not read as a verdict on the whole.
   confidential clients"): edge is the confidential client, the device key still binds every
   token, and the device never holds the PKCE verifier. Signing the proof for auth's mTLS listener
   while posting to edge is subtle and correctly reasoned.
-- **The conformance plan.** Transcript comparison against the server's own reference client,
-  fault injection by proxy, and a scenario catalogue that every issue cites is the strongest
-  testing design among the SDKs compared in section 5.
+- **The conformance plan, and now its first two scenarios.** Transcript comparison against the
+  server's own reference client, fault injection by proxy, and a scenario catalogue that every
+  issue cites is the strongest testing design among the SDKs compared in section 5. As of
+  `d1b54c5` the Android driver (`android/conformance-android`) runs scenarios 01 and 21 green
+  against a staged `auth` + `central` + `edge`, provisioning the tenant through Central and
+  driving auth's login conversation over HTTP (`HttpLoginBrowser`) through the new
+  `configure(browser = …)` seam. That seam is also the right shape for the Auth Tab
+  implementation F1 asks for.
 
 ## 3. Findings, ranked by impact
 
@@ -203,12 +210,15 @@ interceptor and `retryOnConnectionFailure` left to OkHttp is correct on that poi
    with `Call.enqueue` bridged by `suspendCancellableCoroutine` (OkHttp 5 ships
    `okhttp-coroutines` with `executeAsync()`), so no coroutine thread blocks. The 401 branch then
    runs as ordinary suspend code around a second `enqueue`.
-2. Keep `interceptor()` for integrators with an existing client, but (a) run its `runBlocking`
-   on a dedicated single-thread context (`Dispatchers.IO.limitedParallelism(1)` is wrong — it is
-   still the IO pool; use a private `Executors.newSingleThreadExecutor().asCoroutineDispatcher()`
-   owned by the `Versola` instance) and (b) move every `withContext(Dispatchers.IO)` on the
-   refresh path behind a `CoroutineDispatcher` the coordinator is given, so the refresh never
-   contends with the callers waiting on it. Document that the interceptor blocks.
+2. Keep `interceptor()` for integrators with an existing client, but move every
+   `withContext(Dispatchers.IO)` on the refresh path (`TokenRequestExecutor.attempt`,
+   `KeystoreDpopKey.sign`, `HardwareKeyProvider.wrap`/`unwrap`, the DataStore reads) behind one
+   `CoroutineDispatcher` the coordinator is given, defaulting to
+   `Dispatchers.IO.limitedParallelism(4)`. That works because of a documented property of
+   `Dispatchers.IO`: its `limitedParallelism` views "are not restricted by the `Dispatchers.IO`
+   parallelism" — they share threads but have their own allowance — so the refresh can always
+   run even when all 64 base-pool slots are held by callers blocked in `runBlocking`. Document
+   that the interceptor blocks the calling thread.
 3. Add a unit test: 100 concurrent `call()`s on `Dispatchers.IO` against `MockWebServer` with the
    first response 401; assert completion within a timeout.
 
@@ -341,7 +351,9 @@ convention for this is a `@RequiresOptIn` marker.
    harness. The conformance driver opts in; apps cannot without saying so. Keep
    `VersolaError`, `SessionState`, `RetryPolicy`, `TokenBinding`, `BackChannel`, `UnlockPolicy`,
    `VersolaLogger`, `VersolaConfiguration`, `ProviderMetadata`, `KeyAttestation`,
-   `VersolaHttpException` and `VersolaInterceptor` public.
+   `VersolaHttpException`, `VersolaInterceptor` and — since `d1b54c5` added it to `configure()` —
+   `BrowserAuthorizationSession` public: it is the seam the harness and the Auth Tab
+   implementation both need, and its URI-only contract is what keeps a `WebView` unrepresentable.
 3. Write the 0.x versioning policy down: `0.MINOR.PATCH`, breaking changes bump MINOR, `apiCheck`
    enforced on every PR, and the dump committed. Say in the README that 1.0 freezes the opted-out
    surface only.
@@ -566,6 +578,8 @@ behaviour.
 | M6 | `Recoverable.Cause.SystemCancelled` is declared and specified but never produced on Android (the code comment explains why); iOS will produce it. | `BrowserAuthorizationSession.kt` KDoc on `UserCancelled` | Record in `spec/errors.md` that Android never emits it, so the Flutter bridge does not wait for it. |
 | M7 | `AuthenticateChallenge.parse` flattens multiple challenges, first occurrence wins; a future edge that emits `DPoP …, Bearer …` on one response would be misread. | `AuthenticateChallenge.kt` | Parse per challenge and prefer the one whose scheme matches the token presented; cheap now, awkward later. |
 | M8 | `Versola.call()` returns an OkHttp `Response` the caller must close; a suspend API that hands back a closeable is a leak magnet. | `Versola.kt` `call()` | Offer `callWith(request) { response -> }` or a `use`-returning overload; keep `call()` for parity. |
+| M9 | Since `d1b54c5`, `VersolaConfiguration.create` accepts a cleartext `http://` issuer for `localhost`, `127.0.0.1`, `[::1]` and `10.0.2.2` in shipping code, to let the harness use `adb reverse`. `10.0.2.2` is only the emulator's host alias; on a physical device it is a routable `10/8` address, so an issuer string copied from a test fixture into a release build talks OAuth in cleartext to whatever answers there. | `VersolaConfiguration.kt` `isLoopback` (duplicated in two companions) | Keep the exemption but make it explicit: `configure(allowCleartextLoopbackIssuer = true)` (or the harness passing its own `VersolaConfiguration`), drop `10.0.2.2` from the production list, and deduplicate the helper. |
+| M10 | `login()` now appends `offline_access` unconditionally (OIDC Core §11). Correct for this session model, but an app that deliberately wants a one-shot authorization (no refresh token, e.g. a step-up that should not extend the grant) has no way to say so, and the scope set the app sees in `TokenResponse.scopes` differs from what it asked for. | `SessionCoordinator.login()` | Document it in the README (done) and in `spec/state-machine.md` (not yet); consider leaving `stepUp()` without it. |
 
 ## 4. Cross-platform recommendation
 
@@ -659,7 +673,7 @@ the old-bridge option either way.
 
 | SDK | Unit | Android-host / Robolectric | Emulator in CI | Device farm | API surface check | Conformance against a real server |
 |---|---|---|---|---|---|---|
-| **versola-sdk** (today) | 313 methods, MockWebServer | yes | `:storage`, `:dpop` on API 28/34 | planned (FTL) | BCV `apiCheck` | designed, `if: false` |
+| **versola-sdk** (today) | 313 methods, MockWebServer | yes | `:storage`, `:dpop` on API 28/34 | planned (FTL) | BCV `apiCheck` | scenarios 01 and 21 green against a staged stack; `conformance.yml` on demand until a checkout token exists; login driven over HTTP, so Custom Tabs are not exercised |
 | AppAuth-Android | `check jacoco` only | — | no | no | no | no |
 | Auth0.Android | `testReleaseUnitTest`, lint, CodeQL, SCA, SHA-pinned actions | yes | no | no | no | no |
 | Okta mobile Kotlin | `testDebugUnitTest`, `testAndroidHostTest` (KMP) | yes | no | FTL mentioned | no | no |
@@ -667,13 +681,20 @@ the old-bridge option either way.
 | Firebase Android | Robolectric `check` | yes | `connectedCheck` | `deviceCheck` on FTL (`panther`, API 33) | Metalava `api.txt`, `apiInformation`, `metalavaSemver` | emulator suite |
 
 The plan in `conformance/README.md` is closer to MSAL's automation app than to anything AppAuth,
-Auth0 or Okta do, and that is the right company to keep. The gap is that none of it runs yet.
+Auth0 or Okta do, and that is the right company to keep. Two of twenty-three scenarios run; the
+proxy, the transcript comparison with the reference client, and every fault-injection scenario
+are still ahead. One consequence of the driver's design to keep in view: `HttpLoginBrowser`
+replaces the browser leg with an HTTP conversation, which is the right call for determinism but
+means the three findings that live in the browser leg — F1, F10 and the cancel semantics — are
+provable only at the device tier, which does not exist yet.
 
 ### Concrete additions
 
-1. **Build the driver for scenario 01 and 21 first**, exactly as `conformance/README.md` orders
-   it, and flip `conformance.yml` on nightly even while most scenarios are skipped. A harness that
-   runs two scenarios is infinitely more than one that documents twenty-three.
+1. **Keep the driver's order of work** (08, 14, 15–17, 20 next; then the proxy for 03–06, 09, 13,
+   23; then 12 through `am kill`), add the `VERSOLA_CHECKOUT_TOKEN` secret and drop the
+   `workflow_dispatch` gate so the nightly runs, and make the transcript comparison with
+   `NativeAppFlowSpec`'s reference client the next milestone after 08 — it is what turns "green"
+   into "equivalent".
 2. **Scenario traceability.** Annotate every test with `@Scenario("12")` (a tiny runtime
    annotation in a test-fixtures module) and generate a scenario-coverage matrix in CI that fails
    when a scenario has no test at any tier. The README already asks PR authors to say what is
@@ -705,88 +726,90 @@ Every source below was fetched or returned with content during this review.
 
 IETF / OpenID specifications
 
-- RFC 9449, OAuth 2.0 Demonstrating Proof of Possession — https://www.rfc-editor.org/rfc/rfc9449.html
-- RFC 8252, OAuth 2.0 for Native Apps — https://www.rfc-editor.org/rfc/rfc8252.html
-- RFC 9126, OAuth 2.0 Pushed Authorization Requests — https://www.rfc-editor.org/rfc/rfc9126.html
-- RFC 9207, OAuth 2.0 Authorization Server Issuer Identification — https://www.rfc-editor.org/rfc/rfc9207.html
-- draft-ietf-oauth-v2-1-16, The OAuth 2.1 Authorization Framework — https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1
-- draft-ietf-oauth-attestation-based-client-auth-11 — https://datatracker.ietf.org/doc/html/draft-ietf-oauth-attestation-based-client-auth
-- FAPI 2.0 Security Profile (Final, February 2025) — https://openid.net/specs/fapi-security-profile-2_0-final.html
-- OpenID Connect Core 1.0 (§3.1.3.7 ID Token Validation) — https://openid.net/specs/openid-connect-core-1_0.html
-- OpenID Foundation guest blog, "Implementing App-to-App Authorisation in OAuth2/OpenID Connect" — https://openid.net/guest-blog-implementing-app-to-app-authorisation-in-oauth2-openid-connect/
-- Daniel Fett, "Improving OAuth App-to-App Security" — https://danielfett.de/2020/11/27/improving-app2app/
+- RFC 9449, OAuth 2.0 Demonstrating Proof of Possession — <https://www.rfc-editor.org/rfc/rfc9449.html>
+- RFC 8252, OAuth 2.0 for Native Apps — <https://www.rfc-editor.org/rfc/rfc8252.html>
+- RFC 9126, OAuth 2.0 Pushed Authorization Requests — <https://www.rfc-editor.org/rfc/rfc9126.html>
+- RFC 9207, OAuth 2.0 Authorization Server Issuer Identification — <https://www.rfc-editor.org/rfc/rfc9207.html>
+- draft-ietf-oauth-v2-1-16, The OAuth 2.1 Authorization Framework — <https://datatracker.ietf.org/doc/html/draft-ietf-oauth-v2-1>
+- draft-ietf-oauth-attestation-based-client-auth-11 — <https://datatracker.ietf.org/doc/html/draft-ietf-oauth-attestation-based-client-auth>
+- FAPI 2.0 Security Profile (Final, February 2025) — <https://openid.net/specs/fapi-security-profile-2_0-final.html>
+- OpenID Connect Core 1.0 (§3.1.3.7 ID Token Validation) — <https://openid.net/specs/openid-connect-core-1_0.html>
+- OpenID Foundation guest blog, "Implementing App-to-App Authorisation in OAuth2/OpenID Connect" — <https://openid.net/guest-blog-implementing-app-to-app-authorisation-in-oauth2-openid-connect/>
+- Daniel Fett, "Improving OAuth App-to-App Security" — <https://danielfett.de/2020/11/27/improving-app2app/>
 
 Android
 
-- androidx.browser release notes (1.9.0, 1.10.0) — https://developer.android.com/jetpack/androidx/releases/browser
-- Chrome, "Simplify authentication using Auth Tab" — https://developer.chrome.com/docs/android/custom-tabs/guide-auth-tab
-- Chrome, "Improve web privacy for users with Ephemeral Custom Tabs" — https://developer.chrome.com/docs/android/custom-tabs/guide-ephemeral-tab
-- Android, Activity security (Activity Security Model, `allowCrossUidActivitySwitchFromBelow`) — https://developer.android.com/guide/components/activities/secure-bal
-- Android 15 behavior changes (all apps) — https://developer.android.com/about/versions/15/behavior-changes-all
-- Android 15 behavior changes (targeting 35) — https://developer.android.com/about/versions/15/behavior-changes-15
-- Android 16 behavior changes (all apps) — https://developer.android.com/about/versions/16/behavior-changes-all
-- Android, Biometric authentication (`CryptoObject`, `setUserAuthenticationParameters`) — https://developer.android.com/identity/sign-in/biometric-auth
-- Android Keystore system — https://developer.android.com/privacy-and-security/keystore
-- AOSP, Key and ID attestation — https://source.android.com/docs/security/features/keystore/attestation
-- Play Integrity API, standard requests — https://developer.android.com/google/play/integrity/standard
-- Android Developers Blog, "Stronger threat detection, simpler integration: Protect your growth with the Play Integrity API" (October 2025) — https://android-developers.googleblog.com/2025/10/stronger-threat-detection-simpler.html
-- Android, Credential Manager — https://developer.android.com/identity/sign-in/credential-manager
-- Android, Optimization for library authors (R8 consumer rules) — https://developer.android.com/topic/performance/app-optimization/library-optimization
-- Android Developers Blog, "Configure and troubleshoot R8 Keep Rules" (November 2025) — https://android-developers.googleblog.com/2025/11/configure-and-troubleshoot-r8-keep-rules.html
-- TapTrap: Animation-Driven Tapjacking on Android (USENIX Security 2025) — https://taptrap.click/
-- HackTricks, Play Integrity attestation bypass / Keystore chain relay — https://hacktricks.wiki/en/mobile-pentesting/android-app-pentesting/play-integrity-attestation-bypass.html
-- Quarkslab, "Bypassing Android Hardware Attestation from the Analyst's Chair" — https://blog.quarkslab.com/bypassing-android-hardware-attestation.html
+- androidx.browser release notes (1.9.0, 1.10.0) — <https://developer.android.com/jetpack/androidx/releases/browser>
+- Chrome, "Simplify authentication using Auth Tab" — <https://developer.chrome.com/docs/android/custom-tabs/guide-auth-tab>
+- Chrome, "Improve web privacy for users with Ephemeral Custom Tabs" — <https://developer.chrome.com/docs/android/custom-tabs/guide-ephemeral-tab>
+- Android, Activity security (Activity Security Model, `allowCrossUidActivitySwitchFromBelow`) — <https://developer.android.com/guide/components/activities/secure-bal>
+- Android 15 behavior changes (all apps) — <https://developer.android.com/about/versions/15/behavior-changes-all>
+- Android 15 behavior changes (targeting 35) — <https://developer.android.com/about/versions/15/behavior-changes-15>
+- Android 16 behavior changes (all apps) — <https://developer.android.com/about/versions/16/behavior-changes-all>
+- Android, Biometric authentication (`CryptoObject`, `setUserAuthenticationParameters`) — <https://developer.android.com/identity/sign-in/biometric-auth>
+- Android Keystore system — <https://developer.android.com/privacy-and-security/keystore>
+- AOSP, Key and ID attestation — <https://source.android.com/docs/security/features/keystore/attestation>
+- Play Integrity API, standard requests — <https://developer.android.com/google/play/integrity/standard>
+- Android Developers Blog, "Stronger threat detection, simpler integration: Protect your growth with the Play Integrity API" (October 2025) — <https://android-developers.googleblog.com/2025/10/stronger-threat-detection-simpler.html>
+- Android, Credential Manager — <https://developer.android.com/identity/sign-in/credential-manager>
+- Android, Optimization for library authors (R8 consumer rules) — <https://developer.android.com/topic/performance/app-optimization/library-optimization>
+- Android Developers Blog, "Configure and troubleshoot R8 Keep Rules" (November 2025) — <https://android-developers.googleblog.com/2025/11/configure-and-troubleshoot-r8-keep-rules.html>
+- TapTrap: Animation-Driven Tapjacking on Android (USENIX Security 2025) — <https://taptrap.click/>
+- HackTricks, Play Integrity attestation bypass / Keystore chain relay — <https://hacktricks.wiki/en/mobile-pentesting/android-app-pentesting/play-integrity-attestation-bypass.html>
+- Quarkslab, "Bypassing Android Hardware Attestation from the Analyst's Chair" — <https://blog.quarkslab.com/bypassing-android-hardware-attestation.html>
 
 iOS
 
-- Apple Developer Forums, ASWebAuthenticationSession + https on iOS < 17.4 (Apple engineer reply) — https://developer.apple.com/forums/thread/769749
-- Apple Platform Security, Keychain data protection — https://support.apple.com/guide/security/keychain-data-protection-secb0694df1a/web
-- CryptoKit, `SecureEnclave.P256.Signing.PrivateKey` — https://developer.apple.com/documentation/cryptokit/secureenclave/p256/signing/privatekey
-- Apple Developer Forums, `errSecInteractionNotAllowed` in background with AfterFirstUnlock — https://developer.apple.com/forums/thread/766206
-- Swift.org, Library Evolution in Swift — https://www.swift.org/blog/library-evolution/
-- Apple Developer Forums, binary targets with dependencies (DTS answer) — https://developer.apple.com/forums/thread/799438
-- SwiftPM issue #10552, building and publishing binary XCFrameworks — https://github.com/swiftlang/swift-package-manager/issues/10552
-- PowerSync Swift SDK strict-concurrency PR — https://github.com/powersync-ja/powersync-swift/pull/70
+- Apple Developer Forums, ASWebAuthenticationSession + https on iOS < 17.4 (Apple engineer reply) — <https://developer.apple.com/forums/thread/769749>
+- Apple Platform Security, Keychain data protection — <https://support.apple.com/guide/security/keychain-data-protection-secb0694df1a/web>
+- CryptoKit, `SecureEnclave.P256.Signing.PrivateKey` — <https://developer.apple.com/documentation/cryptokit/secureenclave/p256/signing/privatekey>
+- Apple Developer Forums, `errSecInteractionNotAllowed` in background with AfterFirstUnlock — <https://developer.apple.com/forums/thread/766206>
+- Swift.org, Library Evolution in Swift — <https://www.swift.org/blog/library-evolution/>
+- Apple Developer Forums, binary targets with dependencies (DTS answer) — <https://developer.apple.com/forums/thread/799438>
+- SwiftPM issue #10552, building and publishing binary XCFrameworks — <https://github.com/swiftlang/swift-package-manager/issues/10552>
+- PowerSync Swift SDK strict-concurrency PR — <https://github.com/powersync-ja/powersync-swift/pull/70>
 
 Cross-platform
 
-- Kotlin, Interoperability with Swift using Swift export — https://kotlinlang.org/docs/native-swift-export.html
-- What's new in Kotlin 2.4.0 — https://kotlinlang.org/docs/whatsnew24.html
-- What's new in Kotlin 2.4.20 — https://kotlinlang.org/docs/whatsnew2420.html
-- KT-53877, Support Swift Package Manager in Kotlin Multiplatform — https://youtrack.jetbrains.com/projects/KT/issues/KT-53877
-- Pigeon on pub.dev (29.0.8) — https://pub.dev/packages/pigeon
-- Flutter issue #182230, Pigeon native interop — https://github.com/flutter/flutter/issues/182230
-- Dominik Roszkowski, "jnigen and swiftgen in 2026" — https://roszkowski.dev/2026/swiftgen-jnigen/
-- Margelo, "Rewriting Rive React Native with Nitro Modules" — https://margelo.com/blog/rewriting-rive-react-native-with-nitro-modules
-- React Native Relay, "Turbo vs Nitro Modules: RN Guide 2026" — https://reactnativerelay.com/article/building-native-modules-2026-turbo-expo-nitro-compared
-- kalinjul/kotlin-multiplatform-oidc README and PR #187 — https://github.com/kalinjul/kotlin-multiplatform-oidc , https://github.com/kalinjul/kotlin-multiplatform-oidc/pull/187
+- Kotlin, Interoperability with Swift using Swift export — <https://kotlinlang.org/docs/native-swift-export.html>
+- What's new in Kotlin 2.4.0 — <https://kotlinlang.org/docs/whatsnew24.html>
+- What's new in Kotlin 2.4.20 — <https://kotlinlang.org/docs/whatsnew2420.html>
+- KT-53877, Support Swift Package Manager in Kotlin Multiplatform — <https://youtrack.jetbrains.com/projects/KT/issues/KT-53877>
+- Pigeon on pub.dev (29.0.8) — <https://pub.dev/packages/pigeon>
+- Flutter issue #182230, Pigeon native interop — <https://github.com/flutter/flutter/issues/182230>
+- Dominik Roszkowski, "jnigen and swiftgen in 2026" — <https://roszkowski.dev/2026/swiftgen-jnigen/>
+- Margelo, "Rewriting Rive React Native with Nitro Modules" — <https://margelo.com/blog/rewriting-rive-react-native-with-nitro-modules>
+- React Native Relay, "Turbo vs Nitro Modules: RN Guide 2026" — <https://reactnativerelay.com/article/building-native-modules-2026-turbo-expo-nitro-compared>
+- kalinjul/kotlin-multiplatform-oidc README and PR #187 — <https://github.com/kalinjul/kotlin-multiplatform-oidc> , <https://github.com/kalinjul/kotlin-multiplatform-oidc/pull/187>
 
 SDK engineering
 
-- Kotlin binary-compatibility-validator — https://github.com/Kotlin/binary-compatibility-validator
-- Kotlin, Binary compatibility validation in the Kotlin Gradle plugin — https://kotlinlang.org/docs/gradle-binary-compatibility-validation.html
-- KT-83410, Expose API to configure Binary Compatibility validator — https://youtrack.jetbrains.com/projects/KT/issues/KT-83410
-- "Binary Compatibility Validation Silently Stops Working on AGP 9's Built-in Kotlin" — https://medium.com/@tjokinen/binary-compatibility-validation-silently-stops-working-on-agp-9s-built-in-kotlin-974162978780
-- Sonatype, Publishing via Gradle to the Central Portal — https://central.sonatype.org/publish/publish-portal-gradle/
-- Gradle, Dependency verification — https://docs.gradle.org/current/userguide/dependency_verification.html
-- CycloneDX Gradle plugin — https://github.com/CycloneDX/cyclonedx-gradle-plugin
-- "Maven Central Sigstore Validation Defender Guide 2026" — https://safeguard.sh/resources/blog/maven-central-sigstore-validation-2026
-- kotlinx.serialization README (ProGuard/R8 section) — https://github.com/Kotlin/kotlinx.serialization
-- Takahiko Kawasaki, "DPoP Nonce" — https://darutk.medium.com/dpop-nonce-9787b9d276d1
-- MCP conformance PR #529 (DPoP-Nonce newest-wins fix) — https://github.com/modelcontextprotocol/conformance/pull/529
-- Sangsoo Nam, "OkHttp: How to Refresh Access Token Efficiently" — http://sangsoonam.github.io/2019/03/06/okhttp-how-to-refresh-access-token-efficiently.html
+- Kotlin binary-compatibility-validator — <https://github.com/Kotlin/binary-compatibility-validator>
+- Kotlin, Binary compatibility validation in the Kotlin Gradle plugin — <https://kotlinlang.org/docs/gradle-binary-compatibility-validation.html>
+- KT-83410, Expose API to configure Binary Compatibility validator — <https://youtrack.jetbrains.com/projects/KT/issues/KT-83410>
+- "Binary Compatibility Validation Silently Stops Working on AGP 9's Built-in Kotlin" — <https://medium.com/@tjokinen/binary-compatibility-validation-silently-stops-working-on-agp-9s-built-in-kotlin-974162978780>
+- Sonatype, Publishing via Gradle to the Central Portal — <https://central.sonatype.org/publish/publish-portal-gradle/>
+- Gradle, Dependency verification — <https://docs.gradle.org/current/userguide/dependency_verification.html>
+- CycloneDX Gradle plugin — <https://github.com/CycloneDX/cyclonedx-gradle-plugin>
+- "Maven Central Sigstore Validation Defender Guide 2026" — <https://safeguard.sh/resources/blog/maven-central-sigstore-validation-2026>
+- kotlinx.serialization README (ProGuard/R8 section) — <https://github.com/Kotlin/kotlinx.serialization>
+- Takahiko Kawasaki, "DPoP Nonce" — <https://darutk.medium.com/dpop-nonce-9787b9d276d1>
+- MCP conformance PR #529 (DPoP-Nonce newest-wins fix) — <https://github.com/modelcontextprotocol/conformance/pull/529>
+- Sangsoo Nam, "OkHttp: How to Refresh Access Token Efficiently" — <http://sangsoonam.github.io/2019/03/06/okhttp-how-to-refresh-access-token-efficiently.html>
+- kotlinx.coroutines, `Dispatchers.IO` (64-thread limit, elastic `limitedParallelism` views) — <https://kotlinlang.org/api/kotlinx.coroutines/kotlinx-coroutines-core/kotlinx.coroutines/-dispatchers/-i-o.html>
+- Maven Central, `com.squareup.okhttp3:okhttp-coroutines` (5.5.0) — <https://central.sonatype.com/artifact/com.squareup.okhttp3/okhttp-coroutines>
 
 Peer SDKs
 
-- AppAuth-Android README, issues #104, #1146, #1147 — https://github.com/openid/AppAuth-Android , https://github.com/openid/AppAuth-Android/issues/104 , https://github.com/openid/AppAuth-Android/issues/1146 , https://github.com/openid/AppAuth-Android/issues/1147
-- AppAuth-iOS README and PR #978 — https://github.com/openid/AppAuth-iOS , https://github.com/openid/AppAuth-iOS/pull/978
-- flutter_appauth issue #635 (process death, November 2025) — https://github.com/MaikuB/flutter_appauth/issues/635
-- Auth0.Android README, CHANGELOG, `AuthTabResultHandler.kt`, `AuthenticationActivity.kt`, `.github/workflows/test.yml` — https://github.com/auth0/Auth0.Android
-- Auth0.swift CHANGELOG and Package.swift — https://github.com/auth0/Auth0.swift
-- react-native-auth0 issue #1584 (Custom Tab minimize → USER_CANCELLED) — https://github.com/auth0/react-native-auth0/issues/1584
-- Auth0 support, "HTTPS Scheme Fails for iOS Universal Link in ASWebAuthenticationSession" — https://support.auth0.com/center/s/article/auth0-https-scheme-does-not-work-for-ios-universal-link
-- okta-mobile-kotlin README and `.circleci/config.yml` — https://github.com/okta/okta-mobile-kotlin
-- MSAL Android README and `android-complete/docs/Automation/how_to_run_tests.md` — https://github.com/AzureAD/microsoft-authentication-library-for-android , https://github.com/AzureAD/android-complete/blob/master/docs/Automation/how_to_run_tests.md
-- Firebase Android SDK README (testing, Metalava, `metalavaSemver`) — https://github.com/firebase/firebase-android-sdk
-- Keycloak, Securing applications with DPoP; OIDC layers — https://www.keycloak.org/securing-apps/dpop , https://www.keycloak.org/securing-apps/oidc-layers
-- Ory Kratos, self-service flows — https://www.ory.com/docs/kratos/self-service
+- AppAuth-Android README, issues #104, #1146, #1147 — <https://github.com/openid/AppAuth-Android> , <https://github.com/openid/AppAuth-Android/issues/104> , <https://github.com/openid/AppAuth-Android/issues/1146> , <https://github.com/openid/AppAuth-Android/issues/1147>
+- AppAuth-iOS README and PR #978 — <https://github.com/openid/AppAuth-iOS> , <https://github.com/openid/AppAuth-iOS/pull/978>
+- flutter_appauth issue #635 (process death, November 2025) — <https://github.com/MaikuB/flutter_appauth/issues/635>
+- Auth0.Android README, CHANGELOG, `AuthTabResultHandler.kt`, `AuthenticationActivity.kt`, `.github/workflows/test.yml` — <https://github.com/auth0/Auth0.Android>
+- Auth0.swift CHANGELOG and Package.swift — <https://github.com/auth0/Auth0.swift>
+- react-native-auth0 issue #1584 (Custom Tab minimize → USER_CANCELLED) — <https://github.com/auth0/react-native-auth0/issues/1584>
+- Auth0 support, "HTTPS Scheme Fails for iOS Universal Link in ASWebAuthenticationSession" — <https://support.auth0.com/center/s/article/auth0-https-scheme-does-not-work-for-ios-universal-link>
+- okta-mobile-kotlin README and `.circleci/config.yml` — <https://github.com/okta/okta-mobile-kotlin>
+- MSAL Android README and `android-complete/docs/Automation/how_to_run_tests.md` — <https://github.com/AzureAD/microsoft-authentication-library-for-android> , <https://github.com/AzureAD/android-complete/blob/master/docs/Automation/how_to_run_tests.md>
+- Firebase Android SDK README (testing, Metalava, `metalavaSemver`) — <https://github.com/firebase/firebase-android-sdk>
+- Keycloak, Securing applications with DPoP; OIDC layers — <https://www.keycloak.org/securing-apps/dpop> , <https://www.keycloak.org/securing-apps/oidc-layers>
+- Ory Kratos, self-service flows — <https://www.ory.com/docs/kratos/self-service>
