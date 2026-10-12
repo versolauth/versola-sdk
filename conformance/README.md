@@ -2,9 +2,14 @@
 
 Issue #15. Runs the scenario catalogue under [`../spec/conformance/`](../spec/conformance/)
 against a **real staged `auth` + `central` + `edge`** from `versolauth/versola`, once per SDK,
-and asserts identical observable behaviour. Nothing here exists yet beyond the design and the
-stack definition below; this file is the plan the first implementation follows, so that the
-Android and iOS halves are built against one shape rather than two.
+and asserts identical observable behaviour.
+
+**Status.** The Android driver exists as `android/conformance-android` (instrumented tests;
+nothing is published from it) and runs scenarios 01 and 21 — with the refresh, revocation and
+logout steps of 02, 11 and 18 and the blob-less replay of 22 — green against a stack staged
+from `versolauth/versola` at `d6203f93`, from an emulator. The rest of the catalogue, the
+fault-injection proxy and the transcript comparison with the reference client are the order
+of work at the bottom. iOS has no driver yet.
 
 ## Why it is not more unit tests
 
@@ -50,6 +55,29 @@ reason: the e2e fixtures the harness reuses (`EdgeFixture`, `CentralApi`, `EdgeA
 `gen-env.scala` configuration the server's own CI generates. [`stack/docker-compose.yml`](stack/docker-compose.yml)
 is the alternative for local runs against published images, and is what the Flutter and iOS
 harnesses will point at when they do not have an sbt toolchain to hand.
+
+## Running the Android driver
+
+The stack is reached at the loopback addresses auth was configured with (`gen-env.scala`'s
+`local` target: `http://localhost:9003`), so the issuer the SDK validates is the one auth
+announces. `adb reverse` makes the emulator's `localhost` the host's; `adb forward` lets edge
+reach the upstream `MockWebServer` the driver runs on the device for the proxied resource.
+
+```bash
+# In a versola checkout: develop.md's local stack (central 9001, auth 9003/9007/9008,
+# the internal TLS terminator, edge 9005), with Postgres on 5432.
+adb reverse tcp:9001 tcp:9001 && adb reverse tcp:9003 tcp:9003 && adb reverse tcp:9005 tcp:9005
+adb forward tcp:18080 tcp:18080
+cd android && ./gradlew :conformance-android:connectedDebugAndroidTest
+```
+
+Instrumentation arguments override the defaults (`Stack.kt`): `authUrl`, `centralUrl`,
+`edgeUrl`, `centralSecret`, `edgeInternalSecret`, `upstreamPort`, `upstreamUrlFromEdge`.
+
+The browser leg is `HttpLoginBrowser`: auth's login conversation driven over HTTP, the way
+the e2e reference client drives it, handed to the SDK through `Versola.configure(browser = …)`.
+Custom Tabs, App Link delivery and the foreground-return detector are therefore not what this
+tier proves; they are the device tier's.
 
 ## What the driver does per scenario
 
@@ -100,12 +128,17 @@ it with the stack's addresses as instrumentation arguments:
 
 ## Order of work
 
-1. The driver skeleton and scenario 01 on `BackChannel.Auth` against a `standard` tenant —
-   provisioning, the browser leg under UI Automator, the transcript, one assertion set.
-2. Scenario 21 on `BackChannel.Edge`: a `fapi2` tenant, a native client with an edge
-   certificate issued by Central (`issueEdgeClientCertificate`), edge's `native` block.
-3. The proxy, then scenarios 03–06 and 23 (nonces, skew), 09 and 13 (dropped responses,
-   process death).
-4. The reference-transcript comparison, which is what turns the above from "it works" into
+1. ~~The driver skeleton and scenario 01 on `BackChannel.Auth` against a `standard` tenant.~~
+   Done; the browser leg is the HTTP conversation rather than UI Automator, which turned out
+   to be both deterministic and enough.
+2. ~~Scenario 21 on `BackChannel.Edge`: a `fapi2` tenant, a native client with an edge
+   certificate issued by Central (`issueEdgeClientCertificate`), edge's `native` block.~~ Done.
+3. Scenarios 08 (concurrent refresh, asserting one rotation server-side), 10 and 14 (step-up
+   through a resource with `stepUpAcr`), 15–17 and 20 — no fault injection needed.
+4. The proxy, then scenarios 03–06 and 23 (nonces, skew), 09 and 13 (dropped responses,
+   process death), 12 (process death mid-browser, through `am kill` and a second
+   instrumentation run).
+5. The reference-transcript comparison, which is what turns the above from "it works" into
    "it is equivalent".
-5. iOS, unchanged scenarios, once #11–#14 exist.
+6. `conformance.yml` on a schedule once a `VERSOLA_CHECKOUT_TOKEN` secret exists.
+7. iOS, unchanged scenarios, once #11–#14 exist.

@@ -24,9 +24,9 @@ jobs:
   scenarios:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    # Flip on once conformance-android (the driver) exists. Until then the job documents the
-    # staging recipe and is skipped rather than failing every night.
-    if: false
+    # On demand only until a VERSOLA_CHECKOUT_TOKEN secret exists for the private server
+    # checkout; the nightly trigger then takes over by dropping this line.
+    if: github.event_name == 'workflow_dispatch'
     services:
       postgres:
         image: postgres:18
@@ -128,12 +128,13 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           working-directory: sdk/android
-          # 10.0.2.2 is the host from inside the emulator.
-          script: >
+          # The issuer auth announces is http://localhost:9003, and the SDK holds the
+          # document to it, so the emulator's localhost is made the host's rather than the
+          # URLs being rewritten (conformance/README.md, "Running the Android driver").
+          script: |
+            adb reverse tcp:9001 tcp:9001 && adb reverse tcp:9003 tcp:9003 && adb reverse tcp:9005 tcp:9005
+            adb forward tcp:18080 tcp:18080
             ./gradlew :conformance-android:connectedDebugAndroidTest
-            -Pandroid.testInstrumentationRunnerArguments.authUrl=http://10.0.2.2:9003
-            -Pandroid.testInstrumentationRunnerArguments.centralUrl=http://10.0.2.2:9001
-            -Pandroid.testInstrumentationRunnerArguments.edgeUrl=http://10.0.2.2:9005
 
       - name: Upload transcripts and server logs
         if: always()

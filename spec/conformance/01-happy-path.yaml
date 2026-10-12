@@ -15,7 +15,7 @@ steps:
     expect: 200 with authorization_endpoint, token_endpoint and dpop_signing_alg_values_supported present.
   - actor: sdk
     action: Open the authorization endpoint in the system browser.
-    expect: Query carries response_type=code, code_challenge_method=S256, a code_challenge, state, nonce and the registered redirect_uri.
+    expect: Query carries response_type=code, code_challenge_method=S256, a code_challenge, state, nonce, the registered redirect_uri, and a scope of openid, profile and offline_access — the last added by the SDK, since the session has nothing to hold without a refresh token.
   - actor: user
     action: Authenticate in the browser.
   - actor: auth

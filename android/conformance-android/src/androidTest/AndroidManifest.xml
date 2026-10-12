@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!--
+      The staged stack is cleartext on loopback (gen-env's `local` target), which Android
+      refuses by default from API 28. Scoped to the test APK; the SDK's own manifests carry no
+      such exemption.
+    -->
+    <application android:usesCleartextTraffic="true" />
+</manifest>

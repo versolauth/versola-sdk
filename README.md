@@ -19,7 +19,8 @@ versola.logout()
 ```
 
 DPoP, nonce handling, refresh coordination and secure storage are the SDK's job, not the
-integrator's.
+integrator's. So is `offline_access`: `login()` asks for it whatever scopes it is given,
+because a session with no refresh token is not one the SDK can keep.
 
 A client on a FAPI 2.0 tenant — the server's default for a new tenant — cannot be a public
 client of auth. Add `backChannel = BackChannel.Edge` and the SDK authorizes through edge's

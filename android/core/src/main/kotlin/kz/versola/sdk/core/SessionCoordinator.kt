@@ -145,7 +145,12 @@ public class SessionCoordinator(
         acrValues: List<String> = emptyList(),
         maxAge: Long? = null,
     ): TokenResponse {
-        val grant = flow.authorize(scopes, acrValues, maxAge)
+        // OpenID Connect Core §11: a refresh token is issued for a grant that asked for
+        // `offline_access`, and auth issues none otherwise. This session model has nothing to
+        // hold without one — the exchange below refuses a response that omits it — so the
+        // scope is asked for here rather than left for every integrator to discover from a
+        // failed first login. An app that listed it already is unchanged.
+        val grant = flow.authorize(scopes + OFFLINE_ACCESS, acrValues, maxAge)
         // One attempt, with no retry budget around it. An authorization code is single-use
         // and the token endpoint offers no idempotency for `authorization_code` —
         // `Idempotency-Key` is honoured for the refresh family alone (`OAuthTokenService`) —
@@ -482,6 +487,9 @@ public class SessionCoordinator(
 }
 
 private const val NANOS_PER_MILLI = 1_000_000L
+
+/** OpenID Connect Core §11. */
+private const val OFFLINE_ACCESS = "offline_access"
 
 /**
  * How long before its stated expiry a token is treated as due for refresh

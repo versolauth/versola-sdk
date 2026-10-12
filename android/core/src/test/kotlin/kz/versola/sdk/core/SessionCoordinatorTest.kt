@@ -855,6 +855,16 @@ class SessionCoordinatorTest {
         assertEquals(Long.MAX_VALUE, RefreshSkew.usableForMillis(issued(expiresIn = -1)))
     }
 
+    @Test
+    fun `login asks for offline_access, which the refresh token depends on`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val (coordinator, tokenClient, _) = coordinator(pendingStore)
+
+        coordinator.login(setOf("openid", "profile"))
+
+        assertEquals(setOf("openid", "profile", "offline_access"), tokenClient.exchangeCalls.single().scopes)
+    }
+
     // ---- logout() ----------------------------------------------------------------------
 
     @Test
