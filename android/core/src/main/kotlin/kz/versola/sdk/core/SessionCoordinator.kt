@@ -269,7 +269,13 @@ public class SessionCoordinator(
             // it. Also captures the state `Refreshing` is entered from: not assumed to be
             // `Authenticated`, because `refresh()` with no grant stored enters from
             // `Unauthenticated`, and a step-up enters from `StepUpRequired`.
-            val priorState = flow.sessionState.first()
+            //
+            // Read outside the mutex, so it can catch another flight's `Refreshing` just
+            // before that flight retires: restoring *that* on a cancellation would leave the
+            // session in `Refreshing` with no flight to ever resolve it. A flight's own
+            // state is never somewhere to return to, so it settles on `Authenticated`.
+            val priorState = flow.sessionState.first().takeUnless { it == SessionState.Refreshing }
+                ?: SessionState.Authenticated
             var winner = false
             val flight = refreshFlight.mutex.withLock {
                 if (onlyIfStale) {

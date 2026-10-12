@@ -1,6 +1,7 @@
 package kz.versola.sdk.okhttp
 
 import java.io.IOException
+import java.io.InterruptedIOException
 import kotlinx.coroutines.runBlocking
 import kz.versola.sdk.core.AccessToken
 import kz.versola.sdk.core.AccessTokenSource
@@ -56,7 +57,13 @@ public class VersolaInterceptor(
             throw e
         } catch (e: IOException) {
             throw e
-        } catch (e: Throwable) {
+        } catch (e: InterruptedException) {
+            // `runBlocking` raises this when the calling thread is interrupted — an executor
+            // shutting down, say. It is a cancellation, not a defect: the flag goes back and
+            // the call fails the way OkHttp's own blocking I/O does.
+            Thread.currentThread().interrupt()
+            throw InterruptedIOException("interrupted while obtaining an access token")
+        } catch (e: Exception) {
             // Anything else leaving an interceptor is rethrown by OkHttp onto its dispatcher
             // thread for an enqueued call, where Android's default handler ends the process.
             // A Keystore refusing a key, a DataStore refusing a second instance, a URL the
