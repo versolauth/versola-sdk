@@ -63,10 +63,6 @@ public class RedirectUri internal constructor(
             VersolaError.Configuration.Detail.InvalidConfiguration(detail),
             cause,
         )
-
-        /** The loopback names RFC 8252 §7.3 allows for a redirect, plus the emulator's alias for its host. */
-        private fun isLoopback(host: String?): Boolean =
-            host == "localhost" || host == "127.0.0.1" || host == "[::1]" || host == "10.0.2.2"
     }
 }
 

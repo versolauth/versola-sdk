@@ -3,7 +3,7 @@ name: conformance
 # The harness of #15 (see conformance/README.md): the scenario catalogue against a real staged
 # auth + central + edge, driven from an emulator. The stack half below is a copy of what
 # versolauth/versola's own ci-cd.yml does to run `sbt e2e/test`, so the two cannot drift; the
-# driver half is gated off until conformance-android exists. Nightly and on demand rather than
+# driver half runs :conformance-android (scenarios 01 and 21). Nightly and on demand rather than
 # per pull request: a full stage plus an emulator boot is twenty minutes the unit and
 # instrumented jobs in android.yml do not need to wait on.
 
