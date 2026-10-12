@@ -26,6 +26,9 @@ notes: >
 
   The one way out is validating the request before any browser opens, over plain HTTPS from the
   app itself — pushing it via PAR (RFC 9126), whose error response is JSON the SDK can parse
-  directly. PAR is explicitly out of scope for #5 ("Explicitly not in scope"); this scenario
-  stays at "same as cancel" until a follow-up brings PAR in scope, at which point it should be
-  rewritten to require the precise `Configuration` result.
+  directly. That is what `BackChannel.Edge` (#40) does: edge pushes the request to `/par` from
+  `/native/start`, and an unregistered redirect URI comes back as `400 invalid_request` from
+  that call, before any browser opens. Under that back channel this scenario's assertion is the
+  opposite one: `Configuration(AuthorizationRejected("invalid_request", …))` from `login()`,
+  no browser opened, and an unknown client as `Configuration(EdgeClientUnknown)`. The
+  "same as cancel" outcome above remains the truth for `BackChannel.Auth`.

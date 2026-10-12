@@ -51,6 +51,30 @@ From `versola.oauth.token.model.ErrorCode` and `TokenEndpointError`.
 must sign in again, and it is the one most often mistaken for something to retry. A retry loop
 on `invalid_grant` against a rotating-refresh deployment is how clients silently log users out.
 
+Two things about the wire shape, both from `TokenEndpointController`: **`/token` never sends
+`WWW-Authenticate`**, for any error — `use_dpop_nonce` is a `400` with the code in the JSON
+body and the nonce in `DPoP-Nonce`, and `invalid_client` is a bare `401`. And on a `fapi2`
+tenant a public client gets `invalid_client` for every request, because FAPI 2.0 admits
+confidential clients only: that is not a registration typo but the signal that the deployment
+needs `BackChannel.Edge`, and the `Configuration` message says so.
+
+## Edge's native endpoints — `POST /native/{start,complete,token,revoke}/{clientId}`
+
+Under `BackChannel.Edge` (#40). From `NativeController` and `NativeService`. Every endpoint
+demands exactly one `DPoP` header.
+
+| Response | Category | Notes |
+|---|---|---|
+| 404, empty | `Configuration`, detail `EdgeClientUnknown(clientId)` | Edge fronts no such client: not `native`, not `tls_client_auth` with an edge certificate, not on a tenant assigned to this edge, or edge has no `native` block. The most likely first-run mistake under this back channel. |
+| 401, `WWW-Authenticate: DPoP error="use_dpop_nonce"` + `DPoP-Nonce` | handled internally | Edge's own nonce, on `/native/start` only. Cached under edge's origin — the same cache the authenticated client fills. One retry; a second is `Recoverable(NonceLoop)`. |
+| 400 `invalid_request` on `/native/start` | `Configuration`, detail `AuthorizationRejected` | Auth's `/par` refusing the pushed request, relayed: unregistered `redirect_uri`, unknown scope, and the rest of the authorization-endpoint table. This is the precise error scenario 17 cannot give under `BackChannel.Auth`. |
+| 400 `invalid_request` on `/native/complete` | `Configuration` | A missing `code`, `state`, `iss` or blob. SDK fault. |
+| 400 `invalid_grant` from edge on `/native/complete` | `Reauthenticate(GrantRejected)` | The blob is not edge's, is expired, names another client or `state`, `iss` is not the server edge pushed to, or the proof is by a different key than the flow started with. Edge refuses these *before* calling auth, so the code is not spent. |
+| 400 `invalid_dpop_proof` from edge | handled internally, then `Reauthenticate` | Edge checked the forwarded proof's signature, `htm`, `htu` and `iat` against auth's endpoint and refused it. One retry with a fresh proof, as at the token endpoint. |
+| 400 `unsupported_grant_type` on `/native/token` | `Configuration` | Only `refresh_token` is served there. |
+| Anything relayed from auth | as the token endpoint table | Status, body, `DPoP-Nonce` and `WWW-Authenticate` are relayed unchanged — including auth's `400` + JSON `use_dpop_nonce`, whose nonce is cached under the **`htu`'s** origin (auth's mutual-TLS listener), never under edge's. |
+| 200 on `/native/revoke` | — | RFC 7009: says the request was taken, not that the token was live. |
+
 ## Authorization endpoint — `GET /authorize`
 
 From `versola.oauth.authorize.model.ErrorCode` and `Error`. These arrive on the redirect as
@@ -79,8 +103,9 @@ in practice: the SDK has no visibility into that page.** Custom Tabs and
 `ASWebAuthenticationSession` expose neither the page's status nor its body, so an unregistered
 redirect URI is indistinguishable from the user closing the tab — see scenario 17. An
 unregistered redirect URI is still the single most common first-run mistake; the SDK cannot
-fix the integrator's afternoon here, only PAR (RFC 9126, out of scope for #5) can, by moving
-the check to a plain HTTPS response the app makes itself.
+fix the integrator's afternoon here, only PAR (RFC 9126) can, by moving the check to a plain
+HTTPS response the app makes itself — which is exactly what `BackChannel.Edge` gets from
+`/native/start`, see the native table below.
 
 ## UserInfo — `GET /userinfo`
 
@@ -157,6 +182,8 @@ Not every error comes from a server.
 | Storage key invalidated by biometric enrolment change | `Reauthenticate` | Indistinguishable from tampering; treated as sign-out. |
 | Storage key's authentication window has elapsed | `Recoverable`, cause `UnlockRequired` | `UnlockPolicy.OnAppUnlock` only. The app presents the prompt and retries; the grant is intact. |
 | Hardware key unavailable while `requireHardware = true` | `Configuration` | The app asked for a guarantee this device cannot provide. |
+| `BackChannel.Edge` without `edgeBaseUrl`, with `TokenBinding.Bearer`, or with a non-`https` redirect URI | `Configuration` | Refused at `configure()`. Edge's native endpoints are edge's, accept no bearer presentation, and front clients registered with `https` redirect URIs only. |
+| A grant started through one back channel redeemed through the other | `Configuration` | Wiring. Refused before the code is spent. |
 | Discovery document missing a required field | `Configuration` | A missing `dpop_signing_alg_values_supported` is **not** this: it means bearer mode, logged, not failed. |
 | Pending authorization request older than 10 minutes | `Recoverable`, cause `Expired` | Discarded on restore. |
 

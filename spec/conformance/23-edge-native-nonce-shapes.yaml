@@ -1,0 +1,37 @@
+id: 23-edge-native-nonce-shapes
+title: Edge's and auth's nonce challenges are answered once each, from their own cache
+issues: [40, 6, 15]
+applies_to: [android, ios, flutter]
+mode: dpop
+fault_injection: [force-dpop-nonce]
+preconditions:
+  - The same registration as scenario 21.
+  - Edge requires a DPoP nonce, and the client's tenant has requireDpopNonce enabled on auth.
+  - Both nonce caches on the device are empty.
+steps:
+  - actor: app
+    action: Call login.
+  - actor: sdk
+    action: POST native start without a nonce.
+  - actor: edge
+    action: Answer 401 with WWW-Authenticate DPoP error="use_dpop_nonce" and a DPoP-Nonce header.
+  - actor: sdk
+    action: Retry start once with edge's nonce in the proof.
+    expect: 200 OK.
+  - actor: user
+    action: Authenticate in the browser.
+  - actor: sdk
+    action: POST native complete with a proof carrying no nonce for auth's origin.
+  - actor: auth
+    action: Answer 400 with error use_dpop_nonce in the JSON body and a DPoP-Nonce header, relayed by edge unchanged.
+  - actor: sdk
+    action: Retry complete once with auth's nonce in the proof.
+    expect: 200 OK.
+  - actor: app
+    action: Issue a GET through the SDK's HTTP client to a registered edge endpoint.
+    expect: 200 on the first attempt, carrying edge's nonce from the start leg.
+assertions:
+  - Exactly two start requests and exactly two complete requests are made.
+  - The nonce edge issued appears only in proofs whose htu is on edge's origin, and auth's only in proofs whose htu is on the token_endpoint's origin; neither crosses over.
+  - The 401 challenge is read on its error parameter and the 400 challenge on its JSON error value; the scheme is never consulted.
+  - A second challenge of either shape on the same request surfaces Recoverable with cause NonceLoop and no third attempt.

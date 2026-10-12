@@ -1,0 +1,43 @@
+id: 21-edge-native-login
+title: Login through edge's native endpoints on a FAPI 2.0 tenant
+issues: [40, 15]
+applies_to: [android, ios, flutter]
+mode: dpop
+preconditions:
+  - The tenant has the fapi2 security profile.
+  - A native client is registered with tls_client_auth, an edge-held certificate, requirePushedAuthorizationRequests, dpopBoundAccessTokens and one https App Link redirect URI.
+  - Edge is configured with a native block for the auth it fronts.
+  - The SDK is configured with BackChannel.Edge, edgeBaseUrl, and that redirect URI.
+  - No credentials are present on the device.
+steps:
+  - actor: app
+    action: Call login with scopes openid and offline_access.
+  - actor: sdk
+    action: POST edge's native start endpoint for the client with redirect_uri, scope and nonce, and a DPoP proof whose htu is that endpoint.
+    expect: 200 with request_uri, state, blob, token_endpoint and revocation_endpoint.
+  - actor: sdk
+    action: Persist state, the blob and the two endpoints, then open discovery's authorization_endpoint with client_id and request_uri in the system browser.
+  - actor: user
+    action: Authenticate in the browser.
+  - actor: auth
+    action: Redirect to the App Link with code, state and iss.
+  - actor: sdk
+    action: POST edge's native complete endpoint with code, state, iss and the blob, and a DPoP proof whose htu is the token_endpoint from start.
+    expect: 200 with access_token, refresh_token, id_token and token_type=DPoP.
+  - actor: app
+    action: Issue a GET through the SDK's HTTP client to a registered edge endpoint.
+    expect: 200 OK.
+  - actor: sdk
+    action: Refresh through edge's native token endpoint with refresh_token, Idempotency-Key and a proof whose htu is the token_endpoint.
+    expect: 200 with the same refresh_token value echoed back.
+assertions:
+  - The start request carries no code_challenge, state, response_type, dpop_jkt or client_id parameter; those are edge's.
+  - The browser is opened on discovery's authorization endpoint with exactly client_id and request_uri, and the redirect URI is an https App Link.
+  - The redirect is held to the state edge issued, compared in constant time, and a redirect without iss is refused before any network call.
+  - The proof on the complete request has htm=POST and htu equal to the token_endpoint from start, not edge's URL, and no ath claim.
+  - The access token's cnf.jkt equals the thumbprint of the device key, and the token carries no x5t#S256.
+  - The code_verifier never appears in any request the device sends or any file it writes; only the blob does.
+  - The proof on the edge API call has htu equal to that request and ath equal to the base64url SHA-256 of the access token.
+  - After a process restart, a refresh signs for the token_endpoint remembered from start without calling start again.
+  - Every request the SDK emits is equivalent to NativeAppFlowSpec's reference client, ignoring jti, iat and nonce values.
+  - Session state observed by the app is Unauthenticated then Authorizing then Authenticated, with no other value in between.

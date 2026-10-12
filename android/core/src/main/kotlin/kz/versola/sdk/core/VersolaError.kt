@@ -217,6 +217,15 @@ public sealed class VersolaError(
             public data object NoBrowserAvailable : Detail
 
             /**
+             * Edge answered 404 to `/native/{start,complete,token,revoke}/{clientId}`: it
+             * fronts no such client. The client is not registered as `native` with
+             * `tls_client_auth` and an edge certificate, its tenant is not assigned to this
+             * edge, or edge has no `native` block — all deployment, none of them the user's.
+             * Under [BackChannel.Edge] this is the single most common first-run mistake.
+             */
+            public data class EdgeClientUnknown(public val clientId: String) : Detail
+
+            /**
              * `TokenBinding.Dpop(requireHardware = true)` cannot be honoured here: either the
              * device produced only a software-backed key, or the deployment does not
              * advertise DPoP at all. The app asked for a guarantee this pairing cannot give,

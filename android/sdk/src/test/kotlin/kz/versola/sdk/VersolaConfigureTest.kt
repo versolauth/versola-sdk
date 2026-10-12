@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
+import kz.versola.sdk.core.BackChannel
 import kz.versola.sdk.core.SessionState
 import kz.versola.sdk.core.TokenBinding
 import kz.versola.sdk.core.VersolaError
@@ -114,6 +115,36 @@ class VersolaConfigureTest {
             Versola.configure(
                 application, "https://id.versola.kz", "mobile-app", "https://app.example.com/oauth",
                 postLogoutRedirectUri = "signed-out",
+            )
+        }
+    }
+
+    @Test
+    fun `BackChannel Edge needs edge, DPoP and an App Link, each refused at configure time`() {
+        val viaEdge = Versola.configure(
+            application, "https://id.versola.kz", "mobile-app", "https://app.example.com/oauth",
+            edgeBaseUrl = "https://versola.kz", backChannel = BackChannel.Edge,
+        )
+        assertNotNull(viaEdge.dpop)
+
+        val withoutEdge = assertThrows(VersolaError.Configuration::class.java) {
+            Versola.configure(
+                application, "https://id.versola.kz", "mobile-app", "https://app.example.com/oauth",
+                backChannel = BackChannel.Edge,
+            )
+        }
+        assertTrue(withoutEdge.message!!.contains("edgeBaseUrl"))
+
+        assertThrows(VersolaError.Configuration::class.java) {
+            Versola.configure(
+                application, "https://id.versola.kz", "mobile-app", "https://app.example.com/oauth",
+                tokenBinding = TokenBinding.Bearer, edgeBaseUrl = "https://versola.kz", backChannel = BackChannel.Edge,
+            )
+        }
+        assertThrows(VersolaError.Configuration::class.java) {
+            Versola.configure(
+                application, "https://id.versola.kz", "mobile-app", "com.example.app:/oauth",
+                edgeBaseUrl = "https://versola.kz", backChannel = BackChannel.Edge,
             )
         }
     }
