@@ -58,6 +58,24 @@ public class KeystoreDpopKey(
 
     override suspend fun attestation(): KeyAttestation = material().attestation
 
+    /**
+     * Destroys the key and forgets it, so the next proof is signed by a freshly generated one
+     * with a different `jkt` — scenario 18's assertion. Logout does this (#10): the key is
+     * cheap to regenerate and its whole purpose is binding one grant to one
+     * device-installation, so carrying it into the next user's session on a shared device
+     * would defeat it.
+     *
+     * Under the same lock as [material], so a proof being minted concurrently signs with the
+     * key it loaded and the next one starts over, rather than either seeing a half-deleted
+     * entry.
+     */
+    public suspend fun destroy() {
+        mutex.withLock {
+            withContext(Dispatchers.IO) { destroy(alias) }
+            material = null
+        }
+    }
+
     override suspend fun sign(signingInput: ByteArray): ByteArray {
         val key = material().privateKey
         return withContext(Dispatchers.IO) {
@@ -176,9 +194,9 @@ public class KeystoreDpopKey(
         private const val CURVE = "secp256r1"
 
         /**
-         * Destroys the key. Logout does this (#10): the key is cheap to regenerate and its
-         * whole purpose is binding one grant to one device-installation, so carrying it into
-         * the next user's session would defeat it on a shared device.
+         * Deletes the Keystore entry under [alias]. The instance method [KeystoreDpopKey.destroy]
+         * is the one logout calls — it also drops the loaded material, which this cannot — and
+         * this remains for a caller cleaning up an alias no instance holds.
          */
         public fun destroy(alias: String = DEFAULT_ALIAS) {
             KeyStore.getInstance(KEYSTORE).apply { load(null) }.deleteEntry(alias)

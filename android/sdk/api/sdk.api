@@ -20,6 +20,7 @@ public final class kz/versola/sdk/Versola {
 	public final fun keyAttestation (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun login (Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun login$default (Lkz/versola/sdk/Versola;Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun logout (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun metadata (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun refresh (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun resumePendingAuthorization (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -27,7 +28,7 @@ public final class kz/versola/sdk/Versola {
 }
 
 public final class kz/versola/sdk/Versola$Companion {
-	public final fun configure (Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkz/versola/sdk/core/VersolaLogger;Lokhttp3/OkHttpClient;Lkz/versola/sdk/core/TokenBinding;Ljava/lang/String;Lkz/versola/sdk/core/RetryPolicy;)Lkz/versola/sdk/Versola;
-	public static synthetic fun configure$default (Lkz/versola/sdk/Versola$Companion;Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkz/versola/sdk/core/VersolaLogger;Lokhttp3/OkHttpClient;Lkz/versola/sdk/core/TokenBinding;Ljava/lang/String;Lkz/versola/sdk/core/RetryPolicy;ILjava/lang/Object;)Lkz/versola/sdk/Versola;
+	public final fun configure (Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkz/versola/sdk/core/VersolaLogger;Lokhttp3/OkHttpClient;Lkz/versola/sdk/core/TokenBinding;Ljava/lang/String;Lkz/versola/sdk/core/RetryPolicy;Ljava/lang/String;Lkz/versola/sdk/core/BackChannel;)Lkz/versola/sdk/Versola;
+	public static synthetic fun configure$default (Lkz/versola/sdk/Versola$Companion;Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkz/versola/sdk/core/VersolaLogger;Lokhttp3/OkHttpClient;Lkz/versola/sdk/core/TokenBinding;Ljava/lang/String;Lkz/versola/sdk/core/RetryPolicy;Ljava/lang/String;Lkz/versola/sdk/core/BackChannel;ILjava/lang/Object;)Lkz/versola/sdk/Versola;
 }
 

@@ -15,15 +15,36 @@ val versola = Versola.configure(
 
 versola.login(scopes = setOf("openid", "profile"))
 val response = versola.call(request)
+versola.logout()
 ```
 
 DPoP, nonce handling, refresh coordination and secure storage are the SDK's job, not the
 integrator's.
 
+A client on a FAPI 2.0 tenant — the server's default for a new tenant — cannot be a public
+client of auth. Add `backChannel = BackChannel.Edge` and the SDK authorizes through edge's
+native endpoints instead, with the same API and the same key-bound tokens:
+
+```kotlin
+val versola = Versola.configure(
+    context,
+    issuer      = "https://id.versola.kz",
+    clientId    = "mobile-app",
+    redirectUri = "https://app.example.com/oauth",   // an https App Link is required here
+    edgeBaseUrl = "https://versola.kz",
+    backChannel = BackChannel.Edge,
+)
+```
+
 ## Status
 
-Phase 0 — specification. No implementation exists yet. Issue #1 is the grounding document
-every other issue assumes; read it before opening a pull request.
+Phase 1 — Android — is functionally complete on `main`: discovery and browser authorization
+(#5), hardware DPoP (#6), secure storage (#7), token endpoint and single-flight refresh (#8),
+the authenticated client and step-up (#9), logout (#10), and authorization through edge's
+native endpoints for FAPI 2.0 tenants (#40). What is proven against stubs only is tracked
+in issues #36, #37 and #39 and the conformance harness (#15). Issue #1 is the grounding
+document every other issue assumes; read it before opening a pull request, and
+[`spec/server-dependencies.md`](spec/server-dependencies.md) for what the server does today.
 
 | Phase | Contents |
 |---|---|

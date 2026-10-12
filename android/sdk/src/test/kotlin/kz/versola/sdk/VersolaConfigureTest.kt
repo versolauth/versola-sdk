@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
+import kz.versola.sdk.core.BackChannel
 import kz.versola.sdk.core.SessionState
 import kz.versola.sdk.core.TokenBinding
 import kz.versola.sdk.core.VersolaError
@@ -100,5 +101,51 @@ class VersolaConfigureTest {
         // put a StrongBox keygen inside a synchronous call an app makes during startup — and
         // Robolectric has no Keystore to generate it in, so this passing at all is the check.
         assertNotNull(configure(tokenBinding = TokenBinding.Dpop(requireHardware = true)).dpop)
+    }
+
+    @Test
+    fun `a post-logout redirect is validated at configure time like the login redirect`() {
+        val versola = Versola.configure(
+            application, "https://id.versola.kz", "mobile-app", "https://app.example.com/oauth",
+            postLogoutRedirectUri = "https://app.example.com/signed-out",
+        )
+        assertEquals("https://app.example.com/signed-out", versola.configuration.postLogoutRedirectUri?.value)
+
+        assertThrows(VersolaError.Configuration::class.java) {
+            Versola.configure(
+                application, "https://id.versola.kz", "mobile-app", "https://app.example.com/oauth",
+                postLogoutRedirectUri = "signed-out",
+            )
+        }
+    }
+
+    @Test
+    fun `BackChannel Edge needs edge, DPoP and an App Link, each refused at configure time`() {
+        val viaEdge = Versola.configure(
+            application, "https://id.versola.kz", "mobile-app", "https://app.example.com/oauth",
+            edgeBaseUrl = "https://versola.kz", backChannel = BackChannel.Edge,
+        )
+        assertNotNull(viaEdge.dpop)
+
+        val withoutEdge = assertThrows(VersolaError.Configuration::class.java) {
+            Versola.configure(
+                application, "https://id.versola.kz", "mobile-app", "https://app.example.com/oauth",
+                backChannel = BackChannel.Edge,
+            )
+        }
+        assertTrue(withoutEdge.message!!.contains("edgeBaseUrl"))
+
+        assertThrows(VersolaError.Configuration::class.java) {
+            Versola.configure(
+                application, "https://id.versola.kz", "mobile-app", "https://app.example.com/oauth",
+                tokenBinding = TokenBinding.Bearer, edgeBaseUrl = "https://versola.kz", backChannel = BackChannel.Edge,
+            )
+        }
+        assertThrows(VersolaError.Configuration::class.java) {
+            Versola.configure(
+                application, "https://id.versola.kz", "mobile-app", "com.example.app:/oauth",
+                edgeBaseUrl = "https://versola.kz", backChannel = BackChannel.Edge,
+            )
+        }
     }
 }

@@ -9,10 +9,15 @@ import kotlinx.coroutines.withContext
 import kz.versola.sdk.browser.CustomTabsAuthorizationSession
 import kz.versola.sdk.core.AuthorizationFlow
 import kz.versola.sdk.core.AuthorizationGrant
+import kz.versola.sdk.core.BackChannel
 import kz.versola.sdk.core.DiscoveryService
+import kz.versola.sdk.core.EdgeNativeTokenClient
+import kz.versola.sdk.core.FileNativeEndpointsStore
 import kz.versola.sdk.core.FileProviderMetadataCache
 import kz.versola.sdk.core.HttpDiscoveryClient
+import kz.versola.sdk.core.HttpNativeAuthorizationStarter
 import kz.versola.sdk.core.HttpTokenClient
+import kz.versola.sdk.core.TokenClient
 import kz.versola.sdk.core.ProviderMetadata
 import kz.versola.sdk.core.RetryPolicy
 import kz.versola.sdk.core.SessionCoordinator
@@ -139,6 +144,18 @@ public class Versola internal constructor(
     }
 
     /**
+     * Signs out: revokes the refresh token, ends the server session through the system
+     * browser, and wipes everything credential-shaped — refresh token, pending slot, pending
+     * authorization request, both nonce caches, and the DPoP key, which the next [login]
+     * regenerates under a new `jkt`.
+     *
+     * The local wipe is unconditional: [SessionState.Unauthenticated] is reached even when the
+     * browser is dismissed mid-flow or either server call fails. Only the server-side teardown
+     * is best effort, and the return value says whether auth acknowledged it.
+     */
+    public suspend fun logout(): Boolean = coordinator.logout()
+
+    /**
      * A client that authenticates every call to edge: the access token, a DPoP proof over it,
      * one nonce retry, one proof retry, and one refresh-and-replay on a 401 that is neither.
      *
@@ -208,8 +225,24 @@ public class Versola internal constructor(
             tokenBinding: TokenBinding = TokenBinding.Dpop(),
             edgeBaseUrl: String? = null,
             retryPolicy: RetryPolicy = RetryPolicy.Default,
+            /**
+             * Where auth sends the browser once `logout()` has ended the server session.
+             * Optional: without it the signed-out page stays open until the user dismisses
+             * it, and the local sign-out completes regardless. Must be in the tenant's
+             * `postLogoutRedirectUris` and, like [redirectUri], should be a verified App Link
+             * delivered to `VersolaRedirectActivity`.
+             */
+            postLogoutRedirectUri: String? = null,
+            /**
+             * [BackChannel.Edge] for a client on a FAPI 2.0 tenant — the server's default
+             * profile for a new tenant — where auth refuses a public client at `/token` and
+             * edge's `/native/{start,complete,token,revoke}` endpoints front the app instead. Needs [edgeBaseUrl], an
+             * https [redirectUri] and DPoP. [BackChannel.Auth] is the plain OAuth public
+             * client and works against any provider.
+             */
+            backChannel: BackChannel = BackChannel.Auth,
         ): Versola {
-            val configuration = VersolaConfiguration.create(issuer, clientId, redirectUri)
+            val configuration = VersolaConfiguration.create(issuer, clientId, redirectUri, postLogoutRedirectUri)
             configuration.redirectUriWarning?.let(logger::warn)
             // Parsed at configuration time, not at the first call: a base URL that is not a
             // URL is a deployment mistake, and `spec/errors.md` has those fail where they are
@@ -256,6 +289,29 @@ public class Versola internal constructor(
             // origin, so the two servers already hold independent nonces within it — which is
             // scenario 04's requirement — while a second factory would split the clock offset
             // learned from one server's `Date` header away from the other's proofs.
+
+            // Through edge, the three things the flow refuses one at a time are refused here
+            // with one message naming the knob, before any of the flow's own checks run.
+            val nativeStarter = when (backChannel) {
+                BackChannel.Auth -> null
+                BackChannel.Edge -> {
+                    if (edge == null) {
+                        throw VersolaError.Configuration(
+                            VersolaError.Configuration.Detail.InvalidConfiguration(
+                                "BackChannel.Edge needs edgeBaseUrl: the native endpoints are edge's",
+                            ),
+                        )
+                    }
+                    if (proofFactory == null) {
+                        throw VersolaError.Configuration(
+                            VersolaError.Configuration.Detail.InvalidConfiguration(
+                                "BackChannel.Edge needs TokenBinding.Dpop: edge's native endpoints accept no bearer presentation",
+                            ),
+                        )
+                    }
+                    HttpNativeAuthorizationStarter(configuration, edge.toString(), httpClient, proofFactory)
+                }
+            }
             val flow = AuthorizationFlow(
                 configuration = configuration,
                 discovery = discovery,
@@ -267,7 +323,29 @@ public class Versola internal constructor(
                 tokenBinding = tokenBinding,
                 dpopKey = dpopKey,
                 hasStoredGrant = credentialStore::hasGrant,
+                nativeStarter = nativeStarter,
             )
+            val tokenClient: TokenClient = if (nativeStarter == null) {
+                HttpTokenClient(
+                    configuration = configuration,
+                    discovery = discovery,
+                    httpClient = httpClient,
+                    dpop = proofFactory,
+                    tokenBinding = tokenBinding,
+                )
+            } else {
+                EdgeNativeTokenClient(
+                    configuration = configuration,
+                    edgeBaseUrl = checkNotNull(edge).toString(),
+                    httpClient = httpClient,
+                    dpop = checkNotNull(proofFactory),
+                    discovery = discovery,
+                    // Unencrypted and kept across logout, like discovery metadata: two URLs
+                    // edge hands to anyone who asks.
+                    endpoints = FileNativeEndpointsStore(File(directory, "native-endpoints.json")),
+                    tokenBinding = tokenBinding as TokenBinding.Dpop,
+                )
+            }
 
             return Versola(
                 flow = flow,
@@ -275,15 +353,16 @@ public class Versola internal constructor(
                 dpopKey = dpopKey,
                 coordinator = SessionCoordinator(
                     flow = flow,
-                    tokenClient = HttpTokenClient(
-                        configuration = configuration,
-                        discovery = discovery,
-                        httpClient = httpClient,
-                        dpop = proofFactory,
-                        tokenBinding = tokenBinding,
-                    ),
+                    tokenClient = tokenClient,
                     credentialStore = credentialStore,
                     retryPolicy = retryPolicy,
+                    // What `:core` cannot reach and `spec/state-machine.md` wipes with the
+                    // grant: the per-origin nonce caches and the DPoP key (scenario 18).
+                    onCredentialsWiped = {
+                        proofFactory?.nonces?.clear()
+                        dpopKey?.destroy()
+                    },
+                    logger = logger,
                 ),
                 baseHttpClient = httpClient,
                 edgeBaseUrl = edge,

@@ -57,6 +57,7 @@ class TokenClientTest {
 
     private fun client(
         dpopAdvertised: Boolean = true,
+        revocationAdvertised: Boolean = true,
         binding: TokenBinding = TokenBinding.Dpop(),
         dpop: DpopProofSource? = proofSource,
         discoveryFailure: Throwable? = null,
@@ -65,6 +66,7 @@ class TokenClientTest {
             issuer = issuer,
             authorizationEndpoint = "$issuer/authorize",
             tokenEndpoint = "$issuer/token",
+            revocationEndpoint = if (revocationAdvertised) "$issuer/revoke" else null,
             dpopSigningAlgValuesSupported = if (dpopAdvertised) listOf("ES256") else emptyList(),
         )
         return HttpTokenClient(
@@ -513,5 +515,51 @@ class TokenClientTest {
 
         assertNotSame(outgrown, form.backingBytes())
         assertTrue(outgrown.all { it == 0.toByte() })
+    }
+
+    // ---- revoke() ----------------------------------------------------------------------
+
+    @Test
+    fun `a revocation carries the token, its hint and the client id, and no proof`() = runTest {
+        server.enqueue(MockResponse.Builder().code(200).build())
+        val token = refreshToken.toByteArray(Charsets.UTF_8)
+
+        client().revoke(token)
+
+        val request = server.takeRequest()
+        assertEquals("/revoke", request.url.encodedPath)
+        val body = request.body!!.utf8()
+        assertTrue(body.contains("token=8xLOxBtZp8%2Brefresh%2Fvalue"))
+        assertTrue(body.contains("token_type_hint=refresh_token"))
+        assertTrue(body.contains("client_id=mobile-app"))
+        assertFalse(body.contains("client_secret"))
+        // RFC 9449 does not bind revocation and auth reads no proof there; sending one
+        // would only hand a nonce-less proof to a server entitled to reject it.
+        assertNull(request.headers["DPoP"])
+        assertEquals(0, proofSource.proofs)
+        // Taken ownership of, like a refresh.
+        assertTrue(token.all { it == 0.toByte() })
+    }
+
+    @Test
+    fun `a provider that advertises no revocation endpoint is skipped, not failed`() = runTest {
+        client(revocationAdvertised = false).revoke(refreshToken.toByteArray(Charsets.UTF_8))
+
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `a refused revocation is Configuration and an unavailable one is Recoverable`() = runTest {
+        server.enqueue(error("invalid_client", status = 401))
+        val refused = failure { client().revoke(refreshToken.toByteArray(Charsets.UTF_8)) }
+        assertTrue(refused is VersolaError.Configuration)
+        assertEquals(
+            "invalid_client",
+            ((refused as VersolaError.Configuration).detail as VersolaError.Configuration.Detail.TokenRequestRejected).code,
+        )
+
+        server.enqueue(MockResponse.Builder().code(503).build())
+        val unavailable = failure { client().revoke(refreshToken.toByteArray(Charsets.UTF_8)) }
+        assertTrue(unavailable is VersolaError.Recoverable)
     }
 }

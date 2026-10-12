@@ -6,8 +6,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
@@ -38,14 +40,28 @@ private class RecordingPendingStore : PendingAuthorizationStore {
     }
 }
 
-/** Answers with a redirect carrying the `state` the store was just given. */
+/**
+ * Answers with a redirect carrying the `state` the store was just given — or, for the
+ * end-session URI `logout()` opens, whatever [logoutOutcome] says, echoing the `state` the
+ * URI carried the way auth's signed-out page does.
+ */
 private class FixedRedirectBrowser(private val store: RecordingPendingStore) : BrowserAuthorizationSession {
+    val launched = mutableListOf<String>()
+    var logoutOutcome: suspend (String) -> BrowserOutcome = { uri ->
+        BrowserOutcome.Redirect("https://app.example.com/signed-out?state=${stateOf(uri)}")
+    }
+
     override suspend fun authorize(uri: String): BrowserOutcome {
+        launched += uri
+        if (uri.startsWith("$ISSUER/logout")) return logoutOutcome(uri)
         val pending = checkNotNull(store.stored) { "authorize() must persist before opening the browser" }
         return BrowserOutcome.Redirect(
             "https://app.example.com/oauth?code=the-code&state=${pending.state}&iss=$ISSUER",
         )
     }
+
+    private fun stateOf(uri: String): String =
+        Regex("[?&]state=([^&]+)").find(uri)!!.groupValues[1]
 
     override suspend fun awaitPendingRedirect(): BrowserOutcome =
         throw UnsupportedOperationException("not exercised by these tests")
@@ -140,8 +156,16 @@ private class FakeCredentialStore : CredentialStore {
 private class FakeTokenClient : TokenClient {
     val exchangeCalls = mutableListOf<AuthorizationGrant>()
     val refreshCalls = mutableListOf<Pair<ByteArray, String>>()
+    val revokeCalls = mutableListOf<ByteArray>()
     var exchangeResult: suspend () -> TokenResponse = { issued() }
     var refreshActions: MutableList<suspend () -> TokenResponse> = mutableListOf()
+    var revokeFailure: (() -> VersolaError)? = null
+
+    override suspend fun revoke(refreshToken: ByteArray) {
+        revokeCalls += refreshToken.copyOf()
+        refreshToken.fill(0)
+        revokeFailure?.let { throw it() }
+    }
 
     override suspend fun exchange(grant: AuthorizationGrant): TokenResponse {
         exchangeCalls += grant
@@ -178,6 +202,8 @@ class SessionCoordinatorTest {
         issuer = ISSUER,
         authorizationEndpoint = "$ISSUER/authorize",
         tokenEndpoint = "$ISSUER/token",
+        revocationEndpoint = "$ISSUER/revoke",
+        endSessionEndpoint = "$ISSUER/logout",
         authorizationResponseIssParameterSupported = true,
     )
 
@@ -190,11 +216,12 @@ class SessionCoordinatorTest {
     private fun authFlow(
         pendingStore: RecordingPendingStore,
         credentialStore: FakeCredentialStore,
+        browser: BrowserAuthorizationSession = FixedRedirectBrowser(pendingStore),
     ): AuthorizationFlow = AuthorizationFlow(
         configuration = configuration,
         discovery = DiscoveryService(ISSUER, StaticDiscoveryClient(metadata), NoopMetadataCache()),
         pendingStore = pendingStore,
-        browser = FixedRedirectBrowser(pendingStore),
+        browser = browser,
         // Bearer throughout: rotation is the binding that makes single-flight, the rotation
         // slot and the idempotency key load-bearing rather than inert, so every test here
         // runs the mode that can actually lose a user's session.
@@ -205,18 +232,27 @@ class SessionCoordinatorTest {
     /** Advanced by hand, so a lifetime can elapse without a test sleeping through it. */
     private var elapsed = 0L
 
+    /** What the facade tears down with the grant; counted so the logout rule is assertable. */
+    private var teardowns = 0
+    private var teardownFailure: (() -> Exception)? = null
+
     private fun coordinator(
         pendingStore: RecordingPendingStore = RecordingPendingStore(),
         tokenClient: FakeTokenClient = FakeTokenClient(),
         credentialStore: FakeCredentialStore = FakeCredentialStore(),
         retryPolicy: RetryPolicy = RetryPolicy.Conservative,
+        browser: BrowserAuthorizationSession = FixedRedirectBrowser(pendingStore),
     ) = Triple(
         SessionCoordinator(
-            authFlow(pendingStore, credentialStore),
+            authFlow(pendingStore, credentialStore, browser),
             tokenClient,
             credentialStore,
             retryPolicy,
             elapsedMillis = { elapsed },
+            onCredentialsWiped = {
+                teardowns++
+                teardownFailure?.let { throw it() }
+            },
         ),
         tokenClient,
         credentialStore,
@@ -817,6 +853,181 @@ class SessionCoordinatorTest {
     fun `a lifetime past what milliseconds can express does not wrap into an expired token`() {
         assertEquals(Long.MAX_VALUE, RefreshSkew.usableForMillis(issued(expiresIn = Long.MAX_VALUE)))
         assertEquals(Long.MAX_VALUE, RefreshSkew.usableForMillis(issued(expiresIn = -1)))
+    }
+
+    // ---- logout() ----------------------------------------------------------------------
+
+    @Test
+    fun `logout revokes, ends the server session, wipes, and settles Unauthenticated`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val browser = FixedRedirectBrowser(pendingStore)
+        val (coordinator, tokenClient, credentialStore) = coordinator(pendingStore, browser = browser)
+        credentialStore.refreshToken = stored()
+        credentialStore.rawIdToken = "the.id.token"
+        // `MutableStateFlow` conflates, so the transition into `LoggingOut` is observed from
+        // inside the browser leg — the one moment it is guaranteed to be the current state —
+        // rather than from a collector racing the transitions out of it.
+        var stateWhileBrowserOpen: SessionState? = null
+        var revokedBeforeBrowser = false
+        val defaultOutcome = browser.logoutOutcome
+        browser.logoutOutcome = { uri ->
+            stateWhileBrowserOpen = coordinator.sessionState.first()
+            revokedBeforeBrowser = tokenClient.revokeCalls.size == 1
+            defaultOutcome(uri)
+        }
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+
+        val acknowledged = coordinator.logout()
+
+        assertTrue(acknowledged)
+        // Scenario 18, in order: the refresh token is revoked before the browser opens, so a
+        // dismissed signed-out page still leaves a dead grant behind at the server.
+        assertTrue(revokedBeforeBrowser)
+        assertEquals("grant", tokenClient.revokeCalls.single().toString(Charsets.UTF_8))
+        val logoutUri = browser.launched.single()
+        assertTrue(logoutUri.startsWith("$ISSUER/logout?"))
+        assertTrue(logoutUri.contains("id_token_hint=the.id.token"))
+        assertTrue(logoutUri.contains("&state="))
+        assertEquals(SessionState.LoggingOut, stateWhileBrowserOpen)
+        // Everything credential-shaped is gone, including what lives outside this module.
+        assertNull(credentialStore.refreshToken)
+        assertNull(credentialStore.rawIdToken)
+        assertNull(credentialStore.pendingRotationSlot)
+        assertEquals(1, credentialStore.clears)
+        assertEquals(1, pendingStore.clears)
+        assertEquals(1, teardowns)
+        assertNull(coordinator.currentAccessToken())
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `logout wipes locally even when revocation fails`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = stored()
+        tokenClient.revokeFailure = {
+            VersolaError.Recoverable(VersolaError.Recoverable.Cause.Network("revocation endpoint returned HTTP 503"))
+        }
+
+        coordinator.logout()
+
+        assertNull(credentialStore.refreshToken)
+        assertEquals(1, teardowns)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `logout wipes locally even when the browser is dismissed mid-flow`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val browser = FixedRedirectBrowser(pendingStore).apply {
+            logoutOutcome = { BrowserOutcome.UserCancelled }
+        }
+        val (coordinator, _, credentialStore) = coordinator(pendingStore, browser = browser)
+        credentialStore.refreshToken = stored()
+
+        val acknowledged = coordinator.logout()
+
+        // Scenario 18's last assertion: dismissing the browser mid-logout still leaves the
+        // app Unauthenticated locally. Only the server-side teardown is best effort, and the
+        // return value is how that is reported.
+        assertFalse(acknowledged)
+        assertNull(credentialStore.refreshToken)
+        assertEquals(1, teardowns)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `logout wipes locally even when the browser cannot be opened at all`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val browser = FixedRedirectBrowser(pendingStore).apply {
+            logoutOutcome = {
+                throw VersolaError.Configuration(VersolaError.Configuration.Detail.NoBrowserAvailable)
+            }
+        }
+        val (coordinator, _, credentialStore) = coordinator(pendingStore, browser = browser)
+        credentialStore.refreshToken = stored()
+
+        assertFalse(coordinator.logout())
+
+        assertNull(credentialStore.refreshToken)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a redirect carrying another state does not count as the server acknowledging`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val browser = FixedRedirectBrowser(pendingStore).apply {
+            logoutOutcome = { BrowserOutcome.Redirect("https://app.example.com/signed-out?state=stale") }
+        }
+        val (coordinator, _, credentialStore) = coordinator(pendingStore, browser = browser)
+        credentialStore.refreshToken = stored()
+
+        assertFalse(coordinator.logout())
+        assertNull(credentialStore.refreshToken)
+    }
+
+    @Test
+    fun `logout without a readable id token still ends the session, without the hint`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val browser = FixedRedirectBrowser(pendingStore)
+        val (coordinator, _, credentialStore) = coordinator(pendingStore, browser = browser)
+        credentialStore.refreshToken = stored()
+        credentialStore.rawIdToken = null
+
+        coordinator.logout()
+
+        assertFalse(browser.launched.single().contains("id_token_hint"))
+        assertNull(credentialStore.refreshToken)
+    }
+
+    @Test
+    fun `a failing teardown does not stop the sign-out`() = runTest {
+        val (coordinator, _, credentialStore) = coordinator()
+        credentialStore.refreshToken = stored()
+        teardownFailure = { IllegalStateException("Keystore refused to delete the key") }
+
+        coordinator.logout()
+
+        assertNull(credentialStore.refreshToken)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `logout cancelled mid-flight still wipes`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val browserOpened = CompletableDeferred<Unit>()
+        val browser = FixedRedirectBrowser(pendingStore).apply {
+            // The browser leg is where a logout spends its time, and where the caller's
+            // scope is most likely to go away: a screen torn down while the Custom Tab is up.
+            logoutOutcome = { browserOpened.complete(Unit); awaitCancellation() }
+        }
+        val (coordinator, tokenClient, credentialStore) = coordinator(pendingStore, browser = browser)
+        credentialStore.refreshToken = stored()
+
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { coordinator.logout() }
+        browserOpened.await()
+        job.cancelAndJoin()
+
+        assertEquals(1, tokenClient.revokeCalls.size)
+        assertNull(credentialStore.refreshToken)
+        assertEquals(1, teardowns)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `invalid_grant on refresh tears the DPoP key down like a logout`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = stored()
+        tokenClient.refreshActions = mutableListOf({
+            throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.GrantRejected)
+        })
+
+        failure { coordinator.refresh() }
+
+        // `Refreshing → Unauthenticated` in spec/state-machine.md: "the DPoP key follows the
+        // logout rule". Same wipe, same hook, no separate path to drift.
+        assertNull(credentialStore.refreshToken)
+        assertEquals(1, teardowns)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
     }
 
     private suspend fun failure(block: suspend () -> Unit): VersolaError = try {

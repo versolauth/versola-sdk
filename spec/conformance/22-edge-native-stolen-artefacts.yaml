@@ -1,0 +1,30 @@
+id: 22-edge-native-stolen-artefacts
+title: A code, a blob or a refresh token taken off the device is useless without the device key
+issues: [40, 15]
+applies_to: [android, ios, flutter]
+mode: dpop
+preconditions:
+  - The same registration as scenario 21.
+  - The harness holds a second DPoP key that is not the device's.
+steps:
+  - actor: harness
+    action: Run the start and browser legs of scenario 21, capturing code, state, iss and the blob off the redirect and the start response.
+  - actor: harness
+    action: POST native complete with the captured code, state and iss but no blob.
+    expect: 400 invalid_request, and the code is not spent.
+  - actor: harness
+    action: POST native complete with everything captured and a proof signed by the second key.
+    expect: 400 invalid_grant from edge before auth is called, and the code is not spent.
+  - actor: sdk
+    action: Complete the login with the device key.
+    expect: 200 with a DPoP-bound token.
+  - actor: harness
+    action: POST native token with the issued refresh_token and a proof signed by the second key.
+    expect: 400 invalid_grant.
+  - actor: harness
+    action: Present the access token to edge over the Bearer scheme.
+    expect: 401 with DPoP error="invalid_dpop_proof".
+assertions:
+  - The device's own completion after the two refused attempts still succeeds, so a refused presentation did not spend the code.
+  - The SDK maps the second key's invalid_grant on refresh to Reauthenticate(GrantRejected) and wipes; it does not retry.
+  - No request from the harness's second key ever produces a token.

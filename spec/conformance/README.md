@@ -8,6 +8,11 @@ A scenario names preconditions, a request sequence and machine-checkable asserti
 not describe intent — intent belongs in [`../state-machine.md`](../state-machine.md) and
 [`../errors.md`](../errors.md), which every scenario is derived from.
 
+Scenarios 01–20 run with `BackChannel.Auth` on a `standard`-profile tenant. Where a step
+exists under `BackChannel.Edge` as well — refresh, revocation, the edge API call, logout,
+nonce handling — the harness runs it there too, against a `fapi2` tenant, and the observable
+behaviour must be the same. Scenarios 21–23 exist for what only the edge flow has.
+
 ## Index
 
 | # | Scenario | Mode | Issues |
@@ -32,6 +37,9 @@ not describe intent — intent belongs in [`../state-machine.md`](../state-machi
 | 18 | RP-initiated logout | any | 10, 14 |
 | 19 | Retry budget bounded, backed off, configurable within maxima | any | 8, 9, 14 |
 | 20 | Elapsed unlock window locks refresh, not the session | any | 7, 14 |
+| 21 | Login through edge's native endpoints (FAPI 2.0 tenant) | dpop | 40 |
+| 22 | Stolen code, blob or refresh token is useless without the device key | dpop | 40 |
+| 23 | Edge's and auth's nonce challenges answered once each, from their own cache | dpop | 40, 6 |
 
 ## Fault injection
 

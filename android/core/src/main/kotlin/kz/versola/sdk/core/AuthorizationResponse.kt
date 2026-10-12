@@ -15,7 +15,18 @@ public class AuthorizationGrant internal constructor(
     public val redirectUri: String,
     public val nonce: String,
     public val scopes: Set<String>,
+    /** The `state` the redirect carried, already matched; `/native/complete` wants it back. */
+    internal val state: String = "",
+    /** RFC 9207 `iss` off the redirect, already matched; `/native/complete` requires it. */
+    internal val iss: String? = null,
+    /** [PendingAuthorizationRequest.blob], when the request went through edge. */
+    internal val blob: String? = null,
+    internal val tokenEndpoint: String? = null,
+    internal val revocationEndpoint: String? = null,
 ) {
+    /** Whether the code must be redeemed at `/native/complete` rather than at `/token`. */
+    public val viaEdge: Boolean get() = blob != null
+
     /** Credential material on both counts. */
     override fun toString(): String = "AuthorizationGrant(redacted)"
 }
@@ -48,6 +59,8 @@ public object AuthorizationResponseValidator {
         // 2. iss (RFC 9207). Present ⇒ must match. Absent ⇒ only a failure when the provider
         //    advertises authorization_response_iss_parameter_supported; a deployment that
         //    does not advertise it may legitimately omit iss.
+        //    A request that went through edge needs `iss` whatever discovery says: it is a
+        //    required field of `/native/complete`, and auth always emits it.
         val iss = parameters["iss"]
         if (iss != null) {
             if (iss.trimEnd('/') != issuer.trimEnd('/')) {
@@ -55,7 +68,7 @@ public object AuthorizationResponseValidator {
                     VersolaError.Configuration.Detail.IssuerMismatch(issuer, iss),
                 )
             }
-        } else if (issParameterSupported) {
+        } else if (issParameterSupported || pending.viaEdge) {
             throw VersolaError.Configuration(
                 VersolaError.Configuration.Detail.IssuerMismatch(issuer, null),
             )
@@ -81,6 +94,11 @@ public object AuthorizationResponseValidator {
             redirectUri = pending.redirectUri,
             nonce = pending.nonce,
             scopes = pending.scopes.toSet(),
+            state = pending.state,
+            iss = iss,
+            blob = pending.blob,
+            tokenEndpoint = pending.tokenEndpoint,
+            revocationEndpoint = pending.revocationEndpoint,
         )
     }
 

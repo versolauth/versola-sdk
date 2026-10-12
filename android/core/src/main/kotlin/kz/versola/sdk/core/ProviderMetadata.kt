@@ -3,6 +3,14 @@ package kz.versola.sdk.core
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 
+@Serializable
+public data class MtlsEndpointAliases(
+    @SerialName("token_endpoint")
+    public val tokenEndpoint: String? = null,
+    @SerialName("revocation_endpoint")
+    public val revocationEndpoint: String? = null,
+)
+
 /**
  * The authorization server metadata document (RFC 8414 / OpenID Connect Discovery), as far as
  * the SDK reads it. Unknown fields are ignored rather than rejected — a provider is free to
@@ -53,6 +61,14 @@ public data class ProviderMetadata(
      */
     @SerialName("authorization_response_iss_parameter_supported")
     public val authorizationResponseIssParameterSupported: Boolean = false,
+    /**
+     * RFC 8705 §5: the same endpoints on the provider's mutual-TLS listener. Under
+     * [BackChannel.Edge] these are what edge forwards the device's proof to, and therefore
+     * the `htu` a proof is signed for; `/native/start` names them too, and that answer wins
+     * because it is edge's own configuration rather than a deployment-wide guess.
+     */
+    @SerialName("mtls_endpoint_aliases")
+    public val mtlsEndpointAliases: MtlsEndpointAliases? = null,
 ) {
 
     /**

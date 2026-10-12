@@ -5,6 +5,8 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
+import java.net.URLEncoder
+import java.security.SecureRandom
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
@@ -51,6 +53,12 @@ public class AuthorizationFlow(
      * [restoresStoredGrant].
      */
     private val hasStoredGrant: suspend () -> Boolean = NO_STORED_GRANT,
+    /**
+     * Present under [BackChannel.Edge]: the authorization request is pushed through edge and
+     * the browser opens on a `request_uri`, with PKCE and `state` edge's rather than this
+     * class's. Absent, the request is built here and sent to auth directly.
+     */
+    private val nativeStarter: NativeAuthorizationStarter? = null,
 ) {
 
     /**
@@ -71,6 +79,26 @@ public class AuthorizationFlow(
                     "TokenBinding.Dpop needs a DpopKeyBinding; pass one or select TokenBinding.Bearer",
                 ),
             )
+        }
+        if (nativeStarter != null) {
+            // Every native endpoint demands a proof, so there is no bearer variant of this
+            // flow to fall back to; and the server registers an edge-fronted native client
+            // with https redirect URIs only, so anything else fails at /par rather than here.
+            if (tokenBinding !is TokenBinding.Dpop) {
+                throw VersolaError.Configuration(
+                    VersolaError.Configuration.Detail.InvalidConfiguration(
+                        "BackChannel.Edge needs TokenBinding.Dpop: edge's native endpoints accept no bearer presentation",
+                    ),
+                )
+            }
+            if (configuration.redirectUri.kind != RedirectUriKind.AppLink) {
+                throw VersolaError.Configuration(
+                    VersolaError.Configuration.Detail.InvalidConfiguration(
+                        "BackChannel.Edge needs an https App Link redirectUri: " +
+                            "an edge-fronted native client is registered with https redirect URIs only",
+                    ),
+                )
+            }
         }
     }
 
@@ -113,6 +141,81 @@ public class AuthorizationFlow(
     }
 
     /**
+     * `LoggingOut → Unauthenticated`: the local half of `logout()` (#10), which is the half
+     * that is not best-effort. Wipes the pending request — a `login()` abandoned mid-browser
+     * must not survive a sign-out and resume into the next user's session — and settles
+     * `Unauthenticated` whatever the server leg did.
+     */
+    internal suspend fun completeLogout() {
+        pendingStore.clear()
+        state.value = SessionState.Unauthenticated
+    }
+
+    /**
+     * The server leg of `logout()`: auth's `end_session_endpoint` in the system browser, with
+     * `id_token_hint` so the session ends without a confirmation page and
+     * `post_logout_redirect_uri` so the browser comes back once it has.
+     *
+     * Returns whether the server acknowledged — the redirect came back carrying the `state`
+     * that was sent. False covers everything else: the user dismissed the page, the provider
+     * advertises no `end_session_endpoint`, the redirect carried the wrong `state`. None of
+     * those is raised, because `spec/state-machine.md` makes only the local teardown
+     * unconditional and the caller wipes regardless; what the browser did is reported, not
+     * enforced.
+     *
+     * Under [AUTHORIZE_LOCK] for the same reason [authorize] is: the browser and the redirect
+     * channel are one per process, and a `login()` racing a `logout()` for them is the bug,
+     * not a case to support.
+     */
+    public suspend fun endSession(idTokenHint: String?): Boolean = AUTHORIZE_LOCK.withLock {
+        ensureRestored()
+        val endpoint = discovery.metadata().endSessionEndpoint
+        if (endpoint.isNullOrBlank()) return@withLock false
+        val postLogoutRedirectUri = configuration.postLogoutRedirectUri?.value
+        val expectedState = SecureTokens.generate(SecureRandom())
+        val uri = endSessionUri(endpoint, idTokenHint, postLogoutRedirectUri, expectedState)
+
+        val outcome = try {
+            browser.authorize(uri)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // `NoBrowserAvailable`, or the browser failing to launch: the server session
+            // outlives this logout, which is exactly what the return value says.
+            return@withLock false
+        }
+        when (outcome) {
+            is BrowserOutcome.UserCancelled -> false
+            is BrowserOutcome.Redirect -> {
+                val state = AuthorizationResponseValidator.stateOf(outcome.uri)
+                state != null && SecureTokens.constantTimeEquals(expectedState, state)
+            }
+        }
+    }
+
+    /**
+     * OpenID Connect RP-Initiated Logout §2. `state` goes whether or not a redirect URI does:
+     * it costs nothing and is what lets the redirect be told apart from a stale one.
+     */
+    private fun endSessionUri(
+        endpoint: String,
+        idTokenHint: String?,
+        postLogoutRedirectUri: String?,
+        state: String,
+    ): String {
+        val parameters = buildList {
+            idTokenHint?.let { add("id_token_hint" to it) }
+            postLogoutRedirectUri?.let { add("post_logout_redirect_uri" to it) }
+            add("state" to state)
+        }
+        val query = parameters.joinToString("&") { (name, value) -> "${encode(name)}=${encode(value)}" }
+        val separator = if (endpoint.contains('?')) "&" else "?"
+        return endpoint + separator + query
+    }
+
+    private fun encode(value: String): String = URLEncoder.encode(value, "UTF-8").replace("+", "%20")
+
+    /**
      * Pushes a state the session coordinator (#8) owns — `Refreshing`, `Locked`, or a return
      * to `Authenticated`/`Unauthenticated` once a refresh resolves. This class performs none
      * of that itself; it only hosts the [MutableStateFlow] [sessionState] reads from, so the
@@ -149,12 +252,16 @@ public class AuthorizationFlow(
             maxAge = maxAge,
             dpopJkt = dpopJkt(metadata),
         )
-        val pending = request.toPending(clock())
+        val (pending, uri) = if (nativeStarter == null) {
+            request.toPending(clock()) to request.toUri(metadata.authorizationEndpoint)
+        } else {
+            startViaEdge(nativeStarter, request, metadata)
+        }
         pendingStore.save(pending)
         state.value = SessionState.Authorizing
 
         val outcome = try {
-            belongingTo(pending, browser.authorize(request.toUri(metadata.authorizationEndpoint)))
+            belongingTo(pending, browser.authorize(uri))
         } catch (e: CancellationException) {
             // The *caller* was cancelled, not the authorization. The browser may already be
             // in the foreground and its redirect may still arrive, so the slot and the
@@ -210,6 +317,49 @@ public class AuthorizationFlow(
         state.value = SessionState.Authorizing
         val outcome = belongingTo(pending, browser.awaitPendingRedirect())
         complete(outcome, pending, discovery.metadata())
+    }
+
+    /**
+     * [BackChannel.Edge]'s version of building the request: edge builds it, pushes it to
+     * `/par` with `dpop_jkt` set from the proof on this very call, and hands back the
+     * `request_uri` to open, the `state` to expect and the blob that stands in for the
+     * verifier. What is persisted before the browser opens is therefore edge's `state` and
+     * blob rather than a verifier of this class's own — the same moment, the same reason.
+     *
+     * The authorization endpoint comes from discovery, not from edge's answer: the issuer is
+     * the one URL the integrator vouched for, and `request_uri` is bound to the client at
+     * auth either way. Edge's `authorization_endpoint` is informational for this SDK.
+     */
+    private suspend fun startViaEdge(
+        starter: NativeAuthorizationStarter,
+        request: AuthorizationRequest,
+        metadata: ProviderMetadata,
+    ): Pair<PendingAuthorizationRequest, String> {
+        val started = starter.start(
+            NativeStartRequest(
+                redirectUri = configuration.redirectUri.value,
+                scopes = request.scopes,
+                nonce = request.nonce,
+                acrValues = request.acrValues,
+                maxAge = request.maxAge,
+            ),
+        )
+        val pending = PendingAuthorizationRequest(
+            state = started.state,
+            nonce = request.nonce,
+            codeVerifier = "",
+            scopes = request.scopes.toList(),
+            redirectUri = configuration.redirectUri.value,
+            acrValues = request.acrValues,
+            maxAge = request.maxAge,
+            createdAtEpochMillis = clock(),
+            blob = started.blob,
+            tokenEndpoint = started.tokenEndpoint,
+            revocationEndpoint = started.revocationEndpoint,
+        )
+        val query = "client_id=${encode(configuration.clientId)}&request_uri=${encode(started.requestUri)}"
+        val separator = if (metadata.authorizationEndpoint.contains('?')) "&" else "?"
+        return pending to (metadata.authorizationEndpoint + separator + query)
     }
 
     /**
@@ -283,6 +433,10 @@ public class AuthorizationFlow(
      */
     private suspend fun dpopJkt(metadata: ProviderMetadata): String? {
         val binding = tokenBinding as? TokenBinding.Dpop ?: return null
+        // Through edge the thumbprint reaches /par from the proof on /native/start, which is
+        // the only place it can come from: a `dpop_jkt` the device named itself would be a
+        // claim edge cannot verify, and edge sets the parameter from what it did verify.
+        if (nativeStarter != null) return null
         if (!metadata.supportsDpop) {
             if (binding.requireHardware) {
                 throw VersolaError.Configuration(
