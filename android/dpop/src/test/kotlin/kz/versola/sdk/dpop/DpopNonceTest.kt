@@ -125,4 +125,13 @@ class DpopNonceRetryTest {
 
         assertEquals("second", cache.nonceFor(AUTH))
     }
+
+    @Test
+    fun `an origin survives a raw query, an IPv6 literal and userinfo`() {
+        assertEquals("https://versola.kz", Origin.of("""https://versola.kz/x?filter={"a":1}""").value)
+        assertEquals("http://[::1]:9003", Origin.of("http://[::1]:9003/token").value)
+        assertEquals("http://[::1]", Origin.of("http://[::1]:80/token").value)
+        assertEquals("https://id.versola.kz", Origin.of("https://user:pw@id.versola.kz:443/token").value)
+        assertEquals("http://localhost:9005", Origin.of("http://LOCALHOST:9005").value)
+    }
 }

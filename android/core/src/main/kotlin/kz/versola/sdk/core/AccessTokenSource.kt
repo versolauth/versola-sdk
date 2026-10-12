@@ -53,4 +53,12 @@ public interface AccessTokenSource {
      * request rather than each spending the grant.
      */
     public suspend fun renewAccessToken(): AccessToken
+
+    /**
+     * Edge answered `insufficient_user_authentication`: the grant is valid, its authentication
+     * context is not. Published as [SessionState.StepUpRequired] by the session so UI can
+     * react before the app calls `stepUp()`. A no-op for a source that has no session to
+     * publish on.
+     */
+    public fun stepUpRequired() {}
 }

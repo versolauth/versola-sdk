@@ -327,10 +327,10 @@ internal class TokenRequestExecutor(
                     if (response.isSuccessful) return@use
                     onStatus(response.code)?.let { throw it }
                     val payload = response.body.string()
-                    // The same split `rejected` draws: 5xx is the provider having a bad
-                    // moment, anything else is a request it understood and refused —
-                    // `invalid_client` above all, which is a registration fault.
-                    if (response.code >= 500) {
+                    // The same split `rejected` draws: 5xx, 408 and 429 are the provider
+                    // having a bad moment, anything else is a request it understood and
+                    // refused — `invalid_client` above all, which is a registration fault.
+                    if (isTransient(response.code)) {
                         throw VersolaError.Recoverable(
                             VersolaError.Recoverable.Cause.Network("revocation endpoint returned HTTP ${response.code}"),
                         )
@@ -402,8 +402,9 @@ internal class TokenRequestExecutor(
         }
 
         // 5xx is the provider having a bad moment, and its body is as likely to be an HTML
-        // error page as JSON. Transport-shaped, retried under the caller's budget.
-        if (status >= 500) {
+        // error page as JSON. Transport-shaped, retried under the caller's budget — as are a
+        // 408 and, until #22 gives it a cause of its own, a 429 (`spec/retry-policy.md`).
+        if (isTransient(status)) {
             throw VersolaError.Recoverable(
                 VersolaError.Recoverable.Cause.Network("token endpoint returned HTTP $status"),
             )
@@ -439,6 +440,8 @@ internal class TokenRequestExecutor(
             )
         }
     }
+
+    private fun isTransient(status: Int): Boolean = status >= 500 || status == 408 || status == 429
 
     private sealed interface Attempt {
         class Issued(val response: TokenResponse) : Attempt

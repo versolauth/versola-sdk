@@ -8,6 +8,11 @@ public final class kz/versola/sdk/core/AccessToken {
 public abstract interface class kz/versola/sdk/core/AccessTokenSource {
 	public abstract fun accessToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun renewAccessToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun stepUpRequired ()V
+}
+
+public final class kz/versola/sdk/core/AccessTokenSource$DefaultImpls {
+	public static fun stepUpRequired (Lkz/versola/sdk/core/AccessTokenSource;)V
 }
 
 public final class kz/versola/sdk/core/AuthorizationFlow {
@@ -458,6 +463,7 @@ public final class kz/versola/sdk/core/SessionCoordinator : kz/versola/sdk/core/
 	public final fun logout (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun refresh (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun renewAccessToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun stepUpRequired ()V
 }
 
 public abstract interface class kz/versola/sdk/core/SessionState {

@@ -58,7 +58,6 @@ class Scenario21EdgeNativeTest {
     fun startUpstream() {
         upstream = MockWebServer()
         upstream.start(stack.upstreamPort)
-        application.noBackupFilesDir.resolve("versola").deleteRecursively()
     }
 
     @After

@@ -58,9 +58,8 @@ class Scenario01HappyPathTest {
     fun startUpstream() {
         upstream = MockWebServer()
         upstream.start(stack.upstreamPort)
-        // A fresh install: whatever a previous run left behind must not make this one restore
-        // Authenticated.
-        application.noBackupFilesDir.resolve("versola").deleteRecursively()
+        // Every scenario ends in logout(), which is what leaves the shared credential store
+        // empty for the next one; the files are not deleted underneath a live DataStore.
     }
 
     @After

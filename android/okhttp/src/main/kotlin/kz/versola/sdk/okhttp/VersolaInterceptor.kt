@@ -1,5 +1,6 @@
 package kz.versola.sdk.okhttp
 
+import java.io.IOException
 import kotlinx.coroutines.runBlocking
 import kz.versola.sdk.core.AccessToken
 import kz.versola.sdk.core.AccessTokenSource
@@ -49,7 +50,25 @@ public class VersolaInterceptor(
         // requests with `execute()`, and OkHttp's `Dispatcher` caps concurrency for
         // `enqueue`d calls only — sixty-four application calls blocked on a refresh therefore
         // cannot starve the refresh they are waiting for.
-        return runBlocking { authenticated(chain, request) }
+        return try {
+            runBlocking { authenticated(chain, request) }
+        } catch (e: VersolaHttpException) {
+            throw e
+        } catch (e: IOException) {
+            throw e
+        } catch (e: Throwable) {
+            // Anything else leaving an interceptor is rethrown by OkHttp onto its dispatcher
+            // thread for an enqueued call, where Android's default handler ends the process.
+            // A Keystore refusing a key, a DataStore refusing a second instance, a URL the
+            // proof builder could not parse: SDK or deployment defects every one, and reported
+            // as such — never as a crash the app had no way to catch.
+            throw VersolaHttpException(
+                VersolaError.Configuration(
+                    VersolaError.Configuration.Detail.InvalidConfiguration("unexpected failure in the authenticated client: ${e::class.java.name}: ${e.message}"),
+                    e,
+                ),
+            )
+        }
     }
 
     private suspend fun authenticated(chain: Interceptor.Chain, request: Request): Response {
@@ -107,6 +126,7 @@ public class VersolaInterceptor(
                 // 401 into an unbounded rotation loop.
                 "insufficient_user_authentication" -> {
                     response.close()
+                    tokens.stepUpRequired()
                     throw VersolaHttpException(
                         VersolaError.StepUp(challenge.acrValues, challenge.maxAge),
                     )

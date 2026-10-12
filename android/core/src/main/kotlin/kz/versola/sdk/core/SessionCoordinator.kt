@@ -2,6 +2,7 @@ package kz.versola.sdk.core
 
 import java.net.URI
 import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
@@ -134,11 +135,12 @@ public class SessionCoordinator(
      * persistence, and only then [AuthorizationFlow.completeLogin] — which is what moves the
      * pending request's ten-minute survival past the exchange and into `Authenticated`.
      *
-     * A failed exchange leaves the session exactly where [AuthorizationFlow.authorize] left
-     * it — `Authorizing`, pending request intact — deliberately: the pending request's
-     * lifetime belongs to that request, not to how the exchange that follows it turned out,
-     * and this class does not shorten it on a failure that has nothing to do with the
-     * authorization response itself.
+     * A failed exchange abandons the login: the redirect has been consumed and the code is
+     * spent, so the pending request can never complete and keeping it would only make the
+     * next cold start report `Authorizing` for a flow nothing can resume
+     * (`spec/state-machine.md`, `Authorizing → Unauthenticated: authorization error`). The
+     * session settles where it was entered from — `Authenticated` when a grant is still
+     * stored, as during a step-up, otherwise `Unauthenticated`.
      */
     public suspend fun login(
         scopes: Set<String>,
@@ -160,18 +162,39 @@ public class SessionCoordinator(
         // draws exactly this line: a retry is only safe on an operation the server can
         // recognise as a repeat. The nonce and clock-skew retries inside [TokenClient] still
         // apply — those answer a challenge raised before the code was redeemed.
-        val response = tokenClient.exchange(grant)
-        // RFC 6749 permits an authorization_code response to omit refresh_token, but the SDK's
-        // whole session model has nothing to hold on to without one: there is no prior value
-        // to fall back to the way a refresh's BoundRenewal omission falls back to the one
-        // already on disk.
-        val refreshToken = response.refreshToken ?: throw VersolaError.Configuration(
-            VersolaError.Configuration.Detail.TokenResponseMalformed("refresh_token is missing"),
-        )
-        credentialStore.save(refreshToken, response.idToken)
+        val response = try {
+            val issued = tokenClient.exchange(grant)
+            // RFC 6749 permits an authorization_code response to omit refresh_token, but the
+            // SDK's whole session model has nothing to hold on to without one: there is no
+            // prior value to fall back to the way a refresh's BoundRenewal omission falls
+            // back to the one already on disk.
+            issued.refreshToken ?: throw VersolaError.Configuration(
+                VersolaError.Configuration.Detail.TokenResponseMalformed("refresh_token is missing"),
+            )
+            issued
+        } catch (e: CancellationException) {
+            // The caller walked away mid-exchange. The response may still arrive at a server
+            // that has already spent the code, and nothing here can collect it: the slot is
+            // abandoned for the same reason a failure abandons it.
+            withContext(NonCancellable) { flow.abandonLogin() }
+            throw e
+        } catch (e: Throwable) {
+            flow.abandonLogin()
+            throw e
+        }
+        credentialStore.save(checkNotNull(response.refreshToken), response.idToken)
         flow.completeLogin()
         cachedAccessToken = Cached(response, elapsedMillis())
         return response
+    }
+
+    /**
+     * `Authenticated → StepUpRequired`: edge refused a call for want of a stronger
+     * authentication context. The grant is intact, so nothing is wiped; the state says why
+     * the next thing the app does is a `stepUp()` rather than a `login()`.
+     */
+    override fun stepUpRequired() {
+        flow.enterStepUpRequired()
     }
 
     /**
@@ -240,6 +263,13 @@ public class SessionCoordinator(
      */
     private suspend fun refresh(rejected: Cached?, onlyIfStale: Boolean): TokenResponse {
         while (true) {
+            // The lazy restore — disk I/O, and so a point a caller can be cancelled at —
+            // happens *before* a flight exists. A flight handed out and then abandoned here
+            // would never be retired, and every later refresh in the process would wait on
+            // it. Also captures the state `Refreshing` is entered from: not assumed to be
+            // `Authenticated`, because `refresh()` with no grant stored enters from
+            // `Unauthenticated`, and a step-up enters from `StepUpRequired`.
+            val priorState = flow.sessionState.first()
             var winner = false
             val flight = refreshFlight.mutex.withLock {
                 if (onlyIfStale) {
@@ -268,16 +298,11 @@ public class SessionCoordinator(
                 return outcome.getOrThrow()
             }
 
-            // Forces AuthorizationFlow's lazy restore before this flight pushes a state of
-            // its own onto the same stream, and captures the state `Refreshing` is entered
-            // from. Not assumed to be `Authenticated`: a cancellation can arrive before
-            // `performRefresh` has resolved whether a grant even exists, and `refresh()`
-            // called with none stored enters from `Unauthenticated`, not `Authenticated`.
-            val priorState = flow.sessionState.first()
+            val startedIn = epoch.get()
             flow.setState(SessionState.Refreshing)
 
             val result = try {
-                Result.success(performRefresh())
+                Result.success(performRefresh(startedIn))
             } catch (e: CancellationException) {
                 withContext(NonCancellable) {
                     // `Refreshing` was pushed by this flight and nothing resolved it, so it
@@ -285,16 +310,32 @@ public class SessionCoordinator(
                     // the state actually entered from — not a hardcoded `Authenticated` —
                     // costs a successor one extra transition and never publishes a session
                     // that was never there to begin with.
-                    flow.setState(priorState)
+                    publishIfCurrent(startedIn, priorState)
                     endFlight(flight, null)
                 }
                 throw e
             } catch (e: Throwable) {
                 Result.failure(e)
             }
-            endFlight(flight, result)
+            // Retired whatever happens to this job from here on: a flight left pending is
+            // every later refresh in the process hanging on it.
+            withContext(NonCancellable) { endFlight(flight, result) }
             return result.getOrThrow()
         }
+    }
+
+    /**
+     * Moves every time the grant is wiped. A refresh that was in flight when `logout()` — or
+     * an `invalid_grant` on another caller — wiped the grant must not persist its answer
+     * afterwards: that would put the refresh token back on disk and publish `Authenticated`
+     * over a session the app just watched end. Checked under the flight mutex, where the wipe
+     * also moves it, so the two cannot interleave.
+     */
+    private val epoch = AtomicLong()
+
+    /** Publishes [state] unless the grant was wiped since [startedIn]; the wipe's own state stands then. */
+    private suspend fun publishIfCurrent(startedIn: Long, state: SessionState) {
+        refreshFlight.mutex.withLock { if (epoch.get() == startedIn) flow.setState(state) }
     }
 
     /**
@@ -310,7 +351,7 @@ public class SessionCoordinator(
         flight.complete(outcome)
     }
 
-    private suspend fun performRefresh(): TokenResponse {
+    private suspend fun performRefresh(startedIn: Long): TokenResponse {
         val response = try {
             // Step 1. Recorded once, from one unwrap that spends nothing — hashing does not
             // take ownership of what it reads, so this unwrap is independent of the one(s)
@@ -335,21 +376,35 @@ public class SessionCoordinator(
                 // `spec/state-machine.md`'s `Locked` section states for every other caller.
                 credentialStore.useRefreshToken { tokenClient.refresh(it, idempotencyKey) } ?: noGrantStored()
             }
-            // Step 2. Persisted before returning to any caller — including the one whose call
-            // triggered this refresh. `BoundRenewal` omits `refresh_token` on the response
-            // because the stored value did not change; saving nothing in that case is what
-            // leaves it unchanged rather than overwriting it with an absence.
-            issued.refreshToken?.let { credentialStore.save(it, issued.idToken) }
-            // Step 3. Cleared only now. Under DPoP this clears a slot whose value never
-            // moved — inert, per the class doc, not skipped.
-            //
-            // Both writes run inside this same try: a key that locks or is invalidated
-            // between the server answering and either one landing is exactly what the
-            // catches below already map to `Locked` or `Unauthenticated`, and leaving them
-            // outside would let that failure escape as an uncaught exception with
-            // `Refreshing` never resolved — the one state this class must never leave stuck.
-            credentialStore.savePendingRotation(null)
+            refreshFlight.mutex.withLock {
+                // The grant was wiped while this request was out — a `logout()`, or another
+                // caller's `invalid_grant`. The server's answer is for a session that has
+                // ended, and persisting it would resurrect the session; the wipe's state stands.
+                if (epoch.get() != startedIn) throw WipedMeanwhile()
+                // Step 2. Persisted before returning to any caller — including the one whose
+                // call triggered this refresh. `BoundRenewal` echoes the same `refresh_token`,
+                // which is stored again as it was; a response omitting it leaves the stored
+                // value alone rather than overwriting it with an absence.
+                issued.refreshToken?.let { credentialStore.save(it, issued.idToken) }
+                // Step 3. Cleared only now. Under DPoP this clears a slot whose value never
+                // moved — inert, per the class doc, not skipped.
+                //
+                // Both writes run inside this same try: a key that locks or is invalidated
+                // between the server answering and either one landing is exactly what the
+                // catches below already map to `Locked` or `Unauthenticated`, and leaving
+                // them outside would let that failure escape as an uncaught exception with
+                // `Refreshing` never resolved — the one state this class must never leave
+                // stuck. And under the flight mutex, with the state published in the same
+                // breath, so a wipe cannot slip between the save and the `Authenticated`.
+                credentialStore.savePendingRotation(null)
+                cachedAccessToken = Cached(issued, elapsedMillis())
+                flow.setState(SessionState.Authenticated)
+            }
             issued
+        } catch (e: WipedMeanwhile) {
+            // Not a failure of the refresh and nothing to wipe: the caller that asked is told
+            // the grant is gone, which is what it will find.
+            throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.GrantRejected)
         } catch (e: CancellationException) {
             // Not an outcome of the refresh, and not this function's to settle: [refresh]
             // retires the abandoned flight and reverts the state where a successor can see
@@ -363,7 +418,8 @@ public class SessionCoordinator(
             // settling back on `Authenticated`. The same is true whether the key locked
             // during the request or during step 2/3's own wrap: [CredentialKeyProvider] is
             // the same lock either way.
-            flow.setState(
+            publishIfCurrent(
+                startedIn,
                 if (e.reason is VersolaError.Recoverable.Cause.UnlockRequired) {
                     SessionState.Locked
                 } else {
@@ -380,19 +436,21 @@ public class SessionCoordinator(
             // handled identically here regardless of which step raised it.
             // The same teardown `logout()` runs, DPoP key included: `spec/state-machine.md`'s
             // `Refreshing → Unauthenticated` names the key as following the logout rule.
-            withContext(NonCancellable) { wipe() }
+            // Once, though: a wipe that already happened while this request was out is not
+            // repeated on its account.
+            withContext(NonCancellable) { if (epoch.get() == startedIn) wipe() }
             throw e
         } catch (e: Throwable) {
             // A `Configuration` fault or anything unforeseen: a deployment or SDK defect, not
             // a reason to sign the user out. The grant is left exactly as it was.
-            flow.setState(SessionState.Authenticated)
+            publishIfCurrent(startedIn, SessionState.Authenticated)
             throw e
         }
-
-        cachedAccessToken = Cached(response, elapsedMillis())
-        flow.setState(SessionState.Authenticated)
         return response
     }
+
+    /** Raised inside the persistence step when the grant was wiped during the request. */
+    private class WipedMeanwhile : RuntimeException()
 
     /**
      * There was no refresh token to spend — `credentialStore.useRefreshToken` answered null,
@@ -423,6 +481,11 @@ public class SessionCoordinator(
         flow.setState(SessionState.LoggingOut)
         var serverSessionEnded = false
         try {
+            // A refresh already in flight is let finish first, so the revocation below
+            // revokes the generation the server will actually hold afterwards rather than
+            // racing it. Its outcome is of no interest here; the epoch fence inside it is
+            // what guarantees nothing it persists survives the wipe below regardless.
+            refreshFlight.mutex.withLock { refreshFlight.pending }?.let { flight -> runCatching { flight.await() } }
             revokeQuietly()
             // The hint is read, not required: under `OnAppUnlock` an elapsed window makes it
             // unreadable, and the server then shows its own confirmation page rather than
@@ -457,7 +520,10 @@ public class SessionCoordinator(
      * refuses to delete a key is a warning, not a session that cannot end.
      */
     private suspend fun wipe() {
-        cachedAccessToken = null
+        refreshFlight.mutex.withLock {
+            epoch.incrementAndGet()
+            cachedAccessToken = null
+        }
         try {
             credentialStore.clear()
         } finally {

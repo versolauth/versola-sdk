@@ -131,16 +131,31 @@ class AuthorizationFlowTest {
         dpopKey: DpopKeyBinding? = StaticDpopKey,
         nativeStarter: NativeAuthorizationStarter? = null,
         configuration: VersolaConfiguration = this.configuration,
-    ) = AuthorizationFlow(
-        configuration = configuration,
-        discovery = DiscoveryService(ISSUER, StaticDiscovery(metadata), MemoryMetadataCache()),
-        pendingStore = store,
-        browser = browser,
-        tokenBinding = tokenBinding,
-        dpopKey = dpopKey,
-        clock = { now },
-        nativeStarter = nativeStarter,
-    )
+        hasStoredGrant: (suspend () -> Boolean)? = null,
+    ) = if (hasStoredGrant == null) {
+        AuthorizationFlow(
+            configuration = configuration,
+            discovery = DiscoveryService(ISSUER, StaticDiscovery(metadata), MemoryMetadataCache()),
+            pendingStore = store,
+            browser = browser,
+            tokenBinding = tokenBinding,
+            dpopKey = dpopKey,
+            clock = { now },
+            nativeStarter = nativeStarter,
+        )
+    } else {
+        AuthorizationFlow(
+            configuration = configuration,
+            discovery = DiscoveryService(ISSUER, StaticDiscovery(metadata), MemoryMetadataCache()),
+            pendingStore = store,
+            browser = browser,
+            tokenBinding = tokenBinding,
+            dpopKey = dpopKey,
+            clock = { now },
+            hasStoredGrant = hasStoredGrant,
+            nativeStarter = nativeStarter,
+        )
+    }
 
     /** A provider of the previous generation: everything but `dpop_signing_alg_values_supported`. */
     private fun withoutDpop() = metadata.copy(dpopSigningAlgValuesSupported = emptyList())
@@ -795,5 +810,49 @@ class AuthorizationFlowTest {
         assertEquals("b", roundTrip.blob)
         assertEquals("t", roundTrip.tokenEndpoint)
         assertTrue(roundTrip.viaEdge)
+    }
+
+    // ---- review findings M3 / M4 --------------------------------------------------------
+
+    @Test
+    fun `a resumed request waits only for what is left of its ten minutes`() = runTest {
+        val pending = PendingAuthorizationRequest("s", "n", "v", listOf("openid"), "https://app.example.com/oauth", emptyList(), null, 0)
+        val store = RecordingStore(stored = pending)
+        val browser = FakeBrowser({ BrowserOutcome.UserCancelled }, store).let {
+            object : BrowserAuthorizationSession by it {
+                override suspend fun awaitPendingRedirect(): BrowserOutcome = awaitCancellation()
+            }
+        }
+        val flow = flow(store, browser, now = 9 * 60 * 1000)
+
+        val error = failure { flow.resumePendingAuthorization() } as VersolaError.Recoverable
+
+        // Virtual time: the one minute left on the request elapsed, nothing arrived.
+        assertSame(VersolaError.Recoverable.Cause.PendingRequestExpired, error.reason)
+        assertNull(store.stored)
+        assertEquals(SessionState.Unauthenticated, flow.sessionState.first())
+    }
+
+    @Test
+    fun `a cancelled authorization over a stored grant settles on Authenticated`() = runTest {
+        val store = RecordingStore()
+        val browser = FakeBrowser({ BrowserOutcome.UserCancelled }, store)
+        val flow = flow(store, browser, hasStoredGrant = { true })
+
+        failure { flow.authorize(setOf("openid"), acrValues = listOf("mfa")) }
+
+        assertEquals(SessionState.Authenticated, flow.sessionState.first())
+        assertNull(store.stored)
+    }
+
+    @Test
+    fun `a rejected redirect over a stored grant settles on Authenticated too`() = runTest {
+        val store = RecordingStore()
+        val browser = FakeBrowser({ BrowserOutcome.Redirect("https://app.example.com/oauth?code=c&state=wrong&iss=$ISSUER") }, store)
+        val flow = flow(store, browser, hasStoredGrant = { true })
+
+        failure { flow.authorize(setOf("openid")) }
+
+        assertEquals(SessionState.Authenticated, flow.sessionState.first())
     }
 }

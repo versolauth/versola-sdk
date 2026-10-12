@@ -148,4 +148,14 @@ class VersolaConfigureTest {
             )
         }
     }
+
+    @Test
+    fun `configure twice in one process shares the credential store rather than opening a second DataStore`() = runTest {
+        // Activity.onCreate re-runs configure() on every rotation.
+        val first = configure()
+        val second = configure()
+
+        assertSame(SessionState.Unauthenticated, first.sessionState.first())
+        assertSame(SessionState.Unauthenticated, second.sessionState.first())
+    }
 }
