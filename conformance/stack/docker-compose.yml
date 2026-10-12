@@ -1,0 +1,83 @@
+# A staged auth + central + edge from the published images, for running the SDKs against a
+# real server on a developer machine. The CI harness (../README.md) stages from a checkout of
+# versolauth/versola instead, because the e2e fixtures it reuses live there.
+#
+# Configuration: the services read `-Denv.path` HOCON files that versola's `scripts/gen-env.scala`
+# generates ("local" target) along with auth's mutual-TLS material and edge's `dpop`/`native`
+# blocks. Generate them from a versola checkout once and mount the `*/dev` directories here:
+#
+#   cd /path/to/versola && echo "local" | scala-cli run scripts/gen-env.scala
+#   VERSOLA_CHECKOUT=/path/to/versola docker compose -f conformance/stack/docker-compose.yml up
+#
+# Ports match versola's develop.md so the e2e defaults (E2EConfig) and the harness arguments
+# agree: central 9001, auth 9003 (+9007 account API, +9008 mTLS), edge 9005.
+#
+# Not yet wired: the TLS terminator between edge and auth (edge/dev/internal-tls/nginx.conf)
+# that versola's CI runs on the host, and RUN_MIGRATIONS ordering. Treat this file as the
+# starting point for the local stack, not as something that boots green today.
+
+services:
+  postgres:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: dev
+      POSTGRES_PASSWORD: "1234"
+      POSTGRES_DB: auth
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dev -d auth"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  central:
+    image: ghcr.io/versolauth/versola-central:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PORT: "9001"
+      DPORT: "9002"
+      RUN_MIGRATIONS: "true"
+      JAVA_OPTS: "-Denv.path=/config/env.conf"
+    volumes:
+      - ${VERSOLA_CHECKOUT:?set VERSOLA_CHECKOUT to a versola checkout with generated dev configs}/central/dev:/config:ro
+    ports:
+      - "9001:9001"
+      - "9002:9002"
+
+  auth:
+    image: ghcr.io/versolauth/versola-auth:latest
+    depends_on:
+      central:
+        condition: service_started
+    environment:
+      PORT: "9003"
+      DPORT: "9004"
+      APORT: "9007"
+      MPORT: "9008"
+      RUN_MIGRATIONS: "true"
+      JAVA_OPTS: "-Denv.path=/config/env.conf"
+    volumes:
+      - ${VERSOLA_CHECKOUT}/auth/dev:/config:ro
+    ports:
+      - "9003:9003"
+      - "9004:9004"
+      - "9007:9007"
+      - "9008:9008"
+
+  edge:
+    image: ghcr.io/versolauth/versola-edge:latest
+    depends_on:
+      auth:
+        condition: service_started
+    environment:
+      PORT: "9005"
+      DPORT: "9006"
+      JAVA_OPTS: "-Denv.path=/config/env.conf"
+    volumes:
+      - ${VERSOLA_CHECKOUT}/edge/dev:/config:ro
+    ports:
+      - "9005:9005"
+      - "9006:9006"
