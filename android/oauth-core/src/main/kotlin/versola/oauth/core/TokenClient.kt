@@ -307,7 +307,7 @@ public class TokenRequestExecutor(
                     // satisfy (scenario 04).
                     dpop?.observe(htu ?: url, response.header("Date"), nonce)
                     if (response.isSuccessful) {
-                        Attempt.Issued(issued(payload))
+                        Attempt.Issued(issued(payload, response.header("Date")))
                     } else {
                         onStatus(response.code)?.let { throw it }
                         rejected(response.code, payload, nonce, response.headers("WWW-Authenticate"))
@@ -368,7 +368,7 @@ public class TokenRequestExecutor(
         }
     }
 
-    private fun issued(payload: String): TokenResponse {
+    private fun issued(payload: String, dateHeader: String?): TokenResponse {
         val parsed = try {
             discoveryJson.decodeFromString(TokenResponsePayload.serializer(), payload)
         } catch (e: Exception) {
@@ -379,7 +379,15 @@ public class TokenRequestExecutor(
                 e,
             )
         }
-        return TokenResponse.from(parsed)
+        // RFC 9110 5.6.7 dates; an unreadable one is not an error, only an absent clock.
+        val serverDate = dateHeader?.let {
+            try {
+                java.time.ZonedDateTime.parse(it, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant()
+            } catch (e: java.time.format.DateTimeParseException) {
+                null
+            }
+        }
+        return TokenResponse.from(parsed, serverDate)
     }
 
     /**

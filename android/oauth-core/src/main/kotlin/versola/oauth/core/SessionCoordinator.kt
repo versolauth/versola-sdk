@@ -127,6 +127,34 @@ public class SessionCoordinator(
 
     private class MemorySession(val rawIdToken: String?)
 
+    /** Whether the stored ID token was already read back into [claims] since the last wipe. */
+    @Volatile
+    private var claimsRestored = false
+
+    @Volatile
+    private var warnedOfflineAccess = false
+
+    @Volatile
+    private var warnedExpiresIn = false
+
+    /**
+     * [claims] as the stored ID token has them, read once after a cold start: a stored grant
+     * restores `Authenticated` with nothing in memory, and the app's claims and the refresh
+     * check against the previous `sub` need what the token carried. Nothing is re-verified;
+     * the token was validated before it was stored. No-op without a validator.
+     */
+    public suspend fun restoreClaims(): IdTokenClaims? {
+        claims?.let { return it }
+        if (idTokenValidator == null || claimsRestored) return null
+        val stored = try {
+            memorySession?.rawIdToken ?: credentialStore.rawIdToken()
+        } catch (e: VersolaError) {
+            return null
+        }
+        claimsRestored = true
+        return stored?.let(IdTokenClaims::ofStored)?.also { claims = it }
+    }
+
     /**
      * The most recently issued token response, held in memory only — `spec/state-machine.md`'s
      * persistence summary keeps the access token out of storage because it is short-lived and
@@ -150,6 +178,7 @@ public class SessionCoordinator(
      * cache publishes no state transition at all.
      */
     override suspend fun accessToken(): AccessToken {
+        if (claims == null && !claimsRestored) restoreClaims()
         val cached = cachedAccessToken
         if (cached != null && cached.usable()) return AccessToken.of(cached.response)
         if (memorySession != null) expireMemorySession()
@@ -213,6 +242,14 @@ public class SessionCoordinator(
         // nothing silently, and `providers.md` says per provider which scope buys a refresh
         // token.
         val requested = if (refreshTokens == RefreshTokenPolicy.Required) scopes + OFFLINE_ACCESS else scopes
+        if (refreshTokens == RefreshTokenPolicy.Optional && OFFLINE_ACCESS !in requested && !warnedOfflineAccess &&
+            OFFLINE_ACCESS in flow.metadata().scopesSupported
+        ) {
+            // Said once (`spec/oauth-sdk-api.md` section 15): the provider offers refresh
+            // tokens for the asking, and the integrator did not ask.
+            warnedOfflineAccess = true
+            logger?.warn("the provider advertises offline_access and the configured scopes omit it; no refresh token will be issued")
+        }
         val grant = flow.authorize(requested, acrValues, maxAge, parameters)
         // One attempt, with no retry budget around it. An authorization code is single-use
         // and the token endpoint offers no idempotency for `authorization_code` —
@@ -232,8 +269,16 @@ public class SessionCoordinator(
                 val idToken = issued.idToken ?: throw VersolaError.Configuration(
                     VersolaError.Configuration.Detail.IdTokenRejected(IdTokenRejection.Malformed),
                 )
-                validator.validate(idToken, expectedNonce = grant.nonce, accessToken = issued.accessToken, maxAge = maxAge, previous = null)
+                validator.validate(
+                    idToken,
+                    expectedNonce = grant.nonce,
+                    accessToken = issued.accessToken,
+                    maxAge = maxAge,
+                    previous = null,
+                    serverTime = issued.serverDate,
+                )
             }
+            warnIfNoExpiry(issued)
             if (refreshTokens == RefreshTokenPolicy.Required) {
                 // RFC 6749 permits an authorization_code response to omit refresh_token, but
                 // this session model has nothing to hold on to without one: there is no prior
@@ -259,6 +304,10 @@ public class SessionCoordinator(
             credentialStore.save(refreshToken, response.idToken)
             memorySession = null
         } else {
+            // A grant already on disk belongs to the session this login replaces; left there
+            // it would come back on the next cold start as the previous user (the ghost
+            // session `spec/state-machine.md` forbids). The same teardown a wipe does.
+            if (credentialStore.hasGrant()) withContext(NonCancellable) { clearStoredGrant() }
             // Nothing to persist: the session is the access token in memory and ends with it
             // (`spec/state-machine.md`, "no refresh token"). Said once, here, so an
             // integrator who expected a refresh token learns it from the log rather than
@@ -266,6 +315,7 @@ public class SessionCoordinator(
             memorySession = MemorySession(response.idToken)
             logger?.warn("the provider issued no refresh token; the session lasts as long as the access token")
         }
+        claimsRestored = true
         claims = validated
         flow.completeLogin()
         cachedAccessToken = Cached(response, elapsedMillis())
@@ -471,8 +521,18 @@ public class SessionCoordinator(
             // response is persisted. A refusal is a `Configuration` fault handled below: the
             // grant stays, nothing from this response is kept.
             val refreshedClaims = idTokenValidator?.let { validator ->
-                issued.idToken?.let { validator.validate(it, expectedNonce = null, accessToken = issued.accessToken, maxAge = null, previous = claims) }
+                issued.idToken?.let {
+                    validator.validate(
+                        it,
+                        expectedNonce = null,
+                        accessToken = issued.accessToken,
+                        maxAge = null,
+                        previous = restoreClaims(),
+                        serverTime = issued.serverDate,
+                    )
+                }
             }
+            warnIfNoExpiry(issued)
             refreshFlight.mutex.withLock {
                 // The grant was wiped while this request was out — a `logout()`, or another
                 // caller's `invalid_grant`. The server's answer is for a session that has
@@ -613,12 +673,44 @@ public class SessionCoordinator(
      * through [onCredentialsWiped] and is not allowed to fail the sign-out: a Keystore that
      * refuses to delete a key is a warning, not a session that cannot end.
      */
+    /**
+     * The stored grant goes, with the key and nonce teardown, but the memory session a login
+     * is establishing stays: the caller sets it right after. Under the flight mutex with the
+     * epoch moved, so a refresh in flight for the old grant cannot persist its answer.
+     */
+    private suspend fun clearStoredGrant() {
+        refreshFlight.mutex.withLock {
+            epoch.incrementAndGet()
+            cachedAccessToken = null
+        }
+        try {
+            credentialStore.clear()
+        } finally {
+            try {
+                onCredentialsWiped()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logger?.warn("login: teardown of the previous grant's key or nonce caches failed: ${e.message}")
+            }
+        }
+    }
+
+    /** `spec/oauth-sdk-api.md` section 15: a response that does not say when its token dies, once. */
+    private fun warnIfNoExpiry(response: TokenResponse) {
+        if (response.expiresInSeconds <= 0 && !warnedExpiresIn) {
+            warnedExpiresIn = true
+            logger?.warn("the token response carries no expires_in; the access token is treated as of unknown lifetime and refreshed on a 401")
+        }
+    }
+
     private suspend fun wipe() {
         refreshFlight.mutex.withLock {
             epoch.incrementAndGet()
             cachedAccessToken = null
             memorySession = null
             claims = null
+            claimsRestored = false
         }
         try {
             credentialStore.clear()

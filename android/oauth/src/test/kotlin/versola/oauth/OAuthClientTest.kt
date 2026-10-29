@@ -3,6 +3,8 @@ package versola.oauth
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import mockwebserver3.Dispatcher
@@ -157,6 +159,52 @@ class OAuthClientTest {
         // Discovery and the JWKS were fetched once each, before Authenticated was published.
         assertEquals(1, requests.count { it.url.encodedPath == "/.well-known/openid-configuration" })
         assertEquals(1, requests.count { it.url.encodedPath == "/jwks" })
+    }
+
+    @Test
+    fun `the ID token's iss is held to the issuer discovery announces, trailing slash included`() = runTest {
+        // Auth0 announces `https://tenant/` and signs tokens with that `iss`; the configured
+        // issuer has no slash. Discovery tolerates the one slash; the ID token must match
+        // what discovery said, not what was configured.
+        provider.announcedIssuer = provider.issuer + "/"
+        val client = client()
+
+        client.login()
+
+        assertEquals(provider.issuer + "/", client.claims?.issuer)
+        assertEquals(SessionState.Authenticated, client.sessionState.first())
+    }
+
+    @Test
+    fun `login while an authorization is outstanding is refused, not queued`() = runTest {
+        browser.hold = kotlinx.coroutines.CompletableDeferred()
+        val client = client()
+        val first = async(start = CoroutineStart.UNDISPATCHED) { client.login() }
+        // Discovery runs first, off this thread; the state is Authorizing once the browser opened.
+        browser.opened.await()
+        assertEquals(SessionState.Authorizing, client.sessionState.first())
+
+        val error = runCatching { client.login() }.exceptionOrNull() as VersolaError.Configuration
+
+        assertTrue(error.detail is VersolaError.Configuration.Detail.InvalidConfiguration)
+        assertEquals(1, browser.launched.size)
+        browser.hold!!.complete(Unit)
+        first.await()
+        assertEquals(SessionState.Authenticated, client.sessionState.first())
+    }
+
+    @Test
+    fun `two configurations built separately with the same values are one client`() {
+        val id = "client-${counter.incrementAndGet()}"
+        fun built() = OAuthConfiguration(
+            issuer = provider.issuer, clientId = id, redirectUri = REDIRECT_URI,
+            retryPolicy = versola.oauth.core.RetryPolicy(maxAttemptsPerOrigin = 2),
+        )
+
+        val first = OAuthClient.create(application, built(), browser = browser, keyProvider = ReversingKeyProvider)
+        val second = OAuthClient.create(application, built())
+
+        assertSame(first, second)
     }
 
     @Test

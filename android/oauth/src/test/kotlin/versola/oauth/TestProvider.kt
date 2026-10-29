@@ -20,8 +20,11 @@ internal class TestProvider(val server: MockWebServer) {
     val issuer: String = server.url("/").toString().trimEnd('/')
     val keys: KeyPair = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
 
+    /** What the provider announces as its issuer; Auth0 announces it with a trailing slash. */
+    var announcedIssuer: String = issuer
+
     fun discovery(endSession: Boolean = true, revocation: Boolean = true, par: Boolean = false): String = buildString {
-        append("""{"issuer":"$issuer","authorization_endpoint":"$issuer/authorize","token_endpoint":"$issuer/token",""")
+        append("""{"issuer":"$announcedIssuer","authorization_endpoint":"$issuer/authorize","token_endpoint":"$issuer/token",""")
         append(""""jwks_uri":"$issuer/jwks","userinfo_endpoint":"$issuer/userinfo",""")
         if (revocation) append(""""revocation_endpoint":"$issuer/revoke",""")
         if (endSession) append(""""end_session_endpoint":"$issuer/logout",""")
@@ -38,7 +41,7 @@ internal class TestProvider(val server: MockWebServer) {
     fun idToken(nonce: String, subject: String = "alice", audience: String = CLIENT_ID, now: Long = System.currentTimeMillis() / 1000): String {
         val header = Base64.getUrlEncoder().withoutPadding().encodeToString("""{"alg":"RS256","kid":"k1","typ":"JWT"}""".toByteArray())
         val payload = Base64.getUrlEncoder().withoutPadding().encodeToString(
-            """{"iss":"$issuer","sub":"$subject","aud":"$audience","exp":${now + 3600},"iat":$now,"nonce":"$nonce","auth_time":$now}""".toByteArray(),
+            """{"iss":"$announcedIssuer","sub":"$subject","aud":"$audience","exp":${now + 3600},"iat":$now,"nonce":"$nonce","auth_time":$now}""".toByteArray(),
         )
         val signature = Signature.getInstance("SHA256withRSA").apply {
             initSign(keys.private)
@@ -68,8 +71,16 @@ internal class FakeBrowser(
     val launched = mutableListOf<String>()
     var nonceSeen: String? = null
 
+    /** When set, the browser stays open until it completes, as a user who has not signed in yet. */
+    var hold: kotlinx.coroutines.CompletableDeferred<Unit>? = null
+
+    /** Completed when the browser has been opened, for a test that must observe that moment. */
+    val opened: kotlinx.coroutines.CompletableDeferred<Unit> = kotlinx.coroutines.CompletableDeferred()
+
     override suspend fun authorize(uri: String): BrowserOutcome {
         launched += uri
+        opened.complete(Unit)
+        hold?.await()
         val query = uri.substringAfter('?').split('&').associate { it.substringBefore('=') to java.net.URLDecoder.decode(it.substringAfter('='), "UTF-8") }
         nonceSeen = query["nonce"]
         val state = query.getValue("state")

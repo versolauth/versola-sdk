@@ -232,6 +232,26 @@ class PushedAuthorizationStarterTest {
     }
 
     @Test
+    fun `a 401 or 403 carrying an OAuth error is AuthorizationRejected with that code`() = runTest {
+        // RFC 9126 §2.3 via RFC 6749 §5.2: `invalid_client` comes with a 401; a client not
+        // allowed to push gets a 403 from some providers. The code is what the app is promised.
+        server.enqueue(
+            MockResponse.Builder().code(401).setHeader("Content-Type", "application/json")
+                .body("""{"error":"invalid_client"}""").build(),
+        )
+        server.enqueue(
+            MockResponse.Builder().code(403).setHeader("Content-Type", "application/json")
+                .body("""{"error":"access_denied","error_description":"PAR not allowed for this client"}""").build(),
+        )
+
+        val unauthorized = thrown<VersolaError.Configuration> { starter().start(request(), metadata(), 0) }
+        val forbidden = thrown<VersolaError.Configuration> { starter().start(request(), metadata(), 0) }
+
+        assertEquals(VersolaError.Configuration.Detail.AuthorizationRejected("invalid_client", null), unauthorized.detail)
+        assertEquals(VersolaError.Configuration.Detail.AuthorizationRejected("access_denied", "PAR not allowed for this client"), forbidden.detail)
+    }
+
+    @Test
     fun `a 400 that is not an OAuth error is a misconfigured endpoint`() = runTest {
         server.enqueue(MockResponse.Builder().code(400).body("<html>bad</html>").build())
 

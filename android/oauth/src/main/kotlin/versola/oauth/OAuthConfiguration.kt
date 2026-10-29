@@ -149,7 +149,14 @@ public class OAuthConfiguration(
         fingerprint = listOf(
             issuerIdentifier, endpoints?.urls()?.toString(), clientId, redirectUri, postLogoutRedirectUri,
             effectiveScopes.sorted(), tokenBinding.toString(), pushedAuthorization, protectedOrigins.sorted(),
-            endSessionEndpoint, retryPolicy.toString(), unlockPolicy, clockSkewTolerance,
+            endSessionEndpoint,
+            // By value: RetryPolicy has identity equality, and two configurations built in two
+            // places with the same numbers are the same configuration.
+            listOf(
+                retryPolicy.maxAttemptsPerOrigin, retryPolicy.maxTotalAttempts, retryPolicy.initialBackoff,
+                retryPolicy.backoffMultiplier, retryPolicy.maxBackoff, retryPolicy.totalBudget,
+            ),
+            unlockPolicy, clockSkewTolerance,
         ).joinToString("\u0000")
     }
 

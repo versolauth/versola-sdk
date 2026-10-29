@@ -131,7 +131,10 @@ public class PushedAuthorizationStarter(
      */
     private fun interpret(status: Int, payload: String): String {
         if (status == 200 || status == 201) return requestUri(payload)
-        if (status == 400) {
+        // RFC 9126 §2.3 points at RFC 6749 §5.2, which uses 401 for `invalid_client`; some
+        // providers answer 403 for a client not allowed to push. Each carries the error code
+        // the app is promised in `AuthorizationRejected`.
+        if (status == 400 || status == 401 || status == 403) {
             val error = try {
                 discoveryJson.decodeFromString(PushedErrorPayload.serializer(), payload)
             } catch (e: Exception) {

@@ -9,9 +9,8 @@ import versola.oauth.core.VersolaLogger
  * section 15); what this class controls is only where the lines go.
  */
 public class LogcatLogger(private val tag: String = "OAuth") : VersolaLogger {
-    override fun info(message: String) {
-        Log.i(tag, message)
-    }
+    /** Warnings only by default (`spec/oauth-sdk-api.md` section 15); an app that wants more passes its own logger. */
+    override fun info(message: String) {}
 
     override fun warn(message: String) {
         Log.w(tag, message)

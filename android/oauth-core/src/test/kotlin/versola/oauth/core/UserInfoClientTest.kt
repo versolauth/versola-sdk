@@ -55,6 +55,18 @@ class UserInfoClientTest {
         verifier = JwsVerifier({ jwksUri }, { emptyList() }, JwksClient(OkHttpClient())),
     )
 
+    /** A source that hands out one token and, on renewal, the same or another. */
+    class FixedTokens(private val token: AccessToken, private val renewed: AccessToken = token) : AccessTokenSource {
+        var renewals = 0
+        override suspend fun accessToken(): AccessToken = token
+        override suspend fun renewAccessToken(): AccessToken {
+            renewals++
+            return renewed
+        }
+    }
+
+    private fun tokens(token: AccessToken) = FixedTokens(token)
+
     private val bearer = AccessToken("token-1", isDpopBound = false)
     private val bound = AccessToken("token-1", isDpopBound = true)
     private val json = """{"sub":"user-1","name":"Alice Example","email_verified":true,"address":{"country":"KZ"}}"""
@@ -83,7 +95,7 @@ class UserInfoClientTest {
     fun `a bearer token is sent as Bearer with no proof and the JSON claims come back as strings`() = runTest {
         serveJson()
 
-        val info = client().fetch(bearer, "user-1")
+        val info = client().fetch(tokens(bearer), "user-1")
 
         assertEquals("user-1", info.subject)
         assertEquals("Alice Example", info.claims["name"])
@@ -101,7 +113,7 @@ class UserInfoClientTest {
         val dpop = RecordingDpop()
         serveJson()
 
-        client(dpop = dpop).fetch(bound, "user-1")
+        client(dpop = dpop).fetch(tokens(bound), "user-1")
 
         val request = server.takeRequest()
         assertEquals("DPoP token-1", request.headers["Authorization"])
@@ -115,7 +127,7 @@ class UserInfoClientTest {
         val dpop = RecordingDpop()
         serveJson()
 
-        client(dpop = dpop).fetch(bearer, "user-1")
+        client(dpop = dpop).fetch(tokens(bearer), "user-1")
 
         assertEquals("Bearer token-1", server.takeRequest().headers["Authorization"])
         assertTrue(dpop.proofs.isEmpty())
@@ -123,7 +135,7 @@ class UserInfoClientTest {
 
     @Test
     fun `a bound token without a proof source is InvalidConfiguration and nothing is sent`() = runTest {
-        val reason = detail { client(dpop = null).fetch(bound, "user-1") }
+        val reason = detail { client(dpop = null).fetch(tokens(bound), "user-1") }
 
         assertTrue(reason is VersolaError.Configuration.Detail.InvalidConfiguration)
         assertEquals(0, server.requestCount)
@@ -131,7 +143,7 @@ class UserInfoClientTest {
 
     @Test
     fun `a missing userinfo_endpoint is ProviderUnsupported and nothing is sent`() = runTest {
-        val reason = detail { client(endpoint = null).fetch(bearer, "user-1") }
+        val reason = detail { client(endpoint = null).fetch(tokens(bearer), "user-1") }
 
         assertEquals(VersolaError.Configuration.Detail.ProviderUnsupported("userinfo_endpoint"), reason)
         assertEquals(0, server.requestCount)
@@ -141,7 +153,7 @@ class UserInfoClientTest {
     fun `a sub that differs from the ID token's is UserInfoRejected without echoing either value`() = runTest {
         serveJson()
 
-        val reason = detail { client().fetch(bearer, "user-2") }
+        val reason = detail { client().fetch(tokens(bearer), "user-2") }
 
         val rejected = reason as VersolaError.Configuration.Detail.UserInfoRejected
         assertTrue(rejected.detail.startsWith("sub"))
@@ -153,40 +165,57 @@ class UserInfoClientTest {
     fun `a response without sub is UserInfoRejected`() = runTest {
         serveJson("""{"name":"Alice"}""")
 
-        assertTrue(detail { client().fetch(bearer, "user-1") } is VersolaError.Configuration.Detail.UserInfoRejected)
+        assertTrue(detail { client().fetch(tokens(bearer), "user-1") } is VersolaError.Configuration.Detail.UserInfoRejected)
     }
 
     @Test
     fun `a sub of the wrong type is UserInfoRejected`() = runTest {
         serveJson("""{"sub":1}""")
 
-        assertTrue(detail { client().fetch(bearer, "1") } is VersolaError.Configuration.Detail.UserInfoRejected)
+        assertTrue(detail { client().fetch(tokens(bearer), "1") } is VersolaError.Configuration.Detail.UserInfoRejected)
     }
 
     @Test
     fun `a body that is not a JSON object is UserInfoRejected`() = runTest {
         serveJson("<html>oops</html>")
 
-        assertTrue(detail { client().fetch(bearer, "user-1") } is VersolaError.Configuration.Detail.UserInfoRejected)
+        assertTrue(detail { client().fetch(tokens(bearer), "user-1") } is VersolaError.Configuration.Detail.UserInfoRejected)
     }
 
     // --- status mapping ----------------------------------------------------------------------
 
     @Test
-    fun `a 401 is Reauthenticate SessionRejected`() = runTest {
+    fun `a bare 401 spends one renewal and one replay before it is Reauthenticate`() = runTest {
         server.enqueue(MockResponse.Builder().code(401).addHeader("WWW-Authenticate", "Bearer error=\"invalid_token\"").build())
+        server.enqueue(MockResponse.Builder().code(401).addHeader("WWW-Authenticate", "Bearer error=\"invalid_token\"").build())
+        val tokens = FixedTokens(bearer, renewed = AccessToken("token-2", isDpopBound = false))
 
-        val error = failure { client().fetch(bearer, "user-1") }
+        val reauthenticate = runCatching { client().fetch(tokens, "user-1") }.exceptionOrNull() as VersolaError.Reauthenticate
 
-        val reauthenticate = error as VersolaError.Reauthenticate
         assertEquals(VersolaError.Reauthenticate.Reason.SessionRejected, reauthenticate.reason)
+        assertEquals(1, tokens.renewals)
+        assertEquals(2, server.requestCount)
+        server.takeRequest()
+        assertEquals("Bearer token-2", server.takeRequest().headers["Authorization"])
+    }
+
+    @Test
+    fun `a 401 cleared by one renewal answers with the replayed request`() = runTest {
+        server.enqueue(MockResponse.Builder().code(401).addHeader("WWW-Authenticate", "Bearer error=\"invalid_token\"").build())
+        serveJson("""{"sub":"user-1","name":"Alice"}""")
+        val tokens = FixedTokens(bearer, renewed = AccessToken("token-2", isDpopBound = false))
+
+        val info = client().fetch(tokens, "user-1")
+
+        assertEquals("user-1", info.subject)
+        assertEquals(1, tokens.renewals)
     }
 
     @Test
     fun `a 500 is a Network failure and is not retried here`() = runTest {
         server.enqueue(MockResponse.Builder().code(500).build())
 
-        val error = failure { client().fetch(bearer, "user-1") }
+        val error = failure { client().fetch(tokens(bearer), "user-1") }
 
         assertTrue((error as VersolaError.Recoverable).reason is VersolaError.Recoverable.Cause.Network)
         assertEquals(1, server.requestCount)
@@ -197,7 +226,7 @@ class UserInfoClientTest {
         server.enqueue(MockResponse.Builder().code(302).addHeader("Location", server.url("/elsewhere").toString()).build())
         serveJson()
 
-        val error = failure { client().fetch(bearer, "user-1") }
+        val error = failure { client().fetch(tokens(bearer), "user-1") }
 
         assertTrue((error as VersolaError.Recoverable).reason is VersolaError.Recoverable.Cause.Network)
         assertEquals(1, server.requestCount)
@@ -208,7 +237,7 @@ class UserInfoClientTest {
         val dead = endpoint
         server.close()
 
-        val error = failure { client(endpoint = dead).fetch(bearer, "user-1") }
+        val error = failure { client(endpoint = dead).fetch(tokens(bearer), "user-1") }
 
         assertTrue((error as VersolaError.Recoverable).reason is VersolaError.Recoverable.Cause.Network)
     }
@@ -226,7 +255,7 @@ class UserInfoClientTest {
         )
         serveJson()
 
-        val info = client(dpop = dpop).fetch(bound, "user-1")
+        val info = client(dpop = dpop).fetch(tokens(bound), "user-1")
 
         assertEquals("user-1", info.subject)
         assertEquals(2, server.requestCount)
@@ -246,7 +275,7 @@ class UserInfoClientTest {
             )
         }
 
-        val error = failure { client(dpop = dpop).fetch(bound, "user-1") }
+        val error = failure { client(dpop = dpop).fetch(tokens(bound), "user-1") }
 
         assertTrue((error as VersolaError.Recoverable).reason is VersolaError.Recoverable.Cause.NonceLoop)
         assertEquals(2, server.requestCount)
@@ -259,7 +288,7 @@ class UserInfoClientTest {
         serveJwt(signed())
         serveJwks()
 
-        val info = client().fetch(bearer, "user-1")
+        val info = client().fetch(tokens(bearer), "user-1")
 
         assertEquals("user-1", info.subject)
         assertEquals("Alice Example", info.claims["name"])
@@ -272,7 +301,7 @@ class UserInfoClientTest {
         serveJwt(signed(key = Jose.p256, alg = "ES256", kid = "p256"), contentType = "application/jwt; charset=utf-8")
         serveJwks()
 
-        assertEquals("user-1", client().fetch(bearer, "user-1").subject)
+        assertEquals("user-1", client().fetch(tokens(bearer), "user-1").subject)
     }
 
     @Test
@@ -280,7 +309,7 @@ class UserInfoClientTest {
         serveJwt(signed(key = Jose.rsaOther))
         serveJwks()
 
-        val reason = detail { client().fetch(bearer, "user-1") }
+        val reason = detail { client().fetch(tokens(bearer), "user-1") }
 
         assertTrue(reason is VersolaError.Configuration.Detail.UserInfoRejected)
     }
@@ -289,7 +318,7 @@ class UserInfoClientTest {
     fun `a signed response using alg none is UserInfoRejected and the key set is never fetched`() = runTest {
         serveJwt(Jose.jws("none", null, json, header = """{"alg":"none"}"""))
 
-        val reason = detail { client().fetch(bearer, "user-1") }
+        val reason = detail { client().fetch(tokens(bearer), "user-1") }
 
         assertTrue(reason is VersolaError.Configuration.Detail.UserInfoRejected)
         assertEquals(1, server.requestCount)
@@ -299,7 +328,7 @@ class UserInfoClientTest {
     fun `a signed response that is not a JWS is UserInfoRejected`() = runTest {
         serveJwt("not.a.jws.at.all")
 
-        assertTrue(detail { client().fetch(bearer, "user-1") } is VersolaError.Configuration.Detail.UserInfoRejected)
+        assertTrue(detail { client().fetch(tokens(bearer), "user-1") } is VersolaError.Configuration.Detail.UserInfoRejected)
     }
 
     @Test
@@ -307,7 +336,7 @@ class UserInfoClientTest {
         serveJwt(signed())
         serveJwks()
 
-        val reason = detail { client().fetch(bearer, "user-2") }
+        val reason = detail { client().fetch(tokens(bearer), "user-2") }
 
         assertTrue(reason is VersolaError.Configuration.Detail.UserInfoRejected)
     }
@@ -317,7 +346,7 @@ class UserInfoClientTest {
         serveJwt(signed())
         server.enqueue(MockResponse.Builder().code(503).build())
 
-        val error = failure { client().fetch(bearer, "user-1") }
+        val error = failure { client().fetch(tokens(bearer), "user-1") }
 
         assertTrue((error as VersolaError.Recoverable).reason is VersolaError.Recoverable.Cause.Network)
     }

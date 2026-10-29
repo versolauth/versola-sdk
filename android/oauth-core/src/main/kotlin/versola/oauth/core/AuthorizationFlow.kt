@@ -252,6 +252,12 @@ public class AuthorizationFlow(
     ): AuthorizationGrant = AUTHORIZE_LOCK.withLock {
         ensureRestored()
         val metadata = discovery.metadata()
+        // `code_challenge_methods_supported` present without S256 is a provider this SDK cannot
+        // talk to (it sends S256 and nothing else); absent, it is unknown and S256 is sent
+        // (`spec/oauth-sdk-api.md` section 6, `spec/providers.md`).
+        if (metadata.codeChallengeMethodsSupported.isNotEmpty() && "S256" !in metadata.codeChallengeMethodsSupported) {
+            throw VersolaError.Configuration(VersolaError.Configuration.Detail.ProviderUnsupported("S256"))
+        }
 
         val request = AuthorizationRequest.create(
             configuration = configuration,

@@ -61,7 +61,7 @@ construction, never behind a login screen.
 | `tokenBinding` | `Bearer` or `Dpop(required: Boolean = false)` | `Bearer` | section 9 |
 | `pushedAuthorization` | `Never`, `WhenAdvertised`, `Required` | `WhenAdvertised` | section 7 |
 | `endSessionEndpoint` | URL | none | overrides the discovered `end_session_endpoint`, or supplies one when discovery has none; `https`; the parameters the SDK sends stay those of RP-Initiated Logout 1.0 (section 12). The only endpoint that may be overridden alongside `issuer`: vendors commonly place sign-out at a non-standard URL, and no other endpoint is safe to redirect by configuration |
-| `protectedOrigins` | set of origins | empty | `scheme://host[:port]`, `https` only; the only origins the authenticated client sends a token to; may also be given per client (section 10) |
+| `protectedOrigins` | set of origins | empty | `scheme://host[:port]`, `https`, or `http` on a loopback host only (`127.0.0.1`, `localhost`, `[::1]`: a resource on the developer's machine under `adb reverse`, the same allowance the issuer has; never a remote host); the only origins the authenticated client sends a token to; may also be given per client (section 10) |
 | `retryPolicy` | `RetryPolicy` | `Default` | bounds and maxima of `retry-policy.md`; a value above a maximum is `InvalidConfiguration` |
 | `unlockPolicy` | `UnlockPolicy` | `None` | `state-machine.md`'s `Locked` state is reachable only under `OnAppUnlock` |
 | `clockSkewTolerance` | duration | 60 s | tolerance for `exp`, `iat`, `nbf` in ID-token validation; maximum 5 minutes |
@@ -106,7 +106,7 @@ val oauth = OAuthClient.create(context, configuration)
 | `logout(options)` | the local wipe is done; server-side steps are best effort | `LogoutOutcome(sessionEnded: Boolean, tokenRevoked: Boolean)`; `Unauthenticated` published unconditionally | never throws for a server-side failure; `Configuration` only for a misuse |
 | `accessToken()` | a token not within its refresh skew is available, refreshing once if needed (single-flight) | `AccessToken(value, type: Bearer or DPoP, expiresAt, scopes)` | `Reauthenticate(GrantRejected, SessionExpired)`, `Recoverable(Network, UnlockRequired)` |
 | `refresh()` | the refresh completed | nothing | as `accessToken()` |
-| `claims` | — (property, memory) | `IdTokenClaims?` of the last validated ID token; null when unauthenticated or when the provider issued none | — |
+| `claims` | — (property, memory) | `IdTokenClaims?` of the last validated ID token; null when unauthenticated. After a cold start the stored ID token is read back by the first operation (`accessToken()`, `userInfo()`, a refresh), without re-verifying it: it was validated before it was stored | — |
 | `userInfo()` | the UserInfo response is validated | `UserInfo` (the standard claims typed, the rest as a read-only map); `sub` must equal the ID token's `sub` (OIDC Core 5.3.2) | `Configuration(ProviderUnsupported)` when no endpoint, `Recoverable`, `Reauthenticate` |
 | `stepUp(challenge, options)` | as `login()` | re-authorizes with the challenge's `acr_values` and `max_age` and the configured scopes (or the options'); the app re-issues the refused call | as `login()` |
 | `metadata()` | discovery is cached | `ProviderMetadata` | `Configuration(Discovery*)`, `Recoverable(Network)` |
@@ -205,8 +205,8 @@ on 401 with `error="invalid_token"` (or no `error`) refresh once and replay once
 `error="insufficient_user_authentication"` (RFC 9470) publish `StepUpRequired` and raise
 `StepUp(acrValues, maxAge)`; on 401 `use_dpop_nonce` retry once with the nonce; everything else is
 returned as the response it is (403, 404, 429, 5xx are the app's). A request to any other origin
-passes through untouched, and `origins` must be non-empty and `https` (`InvalidConfiguration`
-otherwise). All of this sits inside the originating call's retry budget.
+passes through untouched, and `origins` must be non-empty and `https` (or `http` on a loopback
+host, as in section 3; `InvalidConfiguration` otherwise). All of this sits inside the originating call's retry budget.
 
 The access token is also available as a value (`accessToken()`), documented as the escape hatch: a
 token handed to app code is one the app can log.

@@ -5,6 +5,7 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
@@ -94,6 +95,7 @@ public class OAuthClient private constructor(
      * [sessionState] before asking.
      */
     public suspend fun login(options: LoginOptions = LoginOptions.Default) {
+        refuseWhileAuthorizing()
         coordinator.login(
             scopes = (options.scopes ?: configuration.scopes) + "openid",
             acrValues = options.acrValues,
@@ -108,6 +110,7 @@ public class OAuthClient private constructor(
      * are the configured ones unless [options] says otherwise.
      */
     public suspend fun stepUp(challenge: VersolaError.StepUp, options: LoginOptions = LoginOptions.Default) {
+        refuseWhileAuthorizing()
         coordinator.login(
             scopes = (options.scopes ?: configuration.scopes) + "openid",
             acrValues = challenge.acrValues,
@@ -149,9 +152,22 @@ public class OAuthClient private constructor(
      * `Configuration(ProviderUnsupported)`.
      */
     public suspend fun userInfo(): UserInfo {
-        val subject = coordinator.claims?.subject
+        // After a cold start the claims are read back from the stored ID token first.
+        val subject = coordinator.restoreClaims()?.subject
             ?: throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.GrantRejected)
-        return userInfoClient.fetch(coordinator.accessToken(), subject)
+        return userInfoClient.fetch(coordinator, subject)
+    }
+
+    /**
+     * `spec/oauth-sdk-api.md` section 5: a `login()` while one is outstanding, in this process
+     * or a previous one, is refused rather than queued behind the open browser or allowed to
+     * supersede a request the redirect may still complete. The restored state is read first,
+     * so a cold start mid-browser counts.
+     */
+    private suspend fun refuseWhileAuthorizing() {
+        if (flow.sessionState.first() == SessionState.Authorizing) {
+            throw OAuthConfiguration.invalid("an authorization is already in progress; observe sessionState before asking again")
+        }
     }
 
     /**
@@ -233,16 +249,18 @@ public class OAuthClient private constructor(
             /** Replaces the Keystore-backed wrapping key; a JVM test has no Keystore. */
             keyProvider: CredentialKeyProvider? = null,
         ): OAuthClient {
-            clients[configuration.storageKey]?.let { existing ->
-                if (existing.configuration.fingerprint != configuration.fingerprint) {
-                    throw OAuthConfiguration.invalid(
-                        "a client for ${configuration.issuerIdentifier} / ${configuration.clientId} already exists in this process with a different configuration",
-                    )
-                }
-                return existing
-            }
+            // Lookup, check and build under one lock: two callers racing with different
+            // configurations for the same key must not both pass the check on an empty map.
             return synchronized(clients) {
-                clients[configuration.storageKey] ?: build(context.applicationContext, configuration, browser, keyProvider).also {
+                clients[configuration.storageKey]?.let { existing ->
+                    if (existing.configuration.fingerprint != configuration.fingerprint) {
+                        throw OAuthConfiguration.invalid(
+                            "a client for ${configuration.issuerIdentifier} / ${configuration.clientId} already exists in this process with a different configuration",
+                        )
+                    }
+                    return existing
+                }
+                build(context.applicationContext, configuration, browser, keyProvider).also {
                     clients[configuration.storageKey] = it
                 }
             }
@@ -263,7 +281,13 @@ public class OAuthClient private constructor(
             // restored onto another device out of a cloud backup. One directory per issuer and
             // client id, so two clients in one app never share a file.
             val directory = File(File(context.noBackupFilesDir, "versola-oauth"), configuration.storageKey)
-            val keys = keyProvider ?: HardwareKeyProvider(unlockPolicy = configuration.unlockPolicy)
+            // One wrapping key per configuration, like the DPoP key and the files: the key's
+            // user-authentication requirement is this configuration's unlock policy, not the
+            // first client's in the process.
+            val keys = keyProvider ?: HardwareKeyProvider(
+                alias = "versola-oauth-${configuration.storageKey}",
+                unlockPolicy = configuration.unlockPolicy,
+            )
 
             val discovery = when (val endpoints = configuration.endpoints) {
                 null -> DiscoveryService(
@@ -313,7 +337,9 @@ public class OAuthClient private constructor(
             )
             val jwks = JwksClient(httpClient, FileJwksCache(File(directory, "jwks.json")))
             val validator = JwksIdTokenValidator(
-                issuer = core.issuer,
+                // The issuer the provider signs under: discovery's, which may carry a trailing
+                // slash the configured value does not (Auth0), and which the ID token repeats.
+                issuer = { discovery.metadata().issuer },
                 clientId = core.clientId,
                 jwksUri = { discovery.metadata().jwksUri },
                 allowedAlgorithms = { discovery.metadata().idTokenSigningAlgValuesSupported },

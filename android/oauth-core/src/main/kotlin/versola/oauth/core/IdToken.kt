@@ -1,6 +1,8 @@
 package versola.oauth.core
 
 import java.time.Instant
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonPrimitive
 
 /**
  * The claims of a validated ID token (OpenID Connect Core 2). Standard claims are typed; every
@@ -20,7 +22,48 @@ public class IdTokenClaims(
     public val authorizedParty: String? = null,
     public val all: Map<String, String> = emptyMap(),
 ) {
-    override fun toString(): String = "IdTokenClaims(subject=$subject, issuer=$issuer)"
+    /** The subject is a user identifier; it stays out of logs like every other one. */
+    override fun toString(): String = "IdTokenClaims(issuer=$issuer, subject=redacted)"
+
+    public companion object {
+        /**
+         * The claims of an ID token that was validated before it was stored, read back without
+         * re-verifying: after process death a stored grant restores `Authenticated`, and the
+         * app's `claims` and the refresh check against the previous `sub` need the values the
+         * token carried. Nothing here is trusted beyond what the original validation proved;
+         * `exp` of an ID token says nothing about the session. Null when the token no longer
+         * parses, which a store that only holds what the SDK wrote never produces.
+         */
+        @VersolaInternalApi
+        public fun ofStored(idToken: String): IdTokenClaims? {
+            val payload = try {
+                Jws.parse(idToken).payload
+            } catch (e: Exception) {
+                return null
+            }
+            fun text(name: String): String? = (payload[name] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            fun time(name: String): Instant? = (payload[name] as? JsonPrimitive)?.content?.toDoubleOrNull()
+                ?.let { Instant.ofEpochMilli((it * 1000).toLong()) }
+            fun list(name: String): List<String> = when (val value = payload[name]) {
+                is JsonArray -> value.mapNotNull { (it as? JsonPrimitive)?.takeIf { p -> p.isString }?.content }
+                is JsonPrimitive -> listOfNotNull(value.takeIf { it.isString }?.content)
+                else -> emptyList()
+            }
+            return IdTokenClaims(
+                subject = text("sub") ?: return null,
+                issuer = text("iss") ?: return null,
+                audience = list("aud"),
+                issuedAt = time("iat") ?: Instant.EPOCH,
+                expiresAt = time("exp") ?: Instant.EPOCH,
+                authTime = time("auth_time"),
+                acr = text("acr"),
+                amr = list("amr"),
+                authorizedParty = text("azp"),
+                all = payload.filterKeys { it != "nonce" }
+                    .mapValues { (_, value) -> if (value is JsonPrimitive) value.content else value.toString() },
+            )
+        }
+    }
 }
 
 /**
@@ -37,6 +80,9 @@ public interface IdTokenValidator {
      * @param maxAge the `max_age` the request carried, under which `auth_time` is required.
      * @param previous the claims of the ID token this one replaces, on a refresh: `sub` must
      *   not change and `auth_time` must not move backwards.
+     * @param serverTime the provider's clock as the token response's `Date` header gave it,
+     *   or null: `exp`, `iat` and `auth_time` are judged against it rather than the device's
+     *   clock, so a device minutes off does not refuse every token (spec section 11).
      */
     public suspend fun validate(
         idToken: String,
@@ -44,5 +90,6 @@ public interface IdTokenValidator {
         accessToken: String?,
         maxAge: Long?,
         previous: IdTokenClaims?,
+        serverTime: Instant? = null,
     ): IdTokenClaims
 }

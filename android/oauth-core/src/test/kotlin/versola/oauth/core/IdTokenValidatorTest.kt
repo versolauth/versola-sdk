@@ -57,7 +57,7 @@ class IdTokenValidatorTest {
         tolerance: kotlin.time.Duration = 60.seconds,
         jwks: JwksClient = JwksClient(OkHttpClient()),
     ) = JwksIdTokenValidator(
-        issuer = issuer,
+        issuer = { issuer },
         clientId = clientId,
         jwksUri = { jwksUri },
         allowedAlgorithms = { allowed },

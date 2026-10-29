@@ -25,10 +25,13 @@ public class UserInfo(
 }
 
 /** Asks the provider who the access token's user is. */
+@VersolaInternalApi
 public interface UserInfoClient {
 
     /**
-     * @param accessToken sent as `Bearer`, or as `DPoP` with a proof when it is key-bound.
+     * @param tokens the session: its token is sent as `Bearer`, or as `DPoP` with a proof when
+     *   it is key-bound; a bare 401 spends one renewal and one replay, then is `Reauthenticate`
+     *   (`spec/errors.md`, a resource server's 401).
      * @param expectedSubject the `sub` of the validated ID token. Core 5.3.2: a UserInfo
      *   response about anyone else must not be used, so a different `sub` is refused.
      * @throws VersolaError.Configuration `ProviderUnsupported("userinfo_endpoint")` without an
@@ -37,7 +40,7 @@ public interface UserInfoClient {
      * @throws VersolaError.Reauthenticate `SessionRejected` on a 401.
      * @throws VersolaError.Recoverable `Network` on a transport failure or any other non-2xx.
      */
-    public suspend fun fetch(accessToken: AccessToken, expectedSubject: String): UserInfo
+    public suspend fun fetch(tokens: AccessTokenSource, expectedSubject: String): UserInfo
 }
 
 /**
@@ -70,10 +73,11 @@ public class HttpUserInfoClient(
         .followSslRedirects(false)
         .build()
 
-    override suspend fun fetch(accessToken: AccessToken, expectedSubject: String): UserInfo {
+    override suspend fun fetch(tokens: AccessTokenSource, expectedSubject: String): UserInfo {
         val url = userinfoEndpoint() ?: throw VersolaError.Configuration(
             VersolaError.Configuration.Detail.ProviderUnsupported("userinfo_endpoint"),
         )
+        var accessToken = tokens.accessToken()
         if (accessToken.isDpopBound && dpop == null) {
             throw VersolaError.Configuration(
                 VersolaError.Configuration.Detail.InvalidConfiguration(
@@ -82,9 +86,17 @@ public class HttpUserInfoClient(
             )
         }
         var nonceRetried = false
+        var refreshed = false
         while (true) {
             when (val outcome = attempt(url, accessToken)) {
                 is Outcome.Body -> return parse(outcome, expectedSubject)
+                // A bare 401 is read as an expired token: one refresh, one replay, then the
+                // session is what the provider says it is (`spec/errors.md`).
+                is Outcome.Rejected -> {
+                    if (refreshed) throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.SessionRejected)
+                    refreshed = true
+                    accessToken = tokens.renewAccessToken()
+                }
                 is Outcome.UseDpopNonce -> {
                     // `observe` already cached the nonce off this response, so the next proof
                     // carries it. A challenge without one, or a second challenge, cannot be
@@ -124,7 +136,7 @@ public class HttpUserInfoClient(
                             if (bound && wwwAuthenticateError(response.headers("WWW-Authenticate")) == "use_dpop_nonce") {
                                 Outcome.UseDpopNonce(nonce)
                             } else {
-                                throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.SessionRejected)
+                                Outcome.Rejected
                             }
                         }
 
@@ -173,5 +185,6 @@ public class HttpUserInfoClient(
     private sealed interface Outcome {
         class Body(val payload: String, val signed: Boolean) : Outcome
         class UseDpopNonce(val nonce: String?) : Outcome
+        object Rejected : Outcome
     }
 }

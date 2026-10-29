@@ -128,6 +128,7 @@ public class JsonWebKeySet internal constructor(public val keys: List<JsonWebKey
  * still readable by the next, and so a document that no longer parses is dropped like any
  * corrupt cache.
  */
+@VersolaInternalApi
 public interface JwksCache {
     public suspend fun load(): String?
     public suspend fun save(json: String)
@@ -135,6 +136,7 @@ public interface JwksCache {
 }
 
 /** A plain file, written through a temporary so a crash never leaves half a document. */
+@VersolaInternalApi
 public class FileJwksCache(
     private val file: File,
 ) : JwksCache {
@@ -163,6 +165,7 @@ public class FileJwksCache(
 }
 
 /** Process-local, for tests and for an integrator who wants nothing on disk. */
+@VersolaInternalApi
 public class MemoryJwksCache : JwksCache {
     private var document: String? = null
 

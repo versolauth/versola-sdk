@@ -8,6 +8,8 @@ import java.security.interfaces.ECPublicKey
 import java.security.interfaces.RSAPublicKey
 import java.security.spec.MGF1ParameterSpec
 import java.security.spec.PSSParameterSpec
+import java.security.GeneralSecurityException
+import java.security.NoSuchAlgorithmException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -152,22 +154,7 @@ internal object Jws {
     fun verify(token: ParsedJws, key: PublicKey, algorithm: JwsAlgorithm): Boolean {
         if (!suits(key, algorithm)) return false
         return try {
-            val signature = if (algorithm.pss) {
-                Signature.getInstance("RSASSA-PSS").apply {
-                    // RFC 7518 3.5: MGF1 with the same digest, and a salt as long as the digest.
-                    setParameter(
-                        PSSParameterSpec(
-                            algorithm.digest,
-                            "MGF1",
-                            MGF1ParameterSpec(algorithm.digest),
-                            algorithm.digestBytes,
-                            1,
-                        ),
-                    )
-                }
-            } else {
-                Signature.getInstance(algorithm.jcaName)
-            }
+            val signature = if (algorithm.pss) pssSignature(algorithm) else Signature.getInstance(algorithm.jcaName)
             signature.initVerify(key)
             signature.update(token.signingInput)
             if (algorithm.ecComponentBytes > 0) {
@@ -176,10 +163,29 @@ internal object Jws {
             } else {
                 signature.verify(token.signature)
             }
-        } catch (e: SignatureException) {
+        } catch (e: GeneralSecurityException) {
+            // SignatureException and InvalidKeyException are a bad signature or key; a
+            // NoSuchAlgorithmException or InvalidAlgorithmParameterException is a platform
+            // without the algorithm. None of them may leave as a raw exception: the token is
+            // simply not verified, and the caller reports it as such.
             false
-        } catch (e: InvalidKeyException) {
-            false
+        }
+    }
+
+    /**
+     * Android names the PSS family `SHA256withRSA/PSS` (API 23+) and does not list the JDK's
+     * `RSASSA-PSS` with explicit parameters for the supported range; the JDK (11+) has the
+     * latter and not the former. Try Android's name first, so a device never reaches the
+     * fallback, and fall back for the unit tests on a JDK.
+     */
+    private fun pssSignature(algorithm: JwsAlgorithm): Signature = try {
+        Signature.getInstance(algorithm.digest.replace("-", "") + "withRSA/PSS")
+    } catch (e: NoSuchAlgorithmException) {
+        Signature.getInstance("RSASSA-PSS").apply {
+            // RFC 7518 3.5: MGF1 with the same digest, and a salt as long as the digest.
+            setParameter(
+                PSSParameterSpec(algorithm.digest, "MGF1", MGF1ParameterSpec(algorithm.digest), algorithm.digestBytes, 1),
+            )
         }
     }
 
@@ -294,5 +300,19 @@ public class JwsVerifier(
             throw JwsRejection(IdTokenRejection.Signature, "token has no kid and several keys could have signed it")
         }
         return suitable
+    }
+}
+
+/**
+ * The signature check alone, for a test that must prove an algorithm on a real platform (the
+ * PSS family on an Android emulator, where the JCA names differ from a JDK's). Not for apps.
+ */
+@VersolaInternalApi
+public object JwsSignatures {
+    /** Whether [signature] over [signingInput] verifies under [key] for the JOSE algorithm [algorithm]. */
+    public fun verifies(algorithm: String, key: java.security.PublicKey, signingInput: ByteArray, signature: ByteArray): Boolean {
+        val parsed = JwsAlgorithm.forName(algorithm) ?: return false
+        val empty = kotlinx.serialization.json.JsonObject(emptyMap())
+        return Jws.verify(ParsedJws(empty, empty, signingInput, signature), key, parsed)
     }
 }

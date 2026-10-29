@@ -215,6 +215,7 @@ class SessionCoordinatorTest {
         revocationEndpoint = "$ISSUER/revoke",
         endSessionEndpoint = "$ISSUER/logout",
         authorizationResponseIssParameterSupported = true,
+        scopesSupported = listOf("openid", "offline_access"),
     )
 
     private val configuration = VersolaConfiguration.create(
@@ -295,8 +296,8 @@ class SessionCoordinatorTest {
         val calls = mutableListOf<List<Any?>>()
         var refusal: IdTokenRejection? = null
 
-        override suspend fun validate(idToken: String, expectedNonce: String?, accessToken: String?, maxAge: Long?, previous: IdTokenClaims?): IdTokenClaims {
-            calls += listOf(idToken, expectedNonce, accessToken, maxAge, previous)
+        override suspend fun validate(idToken: String, expectedNonce: String?, accessToken: String?, maxAge: Long?, previous: IdTokenClaims?, serverTime: java.time.Instant?): IdTokenClaims {
+            calls += listOf(idToken, expectedNonce, accessToken, maxAge, previous, serverTime)
             refusal?.let { throw VersolaError.Configuration(VersolaError.Configuration.Detail.IdTokenRejected(it)) }
             return IdTokenClaims(
                 subject = "alice", issuer = "https://id.example.com", audience = listOf("mobile-app"),
@@ -409,6 +410,79 @@ class SessionCoordinatorTest {
         // The response was not persisted and the grant is intact.
         assertEquals("rt-2", credentialStore.refreshToken?.toString(Charsets.UTF_8))
         assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a login over a stored grant that yields no refresh token wipes the stored grant`() = runTest {
+        val credentialStore = FakeCredentialStore()
+        val (coordinator, tokenClient, _) = generic(credentialStore = credentialStore)
+        tokenClient.exchangeResult = { issued(accessToken = "at-a", refreshToken = "rt-a") }
+        coordinator.login(setOf("openid"))
+        assertEquals("rt-a", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        val teardownsBefore = teardowns
+
+        tokenClient.exchangeResult = { issued(accessToken = "at-b", refreshToken = null) }
+        coordinator.login(setOf("openid"))
+
+        // B's session is in memory; A's grant is gone, key teardown included, so a cold start
+        // cannot come back as A.
+        assertNull(credentialStore.refreshToken)
+        assertEquals(teardownsBefore + 1, teardowns)
+        assertEquals("at-b", coordinator.accessToken().value)
+        val (restarted, _, _) = generic(credentialStore = credentialStore)
+        assertEquals(SessionState.Unauthenticated, restarted.sessionState.first())
+    }
+
+    @Test
+    fun `after a cold start the claims come back from the stored ID token and feed the refresh check`() = runTest {
+        val credentialStore = FakeCredentialStore()
+        val validator = RecordingValidator()
+        val (coordinator, tokenClient, _) = generic(credentialStore = credentialStore, validator = validator)
+        val header = Base64Url.encode("""{"alg":"RS256"}""".toByteArray())
+        val payload = Base64Url.encode("""{"iss":"https://id.example.com","sub":"alice","aud":"mobile-app","exp":1700003600,"iat":1700000000,"nonce":"n","acr":"urn:mfa"}""".toByteArray())
+        tokenClient.exchangeResult = { issued(accessToken = "at", refreshToken = "rt", idToken = "$header.$payload.sig") }
+        coordinator.login(setOf("openid"))
+
+        val (restarted, client2, _) = generic(credentialStore = credentialStore, validator = RecordingValidator().also { validator.calls.clear() })
+        assertNull(restarted.claims)
+
+        val restored = restarted.restoreClaims()
+
+        assertEquals("alice", restored?.subject)
+        assertEquals("urn:mfa", restored?.acr)
+        assertEquals(restored, restarted.claims)
+        assertFalse(restored!!.all.containsKey("nonce"))
+        // The refresh check against the previous `sub` has what it needs after the restart.
+        client2.refreshActions = mutableListOf({ issued(accessToken = "at-2", refreshToken = "rt-2", idToken = "$header.$payload.sig") })
+        restarted.refresh()
+    }
+
+    @Test
+    fun `the token response's Date reaches the validator as the provider's clock`() = runTest {
+        val validator = RecordingValidator()
+        val (coordinator, tokenClient, _) = generic(validator = validator)
+        val serverDate = java.time.Instant.parse("2026-10-29T10:00:00Z")
+        tokenClient.exchangeResult = {
+            TokenResponse.from(TokenResponsePayload(accessToken = "at", tokenType = "Bearer", expiresIn = 3600, refreshToken = "rt", idToken = "h.p.s"), serverDate)
+        }
+
+        coordinator.login(setOf("openid"))
+
+        assertEquals(serverDate, validator.calls.single()[5])
+    }
+
+    @Test
+    fun `the optional policy warns once when offline_access is offered but not asked for, and once on a response without expires_in`() = runTest {
+        val logger = WarningLogger()
+        val (coordinator, tokenClient, _) = generic(logger = logger)
+        tokenClient.exchangeResult = { issued(accessToken = "at", refreshToken = "rt", expiresIn = 0) }
+
+        coordinator.login(setOf("openid"))
+        tokenClient.refreshActions = mutableListOf({ issued(accessToken = "at-2", refreshToken = "rt-2", expiresIn = 0) })
+        coordinator.refresh()
+
+        assertEquals(1, logger.warnings.count { it.contains("offline_access") })
+        assertEquals(1, logger.warnings.count { it.contains("expires_in") })
     }
 
     @Test

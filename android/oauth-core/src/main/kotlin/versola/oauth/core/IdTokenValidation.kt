@@ -21,7 +21,9 @@ import kotlinx.serialization.json.doubleOrNull
  * Fail closed throughout: nothing here has an off switch, and a claim that is present but of
  * the wrong type is [IdTokenRejection.Malformed] rather than ignored.
  *
- * @param issuer compared byte for byte with `iss`. Not trailing-slash-insensitive like
+ * @param issuer compared byte for byte with `iss`; supplied from discovery, since that is the
+ *   value the provider signs tokens under (a configured value may differ by a trailing slash,
+ *   which discovery tolerates and this check must not). Not trailing-slash-insensitive like
  *   discovery's check: that one guards where a document was fetched from, this one guards who
  *   signed a token, and a provider that issues `https://a/` and `https://a` is two issuers.
  * @param jwksUri supplier of the `jwks_uri` from discovery, null when it advertises none.
@@ -33,7 +35,7 @@ import kotlinx.serialization.json.doubleOrNull
  */
 @VersolaInternalApi
 public class JwksIdTokenValidator(
-    private val issuer: String,
+    private val issuer: suspend () -> String,
     private val clientId: String,
     jwksUri: suspend () -> String?,
     allowedAlgorithms: suspend () -> List<String>,
@@ -50,6 +52,7 @@ public class JwksIdTokenValidator(
         accessToken: String?,
         maxAge: Long?,
         previous: IdTokenClaims?,
+        serverTime: Instant?,
     ): IdTokenClaims {
         val token = try {
             verifier.verify(idToken)
@@ -57,7 +60,7 @@ public class JwksIdTokenValidator(
             throw rejected(e.reason)
         }
         try {
-            return check(token, expectedNonce, accessToken, maxAge, previous)
+            return check(token, expectedNonce, accessToken, maxAge, previous, issuer(), serverTime)
         } catch (e: JwsRejection) {
             throw rejected(e.reason)
         }
@@ -69,9 +72,14 @@ public class JwksIdTokenValidator(
         accessToken: String?,
         maxAge: Long?,
         previous: IdTokenClaims?,
+        issuer: String,
+        serverTime: Instant?,
     ): IdTokenClaims {
         val payload = token.payload
-        val now = clock()
+        // The provider's own clock when it has just told us (the token response's `Date`):
+        // the token was minted against that clock, so a device clock minutes off does not
+        // turn every `iat` into "the future". Otherwise the injected clock.
+        val now = serverTime ?: clock()
         val tolerance = clockSkewTolerance.toJavaDuration()
 
         // Types first, so that a claim of the wrong type is Malformed wherever it sits in the
