@@ -190,8 +190,13 @@ cd android && OAUTH_CONFORMANCE_ISSUER=http://localhost:4444 \
   OAUTH_CONFORMANCE_PROVIDER=hydra ./gradlew :conformance-oauth:testDebugUnitTest
 ```
 
-A run takes about half a minute, most of it scenario 31 waiting for ten-second tokens to
-expire. `conformance/README.md` ("Providers") says how the proxy, the HTTP browser leg and the
+The iOS driver runs against the same containers from the repository root, on the host
+(`OAUTH_CONFORMANCE_ISSUER=… OAUTH_CONFORMANCE_PROVIDER=… swift test --filter OAuthConformanceTests`)
+or on a simulator (the same variables with a `TEST_RUNNER_` prefix and
+`xcodebuild test … -only-testing:OAuthConformanceTests`).
+
+A run takes about a minute per provider, most of it scenario 31 waiting for ten-second tokens
+to expire. `conformance/README.md` ("Providers") says how the proxy, the HTTP browser leg and the
 resource server work, what differs per provider, and what this tier does not prove.
 
 ## Agent setup
