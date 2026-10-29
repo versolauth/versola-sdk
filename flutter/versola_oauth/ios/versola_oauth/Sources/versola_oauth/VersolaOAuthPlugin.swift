@@ -49,13 +49,15 @@ public final class VersolaOAuthPlugin: NSObject, FlutterPlugin {
             return client
         }
 
-        func put(_ handle: String, _ client: OAuthClient, messenger: FlutterBinaryMessenger?) {
+        /// Records the client and answers with the stream to register for it, or nil when this
+        /// handle already has one. Registering is not done here: this actor runs on the
+        /// cooperative pool, and an event channel may only be registered on the platform thread.
+        func put(_ handle: String, _ client: OAuthClient) -> SessionStateStream? {
             byHandle[handle] = client
-            if streams[handle] == nil, let messenger {
-                let stream = SessionStateStream(client: client)
-                streams[handle] = stream
-                SessionStatesStreamHandler.register(with: messenger, instanceName: handle, streamHandler: stream)
-            }
+            guard streams[handle] == nil else { return nil }
+            let stream = SessionStateStream(client: client)
+            streams[handle] = stream
+            return stream
         }
 
         func deliver(_ url: URL) async {
@@ -73,7 +75,13 @@ extension VersolaOAuthPlugin: OAuthHostApi {
                 configuration: try configuration.toConfiguration(),
                 presentationAnchor: { Self.presentationAnchor() }
             )
-            await clients.put(handle, client, messenger: messenger)
+            if let stream = await clients.put(handle, client), let messenger {
+                // The engine checks that a channel handler is registered on the platform thread
+                // (a debug build aborts otherwise); a Pigeon call reaches this method on the pool.
+                await MainActor.run {
+                    SessionStatesStreamHandler.register(with: messenger, instanceName: handle, streamHandler: stream)
+                }
+            }
         }
     }
 
@@ -104,7 +112,10 @@ extension VersolaOAuthPlugin: OAuthHostApi {
         do {
             // The one credential that crosses (issue #46 decision 7).
             let token = try await clients.get(handle).accessToken()
-            return AccessTokenOk(token: AccessTokenMessage(value: token.value, tokenType: token.tokenType))
+            // The scheme as the spec names it (`Bearer` or `DPoP`), as the Android half sends it: the
+            // SDK's `tokenType` is the provider's own spelling, and Hydra answers `bearer`.
+            let scheme = token.tokenType.caseInsensitiveCompare("DPoP") == .orderedSame ? "DPoP" : "Bearer"
+            return AccessTokenOk(token: AccessTokenMessage(value: token.value, tokenType: scheme))
         } catch let error as OAuthError {
             return AccessTokenFailure(error: error.toMessage())
         }
