@@ -1,0 +1,37 @@
+name: versola_oauth
+description: >-
+  Flutter binding of the Versola generic OAuth 2.0 / OpenID Connect SDK: a Pigeon bridge over
+  the native Android and iOS facades. No protocol logic in Dart.
+version: 0.1.0
+repository: https://github.com/versolauth/versola-sdk
+# Publishing from the monorepo is dormant (release.yml); do not add a publish_to that enables it.
+
+environment:
+  # Pinned tightly (.claude/rules/flutter.md): pubspec.lock is not committed, so these ranges
+  # are what makes a build repeatable. The toolchain is flutter/.fvmrc (3.47.8, Dart 3.13.7).
+  sdk: ">=3.13.0 <3.14.0"
+  flutter: ">=3.47.0 <3.48.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # SHA-256 for the client handle, the same derivation as the native storage key. Dart-team
+  # package, BSD-3-Clause.
+  crypto: 3.0.8
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: 6.0.0
+  # The bridge generator; the version is part of the contract, since both native halves are
+  # generated from pigeons/messages.dart with it. Flutter-team package, BSD-3-Clause.
+  pigeon: 29.0.12
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: versola.oauth.flutter
+        pluginClass: VersolaOAuthPlugin
+      ios:
+        pluginClass: VersolaOAuthPlugin

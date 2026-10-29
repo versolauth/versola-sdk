@@ -97,7 +97,7 @@ android/         Gradle multi-project: oauth-core (the protocol engine, plain JV
 ios/Sources/     Swift targets: OAuthCore (the protocol engine) and OAuthClient (the generic
                  facade, product VersolaOAuth); the Versola* targets are placeholders
 Package.swift    at the repo root; SPM cannot resolve a manifest from a subdirectory
-flutter/         plugin + Pigeon bridge
+flutter/         versola_oauth: Flutter binding over the native facades (Pigeon)
 conformance/     harness driving every SDK against a staged auth + edge, and the provider
                  containers (providers/) the generic facade is proven against
 ```
