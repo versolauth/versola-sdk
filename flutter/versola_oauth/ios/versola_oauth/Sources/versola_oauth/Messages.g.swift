@@ -893,8 +893,10 @@ struct LogoutOutcomeMessage: Hashable, CustomStringConvertible {
   }
 }
 
-/// Result-shaped answers (`flutter.md`, Bridge): a method answers with its value or with the
-/// typed error, never with a thrown `PlatformException` that would collapse the category.
+/// Result-shaped answers (`flutter.md`, Bridge): every method answers with its value or with
+/// the typed error, never with a thrown `PlatformException` that would collapse the category.
+/// Native code catches everything: a `VersolaError` / `OAuthError` crosses as itself, any other
+/// exception as a `Configuration` naming only its class.
 ///
 /// Generated class from Pigeon that represents data sent in messages.
 /// This protocol should not be extended by any user class outside of the generated file.
@@ -964,6 +966,161 @@ struct VoidFailure: VoidResult, Hashable, CustomStringConvertible {
 
   public var description: String {
     return "VoidFailure(error: \(String(describing: error)))"
+  }
+}
+
+/// `create` answers with the handle native chose for this client; every later call and the
+/// event channel's instance name use it, so Dart never derives an identity of its own.
+///
+/// Generated class from Pigeon that represents data sent in messages.
+/// This protocol should not be extended by any user class outside of the generated file.
+protocol CreateResult {
+
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+struct CreateOk: CreateResult, Hashable, CustomStringConvertible {
+  var handle: String
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> CreateOk? {
+    let handle = pigeonVar_list[0] as! String
+
+    return CreateOk(
+      handle: handle
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      handle
+    ]
+  }
+  static func == (lhs: CreateOk, rhs: CreateOk) -> Bool {
+    if Swift.type(of: lhs) != Swift.type(of: rhs) {
+      return false
+    }
+    return MessagesPigeonInternal.deepEquals(lhs.handle, rhs.handle)
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine("CreateOk")
+    MessagesPigeonInternal.deepHash(value: handle, hasher: &hasher)
+  }
+
+  public var description: String {
+    return "CreateOk(handle: \(String(describing: handle)))"
+  }
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+struct CreateFailure: CreateResult, Hashable, CustomStringConvertible {
+  var error: ErrorMessage
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> CreateFailure? {
+    let error = pigeonVar_list[0] as! ErrorMessage
+
+    return CreateFailure(
+      error: error
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      error
+    ]
+  }
+  static func == (lhs: CreateFailure, rhs: CreateFailure) -> Bool {
+    if Swift.type(of: lhs) != Swift.type(of: rhs) {
+      return false
+    }
+    return MessagesPigeonInternal.deepEquals(lhs.error, rhs.error)
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine("CreateFailure")
+    MessagesPigeonInternal.deepHash(value: error, hasher: &hasher)
+  }
+
+  public var description: String {
+    return "CreateFailure(error: \(String(describing: error)))"
+  }
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+/// This protocol should not be extended by any user class outside of the generated file.
+protocol SessionStateResult {
+
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+struct SessionStateOk: SessionStateResult, Hashable, CustomStringConvertible {
+  var state: SessionStateMessage
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> SessionStateOk? {
+    let state = pigeonVar_list[0] as! SessionStateMessage
+
+    return SessionStateOk(
+      state: state
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      state
+    ]
+  }
+  static func == (lhs: SessionStateOk, rhs: SessionStateOk) -> Bool {
+    if Swift.type(of: lhs) != Swift.type(of: rhs) {
+      return false
+    }
+    return MessagesPigeonInternal.deepEquals(lhs.state, rhs.state)
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine("SessionStateOk")
+    MessagesPigeonInternal.deepHash(value: state, hasher: &hasher)
+  }
+
+  public var description: String {
+    return "SessionStateOk(state: \(String(describing: state)))"
+  }
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+struct SessionStateFailure: SessionStateResult, Hashable, CustomStringConvertible {
+  var error: ErrorMessage
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> SessionStateFailure? {
+    let error = pigeonVar_list[0] as! ErrorMessage
+
+    return SessionStateFailure(
+      error: error
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      error
+    ]
+  }
+  static func == (lhs: SessionStateFailure, rhs: SessionStateFailure) -> Bool {
+    if Swift.type(of: lhs) != Swift.type(of: rhs) {
+      return false
+    }
+    return MessagesPigeonInternal.deepEquals(lhs.error, rhs.error)
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine("SessionStateFailure")
+    MessagesPigeonInternal.deepHash(value: error, hasher: &hasher)
+  }
+
+  public var description: String {
+    return "SessionStateFailure(error: \(String(describing: error)))"
   }
 }
 
@@ -1045,6 +1202,82 @@ struct AccessTokenFailure: AccessTokenResult, Hashable, CustomStringConvertible 
 
 /// Generated class from Pigeon that represents data sent in messages.
 /// This protocol should not be extended by any user class outside of the generated file.
+protocol ClaimsResult {
+
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+struct ClaimsOk: ClaimsResult, Hashable, CustomStringConvertible {
+  var claims: IdTokenClaimsMessage? = nil
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> ClaimsOk? {
+    let claims: IdTokenClaimsMessage? = nilOrValue(pigeonVar_list[0])
+
+    return ClaimsOk(
+      claims: claims
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      claims
+    ]
+  }
+  static func == (lhs: ClaimsOk, rhs: ClaimsOk) -> Bool {
+    if Swift.type(of: lhs) != Swift.type(of: rhs) {
+      return false
+    }
+    return MessagesPigeonInternal.deepEquals(lhs.claims, rhs.claims)
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine("ClaimsOk")
+    MessagesPigeonInternal.deepHash(value: claims, hasher: &hasher)
+  }
+
+  public var description: String {
+    return "ClaimsOk(claims: \(String(describing: claims)))"
+  }
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+struct ClaimsFailure: ClaimsResult, Hashable, CustomStringConvertible {
+  var error: ErrorMessage
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> ClaimsFailure? {
+    let error = pigeonVar_list[0] as! ErrorMessage
+
+    return ClaimsFailure(
+      error: error
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      error
+    ]
+  }
+  static func == (lhs: ClaimsFailure, rhs: ClaimsFailure) -> Bool {
+    if Swift.type(of: lhs) != Swift.type(of: rhs) {
+      return false
+    }
+    return MessagesPigeonInternal.deepEquals(lhs.error, rhs.error)
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine("ClaimsFailure")
+    MessagesPigeonInternal.deepHash(value: error, hasher: &hasher)
+  }
+
+  public var description: String {
+    return "ClaimsFailure(error: \(String(describing: error)))"
+  }
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+/// This protocol should not be extended by any user class outside of the generated file.
 protocol UserInfoResult {
 
 }
@@ -1119,6 +1352,160 @@ struct UserInfoFailure: UserInfoResult, Hashable, CustomStringConvertible {
   }
 }
 
+/// Generated class from Pigeon that represents data sent in messages.
+/// This protocol should not be extended by any user class outside of the generated file.
+protocol LogoutResult {
+
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+struct LogoutOk: LogoutResult, Hashable, CustomStringConvertible {
+  var outcome: LogoutOutcomeMessage
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> LogoutOk? {
+    let outcome = pigeonVar_list[0] as! LogoutOutcomeMessage
+
+    return LogoutOk(
+      outcome: outcome
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      outcome
+    ]
+  }
+  static func == (lhs: LogoutOk, rhs: LogoutOk) -> Bool {
+    if Swift.type(of: lhs) != Swift.type(of: rhs) {
+      return false
+    }
+    return MessagesPigeonInternal.deepEquals(lhs.outcome, rhs.outcome)
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine("LogoutOk")
+    MessagesPigeonInternal.deepHash(value: outcome, hasher: &hasher)
+  }
+
+  public var description: String {
+    return "LogoutOk(outcome: \(String(describing: outcome)))"
+  }
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+struct LogoutFailure: LogoutResult, Hashable, CustomStringConvertible {
+  var error: ErrorMessage
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> LogoutFailure? {
+    let error = pigeonVar_list[0] as! ErrorMessage
+
+    return LogoutFailure(
+      error: error
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      error
+    ]
+  }
+  static func == (lhs: LogoutFailure, rhs: LogoutFailure) -> Bool {
+    if Swift.type(of: lhs) != Swift.type(of: rhs) {
+      return false
+    }
+    return MessagesPigeonInternal.deepEquals(lhs.error, rhs.error)
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine("LogoutFailure")
+    MessagesPigeonInternal.deepHash(value: error, hasher: &hasher)
+  }
+
+  public var description: String {
+    return "LogoutFailure(error: \(String(describing: error)))"
+  }
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+/// This protocol should not be extended by any user class outside of the generated file.
+protocol KeyAttestationResult {
+
+}
+
+/// `secureEnclave`, `strongBox`, `trustedEnvironment`, `software`, or null under bearer.
+///
+/// Generated class from Pigeon that represents data sent in messages.
+struct KeyAttestationOk: KeyAttestationResult, Hashable, CustomStringConvertible {
+  var tier: String? = nil
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> KeyAttestationOk? {
+    let tier: String? = nilOrValue(pigeonVar_list[0])
+
+    return KeyAttestationOk(
+      tier: tier
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      tier
+    ]
+  }
+  static func == (lhs: KeyAttestationOk, rhs: KeyAttestationOk) -> Bool {
+    if Swift.type(of: lhs) != Swift.type(of: rhs) {
+      return false
+    }
+    return MessagesPigeonInternal.deepEquals(lhs.tier, rhs.tier)
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine("KeyAttestationOk")
+    MessagesPigeonInternal.deepHash(value: tier, hasher: &hasher)
+  }
+
+  public var description: String {
+    return "KeyAttestationOk(tier: \(String(describing: tier)))"
+  }
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+struct KeyAttestationFailure: KeyAttestationResult, Hashable, CustomStringConvertible {
+  var error: ErrorMessage
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> KeyAttestationFailure? {
+    let error = pigeonVar_list[0] as! ErrorMessage
+
+    return KeyAttestationFailure(
+      error: error
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      error
+    ]
+  }
+  static func == (lhs: KeyAttestationFailure, rhs: KeyAttestationFailure) -> Bool {
+    if Swift.type(of: lhs) != Swift.type(of: rhs) {
+      return false
+    }
+    return MessagesPigeonInternal.deepEquals(lhs.error, rhs.error)
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine("KeyAttestationFailure")
+    MessagesPigeonInternal.deepHash(value: error, hasher: &hasher)
+  }
+
+  public var description: String {
+    return "KeyAttestationFailure(error: \(String(describing: error)))"
+  }
+}
+
 private class MessagesPigeonCodecReader: FlutterStandardReader {
   override func readValue(ofType type: UInt8) -> Any? {
     switch type {
@@ -1183,13 +1570,33 @@ private class MessagesPigeonCodecReader: FlutterStandardReader {
     case 146:
       return VoidFailure.fromList(self.readValue() as! [Any?])
     case 147:
-      return AccessTokenOk.fromList(self.readValue() as! [Any?])
+      return CreateOk.fromList(self.readValue() as! [Any?])
     case 148:
-      return AccessTokenFailure.fromList(self.readValue() as! [Any?])
+      return CreateFailure.fromList(self.readValue() as! [Any?])
     case 149:
-      return UserInfoOk.fromList(self.readValue() as! [Any?])
+      return SessionStateOk.fromList(self.readValue() as! [Any?])
     case 150:
+      return SessionStateFailure.fromList(self.readValue() as! [Any?])
+    case 151:
+      return AccessTokenOk.fromList(self.readValue() as! [Any?])
+    case 152:
+      return AccessTokenFailure.fromList(self.readValue() as! [Any?])
+    case 153:
+      return ClaimsOk.fromList(self.readValue() as! [Any?])
+    case 154:
+      return ClaimsFailure.fromList(self.readValue() as! [Any?])
+    case 155:
+      return UserInfoOk.fromList(self.readValue() as! [Any?])
+    case 156:
       return UserInfoFailure.fromList(self.readValue() as! [Any?])
+    case 157:
+      return LogoutOk.fromList(self.readValue() as! [Any?])
+    case 158:
+      return LogoutFailure.fromList(self.readValue() as! [Any?])
+    case 159:
+      return KeyAttestationOk.fromList(self.readValue() as! [Any?])
+    case 160:
+      return KeyAttestationFailure.fromList(self.readValue() as! [Any?])
     default:
       return super.readValue(ofType: type)
     }
@@ -1252,17 +1659,47 @@ private class MessagesPigeonCodecWriter: FlutterStandardWriter {
     } else if let value = value as? VoidFailure {
       super.writeByte(146)
       super.writeValue(value.toList())
-    } else if let value = value as? AccessTokenOk {
+    } else if let value = value as? CreateOk {
       super.writeByte(147)
       super.writeValue(value.toList())
-    } else if let value = value as? AccessTokenFailure {
+    } else if let value = value as? CreateFailure {
       super.writeByte(148)
       super.writeValue(value.toList())
-    } else if let value = value as? UserInfoOk {
+    } else if let value = value as? SessionStateOk {
       super.writeByte(149)
       super.writeValue(value.toList())
-    } else if let value = value as? UserInfoFailure {
+    } else if let value = value as? SessionStateFailure {
       super.writeByte(150)
+      super.writeValue(value.toList())
+    } else if let value = value as? AccessTokenOk {
+      super.writeByte(151)
+      super.writeValue(value.toList())
+    } else if let value = value as? AccessTokenFailure {
+      super.writeByte(152)
+      super.writeValue(value.toList())
+    } else if let value = value as? ClaimsOk {
+      super.writeByte(153)
+      super.writeValue(value.toList())
+    } else if let value = value as? ClaimsFailure {
+      super.writeByte(154)
+      super.writeValue(value.toList())
+    } else if let value = value as? UserInfoOk {
+      super.writeByte(155)
+      super.writeValue(value.toList())
+    } else if let value = value as? UserInfoFailure {
+      super.writeByte(156)
+      super.writeValue(value.toList())
+    } else if let value = value as? LogoutOk {
+      super.writeByte(157)
+      super.writeValue(value.toList())
+    } else if let value = value as? LogoutFailure {
+      super.writeByte(158)
+      super.writeValue(value.toList())
+    } else if let value = value as? KeyAttestationOk {
+      super.writeByte(159)
+      super.writeValue(value.toList())
+    } else if let value = value as? KeyAttestationFailure {
+      super.writeByte(160)
       super.writeValue(value.toList())
     } else {
       super.writeValue(value)
@@ -1287,25 +1724,24 @@ class MessagesPigeonCodec: FlutterStandardMessageCodec, @unchecked Sendable {
 var messagesPigeonMethodCodec = FlutterStandardMethodCodec(readerWriter: MessagesPigeonCodecReaderWriter());
 
 
-/// Dart → native. Every method takes the `handle` `create` returned: one native client per
-/// configuration per process, as the native facades promise.
+/// Dart → native. Every method but `create` takes the `handle` `create` returned: one native
+/// client per configuration per process, as the native facades promise.
 ///
 /// Generated protocol from Pigeon that represents a handler of messages from Flutter.
 protocol OAuthHostApi {
-  /// Validates the configuration and wires the native client; the handle names it from now on.
-  func create(handle: String, configuration: ConfigurationMessage) async throws -> VoidResult
-  func sessionState(handle: String) async throws -> SessionStateMessage
+  /// Validates the configuration and wires (or finds) the native client, and answers with the
+  /// handle that names it from now on. The same configuration answers the same handle.
+  func create(configuration: ConfigurationMessage) async throws -> CreateResult
+  func sessionState(handle: String) async throws -> SessionStateResult
   func login(handle: String, options: LoginOptionsMessage) async throws -> VoidResult
   func stepUp(handle: String, acrValues: [String], maxAge: Int64?, options: LoginOptionsMessage) async throws -> VoidResult
-  func resumePendingAuthorization(handle: String) async throws -> VoidResult
-  func logout(handle: String, options: LogoutOptionsMessage) async throws -> LogoutOutcomeMessage
+  func logout(handle: String, options: LogoutOptionsMessage) async throws -> LogoutResult
   /// The short-lived access token, the one credential that crosses (issue #46 decision 7).
   func accessToken(handle: String) async throws -> AccessTokenResult
   func refresh(handle: String) async throws -> VoidResult
-  func claims(handle: String) async throws -> IdTokenClaimsMessage?
+  func claims(handle: String) async throws -> ClaimsResult
   func userInfo(handle: String) async throws -> UserInfoResult
-  /// `secureEnclave`, `strongBox`, `trustedEnvironment`, `software`, or null under bearer.
-  func keyAttestation(handle: String) async throws -> String?
+  func keyAttestation(handle: String) async throws -> KeyAttestationResult
 }
 
 /// Generated setup class from Pigeon to handle messages through the `binaryMessenger`.
@@ -1314,16 +1750,16 @@ class OAuthHostApiSetup {
   /// Sets up an instance of `OAuthHostApi` to handle messages through the `binaryMessenger`.
   static func setUp(binaryMessenger: FlutterBinaryMessenger, api: OAuthHostApi?, messageChannelSuffix: String = "") {
     let channelSuffix = messageChannelSuffix.count > 0 ? ".\(messageChannelSuffix)" : ""
-    /// Validates the configuration and wires the native client; the handle names it from now on.
+    /// Validates the configuration and wires (or finds) the native client, and answers with the
+    /// handle that names it from now on. The same configuration answers the same handle.
     let createChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.versola_oauth.OAuthHostApi.create\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       createChannel.setMessageHandler { message, reply in
         let args = message as! [Any?]
-        let handleArg = args[0] as! String
-        let configurationArg = args[1] as! ConfigurationMessage
+        let configurationArg = args[0] as! ConfigurationMessage
         Task { @MainActor in
           do {
-            let result = try await api.create(handle: handleArg, configuration: configurationArg)
+            let result = try await api.create(configuration: configurationArg)
             reply(wrapResult(result))
           } catch {
             reply(wrapError(error))
@@ -1387,23 +1823,6 @@ class OAuthHostApiSetup {
       }
     } else {
       stepUpChannel.setMessageHandler(nil)
-    }
-    let resumePendingAuthorizationChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.versola_oauth.OAuthHostApi.resumePendingAuthorization\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
-    if let api = api {
-      resumePendingAuthorizationChannel.setMessageHandler { message, reply in
-        let args = message as! [Any?]
-        let handleArg = args[0] as! String
-        Task { @MainActor in
-          do {
-            let result = try await api.resumePendingAuthorization(handle: handleArg)
-            reply(wrapResult(result))
-          } catch {
-            reply(wrapError(error))
-          }
-        }
-      }
-    } else {
-      resumePendingAuthorizationChannel.setMessageHandler(nil)
     }
     let logoutChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.versola_oauth.OAuthHostApi.logout\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
@@ -1492,7 +1911,6 @@ class OAuthHostApiSetup {
     } else {
       userInfoChannel.setMessageHandler(nil)
     }
-    /// `secureEnclave`, `strongBox`, `trustedEnvironment`, `software`, or null under bearer.
     let keyAttestationChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.versola_oauth.OAuthHostApi.keyAttestation\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
     if let api = api {
       keyAttestationChannel.setMessageHandler { message, reply in
@@ -1562,9 +1980,11 @@ class PigeonEventSink<ReturnType> {
 
 }
 
-/// Native → Dart: the state machine, one stream per subscription, fed by the native
-/// `Flow` / `AsyncStream`; the native collection ends when the subscription does. One channel
-/// per client: the handle is the Pigeon `instanceName`, registered by `create`.
+/// Native → Dart: the state machine, fed by the native `Flow` / `AsyncStream`; the native
+/// collection ends when the subscription does. One channel per client: the handle `create`
+/// returned is the Pigeon `instanceName`. The generated stream must be subscribed once per
+/// client (a second `EventChannel` of the same name replaces the first's handler); the Dart
+/// client shares one subscription among its listeners.
 class SessionStatesStreamHandler: PigeonEventChannelWrapper<SessionStateMessage> {
   static func register(with messenger: FlutterBinaryMessenger,
                       instanceName: String = "",

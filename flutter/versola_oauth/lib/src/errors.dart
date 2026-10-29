@@ -35,13 +35,26 @@ enum RecoverableCause {
   network,
   unlockRequired,
   nonceLoop,
+
+  /// A native cause this version of the binding does not know; `detail` carries its name. Not
+  /// a reason to retry: the app cannot tell what it means, so it must not loop on it.
+  unknown,
 }
 
 /// The session is over; the user signs in again.
 final class ReauthenticateError extends OAuthError {
-  const ReauthenticateError(this.reason, super.message, {this.code});
+  const ReauthenticateError(
+    this.reason,
+    super.message, {
+    this.code,
+    this.detail,
+  });
   final ReauthenticateReason reason;
   final String? code;
+
+  /// The native name of a reason this version of the binding does not know
+  /// ([ReauthenticateReason.unknown]).
+  final String? detail;
 }
 
 enum ReauthenticateReason {
@@ -51,6 +64,11 @@ enum ReauthenticateReason {
   grantRejected,
   sessionRejected,
   sessionExpired,
+
+  /// A native reason this version of the binding does not know; `detail` carries its name.
+  /// Whether it ends the session is the native SDK's call, so the app asks the user to sign in
+  /// again only if its own flow needs a session.
+  unknown,
 }
 
 /// RFC 9470: the resource server wants a stronger authentication context.
@@ -118,4 +136,8 @@ enum IdTokenRejection {
   authTime,
   malformed,
   accessTokenHash,
+
+  /// A native rejection this version of the binding does not know; the error's `text` carries
+  /// its name.
+  unknown,
 }

@@ -119,6 +119,19 @@ internal fun VersolaError.toMessage(): ErrorMessage = when (this) {
     }
 }
 
+/**
+ * What crosses for an exception that is not a `VersolaError`: a `Configuration` naming only the
+ * class. The exception's message and stack never leave native code (`flutter.md`, "No secret in
+ * a `PlatformException` message").
+ */
+internal fun Throwable.toErrorMessage(): ErrorMessage = (this as? VersolaError)?.toMessage()
+    ?: ErrorMessage(
+        category = ErrorCategoryMessage.CONFIGURATION,
+        kind = "invalidConfiguration",
+        message = "configuration: unexpected ${this::class.simpleName}",
+        detail = "unexpected ${this::class.simpleName}",
+    )
+
 private fun VersolaError.recoverable(kind: String) =
     ErrorMessage(category = ErrorCategoryMessage.RECOVERABLE, kind = kind, message = message.orEmpty())
 

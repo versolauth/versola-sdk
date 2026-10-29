@@ -4,48 +4,6 @@ import 'package:versola_oauth/src/messages.g.dart';
 import 'package:versola_oauth/versola_oauth.dart';
 
 void main() {
-  group('handleFor', () {
-    test('is the native storage key derivation: base64url(sha256(issuer\\nclientId))[0..16]', () {
-      final handle = handleFor(
-        const OAuthConfiguration(
-          issuer: 'https://id.example.com',
-          clientId: 'app',
-          redirectUri: 'https://app.example.com/oauth',
-        ),
-      );
-      expect(handle, hasLength(16));
-      expect(handle, matches(RegExp(r'^[A-Za-z0-9_-]{16}$')));
-    });
-
-    test('ignores a trailing slash on the issuer, as the native side does', () {
-      const a = OAuthConfiguration(
-        issuer: 'https://id.example.com',
-        clientId: 'app',
-        redirectUri: 'https://app.example.com/oauth',
-      );
-      const b = OAuthConfiguration(
-        issuer: 'https://id.example.com/',
-        clientId: 'app',
-        redirectUri: 'https://app.example.com/oauth',
-      );
-      expect(handleFor(a), handleFor(b));
-    });
-
-    test('differs by client id and by issuer', () {
-      const a = OAuthConfiguration(
-        issuer: 'https://id.example.com',
-        clientId: 'app',
-        redirectUri: 'https://app.example.com/oauth',
-      );
-      const b = OAuthConfiguration(
-        issuer: 'https://id.example.com',
-        clientId: 'other',
-        redirectUri: 'https://app.example.com/oauth',
-      );
-      expect(handleFor(a), isNot(handleFor(b)));
-    });
-  });
-
   group('errorFromMessage', () {
     test('rebuilds every category with its payload', () {
       final recoverable = errorFromMessage(
@@ -129,30 +87,80 @@ void main() {
       );
     });
 
-    test('keeps the category for a case this binding does not know', () {
-      final e = errorFromMessage(
-        ErrorMessage(
-          category: ErrorCategoryMessage.configuration,
-          kind: 'somethingNew',
-          message: 'configuration: somethingNew',
-        ),
-      );
-      expect(
-        e,
-        isA<ConfigurationError>()
-            .having((e) => e.detail, 'detail', ConfigurationDetail.unknown)
-            .having((e) => e.text, 'text', 'somethingNew'),
-      );
+    test(
+      'names an unknown case unknown and keeps its name, in every category',
+      () {
+        final configuration = errorFromMessage(
+          ErrorMessage(
+            category: ErrorCategoryMessage.configuration,
+            kind: 'somethingNew',
+            message: 'configuration: somethingNew',
+          ),
+        );
+        expect(
+          configuration,
+          isA<ConfigurationError>()
+              .having((e) => e.detail, 'detail', ConfigurationDetail.unknown)
+              .having((e) => e.text, 'text', 'somethingNew'),
+        );
 
-      final r = errorFromMessage(
-        ErrorMessage(
-          category: ErrorCategoryMessage.recoverable,
-          kind: 'somethingNew',
-          message: 'recoverable',
-        ),
-      );
-      expect(r, isA<RecoverableError>());
-    });
+        // Not `network`: a guessed transient cause is how an app starts a retry loop.
+        final recoverable = errorFromMessage(
+          ErrorMessage(
+            category: ErrorCategoryMessage.recoverable,
+            kind: 'somethingNew',
+            message: 'recoverable',
+          ),
+        );
+        expect(
+          recoverable,
+          isA<RecoverableError>()
+              .having((e) => e.cause, 'cause', RecoverableCause.unknown)
+              .having((e) => e.detail, 'detail', 'somethingNew'),
+        );
+
+        // Not `grantRejected`: a guessed reason would sign the user out for a case that may
+        // not mean that.
+        final reauthenticate = errorFromMessage(
+          ErrorMessage(
+            category: ErrorCategoryMessage.reauthenticate,
+            kind: 'somethingNew',
+            message: 'reauthenticate',
+          ),
+        );
+        expect(
+          reauthenticate,
+          isA<ReauthenticateError>()
+              .having((e) => e.reason, 'reason', ReauthenticateReason.unknown)
+              .having((e) => e.detail, 'detail', 'somethingNew'),
+        );
+
+        // Not `malformed`: an unknown ID-token rejection is not a malformed token.
+        final rejection = errorFromMessage(
+          ErrorMessage(
+            category: ErrorCategoryMessage.configuration,
+            kind: 'idTokenRejected',
+            message: 'configuration: idTokenRejected',
+            idTokenRejection: 'somethingNew',
+          ),
+        );
+        expect(
+          rejection,
+          isA<ConfigurationError>()
+              .having(
+                (e) => e.detail,
+                'detail',
+                ConfigurationDetail.idTokenRejected,
+              )
+              .having(
+                (e) => e.idTokenRejection,
+                'rejection',
+                IdTokenRejection.unknown,
+              )
+              .having((e) => e.text, 'text', 'somethingNew'),
+        );
+      },
+    );
 
     test(
       'never carries a credential: the message is what the native side wrote',

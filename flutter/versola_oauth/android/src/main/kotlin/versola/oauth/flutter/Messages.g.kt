@@ -909,8 +909,10 @@ data class LogoutOutcomeMessage (
 }
 
 /**
- * Result-shaped answers (`flutter.md`, Bridge): a method answers with its value or with the
- * typed error, never with a thrown `PlatformException` that would collapse the category.
+ * Result-shaped answers (`flutter.md`, Bridge): every method answers with its value or with
+ * the typed error, never with a thrown `PlatformException` that would collapse the category.
+ * Native code catches everything: a `VersolaError` / `OAuthError` crosses as itself, any other
+ * exception as a `Configuration` naming only its class.
  *
  * Generated class from Pigeon that represents data sent in messages.
  * This class should not be extended by any user class outside of the generated file.
@@ -980,6 +982,167 @@ data class VoidFailure (
   }
   override fun toString(): String {
     return "VoidFailure(error=$error)"
+  }
+}
+
+/**
+ * `create` answers with the handle native chose for this client; every later call and the
+ * event channel's instance name use it, so Dart never derives an identity of its own.
+ *
+ * Generated class from Pigeon that represents data sent in messages.
+ * This class should not be extended by any user class outside of the generated file.
+ */
+sealed class CreateResult 
+/** Generated class from Pigeon that represents data sent in messages. */
+data class CreateOk (
+  val handle: String
+) : CreateResult()
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): CreateOk {
+      val handle = pigeonVar_list[0] as String
+      return CreateOk(handle)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      handle,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other == null || other.javaClass != javaClass) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    val other = other as CreateOk
+    return MessagesPigeonUtils.deepEquals(this.handle, other.handle)
+  }
+
+  override fun hashCode(): Int {
+    var result = javaClass.hashCode()
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.handle)
+    return result
+  }
+  override fun toString(): String {
+    return "CreateOk(handle=$handle)"
+  }
+}
+
+/** Generated class from Pigeon that represents data sent in messages. */
+data class CreateFailure (
+  val error: ErrorMessage
+) : CreateResult()
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): CreateFailure {
+      val error = pigeonVar_list[0] as ErrorMessage
+      return CreateFailure(error)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      error,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other == null || other.javaClass != javaClass) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    val other = other as CreateFailure
+    return MessagesPigeonUtils.deepEquals(this.error, other.error)
+  }
+
+  override fun hashCode(): Int {
+    var result = javaClass.hashCode()
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.error)
+    return result
+  }
+  override fun toString(): String {
+    return "CreateFailure(error=$error)"
+  }
+}
+
+/**
+ * Generated class from Pigeon that represents data sent in messages.
+ * This class should not be extended by any user class outside of the generated file.
+ */
+sealed class SessionStateResult 
+/** Generated class from Pigeon that represents data sent in messages. */
+data class SessionStateOk (
+  val state: SessionStateMessage
+) : SessionStateResult()
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): SessionStateOk {
+      val state = pigeonVar_list[0] as SessionStateMessage
+      return SessionStateOk(state)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      state,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other == null || other.javaClass != javaClass) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    val other = other as SessionStateOk
+    return MessagesPigeonUtils.deepEquals(this.state, other.state)
+  }
+
+  override fun hashCode(): Int {
+    var result = javaClass.hashCode()
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.state)
+    return result
+  }
+  override fun toString(): String {
+    return "SessionStateOk(state=$state)"
+  }
+}
+
+/** Generated class from Pigeon that represents data sent in messages. */
+data class SessionStateFailure (
+  val error: ErrorMessage
+) : SessionStateResult()
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): SessionStateFailure {
+      val error = pigeonVar_list[0] as ErrorMessage
+      return SessionStateFailure(error)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      error,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other == null || other.javaClass != javaClass) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    val other = other as SessionStateFailure
+    return MessagesPigeonUtils.deepEquals(this.error, other.error)
+  }
+
+  override fun hashCode(): Int {
+    var result = javaClass.hashCode()
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.error)
+    return result
+  }
+  override fun toString(): String {
+    return "SessionStateFailure(error=$error)"
   }
 }
 
@@ -1066,6 +1229,85 @@ data class AccessTokenFailure (
  * Generated class from Pigeon that represents data sent in messages.
  * This class should not be extended by any user class outside of the generated file.
  */
+sealed class ClaimsResult 
+/** Generated class from Pigeon that represents data sent in messages. */
+data class ClaimsOk (
+  val claims: IdTokenClaimsMessage? = null
+) : ClaimsResult()
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): ClaimsOk {
+      val claims = pigeonVar_list[0] as IdTokenClaimsMessage?
+      return ClaimsOk(claims)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      claims,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other == null || other.javaClass != javaClass) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    val other = other as ClaimsOk
+    return MessagesPigeonUtils.deepEquals(this.claims, other.claims)
+  }
+
+  override fun hashCode(): Int {
+    var result = javaClass.hashCode()
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.claims)
+    return result
+  }
+  override fun toString(): String {
+    return "ClaimsOk(claims=$claims)"
+  }
+}
+
+/** Generated class from Pigeon that represents data sent in messages. */
+data class ClaimsFailure (
+  val error: ErrorMessage
+) : ClaimsResult()
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): ClaimsFailure {
+      val error = pigeonVar_list[0] as ErrorMessage
+      return ClaimsFailure(error)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      error,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other == null || other.javaClass != javaClass) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    val other = other as ClaimsFailure
+    return MessagesPigeonUtils.deepEquals(this.error, other.error)
+  }
+
+  override fun hashCode(): Int {
+    var result = javaClass.hashCode()
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.error)
+    return result
+  }
+  override fun toString(): String {
+    return "ClaimsFailure(error=$error)"
+  }
+}
+
+/**
+ * Generated class from Pigeon that represents data sent in messages.
+ * This class should not be extended by any user class outside of the generated file.
+ */
 sealed class UserInfoResult 
 /** Generated class from Pigeon that represents data sent in messages. */
 data class UserInfoOk (
@@ -1138,6 +1380,168 @@ data class UserInfoFailure (
   }
   override fun toString(): String {
     return "UserInfoFailure(error=$error)"
+  }
+}
+
+/**
+ * Generated class from Pigeon that represents data sent in messages.
+ * This class should not be extended by any user class outside of the generated file.
+ */
+sealed class LogoutResult 
+/** Generated class from Pigeon that represents data sent in messages. */
+data class LogoutOk (
+  val outcome: LogoutOutcomeMessage
+) : LogoutResult()
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): LogoutOk {
+      val outcome = pigeonVar_list[0] as LogoutOutcomeMessage
+      return LogoutOk(outcome)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      outcome,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other == null || other.javaClass != javaClass) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    val other = other as LogoutOk
+    return MessagesPigeonUtils.deepEquals(this.outcome, other.outcome)
+  }
+
+  override fun hashCode(): Int {
+    var result = javaClass.hashCode()
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.outcome)
+    return result
+  }
+  override fun toString(): String {
+    return "LogoutOk(outcome=$outcome)"
+  }
+}
+
+/** Generated class from Pigeon that represents data sent in messages. */
+data class LogoutFailure (
+  val error: ErrorMessage
+) : LogoutResult()
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): LogoutFailure {
+      val error = pigeonVar_list[0] as ErrorMessage
+      return LogoutFailure(error)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      error,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other == null || other.javaClass != javaClass) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    val other = other as LogoutFailure
+    return MessagesPigeonUtils.deepEquals(this.error, other.error)
+  }
+
+  override fun hashCode(): Int {
+    var result = javaClass.hashCode()
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.error)
+    return result
+  }
+  override fun toString(): String {
+    return "LogoutFailure(error=$error)"
+  }
+}
+
+/**
+ * Generated class from Pigeon that represents data sent in messages.
+ * This class should not be extended by any user class outside of the generated file.
+ */
+sealed class KeyAttestationResult 
+/**
+ * `secureEnclave`, `strongBox`, `trustedEnvironment`, `software`, or null under bearer.
+ *
+ * Generated class from Pigeon that represents data sent in messages.
+ */
+data class KeyAttestationOk (
+  val tier: String? = null
+) : KeyAttestationResult()
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): KeyAttestationOk {
+      val tier = pigeonVar_list[0] as String?
+      return KeyAttestationOk(tier)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      tier,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other == null || other.javaClass != javaClass) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    val other = other as KeyAttestationOk
+    return MessagesPigeonUtils.deepEquals(this.tier, other.tier)
+  }
+
+  override fun hashCode(): Int {
+    var result = javaClass.hashCode()
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.tier)
+    return result
+  }
+  override fun toString(): String {
+    return "KeyAttestationOk(tier=$tier)"
+  }
+}
+
+/** Generated class from Pigeon that represents data sent in messages. */
+data class KeyAttestationFailure (
+  val error: ErrorMessage
+) : KeyAttestationResult()
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): KeyAttestationFailure {
+      val error = pigeonVar_list[0] as ErrorMessage
+      return KeyAttestationFailure(error)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      error,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other == null || other.javaClass != javaClass) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    val other = other as KeyAttestationFailure
+    return MessagesPigeonUtils.deepEquals(this.error, other.error)
+  }
+
+  override fun hashCode(): Int {
+    var result = javaClass.hashCode()
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.error)
+    return result
+  }
+  override fun toString(): String {
+    return "KeyAttestationFailure(error=$error)"
   }
 }
 private open class MessagesPigeonCodec : StandardMessageCodec() {
@@ -1235,22 +1639,72 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
       }
       147.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          AccessTokenOk.fromList(it)
+          CreateOk.fromList(it)
         }
       }
       148.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          AccessTokenFailure.fromList(it)
+          CreateFailure.fromList(it)
         }
       }
       149.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
-          UserInfoOk.fromList(it)
+          SessionStateOk.fromList(it)
         }
       }
       150.toByte() -> {
         return (readValue(buffer) as? List<Any?>)?.let {
+          SessionStateFailure.fromList(it)
+        }
+      }
+      151.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          AccessTokenOk.fromList(it)
+        }
+      }
+      152.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          AccessTokenFailure.fromList(it)
+        }
+      }
+      153.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          ClaimsOk.fromList(it)
+        }
+      }
+      154.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          ClaimsFailure.fromList(it)
+        }
+      }
+      155.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          UserInfoOk.fromList(it)
+        }
+      }
+      156.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
           UserInfoFailure.fromList(it)
+        }
+      }
+      157.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          LogoutOk.fromList(it)
+        }
+      }
+      158.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          LogoutFailure.fromList(it)
+        }
+      }
+      159.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          KeyAttestationOk.fromList(it)
+        }
+      }
+      160.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          KeyAttestationFailure.fromList(it)
         }
       }
       else -> super.readValueOfType(type, buffer)
@@ -1330,20 +1784,60 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
         stream.write(146)
         writeValue(stream, value.toList())
       }
-      is AccessTokenOk -> {
+      is CreateOk -> {
         stream.write(147)
         writeValue(stream, value.toList())
       }
-      is AccessTokenFailure -> {
+      is CreateFailure -> {
         stream.write(148)
         writeValue(stream, value.toList())
       }
-      is UserInfoOk -> {
+      is SessionStateOk -> {
         stream.write(149)
         writeValue(stream, value.toList())
       }
-      is UserInfoFailure -> {
+      is SessionStateFailure -> {
         stream.write(150)
+        writeValue(stream, value.toList())
+      }
+      is AccessTokenOk -> {
+        stream.write(151)
+        writeValue(stream, value.toList())
+      }
+      is AccessTokenFailure -> {
+        stream.write(152)
+        writeValue(stream, value.toList())
+      }
+      is ClaimsOk -> {
+        stream.write(153)
+        writeValue(stream, value.toList())
+      }
+      is ClaimsFailure -> {
+        stream.write(154)
+        writeValue(stream, value.toList())
+      }
+      is UserInfoOk -> {
+        stream.write(155)
+        writeValue(stream, value.toList())
+      }
+      is UserInfoFailure -> {
+        stream.write(156)
+        writeValue(stream, value.toList())
+      }
+      is LogoutOk -> {
+        stream.write(157)
+        writeValue(stream, value.toList())
+      }
+      is LogoutFailure -> {
+        stream.write(158)
+        writeValue(stream, value.toList())
+      }
+      is KeyAttestationOk -> {
+        stream.write(159)
+        writeValue(stream, value.toList())
+      }
+      is KeyAttestationFailure -> {
+        stream.write(160)
         writeValue(stream, value.toList())
       }
       else -> super.writeValue(stream, value)
@@ -1355,26 +1849,27 @@ val MessagesPigeonMethodCodec = StandardMethodCodec(MessagesPigeonCodec())
 
 
 /**
- * Dart → native. Every method takes the `handle` `create` returned: one native client per
- * configuration per process, as the native facades promise.
+ * Dart → native. Every method but `create` takes the `handle` `create` returned: one native
+ * client per configuration per process, as the native facades promise.
  *
  * Generated interface from Pigeon that represents a handler of messages from Flutter.
  */
 interface OAuthHostApi {
-  /** Validates the configuration and wires the native client; the handle names it from now on. */
-  suspend fun create(handle: String, configuration: ConfigurationMessage): VoidResult
-  suspend fun sessionState(handle: String): SessionStateMessage
+  /**
+   * Validates the configuration and wires (or finds) the native client, and answers with the
+   * handle that names it from now on. The same configuration answers the same handle.
+   */
+  suspend fun create(configuration: ConfigurationMessage): CreateResult
+  suspend fun sessionState(handle: String): SessionStateResult
   suspend fun login(handle: String, options: LoginOptionsMessage): VoidResult
   suspend fun stepUp(handle: String, acrValues: List<String>, maxAge: Long?, options: LoginOptionsMessage): VoidResult
-  suspend fun resumePendingAuthorization(handle: String): VoidResult
-  suspend fun logout(handle: String, options: LogoutOptionsMessage): LogoutOutcomeMessage
+  suspend fun logout(handle: String, options: LogoutOptionsMessage): LogoutResult
   /** The short-lived access token, the one credential that crosses (issue #46 decision 7). */
   suspend fun accessToken(handle: String): AccessTokenResult
   suspend fun refresh(handle: String): VoidResult
-  suspend fun claims(handle: String): IdTokenClaimsMessage?
+  suspend fun claims(handle: String): ClaimsResult
   suspend fun userInfo(handle: String): UserInfoResult
-  /** `secureEnclave`, `strongBox`, `trustedEnvironment`, `software`, or null under bearer. */
-  suspend fun keyAttestation(handle: String): String?
+  suspend fun keyAttestation(handle: String): KeyAttestationResult
 
   companion object {
     /** The codec used by OAuthHostApi. */
@@ -1390,11 +1885,10 @@ interface OAuthHostApi {
         if (api != null) {
           channel.setMessageHandler { message, reply ->
             val args = message as List<Any?>
-            val handleArg = args[0] as String
-            val configurationArg = args[1] as ConfigurationMessage
+            val configurationArg = args[0] as ConfigurationMessage
             CoroutineScope(Dispatchers.Main).launch {
               val wrapped: List<Any?> = try {
-                listOf(api.create(handleArg, configurationArg))
+                listOf(api.create(configurationArg))
               } catch (exception: Throwable) {
                 MessagesPigeonUtils.wrapError(exception)
               }
@@ -1456,25 +1950,6 @@ interface OAuthHostApi {
             CoroutineScope(Dispatchers.Main).launch {
               val wrapped: List<Any?> = try {
                 listOf(api.stepUp(handleArg, acrValuesArg, maxAgeArg, optionsArg))
-              } catch (exception: Throwable) {
-                MessagesPigeonUtils.wrapError(exception)
-              }
-              reply.reply(wrapped)
-            }
-          }
-        } else {
-          channel.setMessageHandler(null)
-        }
-      }
-      run {
-        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.versola_oauth.OAuthHostApi.resumePendingAuthorization$separatedMessageChannelSuffix", codec)
-        if (api != null) {
-          channel.setMessageHandler { message, reply ->
-            val args = message as List<Any?>
-            val handleArg = args[0] as String
-            CoroutineScope(Dispatchers.Main).launch {
-              val wrapped: List<Any?> = try {
-                listOf(api.resumePendingAuthorization(handleArg))
               } catch (exception: Throwable) {
                 MessagesPigeonUtils.wrapError(exception)
               }
@@ -1641,9 +2116,11 @@ class PigeonEventSink<T>(private val sink: EventChannel.EventSink) {
 }
       
 /**
- * Native → Dart: the state machine, one stream per subscription, fed by the native
- * `Flow` / `AsyncStream`; the native collection ends when the subscription does. One channel
- * per client: the handle is the Pigeon `instanceName`, registered by `create`.
+ * Native → Dart: the state machine, fed by the native `Flow` / `AsyncStream`; the native
+ * collection ends when the subscription does. One channel per client: the handle `create`
+ * returned is the Pigeon `instanceName`. The generated stream must be subscribed once per
+ * client (a second `EventChannel` of the same name replaces the first's handler); the Dart
+ * client shares one subscription among its listeners.
  */
 abstract class SessionStatesStreamHandler : MessagesPigeonEventChannelWrapper<SessionStateMessage> {
   companion object {

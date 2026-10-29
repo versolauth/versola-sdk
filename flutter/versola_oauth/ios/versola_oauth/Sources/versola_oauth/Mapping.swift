@@ -94,6 +94,19 @@ extension SessionState {
     }
 }
 
+extension Error {
+    /// What crosses for any error: an `OAuthError` as itself, anything else as a `Configuration`
+    /// naming only its type. The error's text never leaves native code (`flutter.md`, "No secret
+    /// in a `PlatformException` message").
+    func toErrorMessage() -> ErrorMessage {
+        if let error = self as? OAuthError { return error.toMessage() }
+        let name = String(describing: type(of: self))
+        var m = ErrorMessage(category: .configuration, kind: "invalidConfiguration", message: "configuration: unexpected \(name)")
+        m.detail = "unexpected \(name)"
+        return m
+    }
+}
+
 extension OAuthError {
     /// Flattens the taxonomy for the wire. `category` is the contract; `kind` is the case name
     /// in the spelling Dart's enums use, so the sealed hierarchy is rebuilt case for case. The

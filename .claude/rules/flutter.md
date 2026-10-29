@@ -40,12 +40,19 @@ in `security.md`; what the platform SDKs do is in `android-kotlin.md` and `ios-s
 - `Stream<SessionState>` comes from an event channel fed by the native `Flow` / `AsyncStream`. The
   stream carries the seven states of `spec/state-machine.md` and no Flutter-only state. Cancel the
   native collection when the Dart subscription cancels. One channel per client: the Pigeon
-  `instanceName` is the client handle, base64url(SHA-256(issuer + "\n" + clientId))[0..16], the
-  same derivation as the native storage key, so Dart and native agree on which client is which.
-- A channel handler is registered on the platform thread. On iOS a Pigeon call reaches the plugin
-  on the Swift concurrency pool, and the engine aborts a debug build that registers an event
-  channel from there, so `create` hops to the main actor for it; the bridge conformance run is what
-  found that. Android's handlers already run on the main dispatcher.
+  `instanceName` is the handle native's `create` answered with, so Dart derives no identity of its
+  own. Pigeon's generated stream is single-listener per channel name (a second `EventChannel` of
+  the same name replaces the first's handler), so the Dart client subscribes once and shares the
+  subscription among its listeners.
+- Every host method answers a Result, including the ones that look infallible (`sessionState`,
+  `claims`, `logout`, `keyAttestation`), and native catches everything: an SDK error crosses as
+  itself, any other exception as a `Configuration` naming only its class. A channel failure that
+  still reaches Dart is turned into a `ConfigurationError` carrying the exception's code and none
+  of its message. A native case Dart does not know is `unknown` with the name, never a different
+  real case (a guessed `network` starts a retry loop).
+- Registering an event channel's handler (`FlutterEventChannel.setStreamHandler`,
+  `EventChannel.setStreamHandler`) happens on the platform thread; on iOS that is a `MainActor`
+  hop out of any actor, or the engine aborts the process.
 - Generated files (`*.g.dart`, the generated Kotlin and Swift) are never hand-edited, and the guard
   hook denies it; change the Pigeon definition (`pigeons/messages.dart`) and regenerate with
   `fvm dart run pigeon --input pigeons/messages.dart`. They are not exported from

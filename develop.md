@@ -106,6 +106,9 @@ fvm flutter analyze
 fvm flutter test                                    # Dart unit tests, bridge mocked
 cd example && fvm flutter build apk --debug          # the example app on Android
 cd example && fvm flutter build ios --no-codesign    # and on iOS
+cd example/ios && xcodebuild test -workspace Runner.xcworkspace -scheme Runner \
+  -destination "platform=iOS Simulator,name=iPhone 17" -only-testing:RunnerTests   # the Swift glue's unit tests
+cd example/android && ./gradlew :versola_oauth:testDebugUnitTest                  # the Kotlin glue's unit tests
 ```
 
 The example's Android build includes `android/` as a composite build and substitutes the

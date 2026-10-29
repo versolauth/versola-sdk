@@ -942,8 +942,10 @@ class LogoutOutcomeMessage {
   }
 }
 
-/// Result-shaped answers (`flutter.md`, Bridge): a method answers with its value or with the
-/// typed error, never with a thrown `PlatformException` that would collapse the category.
+/// Result-shaped answers (`flutter.md`, Bridge): every method answers with its value or with
+/// the typed error, never with a thrown `PlatformException` that would collapse the category.
+/// Native code catches everything: a `VersolaError` / `OAuthError` crosses as itself, any other
+/// exception as a `Configuration` naming only its class.
 sealed class VoidResult {}
 
 class VoidOk extends VoidResult {
@@ -1018,6 +1020,172 @@ class VoidFailure extends VoidResult {
   @override
   String toString() {
     return 'VoidFailure(error: $error)';
+  }
+}
+
+/// `create` answers with the handle native chose for this client; every later call and the
+/// event channel's instance name use it, so Dart never derives an identity of its own.
+sealed class CreateResult {}
+
+class CreateOk extends CreateResult {
+  CreateOk({required this.handle});
+
+  String handle;
+
+  List<Object?> _toList() {
+    return <Object?>[handle];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static CreateOk decode(Object result) {
+    result as List<Object?>;
+    return CreateOk(handle: result[0]! as String);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! CreateOk || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(handle, other.handle);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
+
+  @override
+  String toString() {
+    return 'CreateOk(handle: $handle)';
+  }
+}
+
+class CreateFailure extends CreateResult {
+  CreateFailure({required this.error});
+
+  ErrorMessage error;
+
+  List<Object?> _toList() {
+    return <Object?>[error];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static CreateFailure decode(Object result) {
+    result as List<Object?>;
+    return CreateFailure(error: result[0]! as ErrorMessage);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! CreateFailure || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(error, other.error);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
+
+  @override
+  String toString() {
+    return 'CreateFailure(error: $error)';
+  }
+}
+
+sealed class SessionStateResult {}
+
+class SessionStateOk extends SessionStateResult {
+  SessionStateOk({required this.state});
+
+  SessionStateMessage state;
+
+  List<Object?> _toList() {
+    return <Object?>[state];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static SessionStateOk decode(Object result) {
+    result as List<Object?>;
+    return SessionStateOk(state: result[0]! as SessionStateMessage);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! SessionStateOk || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(state, other.state);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
+
+  @override
+  String toString() {
+    return 'SessionStateOk(state: $state)';
+  }
+}
+
+class SessionStateFailure extends SessionStateResult {
+  SessionStateFailure({required this.error});
+
+  ErrorMessage error;
+
+  List<Object?> _toList() {
+    return <Object?>[error];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static SessionStateFailure decode(Object result) {
+    result as List<Object?>;
+    return SessionStateFailure(error: result[0]! as ErrorMessage);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! SessionStateFailure || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(error, other.error);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
+
+  @override
+  String toString() {
+    return 'SessionStateFailure(error: $error)';
   }
 }
 
@@ -1103,6 +1271,88 @@ class AccessTokenFailure extends AccessTokenResult {
   }
 }
 
+sealed class ClaimsResult {}
+
+class ClaimsOk extends ClaimsResult {
+  ClaimsOk({this.claims});
+
+  IdTokenClaimsMessage? claims;
+
+  List<Object?> _toList() {
+    return <Object?>[claims];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static ClaimsOk decode(Object result) {
+    result as List<Object?>;
+    return ClaimsOk(claims: result[0] as IdTokenClaimsMessage?);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! ClaimsOk || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(claims, other.claims);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
+
+  @override
+  String toString() {
+    return 'ClaimsOk(claims: $claims)';
+  }
+}
+
+class ClaimsFailure extends ClaimsResult {
+  ClaimsFailure({required this.error});
+
+  ErrorMessage error;
+
+  List<Object?> _toList() {
+    return <Object?>[error];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static ClaimsFailure decode(Object result) {
+    result as List<Object?>;
+    return ClaimsFailure(error: result[0]! as ErrorMessage);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! ClaimsFailure || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(error, other.error);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
+
+  @override
+  String toString() {
+    return 'ClaimsFailure(error: $error)';
+  }
+}
+
 sealed class UserInfoResult {}
 
 class UserInfoOk extends UserInfoResult {
@@ -1185,6 +1435,171 @@ class UserInfoFailure extends UserInfoResult {
   }
 }
 
+sealed class LogoutResult {}
+
+class LogoutOk extends LogoutResult {
+  LogoutOk({required this.outcome});
+
+  LogoutOutcomeMessage outcome;
+
+  List<Object?> _toList() {
+    return <Object?>[outcome];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static LogoutOk decode(Object result) {
+    result as List<Object?>;
+    return LogoutOk(outcome: result[0]! as LogoutOutcomeMessage);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! LogoutOk || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(outcome, other.outcome);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
+
+  @override
+  String toString() {
+    return 'LogoutOk(outcome: $outcome)';
+  }
+}
+
+class LogoutFailure extends LogoutResult {
+  LogoutFailure({required this.error});
+
+  ErrorMessage error;
+
+  List<Object?> _toList() {
+    return <Object?>[error];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static LogoutFailure decode(Object result) {
+    result as List<Object?>;
+    return LogoutFailure(error: result[0]! as ErrorMessage);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! LogoutFailure || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(error, other.error);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
+
+  @override
+  String toString() {
+    return 'LogoutFailure(error: $error)';
+  }
+}
+
+sealed class KeyAttestationResult {}
+
+/// `secureEnclave`, `strongBox`, `trustedEnvironment`, `software`, or null under bearer.
+class KeyAttestationOk extends KeyAttestationResult {
+  KeyAttestationOk({this.tier});
+
+  String? tier;
+
+  List<Object?> _toList() {
+    return <Object?>[tier];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static KeyAttestationOk decode(Object result) {
+    result as List<Object?>;
+    return KeyAttestationOk(tier: result[0] as String?);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! KeyAttestationOk || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(tier, other.tier);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
+
+  @override
+  String toString() {
+    return 'KeyAttestationOk(tier: $tier)';
+  }
+}
+
+class KeyAttestationFailure extends KeyAttestationResult {
+  KeyAttestationFailure({required this.error});
+
+  ErrorMessage error;
+
+  List<Object?> _toList() {
+    return <Object?>[error];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static KeyAttestationFailure decode(Object result) {
+    result as List<Object?>;
+    return KeyAttestationFailure(error: result[0]! as ErrorMessage);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! KeyAttestationFailure || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(error, other.error);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
+
+  @override
+  String toString() {
+    return 'KeyAttestationFailure(error: $error)';
+  }
+}
+
 class _PigeonCodec extends StandardMessageCodec {
   const _PigeonCodec();
   @override
@@ -1246,17 +1661,47 @@ class _PigeonCodec extends StandardMessageCodec {
     } else if (value is VoidFailure) {
       buffer.putUint8(146);
       writeValue(buffer, value.encode());
-    } else if (value is AccessTokenOk) {
+    } else if (value is CreateOk) {
       buffer.putUint8(147);
       writeValue(buffer, value.encode());
-    } else if (value is AccessTokenFailure) {
+    } else if (value is CreateFailure) {
       buffer.putUint8(148);
       writeValue(buffer, value.encode());
-    } else if (value is UserInfoOk) {
+    } else if (value is SessionStateOk) {
       buffer.putUint8(149);
       writeValue(buffer, value.encode());
-    } else if (value is UserInfoFailure) {
+    } else if (value is SessionStateFailure) {
       buffer.putUint8(150);
+      writeValue(buffer, value.encode());
+    } else if (value is AccessTokenOk) {
+      buffer.putUint8(151);
+      writeValue(buffer, value.encode());
+    } else if (value is AccessTokenFailure) {
+      buffer.putUint8(152);
+      writeValue(buffer, value.encode());
+    } else if (value is ClaimsOk) {
+      buffer.putUint8(153);
+      writeValue(buffer, value.encode());
+    } else if (value is ClaimsFailure) {
+      buffer.putUint8(154);
+      writeValue(buffer, value.encode());
+    } else if (value is UserInfoOk) {
+      buffer.putUint8(155);
+      writeValue(buffer, value.encode());
+    } else if (value is UserInfoFailure) {
+      buffer.putUint8(156);
+      writeValue(buffer, value.encode());
+    } else if (value is LogoutOk) {
+      buffer.putUint8(157);
+      writeValue(buffer, value.encode());
+    } else if (value is LogoutFailure) {
+      buffer.putUint8(158);
+      writeValue(buffer, value.encode());
+    } else if (value is KeyAttestationOk) {
+      buffer.putUint8(159);
+      writeValue(buffer, value.encode());
+    } else if (value is KeyAttestationFailure) {
+      buffer.putUint8(160);
       writeValue(buffer, value.encode());
     } else {
       super.writeValue(buffer, value);
@@ -1309,13 +1754,33 @@ class _PigeonCodec extends StandardMessageCodec {
       case 146:
         return VoidFailure.decode(readValue(buffer)!);
       case 147:
-        return AccessTokenOk.decode(readValue(buffer)!);
+        return CreateOk.decode(readValue(buffer)!);
       case 148:
-        return AccessTokenFailure.decode(readValue(buffer)!);
+        return CreateFailure.decode(readValue(buffer)!);
       case 149:
-        return UserInfoOk.decode(readValue(buffer)!);
+        return SessionStateOk.decode(readValue(buffer)!);
       case 150:
+        return SessionStateFailure.decode(readValue(buffer)!);
+      case 151:
+        return AccessTokenOk.decode(readValue(buffer)!);
+      case 152:
+        return AccessTokenFailure.decode(readValue(buffer)!);
+      case 153:
+        return ClaimsOk.decode(readValue(buffer)!);
+      case 154:
+        return ClaimsFailure.decode(readValue(buffer)!);
+      case 155:
+        return UserInfoOk.decode(readValue(buffer)!);
+      case 156:
         return UserInfoFailure.decode(readValue(buffer)!);
+      case 157:
+        return LogoutOk.decode(readValue(buffer)!);
+      case 158:
+        return LogoutFailure.decode(readValue(buffer)!);
+      case 159:
+        return KeyAttestationOk.decode(readValue(buffer)!);
+      case 160:
+        return KeyAttestationFailure.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
     }
@@ -1326,8 +1791,8 @@ const StandardMethodCodec pigeonMethodCodec = StandardMethodCodec(
   _PigeonCodec(),
 );
 
-/// Dart → native. Every method takes the `handle` `create` returned: one native client per
-/// configuration per process, as the native facades promise.
+/// Dart → native. Every method but `create` takes the `handle` `create` returned: one native
+/// client per configuration per process, as the native facades promise.
 class OAuthHostApi {
   /// Constructor for [OAuthHostApi]. The [binaryMessenger] named argument is
   /// available for dependency injection. If it is left null, the default
@@ -1345,11 +1810,9 @@ class OAuthHostApi {
 
   final String pigeonVar_messageChannelSuffix;
 
-  /// Validates the configuration and wires the native client; the handle names it from now on.
-  Future<VoidResult> create(
-    String handle,
-    ConfigurationMessage configuration,
-  ) async {
+  /// Validates the configuration and wires (or finds) the native client, and answers with the
+  /// handle that names it from now on. The same configuration answers the same handle.
+  Future<CreateResult> create(ConfigurationMessage configuration) async {
     final pigeonVar_channelName =
         'dev.flutter.pigeon.versola_oauth.OAuthHostApi.create$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
@@ -1358,7 +1821,7 @@ class OAuthHostApi {
       binaryMessenger: pigeonVar_binaryMessenger,
     );
     final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
-      <Object?>[handle, configuration],
+      <Object?>[configuration],
     );
     final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
 
@@ -1367,10 +1830,10 @@ class OAuthHostApi {
       pigeonVar_channelName,
       isNullValid: false,
     );
-    return pigeonVar_replyValue! as VoidResult;
+    return pigeonVar_replyValue! as CreateResult;
   }
 
-  Future<SessionStateMessage> sessionState(String handle) async {
+  Future<SessionStateResult> sessionState(String handle) async {
     final pigeonVar_channelName =
         'dev.flutter.pigeon.versola_oauth.OAuthHostApi.sessionState$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
@@ -1388,7 +1851,7 @@ class OAuthHostApi {
       pigeonVar_channelName,
       isNullValid: false,
     );
-    return pigeonVar_replyValue! as SessionStateMessage;
+    return pigeonVar_replyValue! as SessionStateResult;
   }
 
   Future<VoidResult> login(String handle, LoginOptionsMessage options) async {
@@ -1438,28 +1901,7 @@ class OAuthHostApi {
     return pigeonVar_replyValue! as VoidResult;
   }
 
-  Future<VoidResult> resumePendingAuthorization(String handle) async {
-    final pigeonVar_channelName =
-        'dev.flutter.pigeon.versola_oauth.OAuthHostApi.resumePendingAuthorization$pigeonVar_messageChannelSuffix';
-    final pigeonVar_channel = BasicMessageChannel<Object?>(
-      pigeonVar_channelName,
-      pigeonChannelCodec,
-      binaryMessenger: pigeonVar_binaryMessenger,
-    );
-    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
-      <Object?>[handle],
-    );
-    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
-
-    final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
-      pigeonVar_replyList,
-      pigeonVar_channelName,
-      isNullValid: false,
-    );
-    return pigeonVar_replyValue! as VoidResult;
-  }
-
-  Future<LogoutOutcomeMessage> logout(
+  Future<LogoutResult> logout(
     String handle,
     LogoutOptionsMessage options,
   ) async {
@@ -1480,7 +1922,7 @@ class OAuthHostApi {
       pigeonVar_channelName,
       isNullValid: false,
     );
-    return pigeonVar_replyValue! as LogoutOutcomeMessage;
+    return pigeonVar_replyValue! as LogoutResult;
   }
 
   /// The short-lived access token, the one credential that crosses (issue #46 decision 7).
@@ -1526,7 +1968,7 @@ class OAuthHostApi {
     return pigeonVar_replyValue! as VoidResult;
   }
 
-  Future<IdTokenClaimsMessage?> claims(String handle) async {
+  Future<ClaimsResult> claims(String handle) async {
     final pigeonVar_channelName =
         'dev.flutter.pigeon.versola_oauth.OAuthHostApi.claims$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
@@ -1542,9 +1984,9 @@ class OAuthHostApi {
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
       pigeonVar_replyList,
       pigeonVar_channelName,
-      isNullValid: true,
+      isNullValid: false,
     );
-    return pigeonVar_replyValue as IdTokenClaimsMessage?;
+    return pigeonVar_replyValue! as ClaimsResult;
   }
 
   Future<UserInfoResult> userInfo(String handle) async {
@@ -1568,8 +2010,7 @@ class OAuthHostApi {
     return pigeonVar_replyValue! as UserInfoResult;
   }
 
-  /// `secureEnclave`, `strongBox`, `trustedEnvironment`, `software`, or null under bearer.
-  Future<String?> keyAttestation(String handle) async {
+  Future<KeyAttestationResult> keyAttestation(String handle) async {
     final pigeonVar_channelName =
         'dev.flutter.pigeon.versola_oauth.OAuthHostApi.keyAttestation$pigeonVar_messageChannelSuffix';
     final pigeonVar_channel = BasicMessageChannel<Object?>(
@@ -1585,15 +2026,17 @@ class OAuthHostApi {
     final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
       pigeonVar_replyList,
       pigeonVar_channelName,
-      isNullValid: true,
+      isNullValid: false,
     );
-    return pigeonVar_replyValue as String?;
+    return pigeonVar_replyValue! as KeyAttestationResult;
   }
 }
 
-/// Native → Dart: the state machine, one stream per subscription, fed by the native
-/// `Flow` / `AsyncStream`; the native collection ends when the subscription does. One channel
-/// per client: the handle is the Pigeon `instanceName`, registered by `create`.
+/// Native → Dart: the state machine, fed by the native `Flow` / `AsyncStream`; the native
+/// collection ends when the subscription does. One channel per client: the handle `create`
+/// returned is the Pigeon `instanceName`. The generated stream must be subscribed once per
+/// client (a second `EventChannel` of the same name replaces the first's handler); the Dart
+/// client shares one subscription among its listeners.
 /// Returns a broadcast [Stream] of events from the `sessionStates` event channel.
 ///
 /// Each call to this method creates a new [EventChannel], so it should

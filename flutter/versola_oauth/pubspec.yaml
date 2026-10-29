@@ -15,9 +15,6 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  # SHA-256 for the client handle, the same derivation as the native storage key. Dart-team
-  # package, BSD-3-Clause.
-  crypto: 3.0.8
 
 dev_dependencies:
   flutter_test:

@@ -1,24 +1,28 @@
-import 'dart:convert';
-
-import 'package:crypto/crypto.dart' show sha256;
+import 'package:flutter/services.dart' show PlatformException;
 
 import 'errors.dart';
 import 'messages.g.dart';
 import 'types.dart';
 
-/// The native facades key their one-instance-per-configuration registry by the issuer and the
-/// client id; the handle is the same derivation so Dart and native agree on identity.
-String handleFor(OAuthConfiguration configuration) {
-  final issuer = (configuration.issuer ?? configuration.endpoints?.issuer ?? '')
-      .replaceAll(RegExp(r'/$'), '');
-  final digest = sha256
-      .convert(utf8.encode('$issuer\n${configuration.clientId}'))
-      .bytes;
-  return base64Url.encode(digest).replaceAll('=', '').substring(0, 16);
+/// Runs one host call and turns a channel-level failure into a typed error. Native code
+/// catches everything and answers with a Result, so a `PlatformException` here means the call
+/// never reached it (no plugin registered, a malformed reply, a native crash in the codec): the
+/// category is `Configuration`, and only the exception's code is kept, never its message, which
+/// is native text and a stack trace (`flutter.md`: no secret in a `PlatformException` message).
+Future<T> guarded<T>(Future<T> Function() call) async {
+  try {
+    return await call();
+  } on PlatformException catch (e) {
+    throw ConfigurationError(
+      ConfigurationDetail.invalidConfiguration,
+      'configuration: the native bridge failed (${e.code})',
+      text: 'bridge failure: ${e.code}',
+    );
+  }
 }
 
 Future<void> unwrapVoid(Future<VoidResult> result) async {
-  switch (await result) {
+  switch (await guarded(() => result)) {
     case VoidOk():
       return;
     case VoidFailure(:final error):
@@ -126,17 +130,25 @@ IdTokenClaims claimsFromMessage(IdTokenClaimsMessage m) => IdTokenClaims(
 );
 
 /// Rebuilds the sealed hierarchy from the flattened native error: the category first (the
-/// contract), then the case by its native name. An unknown case within a known category keeps
-/// the category and names the case in the text, never a crash (`flutter.md`, Bridge).
+/// contract), then the case by its native name. A case within a known category that this
+/// version does not know keeps the category, is named `unknown`, and carries the native name,
+/// never a different real case and never a crash (`flutter.md`, Bridge): a guessed `network`
+/// would start a retry loop and a guessed `grantRejected` would sign the user out.
 OAuthError errorFromMessage(ErrorMessage e) {
-  T byName<T extends Enum>(List<T> values, T fallback) =>
-      values.firstWhere((v) => v.name == e.kind, orElse: () => fallback);
+  T? byName<T extends Enum>(List<T> values, String? name) {
+    for (final v in values) {
+      if (v.name == name) return v;
+    }
+    return null;
+  }
+
   switch (e.category) {
     case ErrorCategoryMessage.recoverable:
+      final cause = byName(RecoverableCause.values, e.kind);
       return RecoverableError(
-        byName(RecoverableCause.values, RecoverableCause.network),
+        cause ?? RecoverableCause.unknown,
         e.message,
-        detail: e.detail,
+        detail: cause == null ? e.kind : e.detail,
         attempts: e.attempts,
         elapsed: e.elapsedMillis == null
             ? null
@@ -144,10 +156,12 @@ OAuthError errorFromMessage(ErrorMessage e) {
         origin: e.origin,
       );
     case ErrorCategoryMessage.reauthenticate:
+      final reason = byName(ReauthenticateReason.values, e.kind);
       return ReauthenticateError(
-        byName(ReauthenticateReason.values, ReauthenticateReason.grantRejected),
+        reason ?? ReauthenticateReason.unknown,
         e.message,
         code: e.code,
+        detail: reason == null ? e.kind : null,
       );
     case ErrorCategoryMessage.stepUp:
       return StepUpError(
@@ -156,26 +170,27 @@ OAuthError errorFromMessage(ErrorMessage e) {
         maxAge: e.maxAge,
       );
     case ErrorCategoryMessage.configuration:
+      final detail = byName(ConfigurationDetail.values, e.kind);
+      final rejection = byName(IdTokenRejection.values, e.idTokenRejection);
       return ConfigurationError(
-        byName(ConfigurationDetail.values, ConfigurationDetail.unknown),
+        detail ?? ConfigurationDetail.unknown,
         e.message,
         code: e.code,
         description: e.errorDescription,
         text:
             e.detail ??
-            (ConfigurationDetail.values.any((v) => v.name == e.kind)
-                ? null
-                : e.kind),
+            (detail == null
+                ? e.kind
+                : (e.idTokenRejection != null && rejection == null
+                      ? e.idTokenRejection
+                      : null)),
         expected: e.expected,
         received: e.received,
         field: e.field,
         capability: e.capability,
         idTokenRejection: e.idTokenRejection == null
             ? null
-            : IdTokenRejection.values.firstWhere(
-                (v) => v.name == e.idTokenRejection,
-                orElse: () => IdTokenRejection.malformed,
-              ),
+            : rejection ?? IdTokenRejection.unknown,
       );
   }
 }
