@@ -71,6 +71,14 @@ flows — is plain RFC behaviour and must stay usable against any conforming Ope
 Versola-specific pieces depend on the core, never the reverse. Behaviour the core exhibits
 that a generic provider would reject is a bug.
 
+## Working on this repository
+
+`develop.md` has the toolchains and the commands for every tier. `AGENTS.md` is the shared
+policy for contributors and coding agents (`CLAUDE.md` imports it; `.claude/rules/` holds the
+rules scoped by path and `.claude/hooks/` the guards). Pull requests are reviewed against
+`REVIEW.md`; security reports follow `SECURITY.md`. Issue #46 tracks the generic OAuth SDK that
+shares this repository's protocol core.
+
 ## Licence
 
 Apache-2.0. See [LICENSE](LICENSE).

@@ -1,0 +1,85 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./gradlew assemble*)",
+      "Bash(./gradlew test*)",
+      "Bash(./gradlew lint*)",
+      "Bash(./gradlew apiCheck*)",
+      "Bash(./gradlew apiDump*)",
+      "Bash(./gradlew :*)",
+      "Bash(swift package resolve)",
+      "Bash(swift build*)",
+      "Bash(swift test*)",
+      "Bash(xcodebuild build *)",
+      "Bash(xcodebuild test *)",
+      "Bash(xcrun simctl list *)",
+      "Bash(flutter analyze*)",
+      "Bash(flutter test*)",
+      "Bash(dart format *)",
+      "Bash(python3 tools/validate-scenarios.py)",
+      "Bash(npx markdownlint-cli2 *)",
+      "Bash(git status *)",
+      "Bash(git diff *)",
+      "Bash(git log *)"
+    ],
+    "ask": [
+      "Bash(git reset --hard *)",
+      "Bash(git tag *)",
+      "Bash(rm -rf *)",
+      "Bash(xcrun simctl erase *)",
+      "Bash(adb uninstall *)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./android/local.properties)",
+      "Bash(gh release *)",
+      "Bash(./gradlew publish*)",
+      "Bash(pod trunk push *)",
+      "Bash(flutter pub publish*)",
+      "Bash(npm publish*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard-paths.sh",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git push *)",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/pre-push.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/check-core-purity.sh",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR\"/.claude/hooks/check-scenario-edit.sh",
+            "timeout": 60
+          }
+        ]
+      }
+    ]
+  }
+}

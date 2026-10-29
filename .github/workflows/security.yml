@@ -1,0 +1,85 @@
+name: Security
+
+# Supply-chain and code scanning. Separate from android.yml and ios.yml so a scanner's outage or
+# a newly published CVE never blocks the build; the findings that gate a merge are the ones
+# introduced by the change itself (secrets, new vulnerable dependencies, SAST errors).
+#
+# What gates and what only reports is deliberate and written next to each job. Triage and SLAs
+# are in SECURITY.md ("Vulnerability management").
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  # Verified credentials committed anywhere in the history this PR/push adds. Gates. Full
+  # history (fetch-depth 0) so the scanner can diff the range the event carries.
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Scan for verified secrets
+        uses: trufflesecurity/trufflehog@31ce31ee1abbcc7dc8eee5764c17121c3044c8b2 # v3.99.7
+        with:
+          extra_args: --only-verified
+
+  # Known-vulnerable dependencies introduced by a PR (Gradle, Swift, pub and GitHub Actions are
+  # all in the dependency graph). Gates on high and above. Needs GitHub Advanced Security while
+  # the repository is private and switches on by itself when it goes public.
+  dependency-review:
+    if: ${{ github.event_name == 'pull_request' && !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
+        with:
+          fail-on-severity: high
+
+  # CodeQL for the Kotlin of the Android modules and the Swift of the iOS targets. Findings
+  # appear under Security > Code scanning. Needs GitHub Advanced Security while the repository
+  # is private and switches on by itself when it goes public. Both languages build explicitly,
+  # the way android.yml and ios.yml do: autobuild finds neither android/gradlew (not at the root)
+  # nor a scheme for the iOS-only Package.swift. Swift needs a macOS runner.
+  codeql:
+    if: ${{ !github.event.repository.private }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: java-kotlin
+            runner: ubuntu-latest
+          - language: swift
+            runner: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: manual
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        if: ${{ matrix.language == 'java-kotlin' }}
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Build Android modules
+        if: ${{ matrix.language == 'java-kotlin' }}
+        working-directory: android
+        run: ./gradlew assemble
+      - name: Build Swift targets
+        if: ${{ matrix.language == 'swift' }}
+        run: xcodebuild build -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 17"
+      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          category: /language:${{ matrix.language }}

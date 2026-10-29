@@ -1,0 +1,18 @@
+# Every change needs a review from an owner (enforced once branch protection requires
+# code-owner review). Narrow these to teams as they form.
+*                                   @goshacodes
+
+# Security-sensitive: the key, the store, the browser leg and the protocol core on both
+# platforms, the normative spec every SDK is held to, and the CI and dependency manifest. A
+# mistake here is a token leak or a silently disabled check, not a failing test.
+/android/dpop/                      @goshacodes
+/android/storage/                   @goshacodes
+/android/browser/                   @goshacodes
+/android/core/                      @goshacodes
+/ios/Sources/VersolaDPoP/           @goshacodes
+/ios/Sources/VersolaStorage/        @goshacodes
+/ios/Sources/VersolaBrowser/        @goshacodes
+/ios/Sources/VersolaCore/           @goshacodes
+/spec/                              @goshacodes
+/.github/                           @goshacodes
+/Package.swift                      @goshacodes

@@ -1,0 +1,46 @@
+# Dependency updates for every ecosystem the SDKs use, so alerts and update PRs come from one
+# place. The server repo's rule applies here too.
+#
+# Minor and patch updates are grouped into one PR per ecosystem per week. Majors are not
+# grouped: each one is its own PR, so a major that breaks the build (an AGP or Kotlin bump, a
+# Swift package API change) blocks only itself instead of the whole group.
+version: 2
+updates:
+  - package-ecosystem: gradle
+    directory: /android
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      gradle:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+  - package-ecosystem: swift
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      swift:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+  # Dormant: flutter/ is a placeholder with no pubspec.yaml. Dependabot starts opening PRs when
+  # one is committed; the entry is here so the Dart package is covered from its first commit.
+  - package-ecosystem: pub
+    directory: /flutter
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      pub:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      actions:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]

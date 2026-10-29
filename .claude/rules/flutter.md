@@ -1,0 +1,83 @@
+---
+paths: ["flutter/**"]
+---
+
+# Flutter
+
+`flutter/` is a placeholder today and Flutter is not installed on the maintainer's Mac (issue #46,
+"Prerequisites": a pinned Flutter in `flutter/.fvmrc` is proposed). These rules hold when the
+plugin lands: `versola_oauth` for the generic SDK, and the Versola plugin later. Security rules are
+in `security.md`; what the platform SDKs do is in `android-kotlin.md` and `ios-swift.md`.
+
+## A binding, not a third implementation
+
+- The plugin forwards to the native SDKs. No PKCE, `state` or `nonce` generation, DPoP proof,
+  token request, refresh, retry, ID-token validation, discovery, storage or key logic in Dart. If
+  Dart needs a behaviour, it is added to the native SDKs and the spec, then exposed through the
+  bridge. A "small" Dart reimplementation is how three implementations drift.
+- The Dart layer holds only the API shape (`Future`, `Stream<SessionState>`), argument validation
+  that the native side would also do, and mapping from bridge types to public types.
+- Native code in the plugin (`flutter/<plugin>/android`, `.../ios`) is glue: it calls the native
+  SDK's public API (not its `@VersolaInternalApi` wiring) and converts types. It contains no
+  protocol logic either, and it adds no second copy of the Android or iOS rules.
+
+## Bridge
+
+- Pigeon with platform channels, not the Native Interop mode: Native Interop is experimental, has no
+  event channels, and requires both sides to pin the same Pigeon version (architecture review
+  section 4). The Pigeon definition is the contract; the Pigeon version is pinned in
+  `pubspec.yaml`, and generation is deterministic from the definition in the repository.
+- Host API methods return `Result`-shaped sealed classes rather than throwing. Pigeon generates
+  sealed classes for Dart, Kotlin and Swift, so the four categories of `spec/errors.md`
+  (`Recoverable`, `Reauthenticate`, `StepUp`, `Configuration`) arrive typed. A `StepUp` that
+  degrades to a `PlatformException`, or a category collapsed into a string, is a bug. Every
+  platform error is mapped; an unmapped one is a `Configuration` with a detail, never a crash.
+- `Stream<SessionState>` comes from an event channel fed by the native `Flow` / `AsyncStream`. The
+  stream carries the seven states of `spec/state-machine.md` and no Flutter-only state. Cancel the
+  native collection when the Dart subscription cancels.
+- Generated files (`*.g.dart`, the generated Kotlin and Swift) are never hand-edited, and the guard
+  hook denies it; change the Pigeon definition and regenerate. They are not exported from
+  `lib/<package>.dart` and no generated type appears in the public Dart API ("subject to change
+  without warning" upstream): public types are hand-written wrappers.
+
+## What crosses the bridge
+
+- Allowed: configuration values, session state, typed results and errors, the user's validated
+  claims, and the short-lived access token, returned only from the call whose purpose is to hand
+  the app a token (issue #46 decision 7: Flutter apps call APIs through `dio` or `http`).
+- Never: the refresh token, any private key, key material, a DPoP proof minting capability, the
+  pending request, `state`, the PKCE verifier, or the ID token's raw form for storage. No secret
+  in a `PlatformException` message, in `debugPrint`, in the example app's UI or in a test fixture.
+- Do not add a Dart-side cache of the access token; ask the native side every time so single-flight
+  refresh stays in one place.
+- No `WebView` plugin dependency, ever (`security.md`). The browser leg is native.
+
+## Commands (run from the plugin directory)
+
+```bash
+dart format --set-exit-if-changed .
+flutter analyze
+flutter test                      # Dart unit tests, bridge mocked
+cd example && flutter build apk --debug      # the example app builds on Android
+cd example && flutter build ios --no-codesign   # and on iOS
+```
+
+- `flutter test` proves the Dart mapping and the error categories against a mocked channel. It does
+  not prove the bridge or the native SDKs; say which tier ran (`testing.md`).
+- The example app builds on both platforms and exercises sign-in, refresh, sign-out and the error
+  categories; a change to the Pigeon definition is not done until both example builds pass. Use
+  `example.com` configuration and no real client ids.
+- When the generic SDK's scenarios run through the bridge (issue #46, B6), a scenario that passes
+  natively but fails through the bridge is a finding in the bridge.
+
+## Packages and dependencies
+
+- `pubspec.yaml` constraints are pinned tightly (a Dart SDK range, exact or caret-minor versions for
+  `pigeon` and anything else); `pubspec.lock` is gitignored (`.gitignore`), so the constraints are
+  what makes a build repeatable. A new dependency needs approval, with licence and
+  maintenance noted (`security.md`).
+- Dependabot watches `pub` under `/flutter/*`; minors arrive grouped, majors separately
+  (`ci-release.md`).
+- Publishing to pub.dev from the monorepo subdirectory is dormant: the `pub-dev` job in
+  `release.yml` is `if: false` until credentials exist. Do not run `flutter pub publish`, do not
+  remove the dormancy, and do not add a `publish_to` that would enable it by accident.
