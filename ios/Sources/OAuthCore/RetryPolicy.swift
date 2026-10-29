@@ -17,7 +17,7 @@ public struct RetryPolicy: Sendable, Equatable {
 
     public init(
         maxAttemptsPerOrigin: Int = 3, maxTotalAttempts: Int = 4, initialBackoff: TimeInterval = 0.5,
-        backoffMultiplier: Double = 2, maxBackoff: TimeInterval = 8, totalBudget: TimeInterval = 30
+        backoffMultiplier: Double = 2, maxBackoff: TimeInterval = 8, totalBudget: TimeInterval = 20
     ) throws {
         func bounded(_ name: String, _ value: Int, _ lower: Int, _ upper: Int) throws {
             if value < lower || value > upper {

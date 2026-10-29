@@ -258,7 +258,7 @@ final class OAuthConfigurationTests: XCTestCase {
             try make(endSessionEndpoint: "https://auth.example.com/logout"),
             try make(retryPolicy: RetryPolicy(maxAttemptsPerOrigin: 2)),
             try make(retryPolicy: RetryPolicy(initialBackoff: 1)),
-            try make(retryPolicy: RetryPolicy(totalBudget: 20)),
+            try make(retryPolicy: RetryPolicy(totalBudget: 10)),
             try make(clockSkewTolerance: 30),
             try make(unlockPolicy: .onAppUnlock),
             try make(tokenBinding: .dpop(required: false)),
