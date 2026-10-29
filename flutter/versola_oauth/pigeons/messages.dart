@@ -230,8 +230,10 @@ class LogoutOutcomeMessage {
   bool tokenRevoked;
 }
 
-/// Result-shaped answers (`flutter.md`, Bridge): a method answers with its value or with the
-/// typed error, never with a thrown `PlatformException` that would collapse the category.
+/// Result-shaped answers (`flutter.md`, Bridge): every method answers with its value or with
+/// the typed error, never with a thrown `PlatformException` that would collapse the category.
+/// Native code catches everything: a `VersolaError` / `OAuthError` crosses as itself, any other
+/// exception as a `Configuration` naming only its class.
 sealed class VoidResult {}
 
 class VoidOk extends VoidResult {
@@ -240,6 +242,32 @@ class VoidOk extends VoidResult {
 
 class VoidFailure extends VoidResult {
   VoidFailure({required this.error});
+  ErrorMessage error;
+}
+
+/// `create` answers with the handle native chose for this client; every later call and the
+/// event channel's instance name use it, so Dart never derives an identity of its own.
+sealed class CreateResult {}
+
+class CreateOk extends CreateResult {
+  CreateOk({required this.handle});
+  String handle;
+}
+
+class CreateFailure extends CreateResult {
+  CreateFailure({required this.error});
+  ErrorMessage error;
+}
+
+sealed class SessionStateResult {}
+
+class SessionStateOk extends SessionStateResult {
+  SessionStateOk({required this.state});
+  SessionStateMessage state;
+}
+
+class SessionStateFailure extends SessionStateResult {
+  SessionStateFailure({required this.error});
   ErrorMessage error;
 }
 
@@ -255,6 +283,18 @@ class AccessTokenFailure extends AccessTokenResult {
   ErrorMessage error;
 }
 
+sealed class ClaimsResult {}
+
+class ClaimsOk extends ClaimsResult {
+  ClaimsOk({this.claims});
+  IdTokenClaimsMessage? claims;
+}
+
+class ClaimsFailure extends ClaimsResult {
+  ClaimsFailure({required this.error});
+  ErrorMessage error;
+}
+
 sealed class UserInfoResult {}
 
 class UserInfoOk extends UserInfoResult {
@@ -267,16 +307,42 @@ class UserInfoFailure extends UserInfoResult {
   ErrorMessage error;
 }
 
-/// Dart → native. Every method takes the `handle` `create` returned: one native client per
-/// configuration per process, as the native facades promise.
+sealed class LogoutResult {}
+
+class LogoutOk extends LogoutResult {
+  LogoutOk({required this.outcome});
+  LogoutOutcomeMessage outcome;
+}
+
+class LogoutFailure extends LogoutResult {
+  LogoutFailure({required this.error});
+  ErrorMessage error;
+}
+
+sealed class KeyAttestationResult {}
+
+/// `secureEnclave`, `strongBox`, `trustedEnvironment`, `software`, or null under bearer.
+class KeyAttestationOk extends KeyAttestationResult {
+  KeyAttestationOk({this.tier});
+  String? tier;
+}
+
+class KeyAttestationFailure extends KeyAttestationResult {
+  KeyAttestationFailure({required this.error});
+  ErrorMessage error;
+}
+
+/// Dart → native. Every method but `create` takes the `handle` `create` returned: one native
+/// client per configuration per process, as the native facades promise.
 @HostApi()
 abstract class OAuthHostApi {
-  /// Validates the configuration and wires the native client; the handle names it from now on.
+  /// Validates the configuration and wires (or finds) the native client, and answers with the
+  /// handle that names it from now on. The same configuration answers the same handle.
   @async
-  VoidResult create(String handle, ConfigurationMessage configuration);
+  CreateResult create(ConfigurationMessage configuration);
 
   @async
-  SessionStateMessage sessionState(String handle);
+  SessionStateResult sessionState(String handle);
 
   @async
   VoidResult login(String handle, LoginOptionsMessage options);
@@ -290,10 +356,7 @@ abstract class OAuthHostApi {
   );
 
   @async
-  VoidResult resumePendingAuthorization(String handle);
-
-  @async
-  LogoutOutcomeMessage logout(String handle, LogoutOptionsMessage options);
+  LogoutResult logout(String handle, LogoutOptionsMessage options);
 
   /// The short-lived access token, the one credential that crosses (issue #46 decision 7).
   @async
@@ -303,19 +366,20 @@ abstract class OAuthHostApi {
   VoidResult refresh(String handle);
 
   @async
-  IdTokenClaimsMessage? claims(String handle);
+  ClaimsResult claims(String handle);
 
   @async
   UserInfoResult userInfo(String handle);
 
-  /// `secureEnclave`, `strongBox`, `trustedEnvironment`, `software`, or null under bearer.
   @async
-  String? keyAttestation(String handle);
+  KeyAttestationResult keyAttestation(String handle);
 }
 
-/// Native → Dart: the state machine, one stream per subscription, fed by the native
-/// `Flow` / `AsyncStream`; the native collection ends when the subscription does. One channel
-/// per client: the handle is the Pigeon `instanceName`, registered by `create`.
+/// Native → Dart: the state machine, fed by the native `Flow` / `AsyncStream`; the native
+/// collection ends when the subscription does. One channel per client: the handle `create`
+/// returned is the Pigeon `instanceName`. The generated stream must be subscribed once per
+/// client (a second `EventChannel` of the same name replaces the first's handler); the Dart
+/// client shares one subscription among its listeners.
 @EventChannelApi()
 abstract class SessionStateEvents {
   SessionStateMessage sessionStates();

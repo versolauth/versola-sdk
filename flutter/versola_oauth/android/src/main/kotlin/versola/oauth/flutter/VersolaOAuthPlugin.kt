@@ -7,6 +7,8 @@ import android.content.Context
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.BinaryMessenger
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -24,7 +26,11 @@ public class VersolaOAuthPlugin : FlutterPlugin, OAuthHostApi {
     private lateinit var context: Context
     private lateinit var messenger: BinaryMessenger
 
-    /** Clients by the handle Dart derived; the SDK's own registry keeps one instance per configuration. */
+    /** The handle native chose for a client, by the client's identity: one handle per configuration. */
+    private val handles = ConcurrentHashMap<String, String>()
+    private val nextHandle = AtomicInteger()
+
+    /** Clients by handle; the SDK's own registry keeps one instance per configuration. */
     private val clients = ConcurrentHashMap<String, OAuthClient>()
 
     /** Event channels already registered, one per handle: registering twice would replace the handler mid-stream. */
@@ -48,23 +54,41 @@ public class VersolaOAuthPlugin : FlutterPlugin, OAuthHostApi {
     }
 
     private fun client(handle: String): OAuthClient = clients[handle] ?: throw VersolaError.Configuration(
-            VersolaError.Configuration.Detail.InvalidConfiguration("no client for this handle; call create first"),
-        )
+        VersolaError.Configuration.Detail.InvalidConfiguration("no client for this handle; call create first"),
+    )
+
+    /**
+     * Every answer is a Result (`flutter.md`): a `VersolaError` crosses as itself, anything else as
+     * a `Configuration` naming only its class, and a cancellation stays a cancellation. A thrown
+     * exception would reach Dart as a `PlatformException` carrying native text.
+     */
+    private inline fun <R> attempt(failure: (ErrorMessage) -> R, block: () -> R): R = try {
+        block()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        failure(e.toErrorMessage())
+    }
 
     // MARK: OAuthHostApi
 
-    override suspend fun create(handle: String, configuration: ConfigurationMessage): VoidResult = voidResult {
+    override suspend fun create(configuration: ConfigurationMessage): CreateResult = attempt(::CreateFailure) {
         // The SDK validates eagerly (a bad URL, a skew over five minutes, a second configuration
         // for the same issuer and client id) and throws Configuration; that is the answer here.
         val client = OAuthClient.create(context, configuration.toConfiguration())
+        val identity = "${client.configuration.issuerIdentifier}\n${client.configuration.clientId}"
+        val handle = handles.computeIfAbsent(identity) { "client-${nextHandle.incrementAndGet()}" }
         clients[handle] = client
         streams.computeIfAbsent(handle) {
             SessionStateStream(client, scope).also { SessionStatesStreamHandler.register(messenger, it, handle) }
         }
+        CreateOk(handle)
     }
 
     /** The flow replays the current (restored) state first, so its first value is the answer. */
-    override suspend fun sessionState(handle: String): SessionStateMessage = client(handle).sessionState.first().toMessage()
+    override suspend fun sessionState(handle: String): SessionStateResult = attempt(::SessionStateFailure) {
+        SessionStateOk(client(handle).sessionState.first().toMessage())
+    }
 
     override suspend fun login(handle: String, options: LoginOptionsMessage): VoidResult = voidResult {
         client(handle).login(options.toLoginOptions())
@@ -73,57 +97,52 @@ public class VersolaOAuthPlugin : FlutterPlugin, OAuthHostApi {
     override suspend fun stepUp(handle: String, acrValues: List<String>, maxAge: Long?, options: LoginOptionsMessage): VoidResult =
         voidResult { client(handle).stepUp(VersolaError.StepUp(acrValues, maxAge), options.toLoginOptions()) }
 
-    override suspend fun resumePendingAuthorization(handle: String): VoidResult = voidResult {
-        // The SDK finishes a pending authorization from the redirect activity on its own; a
-        // caller asking explicitly after a cold start gets the same answer login() would.
-        client(handle).login()
-    }
-
-    override suspend fun logout(handle: String, options: LogoutOptionsMessage): LogoutOutcomeMessage {
+    override suspend fun logout(handle: String, options: LogoutOptionsMessage): LogoutResult = attempt(::LogoutFailure) {
         val outcome = client(handle).logout(LogoutOptions(endSession = options.endSession, revoke = options.revoke))
-        return LogoutOutcomeMessage(sessionEnded = outcome.sessionEnded, tokenRevoked = outcome.tokenRevoked)
+        LogoutOk(LogoutOutcomeMessage(sessionEnded = outcome.sessionEnded, tokenRevoked = outcome.tokenRevoked))
     }
 
-    override suspend fun accessToken(handle: String): AccessTokenResult = try {
+    override suspend fun accessToken(handle: String): AccessTokenResult = attempt(::AccessTokenFailure) {
         val token = client(handle).accessToken()
         // The one credential that crosses (issue #46 decision 7). The scheme is read off the
         // token the way the SDK's own client does, not off configuration.
         AccessTokenOk(AccessTokenMessage(value = token.value, tokenType = if (token.isDpopBound) "DPoP" else "Bearer"))
-    } catch (e: VersolaError) {
-        AccessTokenFailure(e.toMessage())
     }
 
     override suspend fun refresh(handle: String): VoidResult = voidResult { client(handle).refresh() }
 
-    override suspend fun claims(handle: String): IdTokenClaimsMessage? = client(handle).claims?.let { c ->
-        IdTokenClaimsMessage(
-            subject = c.subject,
-            issuer = c.issuer,
-            audience = c.audience,
-            issuedAtEpochSeconds = c.issuedAt.epochSecond,
-            expiresAtEpochSeconds = c.expiresAt.epochSecond,
-            authTimeEpochSeconds = c.authTime?.epochSecond,
-            acr = c.acr,
-            amr = c.amr,
-            authorizedParty = c.authorizedParty,
-            all = c.all,
+    override suspend fun claims(handle: String): ClaimsResult = attempt(::ClaimsFailure) {
+        ClaimsOk(
+            client(handle).claims?.let { c ->
+                IdTokenClaimsMessage(
+                    subject = c.subject,
+                    issuer = c.issuer,
+                    audience = c.audience,
+                    issuedAtEpochSeconds = c.issuedAt.epochSecond,
+                    expiresAtEpochSeconds = c.expiresAt.epochSecond,
+                    authTimeEpochSeconds = c.authTime?.epochSecond,
+                    acr = c.acr,
+                    amr = c.amr,
+                    authorizedParty = c.authorizedParty,
+                    all = c.all,
+                )
+            },
         )
     }
 
-    override suspend fun userInfo(handle: String): UserInfoResult = try {
+    override suspend fun userInfo(handle: String): UserInfoResult = attempt(::UserInfoFailure) {
         val info = client(handle).userInfo()
         UserInfoOk(UserInfoMessage(subject = info.subject, claims = info.claims))
-    } catch (e: VersolaError) {
-        UserInfoFailure(e.toMessage())
     }
 
-    override suspend fun keyAttestation(handle: String): String? = client(handle).keyAttestation()?.toWireName()
+    /** Asking generates the key, so `Configuration(HardwareBindingUnavailable)` is a reachable answer here. */
+    override suspend fun keyAttestation(handle: String): KeyAttestationResult = attempt(::KeyAttestationFailure) {
+        KeyAttestationOk(client(handle).keyAttestation()?.toWireName())
+    }
 
-    private inline fun voidResult(block: () -> Unit): VoidResult = try {
+    private inline fun voidResult(block: () -> Unit): VoidResult = attempt(::VoidFailure) {
         block()
         VoidOk()
-    } catch (e: VersolaError) {
-        VoidFailure(e.toMessage())
     }
 }
 

@@ -25,22 +25,30 @@ public final class VersolaOAuthPlugin: NSObject, FlutterPlugin {
         let instance = VersolaOAuthPlugin()
         instance.messenger = registrar.messenger()
         OAuthHostApiSetup.setUp(binaryMessenger: registrar.messenger(), api: instance)
+        // Both lifecycles: an app that has adopted UIScene (Flutter's template since 3.4x, and
+        // this repository's example) receives a link in the scene delegate and never in the
+        // application delegate; one that has not still receives it in the application delegate.
         registrar.addApplicationDelegate(instance)
+        registrar.addSceneDelegate(instance)
     }
 
-    /// A Universal Link that reached the app while `ASWebAuthenticationSession` was not up
-    /// (a cold start) is handed to the client whose redirect URI it is.
-    public func application(_ application: UIApplication, continue userActivity: NSUserActivity, restorationHandler: @escaping ([any UIUserActivityRestoring]) -> Void) -> Bool {
-        guard userActivity.activityType == NSUserActivityTypeBrowsingWeb, let url = userActivity.webpageURL else { return false }
+    /// A redirect that reached the app while no `ASWebAuthenticationSession` was waiting (the
+    /// app was killed mid-browser and the link cold-started it) goes to the client whose
+    /// redirect URI it is. The link can arrive before Dart has called `create`, so the actor
+    /// holds it until a client claims it. Nothing is returned to the system as handled: the
+    /// answer is asynchronous, and claiming a link here would hide it from other plugins.
+    private func deliver(_ url: URL) {
         Task { await clients.deliver(url) }
-        return false
     }
 
-    /// The handle→client map behind an actor: Pigeon calls arrive on the main actor, the
-    /// state collections run in their own tasks.
+    /// The handle→client map behind an actor: Pigeon calls arrive on the main actor, the state
+    /// collections and link deliveries run in their own tasks.
     actor Clients {
         private var byHandle: [String: OAuthClient] = [:]
+        private var handleByIdentity: [String: String] = [:]
         private var streams: [String: SessionStateStream] = [:]
+        private var nextHandle = 0
+        private var unclaimed: [URL] = []
 
         func get(_ handle: String) throws -> OAuthClient {
             guard let client = byHandle[handle] else {
@@ -49,108 +57,178 @@ public final class VersolaOAuthPlugin: NSObject, FlutterPlugin {
             return client
         }
 
-        func put(_ handle: String, _ client: OAuthClient, messenger: FlutterBinaryMessenger?) {
+        /// Names the client: one handle per configuration (issuer and client id), chosen here so
+        /// Dart derives nothing. Returns the stream handler to register when this handle is new,
+        /// and offers any redirect that arrived before the client existed.
+        func put(_ client: OAuthClient) async -> (handle: String, newStream: SessionStateStream?) {
+            let identity = "\(client.configuration.issuerIdentifier)\n\(client.configuration.clientId)"
+            let handle: String
+            if let existing = handleByIdentity[identity] {
+                handle = existing
+            } else {
+                nextHandle += 1
+                handle = "client-\(nextHandle)"
+                handleByIdentity[identity] = handle
+            }
             byHandle[handle] = client
-            if streams[handle] == nil, let messenger {
+            var newStream: SessionStateStream?
+            if streams[handle] == nil {
                 let stream = SessionStateStream(client: client)
                 streams[handle] = stream
-                SessionStatesStreamHandler.register(with: messenger, instanceName: handle, streamHandler: stream)
+                newStream = stream
             }
+            let waiting = unclaimed
+            unclaimed = []
+            for url in waiting { await deliver(url) }
+            return (handle, newStream)
         }
 
         func deliver(_ url: URL) async {
             for client in byHandle.values where await client.handleRedirect(url) { return }
+            // Nobody's redirect yet: keep a few, newest last, in case `create` is still to come.
+            unclaimed.append(url)
+            if unclaimed.count > 4 { unclaimed.removeFirst() }
         }
     }
 }
 
+// MARK: Link delivery (application and scene lifecycles)
+
+extension VersolaOAuthPlugin: FlutterSceneLifeCycleDelegate {
+    public func application(_ application: UIApplication, continue userActivity: NSUserActivity, restorationHandler: @escaping ([any UIUserActivityRestoring]) -> Void) -> Bool {
+        if userActivity.activityType == NSUserActivityTypeBrowsingWeb, let url = userActivity.webpageURL { deliver(url) }
+        return false
+    }
+
+    public func application(_ application: UIApplication, open url: URL, options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool {
+        deliver(url)
+        return false
+    }
+
+    public func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions?) -> Bool {
+        // The cold-start path: the link that launched the app is in the connection options.
+        for activity in connectionOptions?.userActivities ?? [] where activity.activityType == NSUserActivityTypeBrowsingWeb {
+            if let url = activity.webpageURL { deliver(url) }
+        }
+        for context in connectionOptions?.urlContexts ?? [] { deliver(context.url) }
+        return false
+    }
+
+    public func scene(_ scene: UIScene, continue userActivity: NSUserActivity) -> Bool {
+        if userActivity.activityType == NSUserActivityTypeBrowsingWeb, let url = userActivity.webpageURL { deliver(url) }
+        return false
+    }
+
+    public func scene(_ scene: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) -> Bool {
+        for context in URLContexts { deliver(context.url) }
+        return false
+    }
+}
+
 extension VersolaOAuthPlugin: OAuthHostApi {
-    func create(handle: String, configuration: ConfigurationMessage) async throws -> VoidResult {
-        try await voidResult {
+    /// Every answer is a Result (`flutter.md`): an `OAuthError` crosses as itself, anything else
+    /// as a `Configuration` naming only its type; a thrown error would reach Dart as a
+    /// `PlatformException` carrying native text.
+    private func attempt<R>(_ failure: (ErrorMessage) -> R, _ body: () async throws -> R) async -> R {
+        do {
+            return try await body()
+        } catch {
+            return failure(error.toErrorMessage())
+        }
+    }
+
+    private func voidResult(_ body: () async throws -> Void) async -> VoidResult {
+        await attempt(VoidFailure.init(error:)) {
+            try await body()
+            return VoidOk()
+        }
+    }
+
+    func create(configuration: ConfigurationMessage) async throws -> CreateResult {
+        await attempt(CreateFailure.init(error:)) {
             // The SDK validates eagerly (a bad URL, a skew over five minutes, a second
             // configuration for the same issuer and client id) and throws; that is the answer.
             let client = try await OAuthClient.create(
                 configuration: try configuration.toConfiguration(),
                 presentationAnchor: { Self.presentationAnchor() }
             )
-            await clients.put(handle, client, messenger: messenger)
+            let (handle, newStream) = await clients.put(client)
+            if let newStream, let messenger {
+                // Flutter requires a stream handler to be installed on the platform thread; the
+                // actor above runs on the cooperative pool, so this hop is not optional (the
+                // engine aborts the process otherwise).
+                await MainActor.run {
+                    SessionStatesStreamHandler.register(with: messenger, instanceName: handle, streamHandler: newStream)
+                }
+            }
+            return CreateOk(handle: handle)
         }
     }
 
-    func sessionState(handle: String) async throws -> SessionStateMessage {
-        try await clients.get(handle).sessionState.toMessage()
+    func sessionState(handle: String) async throws -> SessionStateResult {
+        await attempt(SessionStateFailure.init(error:)) {
+            SessionStateOk(state: await try clients.get(handle).sessionState.toMessage())
+        }
     }
 
     func login(handle: String, options: LoginOptionsMessage) async throws -> VoidResult {
-        try await voidResult { try await clients.get(handle).login(try options.toLoginOptions()) }
+        await voidResult { try await clients.get(handle).login(try options.toLoginOptions()) }
     }
 
     func stepUp(handle: String, acrValues: [String], maxAge: Int64?, options: LoginOptionsMessage) async throws -> VoidResult {
-        try await voidResult {
+        await voidResult {
             try await clients.get(handle).stepUp(acrValues: acrValues, maxAge: maxAge.map(Int.init), options: try options.toLoginOptions())
         }
     }
 
-    func resumePendingAuthorization(handle: String) async throws -> VoidResult {
-        try await voidResult { try await clients.get(handle).resumePendingAuthorization() }
-    }
-
-    func logout(handle: String, options: LogoutOptionsMessage) async throws -> LogoutOutcomeMessage {
-        let outcome = try await clients.get(handle).logout(LogoutOptions(endSession: options.endSession, revoke: options.revoke))
-        return LogoutOutcomeMessage(sessionEnded: outcome.sessionEnded, tokenRevoked: outcome.tokenRevoked)
+    func logout(handle: String, options: LogoutOptionsMessage) async throws -> LogoutResult {
+        await attempt(LogoutFailure.init(error:)) {
+            let outcome = try await clients.get(handle).logout(LogoutOptions(endSession: options.endSession, revoke: options.revoke))
+            return LogoutOk(outcome: LogoutOutcomeMessage(sessionEnded: outcome.sessionEnded, tokenRevoked: outcome.tokenRevoked))
+        }
     }
 
     func accessToken(handle: String) async throws -> AccessTokenResult {
-        do {
+        await attempt(AccessTokenFailure.init(error:)) {
             // The one credential that crosses (issue #46 decision 7).
             let token = try await clients.get(handle).accessToken()
             return AccessTokenOk(token: AccessTokenMessage(value: token.value, tokenType: token.tokenType))
-        } catch let error as OAuthError {
-            return AccessTokenFailure(error: error.toMessage())
         }
     }
 
     func refresh(handle: String) async throws -> VoidResult {
-        try await voidResult { try await clients.get(handle).refresh() }
+        await voidResult { try await clients.get(handle).refresh() }
     }
 
-    func claims(handle: String) async throws -> IdTokenClaimsMessage? {
-        guard let c = try await clients.get(handle).claims else { return nil }
-        return IdTokenClaimsMessage(
-            subject: c.subject,
-            issuer: c.issuer,
-            audience: c.audience,
-            issuedAtEpochSeconds: Int64(c.issuedAt.timeIntervalSince1970),
-            expiresAtEpochSeconds: Int64(c.expiresAt.timeIntervalSince1970),
-            authTimeEpochSeconds: c.authTime.map { Int64($0.timeIntervalSince1970) },
-            acr: c.acr,
-            amr: c.amr,
-            authorizedParty: c.authorizedParty,
-            all: c.all
-        )
-    }
-
-    func userInfo(handle: String) async throws -> UserInfoResult {
-        do {
-            let info = try await clients.get(handle).userInfo()
-            return UserInfoOk(userInfo: UserInfoMessage(subject: info.subject, claims: info.claims))
-        } catch let error as OAuthError {
-            return UserInfoFailure(error: error.toMessage())
+    func claims(handle: String) async throws -> ClaimsResult {
+        await attempt(ClaimsFailure.init(error:)) {
+            guard let c = try await clients.get(handle).claims else { return ClaimsOk(claims: nil) }
+            return ClaimsOk(claims: IdTokenClaimsMessage(
+                subject: c.subject,
+                issuer: c.issuer,
+                audience: c.audience,
+                issuedAtEpochSeconds: Int64(c.issuedAt.timeIntervalSince1970),
+                expiresAtEpochSeconds: Int64(c.expiresAt.timeIntervalSince1970),
+                authTimeEpochSeconds: c.authTime.map { Int64($0.timeIntervalSince1970) },
+                acr: c.acr,
+                amr: c.amr,
+                authorizedParty: c.authorizedParty,
+                all: c.all
+            ))
         }
     }
 
-    func keyAttestation(handle: String) async throws -> String? {
-        try await clients.get(handle).keyAttestation().map { $0.tier.rawValue }
+    func userInfo(handle: String) async throws -> UserInfoResult {
+        await attempt(UserInfoFailure.init(error:)) {
+            let info = try await clients.get(handle).userInfo()
+            return UserInfoOk(userInfo: UserInfoMessage(subject: info.subject, claims: info.claims))
+        }
     }
 
-    /// Result-shaped answers: an `OAuthError` crosses typed; anything else (there is nothing
-    /// else on the SDK's API) would surface as a `PlatformException`, which is a bug.
-    private func voidResult(_ body: () async throws -> Void) async throws -> VoidResult {
-        do {
-            try await body()
-            return VoidOk()
-        } catch let error as OAuthError {
-            return VoidFailure(error: error.toMessage())
+    /// Asking generates the key, so `hardwareBindingUnavailable` is a reachable answer here.
+    func keyAttestation(handle: String) async throws -> KeyAttestationResult {
+        await attempt(KeyAttestationFailure.init(error:)) {
+            KeyAttestationOk(tier: try await clients.get(handle).keyAttestation().map { $0.tier.rawValue })
         }
     }
 }

@@ -17,7 +17,9 @@ final client = await OAuthClient.create(const OAuthConfiguration(
   scopes: {'openid', 'profile'},
 ));
 
-client.sessionStates().listen((state) => print(state)); // the seven states of spec/state-machine.md
+// Any number of listeners; the seven states of spec/state-machine.md, and a redirect that
+// finishes an authorization in a cold-started process arrives here too.
+client.sessionStates().listen((state) => print(state));
 
 try {
   await client.login();
@@ -59,8 +61,12 @@ fvm flutter analyze
 fvm flutter test
 cd example && fvm flutter build apk --debug
 cd example && fvm flutter build ios --no-codesign
+cd example/ios && xcodebuild test -workspace Runner.xcworkspace -scheme Runner \
+  -destination "platform=iOS Simulator,name=iPhone 17" -only-testing:RunnerTests   # Swift glue
+cd example/android && ./gradlew :versola_oauth:testDebugUnitTest                  # Kotlin glue
 ```
 
 `flutter test` proves the Dart mapping and the error categories against a mocked channel; the
-example builds prove the bridge compiles against both native SDKs. The native behaviour is
+Kotlin and Swift unit tests prove the wire mapping of the native half; the example builds prove the
+bridge compiles against both native SDKs. The native behaviour is
 proven by the SDKs' own tiers (`conformance/README.md`).

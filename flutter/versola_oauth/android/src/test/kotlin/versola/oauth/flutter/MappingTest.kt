@@ -1,6 +1,7 @@
 package versola.oauth.flutter
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Test
 import versola.oauth.core.IdTokenRejection
@@ -61,6 +62,17 @@ class MappingTest {
         val issuer = VersolaError.Configuration(Detail.DiscoveryIssuerMismatch("https://a.example.com", "https://b.example.com")).toMessage()
         assertEquals("https://a.example.com", issuer.expected)
         assertEquals("https://b.example.com", issuer.received)
+    }
+
+    @Test
+    fun anExceptionThatIsNotAnSdkErrorCrossesAsAConfigurationNamingOnlyItsClass() {
+        val m = IllegalStateException("refresh_token=do-not-leak").toErrorMessage()
+        assertEquals(ErrorCategoryMessage.CONFIGURATION, m.category)
+        assertEquals("invalidConfiguration", m.kind)
+        assertEquals("unexpected IllegalStateException", m.detail)
+        assertFalse(m.message.contains("do-not-leak"))
+        // An SDK error keeps its own mapping through the same entry point.
+        assertEquals("grantRejected", VersolaError.Reauthenticate(Reason.GrantRejected).toErrorMessage().kind)
     }
 
     @Test

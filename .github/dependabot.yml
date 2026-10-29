@@ -31,6 +31,11 @@ updates:
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
+    # The Pigeon version is part of the contract: both native halves are generated from
+    # pigeons/messages.dart with it, so a bump that does not regenerate leaves the generated
+    # files claiming the old version under a new pin. Bump it by hand, with the regeneration.
+    ignore:
+      - dependency-name: pigeon
     groups:
       pub:
         patterns: ["*"]
