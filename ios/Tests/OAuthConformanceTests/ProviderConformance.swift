@@ -15,12 +15,12 @@ class ProviderConformance: XCTestCase {
     let logger = RecordingLogger()
 
     override func setUp() async throws {
-        guard let staged = Provider.fromEnvironment() else {
+        guard let staged = try Provider.fromEnvironment() else {
             throw XCTSkip("OAUTH_CONFORMANCE_ISSUER is not set: no provider to run against (conformance/README.md)")
         }
         provider = staged
         network.reset(provider: staged)
-        ResourceServer.install(network)
+        try await ResourceServer.install(network)
         browser = HttpLoginBrowser(provider: staged)
         // The same issuer in every test: the per-process registry would refuse the next test's configuration.
         await OAuthClient.forgetAll()

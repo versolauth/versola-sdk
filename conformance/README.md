@@ -145,8 +145,10 @@ Its proxy is in process: a `URLProtocol` on the SDK's and the browser leg's sess
 with that origin as `Host` (`URLSession` honours a custom `Host` header), so no listener is
 opened and the same code runs on a simulator; the resource origins are virtual too. The
 login conversation, the provider profiles and the scenario assertions are the Android
-driver's, ported one to one. It has no CI job: GitHub's macOS runners have no Docker daemon,
-so the iOS driver runs locally and the PR says which provider it ran against.
+driver's, ported one to one. The virtual network is one per process, reset by each test, so
+this target runs serially only: do not enable parallel testing for it (`swift test
+--parallel`, Xcode's parallel testing). It has no CI job: GitHub's macOS runners have no
+Docker daemon, so the iOS driver runs locally and the PR says which provider it ran against.
 
 What differs per provider is a `Provider.Profile` in the driver: the issuer's path, the proxy's
 port, the scopes that buy a refresh token, the login conversation. Keycloak derives its issuer

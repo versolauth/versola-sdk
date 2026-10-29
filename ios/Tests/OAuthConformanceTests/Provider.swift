@@ -49,12 +49,14 @@ struct Provider: Sendable {
     /// answers for. Hydra's `hydra.yml` names this exact value as `urls.self`.
     static let proxyOrigin = "http://localhost:14444"
 
-    static func fromEnvironment() -> Provider? {
+    /// - Throws: `ConformanceFailure` for a provider name without a profile, so the test fails
+    ///   readably instead of the process ending.
+    static func fromEnvironment() throws -> Provider? {
         let env = ProcessInfo.processInfo.environment
         guard let raw = env["OAUTH_CONFORMANCE_ISSUER"]?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return nil }
         let issuer = raw.hasSuffix("/") ? String(raw.dropLast()) : raw
         let name = env["OAUTH_CONFORMANCE_PROVIDER"].flatMap { $0.isEmpty ? nil : $0 } ?? "keycloak"
-        guard let profile = Profile(rawValue: name) else { fatalError("no profile for provider '\(name)' (conformance/README.md, Providers)") }
+        guard let profile = Profile(rawValue: name) else { throw ConformanceFailure("no profile for provider '\(name)' (conformance/README.md, Providers)") }
         return Provider(
             issuer: issuer,
             profile: profile,

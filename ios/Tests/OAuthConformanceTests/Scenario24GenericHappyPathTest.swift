@@ -1,5 +1,6 @@
 import Foundation
 import OAuthCore
+import os
 import XCTest
 @testable import OAuthClient
 
@@ -12,11 +13,10 @@ final class Scenario24GenericHappyPathTest: ProviderConformance {
         let metadata = try await client.metadata()
         // The ID token must be validated before `authenticated` is published: the state the
         // SDK is in when it asks for the keys is the proof (second assertion).
-        let stateAtJwksFetch = ResourceServer.Box<SessionState?>(nil)
+        let stateAtJwksFetch = OSAllocatedUnfairLock<SessionState?>(initialState: nil)
         network.rewrite(path(metadata.jwksUri)) { body in
-            let semaphore = DispatchSemaphore(value: 0)
-            Task { stateAtJwksFetch.set(await client.sessionState); semaphore.signal() }
-            semaphore.wait()
+            let state = await client.sessionState
+            stateAtJwksFetch.withLock { $0 = state }
             return body
         }
 
@@ -24,7 +24,7 @@ final class Scenario24GenericHappyPathTest: ProviderConformance {
 
         let state = await client.sessionState
         XCTAssertEqual(state, .authenticated)
-        XCTAssertEqual(stateAtJwksFetch.get(), .authorizing)
+        XCTAssertEqual(stateAtJwksFetch.withLock { $0 }, .authorizing)
         let maybeClaims = await client.claims
         let claims = try XCTUnwrap(maybeClaims)
         XCTAssertFalse(claims.subject.isEmpty)

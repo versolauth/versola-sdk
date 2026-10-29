@@ -1,5 +1,6 @@
 import Foundation
 import OAuthCore
+import os
 import XCTest
 @testable import OAuthClient
 
@@ -17,21 +18,18 @@ final class Scenario29PushedAuthorizationTest: ProviderConformance {
         // The moment the browser opens: the state (Authorizing only once the pending request
         // is persisted), how much of the transcript preceded it, and when.
         struct AtOpen: Sendable { var state: SessionState?; var transcriptCount = -1; var at = Date.distantPast }
-        let atOpen = ResourceServer.Box(AtOpen())
+        let atOpen = OSAllocatedUnfairLock(initialState: AtOpen())
         let network = self.network
         browser.onOpen { _ in
-            // The hook is synchronous; the state lives behind the client's actors.
-            let semaphore = DispatchSemaphore(value: 0)
-            let state = ResourceServer.Box<SessionState?>(nil)
-            Task { state.set(await client.sessionState); semaphore.signal() }
-            _ = semaphore.wait(timeout: .now() + 10)
-            atOpen.set(AtOpen(state: state.get(), transcriptCount: network.transcript.count, at: Date()))
+            // Awaited, not blocked on: the hook runs on the pool the client's actors need.
+            let state = await client.sessionState
+            atOpen.withLock { $0 = AtOpen(state: state, transcriptCount: network.transcript.count, at: Date()) }
         }
 
         try await client.login()
 
         let pushed = try theRequest("POST", path(parEndpoint))
-        let opening = atOpen.get()
+        let opening = atOpen.withLock { $0 }
         // Persisted after the PAR response and before the browser opened.
         XCTAssertEqual(opening.state, .authorizing)
         let pushedIndex = try XCTUnwrap(network.transcript.firstIndex { $0.method == "POST" && $0.path.hasSuffix(path(parEndpoint)) })

@@ -16,24 +16,24 @@ final class HttpLoginBrowser: BrowserAuthorizationSession, Sendable {
         var opened: [URL] = []
         var dismissNext = false
         var cookies: [String: String] = [:]
-        var onOpen: (@Sendable (URL) -> Void)?
+        var onOpen: (@Sendable (URL) async -> Void)?
     }
 
     init(provider: Provider) { self.provider = provider }
 
     var opened: [URL] { state.withLock { $0.opened } }
     func dismissNext() { state.withLock { $0.dismissNext = true } }
-    func onOpen(_ hook: @escaping @Sendable (URL) -> Void) { state.withLock { $0.onOpen = hook } }
+    func onOpen(_ hook: @escaping @Sendable (URL) async -> Void) { state.withLock { $0.onOpen = hook } }
 
     private static let clientPrefixes = [Provider.redirectUri, Provider.postLogoutRedirectUri]
 
     func authorize(_ uri: URL, options: BrowserSessionOptions) async throws -> BrowserOutcome {
-        let (dismiss, hook) = state.withLock { s -> (Bool, (@Sendable (URL) -> Void)?) in
+        let (dismiss, hook) = state.withLock { s -> (Bool, (@Sendable (URL) async -> Void)?) in
             s.opened.append(uri)
             defer { s.dismissNext = false }
             return (s.dismissNext, s.onOpen)
         }
-        hook?(uri)
+        await hook?(uri)
         if dismiss { return .userCancelled }
         var (response, body) = try await send(URLRequest(url: uri))
         // Keycloak takes three hops, Hydra about ten; the bound is for a provider that loops.

@@ -40,9 +40,9 @@ final class VirtualNetwork: Sendable {
     struct State: Sendable {
         var provider: Provider?
         var intercept: (@Sendable (URLRequest) -> StubAnswer?)?
-        var rewrites: [(String, @Sendable (String) -> String)] = []
+        var rewrites: [(String, @Sendable (String) async -> String)] = []
         var addedHeaders: [(String, [String: String])] = []
-        var resources: [String: @Sendable (URLRequest) -> StubAnswer] = [:]
+        var resources: [String: @Sendable (URLRequest) async -> StubAnswer] = [:]
         var requests: [URLRequest] = []
         var transcript: [TranscriptEntry] = []
     }
@@ -75,7 +75,9 @@ final class VirtualNetwork: Sendable {
     }
 
     func intercept(_ handler: (@Sendable (URLRequest) -> StubAnswer?)?) { state.withLock { $0.intercept = handler } }
-    func rewrite(_ pathSuffix: String, _ body: @escaping @Sendable (String) -> String) { state.withLock { $0.rewrites.append((pathSuffix, body)) } }
+    /// The hooks are `async`: they run inside `handle`, on the cooperative pool, and may await
+    /// the client's actors; a semaphore there would park the thread the awaited work needs.
+    func rewrite(_ pathSuffix: String, _ body: @escaping @Sendable (String) async -> String) { state.withLock { $0.rewrites.append((pathSuffix, body)) } }
     func rewriteJSON(_ pathSuffix: String, _ body: @escaping @Sendable ([String: Any]) -> [String: Any]) {
         rewrite(pathSuffix) { raw in
             guard let object = (try? JSONSerialization.jsonObject(with: Data(raw.utf8))) as? [String: Any],
@@ -85,7 +87,7 @@ final class VirtualNetwork: Sendable {
     }
     func addHeaders(_ pathSuffix: String, _ headers: [String: String]) { state.withLock { $0.addedHeaders.append((pathSuffix, headers)) } }
     func clearRewrites() { state.withLock { $0.rewrites = []; $0.addedHeaders = []; $0.intercept = nil } }
-    func resource(_ origin: String, _ handler: @escaping @Sendable (URLRequest) -> StubAnswer) { state.withLock { $0.resources[origin] = handler } }
+    func resource(_ origin: String, _ handler: @escaping @Sendable (URLRequest) async -> StubAnswer) { state.withLock { $0.resources[origin] = handler } }
 
     var requests: [URLRequest] { state.withLock { $0.requests } }
     var transcript: [TranscriptEntry] { state.withLock { $0.transcript } }
@@ -116,7 +118,7 @@ final class VirtualNetwork: Sendable {
         let snapshot = state.withLock { $0 }
         let origin = Self.origin(of: url)
         if let handler = snapshot.resources[origin] {
-            let answer = handler(request)
+            let answer = await handler(request)
             return finish(request, answer, record: record)
         }
         guard let provider = snapshot.provider else { return finish(request, StubAnswer(status: 599), record: record) }
@@ -150,7 +152,7 @@ final class VirtualNetwork: Sendable {
         let (data, response) = try await upstream.data(for: forwarded)
         let http = response as! HTTPURLResponse
         var text = String(decoding: data, as: UTF8.self)
-        for (suffix, rewrite) in snapshot.rewrites where url.path.hasSuffix(suffix) { text = rewrite(text) }
+        for (suffix, rewrite) in snapshot.rewrites where url.path.hasSuffix(suffix) { text = await rewrite(text) }
         var headers: [String: String] = [:]
         for (name, value) in http.allHeaderFields {
             let key = String(describing: name)
@@ -188,8 +190,10 @@ final class VirtualNetwork: Sendable {
     }
 }
 
-/// The protocol class on the SDK's sessions: every exchange goes into the transcript.
-final class RecordingProtocol: URLProtocol, @unchecked Sendable {
+/// The protocol class on the SDK's sessions: every exchange goes into the transcript. The two
+/// subclasses hold no state of their own; the instance crosses into the async world inside
+/// `ProtocolBox`, which says why that is safe.
+final class RecordingProtocol: URLProtocol {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() { VirtualProtocols.load(self, record: true) }
@@ -197,7 +201,7 @@ final class RecordingProtocol: URLProtocol, @unchecked Sendable {
 }
 
 /// The protocol class on the browser leg's session: the same network, nothing recorded.
-final class BrowserProtocol: URLProtocol, @unchecked Sendable {
+final class BrowserProtocol: URLProtocol {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() { VirtualProtocols.load(self, record: false) }

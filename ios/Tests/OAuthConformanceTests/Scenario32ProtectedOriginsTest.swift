@@ -15,8 +15,8 @@ final class Scenario32ProtectedOriginsTest: ProviderConformance {
     private static let otherHostOrigin = "http://127.0.0.1:18080"
 
     func test32OnlyTheConfiguredOriginWithAnyPathAndQueryCarriesAuthorization() async throws {
-        ResourceServer.install(network, origin: ResourceServer.secondOrigin)
-        ResourceServer.install(network, origin: Self.otherHostOrigin)
+        try await ResourceServer.install(network, origin: ResourceServer.secondOrigin)
+        try await ResourceServer.install(network, origin: Self.otherHostOrigin)
         let client = try await client()
         try await client.login()
         let tokenPath = path(try await client.metadata().tokenEndpoint)
