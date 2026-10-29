@@ -10,9 +10,17 @@ plugins {
     id("org.jetbrains.kotlinx.binary-compatibility-validator")
 }
 
+// The build runs on JDK 21 (CI and develop.md) with no toolchain download; the bytecode stays
+// Java 17 so an app on AGP's common toolchain can consume the artefact. The Android modules say
+// the same with sourceCompatibility/targetCompatibility.
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
 kotlin {
     explicitApi()
-    jvmToolchain(17)
+    compilerOptions { jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17) }
     compilerOptions {
         // The module's own wiring is marked for the benefit of other modules; inside it the
         // marker is noise.

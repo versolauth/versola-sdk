@@ -28,6 +28,8 @@ android {
 kotlin {
     explicitApi()
     compilerOptions {
+        // Java 17 bytecode for consumers, whatever JDK runs the build (develop.md: 21).
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
         // The edge half reaches the protocol core's wiring (the request executor, the form
         // body, the grant's code) through the opt-in marker rather than through `internal`,
         // which stops at the module boundary.

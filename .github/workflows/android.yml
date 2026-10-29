@@ -23,7 +23,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
 
       # compileSdk 36 across every module (#4's package-coordinates decision, #1 §4's
       # API 26 / target 36 floor). Installed explicitly rather than trusting whatever
@@ -61,9 +61,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # The floor and a current release: below API 30 the storage key's window is set with
-        # the deprecated setter, which is the branch #30 asks to see behave the same.
-        api-level: [28, 34]
+        # The latest release only. The pre-R branch of the storage key's window (the
+        # deprecated setter below API 30) is proven at the unit tier (HardwareKeyProviderTest
+        # pins one test to API 29 under Robolectric); a row for 28 ran it on a real Keystore
+        # and can come back if a device below 30 ever disagrees. google_apis, not default:
+        # Auth Tab needs Chrome.
+        api-level: [36]
     defaults:
       run:
         working-directory: android
@@ -81,7 +84,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
 
       - name: Install Android SDK platform
         run: |
@@ -95,7 +98,7 @@ jobs:
         with:
           api-level: ${{ matrix.api-level }}
           arch: x86_64
-          target: default
+          target: google_apis
           force-avd-creation: false
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           disable-animations: true

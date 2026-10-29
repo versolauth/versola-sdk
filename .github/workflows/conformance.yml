@@ -106,11 +106,11 @@ jobs:
 
       # ---- the driver ----
 
-      - name: Set up JDK 17 for the SDK
+      - name: Set up JDK 21 for the SDK
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
 
       - name: Install Android SDK platform
         run: |

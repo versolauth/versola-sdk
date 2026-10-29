@@ -24,6 +24,10 @@ android {
 }
 
 kotlin {
+    compilerOptions {
+        // Java 17 bytecode for consumers, whatever JDK runs the build (develop.md: 21).
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
     explicitApi()
 }
 

@@ -25,10 +25,20 @@ android {
 
     testOptions {
         unitTests.isIncludeAndroidResources = true
+        unitTests.all {
+            // Robolectric's API 36 image on JDK 21: ApplicationSharedMemory reaches the raw
+            // file descriptor through jdk.internal.access, which the module system hides from
+            // the unnamed module unless exported here.
+            it.jvmArgs("--add-exports", "java.base/jdk.internal.access=ALL-UNNAMED")
+        }
     }
 }
 
 kotlin {
+    compilerOptions {
+        // Java 17 bytecode for consumers, whatever JDK runs the build (develop.md: 21).
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
     explicitApi()
 }
 

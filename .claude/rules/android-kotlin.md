@@ -10,8 +10,10 @@ trap for the next reader. Security rules are in `security.md`, test conventions 
 
 ## Toolchain
 
-- Gradle 9.7.1 (`android/gradle/wrapper`), JDK 17 (`JavaVersion.VERSION_17` in every module, Temurin
-  17 in CI), Kotlin 2.4.20, AGP 9.4.1, `minSdk = 26`, `compileSdk = 36`. The versions are declared
+- Gradle 9.7.1 (`android/gradle/wrapper`), JDK 21 to build (Temurin 21 in CI; Robolectric's API 36
+  image needs it) with Java 17 bytecode for consumers (`JavaVersion.VERSION_17` in every Android
+  module, `jvmTarget` 17 in `:oauth-core`), Kotlin 2.4.20, AGP 9.4.1, `minSdk = 26`,
+  `compileSdk = 36`. The versions are declared
   in `android/build.gradle.kts` and each module's `build.gradle.kts`; change one in every module
   together, and ask first to lower `minSdk` or raise it.
 - Libraries declare no `targetSdk` (AGP would force consumers to match it); target 36 is the app's
@@ -36,7 +38,7 @@ trap for the next reader. Security rules are in `security.md`, test conventions 
 ./gradlew :dpop:connectedDebugAndroidTest   # device tier: needs an emulator (AVD) or device
 ```
 
-The maintainer's Mac has JDK 17 and the Android SDK under `~/Library/Android/sdk`; an AVD exists
+The maintainer's Mac has JDK 21 and the Android SDK under `~/Library/Android/sdk`; an AVD exists
 for API 36. If you cannot start an emulator, say the device tier was not run (`testing.md`).
 
 ## Modules and direction
@@ -126,8 +128,8 @@ for API 36. If you cannot start an emulator, say the device tier was not run (`t
   level) in `:browser`, `:storage` and `:sdk`; `:oauth-core`, `:core`, `:dpop` and `:okhttp` stay plain JVM tests.
   Do not add Robolectric to a module that does not have it, or `isIncludeAndroidResources` with it.
 - The Keystore has no JVM implementation: what the hardware does is proved on an emulator
-  (`src/androidTest`, `connectedDebugAndroidTest`), API 28 and 34 in the instrumented job and API
-  36 planned; the unit tier proves what key the SDK asks for. Name which tier proved what.
+  (`src/androidTest`, `connectedDebugAndroidTest`), API 36 in the instrumented job; the unit tier
+  proves what key the SDK asks for, including the pre-R branch at API 29. Name which tier proved what.
 
 ## Logging and R8
 
