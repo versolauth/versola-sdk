@@ -1,0 +1,33 @@
+# Keycloak as a conforming OpenID Provider for the generic facade's scenarios
+# (spec/conformance/README.md, "Facades"; spec/providers.md section 4). Development mode with
+# the realm imported from realm.json on every start: a throwaway provider on the developer's
+# machine or a CI runner, never a deployment.
+#
+#   docker compose -f conformance/providers/keycloak/docker-compose.yml up -d --wait
+#   # after editing realm.json: `down` first; the import runs at start and ignores an existing realm
+#   OAUTH_CONFORMANCE_PROVIDER=keycloak OAUTH_CONFORMANCE_ISSUER=http://localhost:8080/realms/conformance \
+#     ./gradlew :conformance-oauth:testDebugUnitTest
+#
+services:
+  keycloak:
+    # Pinned to a release line rather than :latest so the matrix row in spec/providers.md says
+    # what was tested; bump deliberately.
+    image: quay.io/keycloak/keycloak:26.4
+    command: ["start-dev", "--import-realm"]
+    environment:
+      KC_BOOTSTRAP_ADMIN_USERNAME: admin
+      KC_BOOTSTRAP_ADMIN_PASSWORD: admin
+      KC_HEALTH_ENABLED: "true"
+    ports:
+      - "8080:8080"
+      - "9000:9000"
+    volumes:
+      - ./realm.json:/opt/keycloak/data/import/realm.json:ro
+    healthcheck:
+      # The management port serves health in 26.x; curl is not in the image, so bash's /dev/tcp
+      # stands in. Ready once the realm is importable, which is after the HTTP listener is up.
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/9000 && echo -e 'GET /health/ready HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n' >&3 && grep -q '\"status\": \"UP\"' <&3"]
+      interval: 5s
+      timeout: 5s
+      retries: 40
+      start_period: 20s

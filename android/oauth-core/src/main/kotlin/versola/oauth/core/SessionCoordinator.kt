@@ -246,9 +246,11 @@ public class SessionCoordinator(
             OFFLINE_ACCESS in flow.metadata().scopesSupported
         ) {
             // Said once (`spec/oauth-sdk-api.md` section 15): the provider offers refresh
-            // tokens for the asking, and the integrator did not ask.
+            // tokens for the asking, and the integrator did not ask. "May": Keycloak advertises
+            // the scope and issues a refresh token without it (scenario 31 against it), so the
+            // scope's absence is not proof of the token's.
             warnedOfflineAccess = true
-            logger?.warn("the provider advertises offline_access and the configured scopes omit it; no refresh token will be issued")
+            logger?.warn("the provider advertises offline_access and the configured scopes omit it; a refresh token may not be issued")
         }
         val grant = flow.authorize(requested, acrValues, maxAge, parameters)
         // One attempt, with no retry budget around it. An authorization code is single-use

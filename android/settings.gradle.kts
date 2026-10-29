@@ -39,3 +39,8 @@ include(":oauth")
 // The conformance driver (#15): instrumented tests only, driving the SDK against a staged
 // auth + central + edge from an emulator. Nothing is published from it.
 include(":conformance-android")
+// The generic facade's conformance driver (#46, B4): Robolectric unit tests that drive OAuthClient
+// against a real OpenID Provider in Docker (conformance/providers/) through a rewriting proxy, for
+// the scenarios tagged `facade: [oauth]`. Skipped unless OAUTH_CONFORMANCE_ISSUER is set, so the
+// build job's `test` stays a unit run. Nothing is published from it.
+include(":conformance-oauth")
