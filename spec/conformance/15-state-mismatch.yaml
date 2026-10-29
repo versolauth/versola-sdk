@@ -2,6 +2,7 @@ id: 15-state-mismatch
 title: state mismatch on redirect is a hard failure with no token request
 issues: [5, 11, 15]
 applies_to: [android, ios, flutter]
+facade: [versola, oauth]
 mode: any
 preconditions:
   - An authorization request is outstanding with a known persisted state.

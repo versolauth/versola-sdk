@@ -1,0 +1,21 @@
+id: 28-explicit-endpoints
+title: A provider without discovery is configured from explicit endpoints and behaves as a discovered one
+issues: [46]
+applies_to: [android, ios, flutter]
+facade: [oauth]
+mode: bearer
+fault_injection: [omit-discovery-field]
+preconditions:
+  - The proxy answers 404 for /.well-known/openid-configuration and passes every other path through.
+  - The SDK is configured with endpoints (issuer, authorizationEndpoint, tokenEndpoint, jwksUri, userinfoEndpoint, revocationEndpoint, no endSessionEndpoint) and no issuer field.
+steps:
+  - actor: app
+    action: Create the client, login(), call the protected resource, logout().
+  - actor: sdk
+    action: Run the whole flow without ever requesting discovery.
+assertions:
+  - No request to any /.well-known/ path is made at any point.
+  - The ID token is validated against the configured jwksUri and the configured issuer.
+  - PAR is not attempted (no endpoint was listed) and iss on the redirect is not required (no advertisement), but is checked when present.
+  - logout() revokes at the configured revocation endpoint, opens no browser, and returns sessionEnded false and tokenRevoked true.
+  - A configuration that lists both issuer and endpoints, or an endpoint that is not https, is refused at construction with Configuration InvalidConfiguration.

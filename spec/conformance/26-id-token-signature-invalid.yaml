@@ -1,0 +1,19 @@
+id: 26-id-token-signature-invalid
+title: An ID token that does not verify against the provider's keys, or uses a refused algorithm, is rejected
+issues: [46]
+applies_to: [android, ios, flutter]
+facade: [versola, oauth]
+mode: any
+preconditions:
+  - A proxy in front of the provider can rewrite the token response body and serve a substituted JWKS.
+  - An authorization request is outstanding.
+steps:
+  - actor: harness
+    action: Rewrite the id_token's signature bytes (case A); re-sign it with a key absent from jwks_uri (case B); set the header alg to none with an empty signature (case C); set alg to HS256 signed with the client id as key (case D).
+  - actor: sdk
+    action: Validate the ID token in each case.
+assertions:
+  - Each case surfaces Configuration with detail IdTokenRejected; the reason is Signature for A and B and Algorithm for C and D.
+  - Case B causes exactly one JWKS refetch before the rejection, and no further refetch on repeated failures within the same operation.
+  - Nothing is persisted in any case and the state settles on its pre-login value.
+  - The refusal happens before any request to userinfo, a protected origin or the revocation endpoint.

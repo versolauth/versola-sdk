@@ -1,0 +1,22 @@
+id: 31-session-without-refresh-token
+title: A provider that issues no refresh token yields a session that ends at access-token expiry with Reauthenticate
+issues: [46]
+applies_to: [android, ios, flutter]
+facade: [oauth]
+mode: any
+fault_injection: [clock-skew]
+preconditions:
+  - The client is registered, or the scopes chosen, so that the token response carries an access token and ID token but no refresh_token.
+steps:
+  - actor: app
+    action: login(), then call the protected resource.
+    expect: Authenticated; the call succeeds; one warning that no refresh token was issued.
+  - actor: harness
+    action: Advance the device clock past the access token's expiry.
+  - actor: app
+    action: Call accessToken() and then the protected resource.
+assertions:
+  - accessToken() fails with Reauthenticate SessionExpired; no request reaches the token endpoint.
+  - The authenticated client makes no refresh attempt and surfaces the same Reauthenticate.
+  - SessionState moves from Authenticated to Unauthenticated when the expiry is observed, and the ID token and claims are wiped.
+  - The SDK did not open a browser on its own.

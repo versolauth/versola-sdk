@@ -37,6 +37,7 @@ stateDiagram-v2
     Authenticated --> Refreshing: access token expired or 401
     Refreshing --> Authenticated: token response persisted
     Refreshing --> Unauthenticated: invalid_grant
+    Authenticated --> Unauthenticated: access token expired, no refresh token (generic facade)
     Authenticated --> StepUpRequired: edge insufficient_user_authentication
     StepUpRequired --> Authorizing: stepUp(challenge)
     Authenticated --> Locked: key requires user authentication
@@ -178,6 +179,11 @@ Every refresh carries an `Idempotency-Key`. The key is derived from the refresh 
 generation being consumed, so a retry after a dropped response reuses it and resolves to the
 same rotation.
 
+The `Idempotency-Key` is the Versola facade's: auth honours it, and no standard requires a
+provider to. The generic facade (`oauth-sdk-api.md` section 8) sends none, persists the same
+`pending` slot, and on a replay the provider decides; a provider that already rotated answers
+`invalid_grant`, which is `Reauthenticate`.
+
 Persistence, in order:
 
 1. the outgoing generation is copied into a `pending` slot before the request is sent
@@ -195,6 +201,14 @@ Through edge the request is `POST {edge}/native/token/{clientId}`, carrying the 
 `Idempotency-Key` (edge forwards it) and a proof signed for the remembered `token_endpoint`.
 A `use_dpop_nonce` in the relayed answer is auth's nonce and is cached under auth's origin,
 not edge's: the next proof for that `htu` carries it, and edge's own cache is untouched.
+
+### `Authenticated → Unauthenticated` — no refresh token
+
+Generic facade only. A provider that issued no `refresh_token` leaves a session that lives as
+long as its access token. When the token is observed expired (by the refresh skew or a 401),
+there is nothing to spend: the SDK wipes the ID token and claims, publishes `Unauthenticated`,
+and the operation fails with `Reauthenticate(SessionExpired)`. No token request is made and the
+browser is not opened. Scenario 31.
 
 ### `Refreshing → Unauthenticated`
 

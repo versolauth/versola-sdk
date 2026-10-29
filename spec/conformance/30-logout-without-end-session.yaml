@@ -1,0 +1,25 @@
+id: 30-logout-without-end-session
+title: Sign-out against a provider without an end_session_endpoint revokes, wipes, and says the server session was not ended
+issues: [46]
+applies_to: [android, ios, flutter]
+facade: [oauth]
+mode: any
+fault_injection: [omit-discovery-field]
+preconditions:
+  - The SDK is Authenticated against a provider whose discovery (or the proxy's rewrite of it) omits end_session_endpoint and includes revocation_endpoint.
+steps:
+  - actor: app
+    action: logout() with the defaults.
+  - actor: sdk
+    action: Revoke the refresh token, wipe local state.
+    expect: No browser is opened; LogoutOutcome is sessionEnded false, tokenRevoked true.
+  - actor: harness
+    action: Repeat with the revocation endpoint answering 503 on every attempt.
+    expect: LogoutOutcome is sessionEnded false, tokenRevoked false; the local wipe still happened; Unauthenticated published.
+  - actor: harness
+    action: Repeat against a provider that advertises end_session_endpoint, with the user dismissing the browser.
+    expect: sessionEnded false; the local wipe still happened; Unauthenticated published.
+assertions:
+  - After every variant the credential store holds no refresh token, ID token or pending request.
+  - The revocation request carries token, token_type_hint refresh_token and client_id, and no client secret.
+  - Revocation attempts stay within the operation's retry budget.

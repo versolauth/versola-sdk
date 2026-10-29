@@ -2,6 +2,7 @@ id: 18-logout
 title: RP-initiated logout clears local state and the server session
 issues: [10, 14, 15]
 applies_to: [android, ios, flutter]
+facade: [versola, oauth]
 mode: any
 preconditions:
   - The session is Authenticated and an id_token is held.

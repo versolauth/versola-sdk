@@ -2,6 +2,7 @@ id: 17-unregistered-redirect-uri
 title: Unregistered redirect URI or unknown client_id is indistinguishable from user cancel
 issues: [5, 11, 15]
 applies_to: [android, ios, flutter]
+facade: [versola, oauth]
 mode: any
 preconditions:
   - The SDK is configured with a redirect URI the client is not registered for.

@@ -2,6 +2,7 @@ id: 02-silent-refresh
 title: Silent refresh before expiry, followed by a successful call
 issues: [8, 14, 15]
 applies_to: [android, ios, flutter]
+facade: [versola, oauth]
 mode: any
 preconditions:
   - Scenario 01 has completed and the session is Authenticated.

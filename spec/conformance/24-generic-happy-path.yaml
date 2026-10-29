@@ -1,0 +1,38 @@
+id: 24-generic-happy-path
+title: Sign-in, authenticated call and sign-out through the generic facade against a conforming provider
+issues: [46]
+applies_to: [android, ios, flutter]
+facade: [oauth]
+mode: bearer
+preconditions:
+  - A provider from spec/providers.md is staged with a public client registered for authorization code + PKCE, the harness's redirect URI, and the scopes openid profile (plus the provider's refresh-token scope where providers.md says one is needed).
+  - A protected resource is staged that accepts the provider's access tokens and returns 401 without a valid one.
+  - The SDK is configured with the provider's issuer, the client id, the redirect URI, the scopes above, tokenBinding Bearer and the resource's origin in protectedOrigins.
+steps:
+  - actor: app
+    action: Create the client and call login() with the default options.
+  - actor: sdk
+    action: Fetch discovery, validate issuer equality, build the authorization request (PAR when advertised), persist the pending request, open the browser.
+    expect: Exactly one GET of /.well-known/openid-configuration; the authorization request carries response_type=code, code_challenge_method=S256, state and nonce; no client_secret anywhere.
+  - actor: user
+    action: Sign in at the provider.
+  - actor: sdk
+    action: Validate the redirect (state, iss when advertised, code), exchange the code, validate the ID token, persist the grant.
+    expect: SessionState Authorizing then Authenticated; claims is non-null with subject set.
+  - actor: app
+    action: Issue a request to the protected resource through the authenticated client, and one to an origin not in protectedOrigins.
+    expect: The first carries Authorization Bearer and returns 200; the second carries no Authorization header.
+  - actor: app
+    action: Call userInfo().
+    expect: sub equals claims.subject.
+  - actor: app
+    action: Call logout() with the defaults.
+  - actor: sdk
+    action: Revoke when a revocation endpoint is advertised, end the session through the browser when an end_session_endpoint is advertised, wipe local state.
+    expect: SessionState LoggingOut then Unauthenticated; LogoutOutcome reports which of the two server steps ran.
+assertions:
+  - The token request carries grant_type=authorization_code, code, code_verifier, redirect_uri and client_id, and no client_secret or client_assertion.
+  - The ID token was validated before Authenticated was published; a transcript shows the JWKS fetch preceding the state transition.
+  - No request to a non-protected origin carried an Authorization header.
+  - After logout the credential store holds no refresh token, ID token or pending request, and the provider reports the refresh token revoked where it supports introspection or revocation.
+  - The same transcript shape is produced on every provider in the matrix; differences are limited to the capabilities providers.md lists.

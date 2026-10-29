@@ -2,6 +2,7 @@ id: 19-retry-budget
 title: Retries are bounded, backed off, and configurable only within fixed maxima
 issues: [8, 9, 14, 15]
 applies_to: [android, ios, flutter]
+facade: [versola, oauth]
 mode: any
 fault_injection: [network-partition, drop-response, always-demand-dpop-nonce]
 preconditions:
