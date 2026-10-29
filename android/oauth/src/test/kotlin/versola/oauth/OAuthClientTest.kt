@@ -176,6 +176,17 @@ class OAuthClientTest {
     }
 
     @Test
+    fun `ephemeralBrowser reaches the browser session and is off by default`() = runTest {
+        val client = client()
+
+        client.login()
+        client.login(LoginOptions(ephemeralBrowser = true))
+
+        assertEquals(listOf(false, true), browser.options.map { it.ephemeral })
+        assertEquals(REDIRECT_URI, browser.options.last().redirectUri)
+    }
+
+    @Test
     fun `login while an authorization is outstanding is refused, not queued`() = runTest {
         browser.hold = kotlinx.coroutines.CompletableDeferred()
         val client = client()

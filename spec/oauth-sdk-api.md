@@ -130,7 +130,7 @@ the state before asking.
 | `acrValues` | `acr_values` | list; also set by `stepUp()` |
 | `maxAge` | `max_age` | seconds; when set, the ID token must carry `auth_time` and it is checked |
 | `resources` | `resource` (RFC 8707) | repeatable; also sent on the token request |
-| `ephemeralBrowser` | platform | `false`: an ephemeral session breaks passkeys and SSO; opt-in only. Not yet on Android: it arrives with the Auth Tab browser leg (B3b) |
+| `ephemeralBrowser` | platform | `false`: an ephemeral session breaks passkeys and SSO; opt-in only. Best effort, as iOS's `prefersEphemeralWebBrowserSession`: Android passes it to the Auth Tab or Custom Tab when the provider supports ephemeral browsing, and otherwise logs one warning and opens the session shared. The end-session request is never ephemeral |
 | `extraParameters` | verbatim | a map for provider extensions (`audience`, `claims`, `kc_idp_hint`, …); a key that collides with a reserved parameter (`client_id`, `redirect_uri`, `response_type`, `scope`, `state`, `nonce`, `code_challenge*`, `request_uri`, `prompt`, `max_age`, `acr_values`, `resource`, `login_hint`, `ui_locales`) is `Configuration(InvalidConfiguration)` |
 
 The SDK always sends `response_type=code`, `code_challenge_method=S256`, a fresh `state` and
@@ -273,7 +273,8 @@ handled in app code after `logout()` has wiped locally; the SDK does not special
 | UserInfo | `suspend fun userInfo(): UserInfo` | `func userInfo() async throws -> UserInfo` | `Future<UserInfo> userInfo()` |
 | Step-up | `suspend fun stepUp(challenge, options)` | `func stepUp(_:_:) async throws` | `Future<void> stepUp(challenge, [options])` |
 | HTTP | `interceptor(origins)`, `authenticatedClient(origins)` | `authenticatedSession(origins)` | `accessToken()` |
-| Redirect | manifest-declared activity | `handleRedirect(_ url: URL) -> Bool` | native |
+| Browser leg | Auth Tab (androidx.browser, activity result) where the Custom Tabs provider supports it, Custom Tabs otherwise, any browser last; `WebView` unrepresentable | `ASWebAuthenticationSession` | native |
+| Redirect | an Auth Tab returns it as its result; otherwise the manifest-declared activity | `handleRedirect(_ url: URL) -> Bool` | native |
 | Errors | `sealed class OAuthError : Exception` | `enum OAuthError: Error, Sendable` | `sealed class OAuthError implements Exception` |
 | Internal wiring | `@VersolaInternalApi` (`RequiresOptIn`, error level) | `package` access / `_` prefix, not in products | `src/` private, not exported |
 

@@ -38,7 +38,7 @@ import versola.oauth.core.TokenBinding
 import versola.oauth.core.UserInfo
 import versola.oauth.core.UserInfoClient
 import versola.oauth.core.VersolaError
-import versola.sdk.browser.CustomTabsAuthorizationSession
+import versola.sdk.browser.AuthTabAuthorizationSession
 import versola.sdk.dpop.DpopProofFactory
 import versola.sdk.dpop.KeyAttestation
 import versola.sdk.dpop.KeystoreDpopKey
@@ -101,6 +101,7 @@ public class OAuthClient private constructor(
             acrValues = options.acrValues,
             maxAge = options.maxAge,
             parameters = options.parameters,
+            ephemeralBrowser = options.ephemeralBrowser,
         )
     }
 
@@ -116,6 +117,7 @@ public class OAuthClient private constructor(
             acrValues = challenge.acrValues,
             maxAge = challenge.maxAge,
             parameters = options.parameters,
+            ephemeralBrowser = options.ephemeralBrowser,
         )
     }
 
@@ -327,7 +329,8 @@ public class OAuthClient private constructor(
                     file = File(directory, "pending-authorization"),
                     keyProvider = keys,
                 ),
-                browser = browser ?: CustomTabsAuthorizationSession(context, logger),
+                // Auth Tab where the device's browser supports it, Custom Tabs otherwise.
+                browser = browser ?: AuthTabAuthorizationSession(context, logger),
                 tokenBinding = configuration.tokenBinding,
                 dpopKey = dpopKey,
                 hasStoredGrant = credentialStore::hasGrant,

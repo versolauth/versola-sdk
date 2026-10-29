@@ -183,7 +183,8 @@ public class AuthorizationFlow(
         val uri = endSessionUri(endpoint, idTokenHint, postLogoutRedirectUri, expectedState)
 
         val outcome = try {
-            browser.authorize(uri)
+            // Never ephemeral: the point is to end the session the shared browser holds.
+            browser.authorize(uri, BrowserSessionOptions(redirectUri = postLogoutRedirectUri))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -249,6 +250,8 @@ public class AuthorizationFlow(
         acrValues: List<String> = emptyList(),
         maxAge: Long? = null,
         parameters: AuthorizationParameters = AuthorizationParameters(),
+        /** `spec/oauth-sdk-api.md` section 6: a browser without the user's shared state. */
+        ephemeralBrowser: Boolean = false,
     ): AuthorizationGrant = AUTHORIZE_LOCK.withLock {
         ensureRestored()
         val metadata = discovery.metadata()
@@ -275,8 +278,9 @@ public class AuthorizationFlow(
         pendingStore.save(pending)
         state.value = SessionState.Authorizing
 
+        val browserOptions = BrowserSessionOptions(ephemeral = ephemeralBrowser, redirectUri = configuration.redirectUri.value)
         val outcome = try {
-            belongingTo(pending, browser.authorize(uri))
+            belongingTo(pending, browser.authorize(uri, browserOptions))
         } catch (e: CancellationException) {
             // The *caller* was cancelled, not the authorization. The browser may already be
             // in the foreground and its redirect may still arrive, so the slot and the

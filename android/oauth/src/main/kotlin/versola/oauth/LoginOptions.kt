@@ -21,6 +21,12 @@ public class LoginOptions(
     public val resources: List<String> = emptyList(),
     /** A provider's own parameters (`audience`, `claims`, `kc_idp_hint`), sent verbatim. */
     public val extraParameters: Map<String, String> = emptyMap(),
+    /**
+     * Open the browser without the user's shared browsing state (section 6). Off by default:
+     * it breaks passkeys and single sign-on. Honoured by Auth Tab and Custom Tabs providers
+     * that support ephemeral browsing; otherwise logged once and the session opens shared.
+     */
+    public val ephemeralBrowser: Boolean = false,
 ) {
     internal val parameters: AuthorizationParameters = AuthorizationParameters(
         prompt = prompt,

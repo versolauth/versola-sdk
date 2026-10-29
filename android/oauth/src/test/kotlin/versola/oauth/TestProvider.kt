@@ -71,6 +71,14 @@ internal class FakeBrowser(
     val launched = mutableListOf<String>()
     var nonceSeen: String? = null
 
+    /** The options of each open, in order: what `LoginOptions.ephemeralBrowser` must reach. */
+    val options = mutableListOf<versola.oauth.core.BrowserSessionOptions>()
+
+    override suspend fun authorize(uri: String, options: versola.oauth.core.BrowserSessionOptions): BrowserOutcome {
+        this.options += options
+        return authorize(uri)
+    }
+
     /** When set, the browser stays open until it completes, as a user who has not signed in yet. */
     var hold: kotlinx.coroutines.CompletableDeferred<Unit>? = null
 

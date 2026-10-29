@@ -1,0 +1,92 @@
+package versola.sdk.browser
+
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.result.ActivityResultLauncher
+import androidx.browser.auth.AuthTabIntent
+import versola.oauth.core.VersolaError
+
+/**
+ * Launches an Auth Tab and hands its result to [RedirectDispatcher].
+ *
+ * An Auth Tab answers through the activity-result API, which needs a `ComponentActivity` that
+ * registered its launcher before being started: the SDK is given an application context and
+ * must not reach into the integrator's activities, so this one exists. It is transparent, sits
+ * under the tab for as long as the tab lives, and finishes the moment the result is in. On a
+ * process death while the tab is open the system restores it with the tab's result, so the
+ * redirect still reaches a buffered dispatcher for the next cold start to resume (scenario 12).
+ *
+ * Nothing credential-shaped passes through here: the extras are the authorization URI and the
+ * redirect URI to intercept, both of which the browser sees anyway.
+ */
+internal class VersolaAuthTabActivity : ComponentActivity() {
+
+    private lateinit var launcher: ActivityResultLauncher<Intent>
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        // Registered unconditionally, and first: the registry keys launchers by registration
+        // order, so a recreated activity must register the same one before any result arrives.
+        launcher = AuthTabIntent.registerActivityResultLauncher(this) { result ->
+            deliver(result.resultCode, result.resultUri)
+            finish()
+        }
+        if (savedInstanceState != null) return
+
+        val uri = Uri.parse(intent.getStringExtra(EXTRA_URI) ?: run { finish(); return })
+        val redirect = Uri.parse(intent.getStringExtra(EXTRA_REDIRECT_URI) ?: run { finish(); return })
+        val authTab = AuthTabIntent.Builder()
+            .setEphemeralBrowsingEnabled(intent.getBooleanExtra(EXTRA_EPHEMERAL, false))
+            .build()
+        // The provider the session chose, so the launch cannot land in a browser without
+        // Auth Tab support and fall back to a plain tab that never answers.
+        intent.getStringExtra(EXTRA_PROVIDER)?.let { authTab.intent.setPackage(it) }
+        if (redirect.scheme.equals("https", ignoreCase = true)) {
+            authTab.launch(launcher, uri, redirect.host.orEmpty(), redirect.path.orEmpty())
+        } else {
+            authTab.launch(launcher, uri, redirect.scheme.orEmpty())
+        }
+    }
+
+    private fun deliver(resultCode: Int, resultUri: Uri?) {
+        when (resultCode) {
+            AuthTabIntent.RESULT_OK -> {
+                if (resultUri != null) RedirectDispatcher.deliver(resultUri.toString()) else RedirectDispatcher.deliverUserCancelled()
+            }
+            AuthTabIntent.RESULT_CANCELED -> RedirectDispatcher.deliverUserCancelled()
+            // The browser could not verify that the redirect's https host belongs to this app
+            // (Digital Asset Links), or gave up trying. A deployment mistake, not something the
+            // user can fix by trying again: Configuration, and the pending request goes.
+            AuthTabIntent.RESULT_VERIFICATION_FAILED, AuthTabIntent.RESULT_VERIFICATION_TIMED_OUT -> RedirectDispatcher.fail(
+                VersolaError.Configuration(
+                    VersolaError.Configuration.Detail.InvalidConfiguration(
+                        "the redirect URI's host is not a verified App Link for this app (Auth Tab result $resultCode)",
+                    ),
+                ),
+            )
+            // A result this version of the browser library does not know: the tab is gone and
+            // nothing arrived, which is what a system cancel looks like.
+            else -> RedirectDispatcher.fail(VersolaError.Recoverable(VersolaError.Recoverable.Cause.SystemCancelled))
+        }
+    }
+
+    internal companion object {
+        const val EXTRA_URI = "versola.sdk.browser.extra.URI"
+        const val EXTRA_REDIRECT_URI = "versola.sdk.browser.extra.REDIRECT_URI"
+        const val EXTRA_EPHEMERAL = "versola.sdk.browser.extra.EPHEMERAL"
+        const val EXTRA_PROVIDER = "versola.sdk.browser.extra.PROVIDER"
+
+        fun intent(context: Context, uri: String, redirectUri: String, ephemeral: Boolean, provider: String): Intent =
+            Intent(context, VersolaAuthTabActivity::class.java)
+                .putExtra(EXTRA_URI, uri)
+                .putExtra(EXTRA_REDIRECT_URI, redirectUri)
+                .putExtra(EXTRA_EPHEMERAL, ephemeral)
+                .putExtra(EXTRA_PROVIDER, provider)
+                // Launched from the application context, so it needs its own task entry; it
+                // joins the app's task by affinity.
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    }
+}

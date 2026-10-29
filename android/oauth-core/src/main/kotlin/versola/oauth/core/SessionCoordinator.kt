@@ -232,6 +232,7 @@ public class SessionCoordinator(
         acrValues: List<String> = emptyList(),
         maxAge: Long? = null,
         parameters: AuthorizationParameters = AuthorizationParameters(),
+        ephemeralBrowser: Boolean = false,
     ): TokenResponse {
         // OpenID Connect Core §11: a refresh token is issued for a grant that asked for
         // `offline_access`, and auth issues none otherwise. This session model has nothing to
@@ -250,7 +251,7 @@ public class SessionCoordinator(
             warnedOfflineAccess = true
             logger?.warn("the provider advertises offline_access and the configured scopes omit it; no refresh token will be issued")
         }
-        val grant = flow.authorize(requested, acrValues, maxAge, parameters)
+        val grant = flow.authorize(requested, acrValues, maxAge, parameters, ephemeralBrowser)
         // One attempt, with no retry budget around it. An authorization code is single-use
         // and the token endpoint offers no idempotency for `authorization_code` —
         // `Idempotency-Key` is honoured for the refresh family alone (`OAuthTokenService`) —

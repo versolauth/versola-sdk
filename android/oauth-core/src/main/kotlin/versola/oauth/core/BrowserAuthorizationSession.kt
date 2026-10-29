@@ -19,6 +19,31 @@ public sealed interface BrowserOutcome {
 }
 
 /**
+ * What one browser leg may ask of the session beyond the URI it opens
+ * (`spec/oauth-sdk-api.md` section 6, `ephemeralBrowser`; section 13). Still URIs and flags
+ * only: nothing here lets an implementation see a page, a cookie or a credential.
+ */
+public class BrowserSessionOptions(
+    /**
+     * Open the browser without the user's shared browsing state: no cookies in, none kept.
+     * Off by default because an ephemeral session breaks passkeys and single sign-on; a
+     * browser that cannot honour it says so once and proceeds shared (best effort, as iOS's
+     * `prefersEphemeralWebBrowserSession`).
+     */
+    public val ephemeral: Boolean = false,
+    /**
+     * The URI the provider will redirect to, when the session can intercept it itself (Auth
+     * Tab does, from its result; a Custom Tab relies on the redirect activity instead). Null
+     * when there is none to expect, as for an end-session request without a post-logout URI.
+     */
+    public val redirectUri: String? = null,
+) {
+    public companion object {
+        public val Default: BrowserSessionOptions = BrowserSessionOptions()
+    }
+}
+
+/**
  * The system browser leg of the authorization flow.
  *
  * The interface takes and returns URIs and nothing else. No implementation may accept a
@@ -35,6 +60,13 @@ public interface BrowserAuthorizationSession {
      *   when the device has no browser at all.
      */
     public suspend fun authorize(uri: String): BrowserOutcome
+
+    /**
+     * [authorize] with [options]. The default ignores them, so an implementation that cannot
+     * act on them (a driver's HTTP login conversation) needs no change; the system browser
+     * sessions override it. The flow always calls this form.
+     */
+    public suspend fun authorize(uri: String, options: BrowserSessionOptions): BrowserOutcome = authorize(uri)
 
     /**
      * Suspends for a redirect belonging to an authorization this process did not start — the

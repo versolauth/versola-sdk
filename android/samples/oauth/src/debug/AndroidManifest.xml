@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+    <!--
+      The smoke test's provider is a MockWebServer on loopback over cleartext, which Android
+      refuses from API 28. The SDK runs in the app's process, so the app's own policy is what
+      counts, and a test manifest cannot change it: the debug build relaxes it here, the release
+      build (src/main) stays cleartext-free.
+    -->
+    <application
+        android:usesCleartextTraffic="true"
+        tools:replace="android:usesCleartextTraffic" />
+</manifest>

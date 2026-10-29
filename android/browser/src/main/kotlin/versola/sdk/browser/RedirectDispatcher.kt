@@ -2,10 +2,12 @@ package versola.sdk.browser
 
 import kotlinx.coroutines.channels.Channel
 import versola.oauth.core.BrowserOutcome
+import versola.oauth.core.VersolaError
 
 /**
- * The hand-off from [VersolaRedirectActivity] — which the OS starts, with no reference to
- * whatever coroutine is waiting — to the suspending call that launched the browser.
+ * The hand-off from [VersolaRedirectActivity] and [VersolaAuthTabActivity] — which the OS
+ * starts, with no reference to whatever coroutine is waiting — to the suspending call that
+ * launched the browser.
  *
  * Process-wide, because that is the only scope both ends share. A buffered channel rather
  * than a `SharedFlow` with replay: a redirect delivered to a cold-started process arrives
@@ -14,7 +16,8 @@ import versola.oauth.core.BrowserOutcome
  */
 internal object RedirectDispatcher {
 
-    private val outcomes = Channel<BrowserOutcome>(capacity = Channel.BUFFERED)
+    /** An outcome, or the error the browser leg ended in ([fail]), thrown to the waiter. */
+    private val outcomes = Channel<Result<BrowserOutcome>>(capacity = Channel.BUFFERED)
 
     /**
      * Set by the redirect activity before it resumes, and read by [ForegroundReturnDetector]
@@ -27,14 +30,23 @@ internal object RedirectDispatcher {
 
     fun deliver(uri: String) {
         redirectDelivered = true
-        outcomes.trySend(BrowserOutcome.Redirect(uri))
+        outcomes.trySend(Result.success(BrowserOutcome.Redirect(uri)))
     }
 
     fun deliverUserCancelled() {
-        outcomes.trySend(BrowserOutcome.UserCancelled)
+        outcomes.trySend(Result.success(BrowserOutcome.UserCancelled))
     }
 
-    suspend fun await(): BrowserOutcome = outcomes.receive()
+    /**
+     * The browser leg failed in a way that is neither a redirect nor a dismissal: an Auth Tab
+     * that could not verify the redirect host. Surfaced to the waiter as the error itself, so
+     * the flow wipes the pending request the way it does for `NoBrowserAvailable`.
+     */
+    fun fail(error: VersolaError) {
+        outcomes.trySend(Result.failure(error))
+    }
+
+    suspend fun await(): BrowserOutcome = outcomes.receive().getOrThrow()
 
     /**
      * Drops anything left over from an abandoned session. A buffered redirect nobody

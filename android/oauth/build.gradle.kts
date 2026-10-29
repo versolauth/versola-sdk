@@ -45,7 +45,10 @@ dependencies {
     // Platform halves, reused unchanged: the Keystore-wrapped stores, the system browser and
     // the hardware DPoP key. None of them is Versola-specific.
     implementation(project(":storage"))
-    implementation(project(":browser"))
+    // api: the app re-declares VersolaRedirectActivity in its manifest (the merge snippet in
+    // its KDoc), so the class must be on the app's compile classpath or lint reports
+    // MissingClass for it; the sample app found this.
+    api(project(":browser"))
     // api: KeyAttestation is on this module's ABI (keyAttestation()).
     api(project(":dpop"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")

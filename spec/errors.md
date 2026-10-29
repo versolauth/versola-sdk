@@ -176,6 +176,7 @@ Not every error comes from a server.
 | `iss` mismatch on redirect (RFC 9207) | `Configuration` | Same treatment. |
 | Missing `code` and missing `error` on redirect | `Configuration` | |
 | User cancelled the browser | `Recoverable`, cause `UserCancelled` | Pending request wiped. Never retried automatically. |
+| The browser could not verify the redirect's `https` host as this app's App Link (Auth Tab `RESULT_VERIFICATION_FAILED` / `TIMED_OUT`) | `Configuration`, detail `InvalidConfiguration` | Android only. Pending request wiped; a deployment mistake (`assetlinks.json`), not something a retry fixes. |
 | System tore down the browser session | `Recoverable`, cause `SystemCancelled` | Pending request kept; may be resumed. See the cancel table in [`state-machine.md`](state-machine.md). |
 | Network failure, timeout, DNS | `Recoverable` | Surfaced only after the SDK's retry policy is exhausted. |
 | Nonce demanded on a retry that already carried one | `Recoverable`, cause `NonceLoop` | **Terminating.** A server that always demands a nonce must produce an error, never an unbounded retry. |

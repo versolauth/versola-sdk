@@ -39,3 +39,6 @@ include(":oauth")
 // The conformance driver (#15): instrumented tests only, driving the SDK against a staged
 // auth + central + edge from an emulator. Nothing is published from it.
 include(":conformance-android")
+// A minimal app over the generic facade, minifyEnabled: R8 over the SDK is the proof that it
+// needs no consumer keep rules (architecture review F9). Nothing is published from it.
+include(":samples:oauth")

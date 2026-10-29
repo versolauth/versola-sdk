@@ -104,10 +104,14 @@ for API 36. If you cannot start an emulator, say the device tier was not run (`t
 
 ## Browser and redirect
 
-- Authorization uses Auth Tab (`androidx.browser`) first, with Custom Tabs as the fallback and the
-  foreground-return heuristic demoted. Chrome's minimize button resumes the host app while the tab
-  lives, so "resumed without redirect" is not a user cancel (F1). Do not add logic that wipes the
-  pending request on a bare resume.
+- Authorization uses Auth Tab (`androidx.browser`, `AuthTabAuthorizationSession` through the
+  transparent `VersolaAuthTabActivity` trampoline, since the activity-result API needs one) first,
+  with Custom Tabs as the fallback (`CustomTabsAuthorizationSession`). The foreground-return
+  heuristic exists only in that fallback: Chrome's minimize button resumes the host app while the
+  tab lives, so "resumed without redirect" is not a reliable user cancel (F1). Do not add logic
+  that wipes the pending request on a bare resume, and do not extend the heuristic to the Auth Tab
+  path, whose result code is the signal. `ephemeral` is best effort (one warning when the provider
+  lacks it), never a security check.
 - The redirect activity is reached by explicit intent. Verified App Links are preferred; a custom
   scheme works but logs a warning, since any app can register it (F10). The redirect activity stays
   exported only as far as the manifest merge snippet needs, with transitions overridden to none.

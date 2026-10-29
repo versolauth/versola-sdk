@@ -161,8 +161,8 @@ the proxied resource. Instrumentation arguments override the defaults in `Stack.
 `upstreamUrlFromEdge`. Pass one with
 `-Pandroid.testInstrumentationRunnerArguments.<name>=<value>`.
 
-The browser leg in this tier is auth's login conversation driven over HTTP, not a Custom Tab.
-Custom Tabs, App Link delivery and the foreground-return detector are the device tier's to
+The browser leg in this tier is auth's login conversation driven over HTTP, not an Auth Tab or
+Custom Tab. Those, App Link delivery and the foreground-return detector are the device tier's to
 prove, so a green conformance run does not cover them.
 
 A scenario with no driver yet is proven against stubs only. Say so in the pull request.

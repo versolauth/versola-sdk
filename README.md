@@ -42,7 +42,9 @@ val versola = Versola.configure(
 The same core serves any conforming provider through `OAuthClient` (`android/oauth`,
 `spec/oauth-sdk-api.md`): Bearer by default, DPoP when the app opts in and the provider
 advertises it, PAR when advertised, the ID token validated against the provider's keys before
-anything is stored, and a token attached only to the origins the app names.
+anything is stored, and a token attached only to the origins the app names. The browser leg is
+an Auth Tab where the device's browser supports it and a Custom Tab otherwise; `LoginOptions`
+can ask for an ephemeral session (off by default: it breaks passkeys and SSO).
 
 ```kotlin
 val oauth = OAuthClient.create(
@@ -85,7 +87,7 @@ spec/            state machine, errors, retry policy, conformance scenarios,
 android/         Gradle multi-project: oauth-core (the protocol engine, plain JVM, package
                  versola.oauth.core), core (the edge back channel, versola.sdk.core), dpop,
                  storage, browser, okhttp, sdk (the Versola facade), oauth (the generic OAuthClient facade,
-                 spec/oauth-sdk-api.md)
+                 spec/oauth-sdk-api.md), samples/oauth (a minified app over it: the R8 proof)
 ios/Sources/     Swift targets
 Package.swift    at the repo root; SPM cannot resolve a manifest from a subdirectory
 flutter/         plugin + Pigeon bridge
