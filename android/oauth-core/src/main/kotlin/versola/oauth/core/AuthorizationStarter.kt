@@ -18,6 +18,14 @@ public fun interface AuthorizationStarter {
         metadata: ProviderMetadata,
         nowEpochMillis: Long,
     ): StartedAuthorization
+
+    /**
+     * Whether the starter binds the request to the DPoP key itself, so the flow must not put
+     * `dpop_jkt` on the request it builds. The edge back channel does: the thumbprint reaches
+     * `/par` from the proof on `/native/start`, the one place edge can verify it. A starter
+     * that pushes the request as built (RFC 9126) does not, and keeps the flow's `dpop_jkt`.
+     */
+    public val bindsDpopKeyItself: Boolean get() = false
 }
 
 /** What [AuthorizationStarter.start] hands back: persist [pending], then open [browserUri]. */

@@ -30,6 +30,11 @@ android {
 
 kotlin {
     explicitApi()
+    compilerOptions {
+        // The instrumented tests prove the protocol core's JCA names on a real Android (the
+        // PSS family), which means reaching the core's wiring entry point for that.
+        optIn.add("versola.oauth.core.VersolaInternalApi")
+    }
 }
 
 dependencies {

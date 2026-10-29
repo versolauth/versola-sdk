@@ -71,6 +71,14 @@ public class HttpTokenClient(
     /** Null for a session that is not key-bound; see [TokenBinding]. */
     private val dpop: DpopProofSource? = null,
     private val tokenBinding: TokenBinding = if (dpop == null) TokenBinding.Bearer else TokenBinding.Dpop(),
+    /**
+     * Whether a refresh carries `Idempotency-Key`. Auth honours it so a retry after a dropped
+     * response resolves to the same rotation (`spec/state-machine.md`); no standard asks a
+     * provider to, and the generic facade sends only what a standard defines (ADR 0001), so it
+     * passes false. The key is still derived and persisted either way: it is what makes a
+     * process death mid-rotation replay the same request.
+     */
+    private val sendIdempotencyKey: Boolean = true,
 ) : TokenClient {
 
     /**
@@ -124,6 +132,9 @@ public class HttpTokenClient(
             .add("redirect_uri", grant.redirectUri)
             .add("code_verifier", grant.codeVerifier.value)
             .add("client_id", configuration.clientId)
+        // RFC 8707 §2.2: repeated on the code exchange, so the token is issued for the
+        // audience the user consented to. Not on `refresh`: the grant's audience is fixed.
+        grant.resources.forEach { form.add("resource", it) }
         return post(form, idempotencyKey = null)
     }
 
@@ -136,7 +147,7 @@ public class HttpTokenClient(
             .addBytes("refresh_token", refreshToken)
             .add("client_id", configuration.clientId)
         refreshToken.fill(0)
-        return post(form, idempotencyKey)
+        return post(form, idempotencyKey.takeIf { sendIdempotencyKey })
     }
 
     /**
@@ -296,7 +307,7 @@ public class TokenRequestExecutor(
                     // satisfy (scenario 04).
                     dpop?.observe(htu ?: url, response.header("Date"), nonce)
                     if (response.isSuccessful) {
-                        Attempt.Issued(issued(payload))
+                        Attempt.Issued(issued(payload, response.header("Date")))
                     } else {
                         onStatus(response.code)?.let { throw it }
                         rejected(response.code, payload, nonce, response.headers("WWW-Authenticate"))
@@ -357,7 +368,7 @@ public class TokenRequestExecutor(
         }
     }
 
-    private fun issued(payload: String): TokenResponse {
+    private fun issued(payload: String, dateHeader: String?): TokenResponse {
         val parsed = try {
             discoveryJson.decodeFromString(TokenResponsePayload.serializer(), payload)
         } catch (e: Exception) {
@@ -368,7 +379,15 @@ public class TokenRequestExecutor(
                 e,
             )
         }
-        return TokenResponse.from(parsed)
+        // RFC 9110 5.6.7 dates; an unreadable one is not an error, only an absent clock.
+        val serverDate = dateHeader?.let {
+            try {
+                java.time.ZonedDateTime.parse(it, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant()
+            } catch (e: java.time.format.DateTimeParseException) {
+                null
+            }
+        }
+        return TokenResponse.from(parsed, serverDate)
     }
 
     /**

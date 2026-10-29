@@ -5,6 +5,7 @@ import java.net.URLDecoder
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -151,5 +152,165 @@ class AuthorizationRequestTest {
         assertFalse(first.state == second.state)
         assertFalse(first.nonce == second.nonce)
         assertFalse(first.codeVerifier.value == second.codeVerifier.value)
+    }
+
+    private fun names(uri: String): List<String> =
+        URI(uri).rawQuery.split('&').map { URLDecoder.decode(it.substringBefore('='), "UTF-8") }
+
+    @Test
+    fun `login parameters follow dpop_jkt in the order prompt, login_hint, ui_locales, resource, extras`() {
+        val request = AuthorizationRequest.create(
+            configuration,
+            scopes = setOf("openid"),
+            dpopJkt = "0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I",
+            parameters = AuthorizationParameters(
+                prompt = AuthorizationParameters.Prompt.SelectAccount,
+                loginHint = "ada@example.com",
+                uiLocales = listOf("kk-KZ", "ru"),
+                resources = listOf("https://api.example.com/a", "https://api.example.com/b"),
+                extra = linkedMapOf("audience" to "orders", "claims" to "{}"),
+            ),
+        )
+
+        val uri = request.toUri("https://id.versola.kz/authorize")
+
+        assertEquals(
+            listOf(
+                "response_type", "client_id", "redirect_uri", "scope", "state", "nonce", "code_challenge",
+                "code_challenge_method", "dpop_jkt", "prompt", "login_hint", "ui_locales", "resource",
+                "resource", "audience", "claims",
+            ),
+            names(uri),
+        )
+        val parameters = query(uri)
+        assertEquals("select_account", parameters["prompt"])
+        assertEquals("ada@example.com", parameters["login_hint"])
+        assertEquals("orders", parameters["audience"])
+        assertEquals("{}", parameters["claims"])
+    }
+
+    @Test
+    fun `ui_locales is one space-delimited value, percent-encoded rather than form-encoded`() {
+        val request = AuthorizationRequest.create(
+            configuration,
+            scopes = setOf("openid"),
+            parameters = AuthorizationParameters(uiLocales = listOf("kk-KZ", "ru", "en")),
+        )
+
+        val uri = request.toUri("https://id.versola.kz/authorize")
+
+        assertTrue(uri.contains("ui_locales=kk-KZ%20ru%20en"))
+        assertFalse(uri.contains('+'))
+    }
+
+    @Test
+    fun `resource is repeated once per value and never joined`() {
+        val request = AuthorizationRequest.create(
+            configuration,
+            scopes = setOf("openid"),
+            parameters = AuthorizationParameters(
+                resources = listOf("https://api.example.com/a", "https://api.example.com/b"),
+            ),
+        )
+
+        val uri = request.toUri("https://id.versola.kz/authorize")
+
+        val resources = URI(uri).rawQuery.split('&')
+            .filter { it.startsWith("resource=") }
+            .map { URLDecoder.decode(it.removePrefix("resource="), "UTF-8") }
+        assertEquals(listOf("https://api.example.com/a", "https://api.example.com/b"), resources)
+        assertTrue(uri.contains("resource=https%3A%2F%2Fapi.example.com%2Fa"))
+    }
+
+    @Test
+    fun `extra parameters come after everything the SDK sets and are encoded like the rest`() {
+        val request = AuthorizationRequest.create(
+            configuration,
+            scopes = setOf("openid"),
+            parameters = AuthorizationParameters(
+                resources = listOf("https://api.example.com/a"),
+                extra = linkedMapOf("zeta" to "a b&c", "alpha" to "ü"),
+            ),
+        )
+
+        val uri = request.toUri("https://id.versola.kz/authorize")
+
+        assertEquals(listOf("resource", "zeta", "alpha"), names(uri).takeLast(3))
+        assertTrue(uri.contains("zeta=a%20b%26c"))
+        assertTrue(uri.contains("alpha=%C3%BC"))
+    }
+
+    @Test
+    fun `no login parameters leaves the query exactly as it was`() {
+        val request = AuthorizationRequest.create(configuration, setOf("openid"))
+
+        val parameters = query(request.toUri("https://id.versola.kz/authorize"))
+
+        for (name in listOf("prompt", "login_hint", "ui_locales", "resource")) assertNull(name, parameters[name])
+    }
+
+    @Test
+    fun `an extra parameter that collides with one the SDK sets is refused at construction`() {
+        for (reserved in listOf("redirect_uri", "state", "resource", "prompt", "client_secret")) {
+            val error = assertThrows(VersolaError.Configuration::class.java) {
+                AuthorizationParameters(extra = mapOf(reserved to "x"))
+            }
+            assertTrue(reserved, error.detail is VersolaError.Configuration.Detail.InvalidConfiguration)
+        }
+    }
+
+    @Test
+    fun `the pending request keeps the resources so the exchange can repeat them`() {
+        val request = AuthorizationRequest.create(
+            configuration,
+            scopes = setOf("openid"),
+            parameters = AuthorizationParameters(resources = listOf("https://api.example.com/a")),
+        )
+
+        val pending = request.toPending(createdAtEpochMillis = 1_000)
+
+        assertEquals(listOf("https://api.example.com/a"), pending.resources)
+    }
+
+    @Test
+    fun `a pending request persisted before resources existed decodes with none`() {
+        val old = """{"state":"s","nonce":"n","codeVerifier":"v","scopes":["openid"],"redirectUri":"https://app.example.com/oauth","acrValues":[],"maxAge":null,"createdAtEpochMillis":1}"""
+
+        val decoded = PendingAuthorizationCodec.decode(old.toByteArray())
+
+        assertEquals(emptyList<String>(), decoded.resources)
+        assertEquals(emptyMap<String, String>(), decoded.extension)
+    }
+
+    @Test
+    fun `resources survive the codec and are not mistaken for a starter's artefact`() {
+        val pending = AuthorizationRequest.create(
+            configuration,
+            scopes = setOf("openid"),
+            parameters = AuthorizationParameters(resources = listOf("https://api.example.com/a")),
+        ).toPending(1)
+
+        val decoded = PendingAuthorizationCodec.decode(PendingAuthorizationCodec.encode(pending))
+
+        assertEquals(listOf("https://api.example.com/a"), decoded.resources)
+        assertEquals(emptyMap<String, String>(), decoded.extension)
+    }
+
+    @Test
+    fun `the validator copies the resources onto the grant`() {
+        val pending = AuthorizationRequest.create(
+            configuration,
+            scopes = setOf("openid"),
+            parameters = AuthorizationParameters(resources = listOf("https://api.example.com/a")),
+        ).toPending(1)
+
+        val grant = AuthorizationResponseValidator.validate(
+            redirect = "https://app.example.com/oauth?code=c&state=${pending.state}",
+            pending = pending,
+            issuer = "https://id.versola.kz",
+            issParameterSupported = false,
+        )
+
+        assertEquals(listOf("https://api.example.com/a"), grant.resources)
     }
 }

@@ -23,6 +23,8 @@ public class TokenResponse internal constructor(
     internal val refreshToken: ByteArray?,
     public val idToken: String?,
     public val scopes: Set<String>,
+    /** The provider's clock when it answered (`Date`), or null when the header was absent or unreadable. */
+    public val serverDate: java.time.Instant? = null,
 ) {
 
     /**
@@ -37,7 +39,7 @@ public class TokenResponse internal constructor(
     override fun toString(): String = "TokenResponse(redacted)"
 
     internal companion object {
-        fun from(payload: TokenResponsePayload): TokenResponse {
+        fun from(payload: TokenResponsePayload, serverDate: java.time.Instant? = null): TokenResponse {
             if (payload.accessToken.isBlank()) {
                 throw VersolaError.Configuration(
                     VersolaError.Configuration.Detail.TokenResponseMalformed("access_token is missing"),
@@ -57,6 +59,7 @@ public class TokenResponse internal constructor(
                 expiresInSeconds = payload.expiresIn,
                 refreshToken = payload.refreshToken?.toByteArray(Charsets.UTF_8),
                 idToken = payload.idToken,
+                serverDate = serverDate,
                 // RFC 6749 §5.1: space-delimited, and present only when it differs from what
                 // was requested. An absent scope is not an empty grant.
                 scopes = payload.scope?.split(' ')?.filter { it.isNotEmpty() }?.toSet() ?: emptySet(),

@@ -125,6 +125,13 @@ public sealed class VersolaError(
              * audience or revocation problem.
              */
             public data object SessionRejected : Reason
+
+            /**
+             * The access token expired and the provider issued no refresh token to spend
+             * (`spec/state-machine.md`, "no refresh token"). Nothing was retried and no token
+             * request was made; the session is over and the user signs in again.
+             */
+            public data object SessionExpired : Reason
         }
     }
 
@@ -217,6 +224,30 @@ public sealed class VersolaError(
             public data object NoBrowserAvailable : Detail
 
             /**
+             * The ID token failed validation (OpenID Connect Core 3.1.3.7). Nothing was
+             * persisted and the session settled where it was before `login()`. Every reason
+             * is a deployment mistake (issuer, algorithm, audience, clock) or an attack, and
+             * the user trying again fixes neither, which is why this is `Configuration`
+             * (`spec/errors.md`).
+             */
+            public data class IdTokenRejected(public val reason: IdTokenRejection) : Detail
+
+            /**
+             * The UserInfo response is not about the user the ID token names, or a signed
+             * UserInfo response does not verify (OpenID Connect Core 5.3.2).
+             */
+            public data class UserInfoRejected(public val detail: String) : Detail
+
+            /**
+             * The configuration needs a capability the provider does not advertise: DPoP
+             * required but not offered, pushed authorization required but no endpoint, a
+             * UserInfo call without an endpoint, `S256` absent from
+             * `code_challenge_methods_supported`. Raised at the first operation that needs the
+             * capability, never by a silent downgrade.
+             */
+            public data class ProviderUnsupported(public val capability: String) : Detail
+
+            /**
              * A case a facade adds for a back channel of its own (the Versola facade's edge
              * errors). This module produces none; an exhaustive `when` handles the class as
              * one branch, and the facade documents its subclasses.
@@ -232,4 +263,37 @@ public sealed class VersolaError(
             public data class HardwareBindingUnavailable(public val detail: String) : Detail
         }
     }
+}
+
+/** Why an ID token was refused; one value per check of OpenID Connect Core 3.1.3.7. */
+public enum class IdTokenRejection {
+    /** The signature does not verify against any key at `jwks_uri`, after one refetch. */
+    Signature,
+
+    /** `alg` is outside the closed asymmetric set, or not advertised by the provider. */
+    Algorithm,
+
+    /** `iss` is not the issuer, byte for byte. */
+    Issuer,
+
+    /** `aud` does not contain the client id, or several audiences without a matching `azp`. */
+    Audience,
+
+    /** `exp` is in the past beyond the clock-skew tolerance. */
+    Expired,
+
+    /** `iat` is missing or too far from now. */
+    IssuedAt,
+
+    /** `nonce` is missing or not the one the request carried. */
+    Nonce,
+
+    /** `auth_time` is missing under `max_age`, older than it, or moved backwards on refresh. */
+    AuthTime,
+
+    /** Not a JWS, not JSON, a required claim missing or of the wrong type. */
+    Malformed,
+
+    /** `at_hash` is present and does not match the access token. */
+    AccessTokenHash,
 }

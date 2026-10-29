@@ -22,6 +22,12 @@ public class AuthorizationGrant @VersolaInternalApi public constructor(
     @VersolaInternalApi public val iss: String? = null,
     /** [PendingAuthorizationRequest.extension], unchanged: what the starter left for the exchange. */
     @VersolaInternalApi public val extension: Map<String, String> = emptyMap(),
+    /**
+     * RFC 8707 `resource` values the authorization request carried; the exchange repeats them
+     * (§2.2). Not a credential, so readable by the app. A refresh does not repeat them: the
+     * grant's audience is already fixed.
+     */
+    public val resources: List<String> = emptyList(),
 ) {
 
     /** Credential material on both counts. */
@@ -94,6 +100,7 @@ public object AuthorizationResponseValidator {
             state = pending.state,
             iss = iss,
             extension = pending.extension,
+            resources = pending.resources,
         )
     }
 

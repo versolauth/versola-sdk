@@ -43,6 +43,13 @@ public class PendingAuthorizationRequest public constructor(
      * whose exchange requires `iss` sets it; the plain request leaves it to the metadata.
      */
     public val issRequired: Boolean = false,
+    /**
+     * RFC 8707 `resource` values the authorization request carried, repeated on the token
+     * request (§2.2) so the token is issued for the audience the user consented to. Empty
+     * when there were none, and for anything persisted before this field existed, which is
+     * why it defaults.
+     */
+    public val resources: List<String> = emptyList(),
 ) {
 
     /**
@@ -96,7 +103,7 @@ public object PendingAuthorizationCodec {
 
     private val KNOWN_MEMBERS = setOf(
         "state", "nonce", "codeVerifier", "scopes", "redirectUri", "acrValues", "maxAge",
-        "createdAtEpochMillis", "issRequired",
+        "createdAtEpochMillis", "issRequired", "resources",
     )
 }
 
