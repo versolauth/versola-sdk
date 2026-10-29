@@ -32,7 +32,7 @@ kotlin {
 dependencies {
     // api, not implementation: SessionState is exposed as a Flow (spec/state-machine.md,
     // "Observability"), so the coroutines types are part of this module's ABI.
-    api("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
+    api("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.12.0")
 
     // Discovery needs an HTTP client and a JSON parser (#5).
     //
@@ -45,10 +45,10 @@ dependencies {
     // every discovery test. Reflection-free, so it also survives R8 without keep rules.
     // api, not implementation: HttpDiscoveryClient takes an OkHttpClient, so the type is on
     // this module's ABI and a consumer configuring their own client needs to see it.
-    api("com.squareup.okhttp3:okhttp:5.4.0")
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+    api("com.squareup.okhttp3:okhttp:5.5.1")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
 
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
-    testImplementation("com.squareup.okhttp3:mockwebserver3:5.4.0")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.12.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver3:5.5.1")
 }
