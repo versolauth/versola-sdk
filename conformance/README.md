@@ -116,7 +116,7 @@ docker compose -f conformance/providers/keycloak/docker-compose.yml up -d --wait
 cd android && OAUTH_CONFORMANCE_ISSUER=http://localhost:8080/realms/conformance \
   OAUTH_CONFORMANCE_PROVIDER=keycloak ./gradlew :conformance-oauth:testDebugUnitTest
 
-docker compose -f conformance/providers/hydra/docker-compose.yml up -d --wait
+docker compose -f conformance/providers/hydra/docker-compose.yml up -d
 cd android && OAUTH_CONFORMANCE_ISSUER=http://localhost:4444 \
   OAUTH_CONFORMANCE_PROVIDER=hydra ./gradlew :conformance-oauth:testDebugUnitTest
 ```

@@ -8,7 +8,8 @@
 # names the driver's proxy, which therefore listens on the fixed port 14444 for this provider
 # (OAUTH_CONFORMANCE_PROXY_PORT), and the login and consent redirects go through it too.
 #
-#   docker compose -f conformance/providers/hydra/docker-compose.yml up -d --wait
+#   docker compose -f conformance/providers/hydra/docker-compose.yml up -d
+#   # (not `--wait`: some compose versions count the import's clean exit as a failure)
 #   OAUTH_CONFORMANCE_PROVIDER=hydra OAUTH_CONFORMANCE_ISSUER=http://localhost:4444 \
 #     ./gradlew :conformance-oauth:testDebugUnitTest
 #   # after editing clients: `down -v` first; the import leaves an existing client alone

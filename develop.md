@@ -183,7 +183,7 @@ cd android && OAUTH_CONFORMANCE_ISSUER=http://localhost:8080/realms/conformance 
   OAUTH_CONFORMANCE_PROVIDER=keycloak ./gradlew :conformance-oauth:testDebugUnitTest
 docker compose -f conformance/providers/keycloak/docker-compose.yml down -v   # also before re-importing an edited realm.json
 
-docker compose -f conformance/providers/hydra/docker-compose.yml up -d --wait   # ports 4444, 4445, 3000; the proxy takes 14444
+docker compose -f conformance/providers/hydra/docker-compose.yml up -d   # ports 4444, 4445, 3000; the proxy takes 14444
 cd android && OAUTH_CONFORMANCE_ISSUER=http://localhost:4444 \
   OAUTH_CONFORMANCE_PROVIDER=hydra ./gradlew :conformance-oauth:testDebugUnitTest
 ```

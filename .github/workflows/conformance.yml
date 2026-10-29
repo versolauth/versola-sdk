@@ -81,18 +81,18 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
 
-      # `--wait` returns once the compose health checks pass (Keycloak's /health/ready on the
-      # management port; Hydra has none and counts as up when running), then the provider's own
-      # readiness condition from the matrix is polled, since a one-shot import can still be
-      # retrying. The condition is a fixed string from this file, not from an input.
+      # No `--wait`: the runner's compose exits 1 when a one-shot service exits 0, which is what
+      # Hydra's client import does. The provider's own readiness condition from the matrix is
+      # polled instead (Keycloak: discovery after the realm import; Hydra: both clients present).
+      # The condition is a fixed string from this file, not from an input.
       - name: Start ${{ matrix.provider }}
         working-directory: conformance/providers/${{ matrix.provider }}
         env:
           READY: ${{ matrix.ready }}
         run: |
-          docker compose up -d --wait
-          for i in $(seq 1 60); do sh -c "$READY" && exit 0; sleep 2; done
-          echo "provider not ready after 120 s" >&2; docker compose logs --no-color | tail -50; exit 1
+          docker compose up -d
+          for i in $(seq 1 90); do sh -c "$READY" && exit 0; sleep 2; done
+          echo "provider not ready after 180 s" >&2; docker compose logs --no-color | tail -50; exit 1
 
       - name: Scenarios 24 to 32 against ${{ matrix.provider }}
         env:
