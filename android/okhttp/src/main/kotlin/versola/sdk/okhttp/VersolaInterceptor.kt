@@ -8,6 +8,7 @@ import versola.oauth.core.AccessTokenSource
 import versola.oauth.core.DpopProofSource
 import versola.oauth.core.VersolaError
 import okhttp3.HttpUrl
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
 import okhttp3.Request
 import okhttp3.Response
@@ -32,19 +33,27 @@ import okhttp3.Response
  */
 public class VersolaInterceptor(
     private val tokens: AccessTokenSource,
-    /** Requests outside this origin and path prefix are passed through untouched. */
-    private val edgeBaseUrl: HttpUrl,
+    /** Which requests get the token; everything else passes through untouched. */
+    private val scope: RequestScope,
     /** Null under `TokenBinding.Bearer`, and then no proof goes on any request. */
     private val dpop: DpopProofSource?,
 ) : Interceptor {
 
+    /** The Versola facade's shape: everything under edge's origin and path prefix. */
+    public constructor(
+        tokens: AccessTokenSource,
+        /** Requests outside this origin and path prefix are passed through untouched. */
+        edgeBaseUrl: HttpUrl,
+        dpop: DpopProofSource?,
+    ) : this(tokens, RequestScope { url -> url.isUnder(edgeBaseUrl) }, dpop)
+
     override fun intercept(chain: Interceptor.Chain): Response {
         val request = chain.request()
-        // Anything outside edge passes through untouched, which is what makes this safe to
-        // install on the same `OkHttpClient` the token endpoint and discovery use: without
+        // Anything outside the scope passes through untouched, which is what makes this safe
+        // to install on the same `OkHttpClient` the token endpoint and discovery use: without
         // the check, a refresh triggered here would re-enter here, and attaching an access
         // token to the request that exists to obtain one is the recursion that follows.
-        if (!request.url.isUnder(edgeBaseUrl)) return chain.proceed(request)
+        if (!scope.includes(request.url)) return chain.proceed(request)
 
         // The coordinator's API is suspending and OkHttp's is not, so one of the two has to
         // block. It is safe here for a reason worth stating: `HttpTokenClient` issues its
@@ -223,7 +232,7 @@ public class VersolaInterceptor(
  * `https://versola.kz/internal` gets a token on the first and not the second. Compared on
  * whole path segments, so `/resources` does not claim `/resources-admin`.
  */
-private fun HttpUrl.isUnder(base: HttpUrl): Boolean {
+internal fun HttpUrl.isUnder(base: HttpUrl): Boolean {
     if (scheme != base.scheme || host != base.host || port != base.port) return false
     val prefix = base.encodedPath.trimEnd('/')
     return prefix.isEmpty() || encodedPath == prefix || encodedPath.startsWith("$prefix/")
@@ -241,4 +250,39 @@ private fun HttpUrl.origin(): String = "$scheme://$host:$port"
 private fun Request.isReplayable(): Boolean {
     val body = body ?: return true
     return !body.isOneShot() && !body.isDuplex()
+}
+
+/**
+ * Which requests the authenticated client attaches a token to. A token sent to a host the app
+ * did not name is a leak, so the scope is explicit: the Versola facade's is edge's base URL,
+ * the generic facade's is the set of protected origins its configuration lists
+ * (`spec/oauth-sdk-api.md` section 10).
+ */
+public fun interface RequestScope {
+    public fun includes(url: HttpUrl): Boolean
+
+    public companion object {
+        private val LOOPBACK_HOSTS = setOf("127.0.0.1", "localhost", "::1")
+
+        /**
+         * Exactly these origins (`scheme://host[:port]`, compared with the default port
+         * applied), any path. A different port or scheme is a different origin.
+         */
+        public fun origins(origins: Set<String>): RequestScope {
+            require(origins.isNotEmpty()) { "at least one protected origin is required" }
+            val parsed = origins.map { origin ->
+                val url = origin.toHttpUrlOrNull()
+                    ?: throw IllegalArgumentException("not an origin: $origin")
+                // Cleartext only to the developer's own machine, as the core allows the issuer.
+                require(url.scheme == "https" || (url.scheme == "http" && url.host in LOOPBACK_HOSTS)) {
+                    "protected origins must be https (http only on loopback): $origin"
+                }
+                require(url.encodedPath == "/" && url.query == null && url.fragment == null) {
+                    "an origin has no path, query or fragment: $origin"
+                }
+                url.origin()
+            }.toSet()
+            return RequestScope { url -> url.origin() in parsed }
+        }
+    }
 }

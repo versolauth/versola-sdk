@@ -15,6 +15,20 @@
             android:exported="true"
             android:launchMode="singleTask"
             android:theme="@android:style/Theme.NoDisplay" />
+
+        <!--
+          The Auth Tab trampoline: launches the tab through the activity-result API and
+          delivers its result (AuthTabAuthorizationSession). Not exported: only the SDK starts
+          it, with an explicit intent. Translucent rather than NoDisplay because it must stay
+          alive, under the tab, until the result arrives; a NoDisplay activity has to finish
+          before it resumes. It is never the task root the user returns to: finishing it lands
+          the user on whatever was below.
+        -->
+        <activity
+            android:name="versola.sdk.browser.VersolaAuthTabActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
     </application>
 
     <!--

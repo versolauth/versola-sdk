@@ -1,7 +1,16 @@
+public final class versola/sdk/browser/AuthTabAuthorizationSession : versola/oauth/core/BrowserAuthorizationSession {
+	public fun <init> (Landroid/content/Context;Lversola/oauth/core/VersolaLogger;Lversola/oauth/core/BrowserAuthorizationSession;)V
+	public synthetic fun <init> (Landroid/content/Context;Lversola/oauth/core/VersolaLogger;Lversola/oauth/core/BrowserAuthorizationSession;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun authorize (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun authorize (Ljava/lang/String;Lversola/oauth/core/BrowserSessionOptions;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun awaitPendingRedirect (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
 public final class versola/sdk/browser/CustomTabsAuthorizationSession : versola/oauth/core/BrowserAuthorizationSession {
 	public fun <init> (Landroid/content/Context;Lversola/oauth/core/VersolaLogger;)V
 	public synthetic fun <init> (Landroid/content/Context;Lversola/oauth/core/VersolaLogger;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun authorize (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun authorize (Ljava/lang/String;Lversola/oauth/core/BrowserSessionOptions;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun awaitPendingRedirect (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 

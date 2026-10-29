@@ -69,6 +69,15 @@ public data class ProviderMetadata(
      */
     @SerialName("mtls_endpoint_aliases")
     public val mtlsEndpointAliases: MtlsEndpointAliases? = null,
+    /** RFC 9126: where a request is pushed before the browser opens. Absent means no PAR. */
+    @SerialName("pushed_authorization_request_endpoint")
+    public val pushedAuthorizationRequestEndpoint: String? = null,
+    /** RFC 9126 §5: the provider refuses an authorization request that was not pushed. */
+    @SerialName("require_pushed_authorization_requests")
+    public val requirePushedAuthorizationRequests: Boolean = false,
+    /** OpenID Connect Discovery 3: the ID-token signing algorithms the provider uses. */
+    @SerialName("id_token_signing_alg_values_supported")
+    public val idTokenSigningAlgValuesSupported: List<String> = emptyList(),
 ) {
 
     /**

@@ -56,12 +56,12 @@ construction, never behind a login screen.
 | `endpoints` | `ProviderEndpoints` | none | for a provider without discovery: `authorizationEndpoint`, `tokenEndpoint`, `issuer`, optional `jwksUri`, `userinfoEndpoint`, `revocationEndpoint`, `endSessionEndpoint`, `pushedAuthorizationRequestEndpoint`, `idTokenSigningAlgValuesSupported`; all `https`; mutually exclusive with discovery, and the SDK then treats unlisted capabilities as absent |
 | `clientId` | string | required | non-blank |
 | `redirectUri` | URI | required | absolute, no fragment; `https` (verified link, preferred), loopback, or a private-use scheme (accepted with a logged warning on every `create()`); cleartext `http` to a non-loopback host refused |
-| `postLogoutRedirectUri` | URI | none | same rules as `redirectUri`; when absent `post_logout_redirect_uri` is not sent |
+| `postLogoutRedirectUri` | URI | none | same rules as `redirectUri`; when absent `post_logout_redirect_uri` is not sent. Android, under Auth Tab: the tab intercepts this URI, so an `https` host must be a verified App Link of the app like `redirectUri`'s, or the tab closes unverified and `logout()` reports `sessionEnded = false` (a Custom Tab would have shown the page instead) |
 | `scopes` | set of strings | `{"openid"}` | the default scope set for `login()`; `openid` is added if missing (this is an OIDC SDK); nothing else is added silently, including `offline_access` (see section 8) |
 | `tokenBinding` | `Bearer` or `Dpop(required: Boolean = false)` | `Bearer` | section 9 |
 | `pushedAuthorization` | `Never`, `WhenAdvertised`, `Required` | `WhenAdvertised` | section 7 |
 | `endSessionEndpoint` | URL | none | overrides the discovered `end_session_endpoint`, or supplies one when discovery has none; `https`; the parameters the SDK sends stay those of RP-Initiated Logout 1.0 (section 12). The only endpoint that may be overridden alongside `issuer`: vendors commonly place sign-out at a non-standard URL, and no other endpoint is safe to redirect by configuration |
-| `protectedOrigins` | set of origins | empty | `scheme://host[:port]`, `https` only; the only origins the authenticated client sends a token to; may also be given per client (section 10) |
+| `protectedOrigins` | set of origins | empty | `scheme://host[:port]`, `https`, or `http` on a loopback host only (`127.0.0.1`, `localhost`, `[::1]`: a resource on the developer's machine under `adb reverse`, the same allowance the issuer has; never a remote host); the only origins the authenticated client sends a token to; may also be given per client (section 10) |
 | `retryPolicy` | `RetryPolicy` | `Default` | bounds and maxima of `retry-policy.md`; a value above a maximum is `InvalidConfiguration` |
 | `unlockPolicy` | `UnlockPolicy` | `None` | `state-machine.md`'s `Locked` state is reachable only under `OnAppUnlock` |
 | `clockSkewTolerance` | duration | 60 s | tolerance for `exp`, `iat`, `nbf` in ID-token validation; maximum 5 minutes |
@@ -106,9 +106,9 @@ val oauth = OAuthClient.create(context, configuration)
 | `logout(options)` | the local wipe is done; server-side steps are best effort | `LogoutOutcome(sessionEnded: Boolean, tokenRevoked: Boolean)`; `Unauthenticated` published unconditionally | never throws for a server-side failure; `Configuration` only for a misuse |
 | `accessToken()` | a token not within its refresh skew is available, refreshing once if needed (single-flight) | `AccessToken(value, type: Bearer or DPoP, expiresAt, scopes)` | `Reauthenticate(GrantRejected, SessionExpired)`, `Recoverable(Network, UnlockRequired)` |
 | `refresh()` | the refresh completed | nothing | as `accessToken()` |
-| `claims` | — (property, memory) | `IdTokenClaims?` of the last validated ID token; null when unauthenticated or when the provider issued none | — |
+| `claims` | — (property, memory) | `IdTokenClaims?` of the last validated ID token; null when unauthenticated. After a cold start the stored ID token is read back by the first operation (`accessToken()`, `userInfo()`, a refresh), without re-verifying it: it was validated before it was stored | — |
 | `userInfo()` | the UserInfo response is validated | `UserInfo` (the standard claims typed, the rest as a read-only map); `sub` must equal the ID token's `sub` (OIDC Core 5.3.2) | `Configuration(ProviderUnsupported)` when no endpoint, `Recoverable`, `Reauthenticate` |
-| `stepUp(challenge, options)` | as `login()` | re-authorizes with the challenge's `acr_values` and `max_age`; the app re-issues the refused call | as `login()` |
+| `stepUp(challenge, options)` | as `login()` | re-authorizes with the challenge's `acr_values` and `max_age` and the configured scopes (or the options'); the app re-issues the refused call | as `login()` |
 | `metadata()` | discovery is cached | `ProviderMetadata` | `Configuration(Discovery*)`, `Recoverable(Network)` |
 | `authenticatedClient(origins)` / `interceptor(origins)` / `authenticatedSession(origins)` | — | section 10 | — |
 | `keyAttestation()` | the DPoP key exists | `KeyAttestation?` (null under `Bearer`) | — |
@@ -130,7 +130,7 @@ the state before asking.
 | `acrValues` | `acr_values` | list; also set by `stepUp()` |
 | `maxAge` | `max_age` | seconds; when set, the ID token must carry `auth_time` and it is checked |
 | `resources` | `resource` (RFC 8707) | repeatable; also sent on the token request |
-| `ephemeralBrowser` | platform | `false`: an ephemeral session breaks passkeys and SSO; opt-in only |
+| `ephemeralBrowser` | platform | `false`: an ephemeral session breaks passkeys and SSO; opt-in only. Best effort, as iOS's `prefersEphemeralWebBrowserSession`: Android passes it to the Auth Tab or Custom Tab when the provider supports ephemeral browsing, and otherwise logs one warning and opens the session shared. The end-session request is never ephemeral |
 | `extraParameters` | verbatim | a map for provider extensions (`audience`, `claims`, `kc_idp_hint`, …); a key that collides with a reserved parameter (`client_id`, `redirect_uri`, `response_type`, `scope`, `state`, `nonce`, `code_challenge*`, `request_uri`, `prompt`, `max_age`, `acr_values`, `resource`, `login_hint`, `ui_locales`) is `Configuration(InvalidConfiguration)` |
 
 The SDK always sends `response_type=code`, `code_challenge_method=S256`, a fresh `state` and
@@ -205,8 +205,8 @@ on 401 with `error="invalid_token"` (or no `error`) refresh once and replay once
 `error="insufficient_user_authentication"` (RFC 9470) publish `StepUpRequired` and raise
 `StepUp(acrValues, maxAge)`; on 401 `use_dpop_nonce` retry once with the nonce; everything else is
 returned as the response it is (403, 404, 429, 5xx are the app's). A request to any other origin
-passes through untouched, and `origins` must be non-empty and `https` (`InvalidConfiguration`
-otherwise). All of this sits inside the originating call's retry budget.
+passes through untouched, and `origins` must be non-empty and `https` (or `http` on a loopback
+host, as in section 3; `InvalidConfiguration` otherwise). All of this sits inside the originating call's retry budget.
 
 The access token is also available as a value (`accessToken()`), documented as the escape hatch: a
 token handed to app code is one the app can log.
@@ -264,7 +264,7 @@ handled in app code after `logout()` has wiped locally; the SDK does not special
 |---|---|---|---|
 | Entry point | `OAuthClient.create(context, config)` | `OAuthClient(configuration:)` | `OAuthClient.create(config)` |
 | Configuration | `OAuthConfiguration(...)` data class | `OAuthConfiguration` struct | `OAuthConfiguration` |
-| State | `StateFlow<SessionState>` | `sessionStates() -> AsyncStream<SessionState>` (one stream per observer) + `currentState` | `Stream<SessionState>` + `currentState` |
+| State | `Flow<SessionState>` (cold; the first emission is the restored state, which a `StateFlow` could not promise) | `sessionStates() -> AsyncStream<SessionState>` (one stream per observer) | `Stream<SessionState>` |
 | Sign-in | `suspend fun login(options)` | `func login(_ options:) async throws` | `Future<void> login([options])` |
 | Options | `LoginOptions` data class | `LoginOptions` struct | `LoginOptions` |
 | Sign-out | `suspend fun logout(options): LogoutOutcome` | `func logout(_:) async -> LogoutOutcome` | `Future<LogoutOutcome> logout([options])` |
@@ -273,7 +273,8 @@ handled in app code after `logout()` has wiped locally; the SDK does not special
 | UserInfo | `suspend fun userInfo(): UserInfo` | `func userInfo() async throws -> UserInfo` | `Future<UserInfo> userInfo()` |
 | Step-up | `suspend fun stepUp(challenge, options)` | `func stepUp(_:_:) async throws` | `Future<void> stepUp(challenge, [options])` |
 | HTTP | `interceptor(origins)`, `authenticatedClient(origins)` | `authenticatedSession(origins)` | `accessToken()` |
-| Redirect | manifest-declared activity | `handleRedirect(_ url: URL) -> Bool` | native |
+| Browser leg | Auth Tab (androidx.browser, activity result) where the Custom Tabs provider supports it, Custom Tabs otherwise, any browser last; `WebView` unrepresentable | `ASWebAuthenticationSession` | native |
+| Redirect | an Auth Tab returns it as its result; otherwise the manifest-declared activity | `handleRedirect(_ url: URL) -> Bool` | native |
 | Errors | `sealed class OAuthError : Exception` | `enum OAuthError: Error, Sendable` | `sealed class OAuthError implements Exception` |
 | Internal wiring | `@VersolaInternalApi` (`RequiresOptIn`, error level) | `package` access / `_` prefix, not in products | `src/` private, not exported |
 
@@ -293,10 +294,10 @@ As `state-machine.md`'s persistence summary, minus the edge-mode rows, plus:
 |---|---|---|---|
 | JWKS | Disk, unencrypted | yes | yes |
 | Configuration hash (storage key) | Disk | yes | yes |
-| Granted scopes | Encrypted, with the grant | yes | no |
 
-Granted scopes are persisted so `stepUp()` after process death can re-request them; the Versola
-facade's reason for requiring them as a parameter does not apply once they are stored.
+Granted scopes are not persisted: `stepUp()` re-requests the configured scopes, or the ones its
+options carry, which an app that changed them per login still has. The Versola facade requires
+them as a parameter for the same reason.
 
 ## 15. Logging
 
@@ -311,8 +312,8 @@ refresh token issued, `offline_access` advertised but not configured, a response
 1. `IdTokenRejected` as `Configuration` (section 11) versus a fifth category; the spec's
    four-category rule argues for `Configuration`.
 2. `login()` while `Authorizing` refused (section 5) versus cancelling the outstanding request.
-3. Granted scopes persisted (section 14) versus the Versola facade's explicit parameter; the two
-   facades would differ in `stepUp()`'s signature.
+3. `stepUp()` takes the configured scopes by default (section 5); the Versola facade requires
+   them as a parameter. The two differ in signature, not in what is sent.
 4. The 24-hour discovery cache age and the 30-second refresh skew: both fixed, not configurable.
 5. Whether `authenticatedSession` on iOS should be a `URLSession` subclass or a wrapper; a wrapper
    keeps the surface small.

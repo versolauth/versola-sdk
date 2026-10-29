@@ -101,8 +101,8 @@ app shows a different thing.
 
 | Cause | Android | iOS |
 |---|---|---|
-| **User cancel** — user dismissed the browser | Custom Tab closed with no redirect, app returned to foreground | `ASWebAuthenticationSessionErrorCodeCanceledLogin` **while the app is foreground** |
-| **System cancel** — the OS tore the session down | activity destroyed while backgrounded, no redirect delivered | the same error code **while the app is backgrounded or inactive** |
+| **User cancel** — user dismissed the browser | Auth Tab: the tab's result is `RESULT_CANCELED`. Custom Tabs fallback: tab closed with no redirect, app returned to foreground (a heuristic: Chrome's minimize button resumes the app too, which is why Auth Tab is preferred) | `ASWebAuthenticationSessionErrorCodeCanceledLogin` **while the app is foreground** |
+| **System cancel** — the OS tore the session down | activity destroyed while backgrounded, no redirect delivered; an Auth Tab result code the SDK does not know (for that cause alone the pending request is **wiped**, since the tab is gone and no redirect can follow) | the same error code **while the app is backgrounded or inactive** |
 
 iOS reports both through one error code. Pairing it with app lifecycle state at the moment the
 error arrives is the only way to separate them, and it is required, not optional: a system

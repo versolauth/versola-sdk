@@ -44,7 +44,8 @@ for API 36. If you cannot start an emulator, say the device tier was not run (`t
 - Direction: `:oauth-core` (plain `kotlin("jvm")`, package `versola.oauth.core`) is the protocol
   engine and has no internal dependency; `:core` (package `versola.sdk.core`, the edge back channel
   and the errors only edge produces), `:dpop`, `:storage` and `:browser` depend on `:oauth-core`;
-  `:okhttp` on `:oauth-core` and `:dpop`; `:sdk` sits on top of all of them
+  `:okhttp` on `:oauth-core` and `:dpop`; the two facades sit on top: `:sdk` (Versola, on `:core`
+  too) and `:oauth` (generic, `OAuthClient`, package `versola.oauth`, never on `:core`)
   (`android/settings.gradle.kts`, ADR 0001). `:storage` and `:browser` never depend on each other;
   the facade is the one place that sees both. A new edge in this graph needs a reason in the PR.
 - `:oauth-core`, `:core` and `:okhttp` contain no `android.*` import, and
@@ -52,8 +53,9 @@ for API 36. If you cannot start an emulator, say the device tier was not run (`t
   no edge, tenant, security profile or Versola endpoint. A facade reaches it through its seams
   (`AuthorizationStarter`, `TokenClient`, `BrowserAuthorizationSession`, the stores,
   `DpopProofSource`, `PendingAuthorizationRequest.extension`, the `Extension` case of each error
-  detail). A Versola behaviour that cannot be a seam lives in `:core`, never in `:oauth-core`;
-  the generic `:oauth` facade is planned by issue #46 (B3).
+  detail, `RefreshTokenPolicy`, `IdTokenValidator`). A Versola behaviour that cannot be a seam
+  lives in `:core`, never in `:oauth-core`. `:oauth` sends only what a standard defines: no
+  `Idempotency-Key`, no `offline_access` added, bearer by default.
 - Versola-specific code (`BackChannel`, `EdgeNativeTokenClient`, native endpoints, mTLS aliases)
   depends on generic code, never the reverse. Behaviour the core shows that a generic provider
   would reject is a bug (README, "Portability").
@@ -102,10 +104,14 @@ for API 36. If you cannot start an emulator, say the device tier was not run (`t
 
 ## Browser and redirect
 
-- Authorization uses Auth Tab (`androidx.browser`) first, with Custom Tabs as the fallback and the
-  foreground-return heuristic demoted. Chrome's minimize button resumes the host app while the tab
-  lives, so "resumed without redirect" is not a user cancel (F1). Do not add logic that wipes the
-  pending request on a bare resume.
+- Authorization uses Auth Tab (`androidx.browser`, `AuthTabAuthorizationSession` through the
+  transparent `VersolaAuthTabActivity` trampoline, since the activity-result API needs one) first,
+  with Custom Tabs as the fallback (`CustomTabsAuthorizationSession`). The foreground-return
+  heuristic exists only in that fallback: Chrome's minimize button resumes the host app while the
+  tab lives, so "resumed without redirect" is not a reliable user cancel (F1). Do not add logic
+  that wipes the pending request on a bare resume, and do not extend the heuristic to the Auth Tab
+  path, whose result code is the signal. `ephemeral` is best effort (one warning when the provider
+  lacks it), never a security check.
 - The redirect activity is reached by explicit intent. Verified App Links are preferred; a custom
   scheme works but logs a warning, since any app can register it (F10). The redirect activity stays
   exported only as far as the manifest merge snippet needs, with transitions overridden to none.

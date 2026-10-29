@@ -137,6 +137,43 @@ class TokenClientTest {
     }
 
     @Test
+    fun `a code exchange repeats resource once per value the grant carries`() = runTest {
+        server.enqueue(issued())
+        val grant = AuthorizationGrant(
+            code = "the-code",
+            codeVerifier = CodeVerifier("dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"),
+            redirectUri = "https://app.example.com/oauth",
+            nonce = "the-nonce",
+            scopes = setOf("openid"),
+            resources = listOf("https://api.example.com/a", "https://api.example.com/b"),
+        )
+
+        client().exchange(grant)
+
+        val body = server.takeRequest().body!!.utf8()
+        assertTrue(body.contains("resource=https%3A%2F%2Fapi.example.com%2Fa&resource=https%3A%2F%2Fapi.example.com%2Fb"))
+        assertEquals(2, body.split('&').count { it.startsWith("resource=") })
+    }
+
+    @Test
+    fun `a code exchange without resources sends no resource parameter`() = runTest {
+        server.enqueue(issued())
+
+        client().exchange(grant())
+
+        assertFalse(server.takeRequest().body!!.utf8().contains("resource"))
+    }
+
+    @Test
+    fun `a refresh sends no resource, the grant's audience being already fixed`() = runTest {
+        server.enqueue(issued())
+
+        client().refresh(refreshToken.toByteArray(), "idem-key-1")
+
+        assertFalse(server.takeRequest().body!!.utf8().contains("resource"))
+    }
+
+    @Test
     fun `a refresh carries the idempotency key and a code exchange does not`() = runTest {
         server.enqueue(issued())
         server.enqueue(issued())

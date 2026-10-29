@@ -183,7 +183,8 @@ public class AuthorizationFlow(
         val uri = endSessionUri(endpoint, idTokenHint, postLogoutRedirectUri, expectedState)
 
         val outcome = try {
-            browser.authorize(uri)
+            // Never ephemeral: the point is to end the session the shared browser holds.
+            browser.authorize(uri, BrowserSessionOptions(redirectUri = postLogoutRedirectUri))
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -248,9 +249,18 @@ public class AuthorizationFlow(
         scopes: Set<String>,
         acrValues: List<String> = emptyList(),
         maxAge: Long? = null,
+        parameters: AuthorizationParameters = AuthorizationParameters(),
+        /** `spec/oauth-sdk-api.md` section 6: a browser without the user's shared state. */
+        ephemeralBrowser: Boolean = false,
     ): AuthorizationGrant = AUTHORIZE_LOCK.withLock {
         ensureRestored()
         val metadata = discovery.metadata()
+        // `code_challenge_methods_supported` present without S256 is a provider this SDK cannot
+        // talk to (it sends S256 and nothing else); absent, it is unknown and S256 is sent
+        // (`spec/oauth-sdk-api.md` section 6, `spec/providers.md`).
+        if (metadata.codeChallengeMethodsSupported.isNotEmpty() && "S256" !in metadata.codeChallengeMethodsSupported) {
+            throw VersolaError.Configuration(VersolaError.Configuration.Detail.ProviderUnsupported("S256"))
+        }
 
         val request = AuthorizationRequest.create(
             configuration = configuration,
@@ -258,6 +268,7 @@ public class AuthorizationFlow(
             acrValues = acrValues,
             maxAge = maxAge,
             dpopJkt = dpopJkt(metadata),
+            parameters = parameters,
         )
         val (pending, uri) = if (starter == null) {
             request.toPending(clock()) to request.toUri(metadata.authorizationEndpoint)
@@ -267,8 +278,9 @@ public class AuthorizationFlow(
         pendingStore.save(pending)
         state.value = SessionState.Authorizing
 
+        val browserOptions = BrowserSessionOptions(ephemeral = ephemeralBrowser, redirectUri = configuration.redirectUri.value)
         val outcome = try {
-            belongingTo(pending, browser.authorize(uri))
+            belongingTo(pending, browser.authorize(uri, browserOptions))
         } catch (e: CancellationException) {
             // The *caller* was cancelled, not the authorization. The browser may already be
             // in the foreground and its redirect may still arrive, so the slot and the
@@ -407,10 +419,11 @@ public class AuthorizationFlow(
      */
     private suspend fun dpopJkt(metadata: ProviderMetadata): String? {
         val binding = tokenBinding as? TokenBinding.Dpop ?: return null
-        // A starter that pushes the request sets `dpop_jkt` from the proof it verified on its
-        // own call (the edge flow's /native/start): a thumbprint named here would be a claim
-        // that starter cannot verify, so the parameter is left to it.
-        if (starter != null) return null
+        // A starter that binds the key on a call of its own (the edge flow's /native/start)
+        // sets `dpop_jkt` from the proof it verified: a thumbprint named here would be a claim
+        // it cannot verify, so the parameter is left to it. Any other starter pushes the
+        // request as built, `dpop_jkt` and the hardware check included.
+        if (starter?.bindsDpopKeyItself == true) return null
         if (!metadata.supportsDpop) {
             if (binding.requireHardware) {
                 throw VersolaError.Configuration(

@@ -1,6 +1,6 @@
-// System browser launch: Chrome Custom Tabs with a fallback chain to the default
-// browser. Embedded WebView is deliberately unreachable from this module's public API
-// — see #1 §4 and #5's scope note on why.
+// System browser launch: Auth Tab where the browser supports it, Chrome Custom Tabs with a
+// fallback chain to the default browser otherwise. Embedded WebView is deliberately
+// unreachable from this module's public API — see #1 §4 and #5's scope note on why.
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
@@ -35,6 +35,11 @@ kotlin {
 dependencies {
     api(project(":oauth-core"))
     implementation("androidx.browser:browser:1.10.0")
+    // Auth Tab (androidx.browser 1.9+) answers through the activity-result API, so the SDK's
+    // trampoline activity must be a ComponentActivity. androidx.activity is already on the
+    // runtime classpath as browser's own dependency, at this same version; declaring it is
+    // what puts it on the compile classpath. Apache-2.0, AndroidX.
+    implementation("androidx.activity:activity:1.9.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")

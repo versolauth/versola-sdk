@@ -40,7 +40,8 @@ yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36"
 ```text
 spec/            normative: state machine, errors, retry policy, conformance scenarios
 android/         Gradle multi-project: oauth-core (protocol engine, plain Kotlin/JVM), core (the
-                 edge back channel), dpop, storage, browser, okhttp, sdk (the Versola facade)
+                 edge back channel), dpop, storage, browser, okhttp, sdk (the Versola facade),
+                 oauth (the generic OAuthClient facade)
 ios/Sources/     Swift targets; the manifest is Package.swift at the repo root
 flutter/         plugin + Pigeon bridge (placeholder)
 conformance/     harness driving every SDK against a staged Versola stack
@@ -160,8 +161,8 @@ the proxied resource. Instrumentation arguments override the defaults in `Stack.
 `upstreamUrlFromEdge`. Pass one with
 `-Pandroid.testInstrumentationRunnerArguments.<name>=<value>`.
 
-The browser leg in this tier is auth's login conversation driven over HTTP, not a Custom Tab.
-Custom Tabs, App Link delivery and the foreground-return detector are the device tier's to
+The browser leg in this tier is auth's login conversation driven over HTTP, not an Auth Tab or
+Custom Tab. Those, App Link delivery and the foreground-return detector are the device tier's to
 prove, so a green conformance run does not cover them.
 
 A scenario with no driver yet is proven against stubs only. Say so in the pull request.

@@ -184,6 +184,28 @@ class AuthorizationFlowTest {
     }
 
     @Test
+    fun `login parameters reach the authorization request and the resources reach the grant`() = runTest {
+        val store = RecordingStore()
+        val browser = FakeBrowser(redirectFor(store), store)
+
+        val grant = flow(store, browser).authorize(
+            setOf("openid"),
+            parameters = AuthorizationParameters(
+                prompt = AuthorizationParameters.Prompt.Login,
+                loginHint = "ada@example.com",
+                resources = listOf("https://api.example.com/a"),
+            ),
+        )
+
+        val uri = browser.launchedUri!!
+        assertTrue(uri.contains("prompt=login"))
+        assertTrue(uri.contains("login_hint=ada%40example.com"))
+        assertTrue(uri.contains("resource=https%3A%2F%2Fapi.example.com%2Fa"))
+        assertEquals(listOf("https://api.example.com/a"), store.stored!!.resources)
+        assertEquals(listOf("https://api.example.com/a"), grant.resources)
+    }
+
+    @Test
     fun `the pending request is persisted before the browser opens`() = runTest {
         // The kill lands between the two often enough that AppAuth's in-memory version is the
         // documented reason mobile-demo rejected flutter_appauth. Order, not presence.
@@ -867,5 +889,96 @@ class AuthorizationFlowTest {
         failure { flow.authorize(setOf("openid")) }
 
         assertEquals(SessionState.Authenticated, flow.sessionState.first())
+    }
+}
+
+/**
+ * The browser options the flow hands its session: `ephemeralBrowser` and the redirect URI the
+ * session may intercept (`spec/oauth-sdk-api.md` section 6, 13).
+ */
+class AuthorizationFlowBrowserOptionsTest {
+
+    private class OptionsRecordingBrowser(private val store: RecordingStore) : BrowserAuthorizationSession {
+        val options = mutableListOf<BrowserSessionOptions>()
+        override suspend fun authorize(uri: String): BrowserOutcome = error("the flow must call the options form")
+        override suspend fun authorize(uri: String, options: BrowserSessionOptions): BrowserOutcome {
+            this.options += options
+            val state = store.stored?.state ?: AuthorizationResponseValidator.stateOf(uri) ?: "s"
+            return BrowserOutcome.Redirect("https://app.example.com/oauth?code=the-code&state=$state&iss=$ISSUER")
+        }
+        override suspend fun awaitPendingRedirect(): BrowserOutcome = error("not pending")
+    }
+
+    private val configuration = VersolaConfiguration.create(
+        issuer = ISSUER,
+        clientId = "mobile-app",
+        redirectUri = "https://app.example.com/oauth",
+        postLogoutRedirectUri = "https://app.example.com/signed-out",
+    )
+
+    private fun flow(store: RecordingStore, browser: BrowserAuthorizationSession, configuration: VersolaConfiguration = this.configuration) =
+        AuthorizationFlow(
+            configuration = configuration,
+            discovery = DiscoveryService(
+                ISSUER,
+                StaticDiscovery(
+                    ProviderMetadata(
+                        issuer = ISSUER,
+                        authorizationEndpoint = "$ISSUER/authorize",
+                        tokenEndpoint = "$ISSUER/token",
+                        endSessionEndpoint = "$ISSUER/logout",
+                        authorizationResponseIssParameterSupported = true,
+                    ),
+                ),
+                MemoryMetadataCache(),
+            ),
+            pendingStore = store,
+            browser = browser,
+            tokenBinding = TokenBinding.Bearer,
+            dpopKey = null,
+            clock = { 0 },
+        )
+
+    @Test
+    fun `login passes ephemeralBrowser and the redirect URI to the session, off by default`() = runTest {
+        val store = RecordingStore()
+        val browser = OptionsRecordingBrowser(store)
+        val flow = flow(store, browser)
+
+        flow.authorize(setOf("openid"))
+        flow.authorize(setOf("openid"), ephemeralBrowser = true)
+
+        assertEquals(listOf(false, true), browser.options.map { it.ephemeral })
+        assertTrue(browser.options.all { it.redirectUri == "https://app.example.com/oauth" })
+    }
+
+    @Test
+    fun `the end-session request is never ephemeral and names the post-logout redirect`() = runTest {
+        val store = RecordingStore()
+        val browser = OptionsRecordingBrowser(store)
+        val flow = flow(store, browser)
+
+        flow.endSession(idTokenHint = null)
+
+        val options = browser.options.single()
+        assertFalse(options.ephemeral)
+        assertEquals("https://app.example.com/signed-out", options.redirectUri)
+    }
+
+    @Test
+    fun `an implementation that overrides only the URI form still works`() = runTest {
+        val store = RecordingStore()
+        var opened: String? = null
+        val browser = object : BrowserAuthorizationSession {
+            override suspend fun authorize(uri: String): BrowserOutcome {
+                opened = uri
+                return BrowserOutcome.Redirect("https://app.example.com/oauth?code=c&state=${store.stored!!.state}&iss=$ISSUER")
+            }
+            override suspend fun awaitPendingRedirect(): BrowserOutcome = error("not pending")
+        }
+
+        flow(store, browser).authorize(setOf("openid"), ephemeralBrowser = true)
+
+        assertTrue(opened!!.startsWith("$ISSUER/authorize?"))
     }
 }

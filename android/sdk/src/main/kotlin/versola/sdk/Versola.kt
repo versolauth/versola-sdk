@@ -6,7 +6,7 @@ import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
-import versola.sdk.browser.CustomTabsAuthorizationSession
+import versola.sdk.browser.AuthTabAuthorizationSession
 import versola.oauth.core.AuthorizationFlow
 import versola.oauth.core.AuthorizationGrant
 import versola.sdk.core.BackChannel
@@ -155,7 +155,7 @@ public class Versola internal constructor(
      * browser is dismissed mid-flow or either server call fails. Only the server-side teardown
      * is best effort, and the return value says whether auth acknowledged it.
      */
-    public suspend fun logout(): Boolean = coordinator.logout()
+    public suspend fun logout(): Boolean = coordinator.logout().sessionEnded
 
     /**
      * A client that authenticates every call to edge: the access token, a DPoP proof over it,
@@ -244,7 +244,7 @@ public class Versola internal constructor(
              */
             backChannel: BackChannel = BackChannel.Auth,
             /**
-             * The browser leg. Custom Tabs by default; the conformance harness substitutes a
+             * The browser leg. Auth Tab (Custom Tabs fallback) by default; the conformance harness substitutes a
              * session that drives auth's login conversation over HTTP. The interface takes
              * URIs and nothing else, so nothing a WebView could be smuggled through exists
              * here either (#1 §4).
@@ -329,7 +329,7 @@ public class Versola internal constructor(
                     file = File(directory, "pending-authorization"),
                     keyProvider = HardwareKeyProvider(),
                 ),
-                browser = browser ?: CustomTabsAuthorizationSession(applicationContext, logger),
+                browser = browser ?: AuthTabAuthorizationSession(applicationContext, logger),
                 tokenBinding = tokenBinding,
                 dpopKey = dpopKey,
                 hasStoredGrant = credentialStore::hasGrant,

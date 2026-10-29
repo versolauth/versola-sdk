@@ -33,6 +33,12 @@ include(":okhttp")
 // the browser and the store at once, and neither may depend on the other. It is also the
 // module the single published artifact (kz.versola:versola-android) maps to.
 include(":sdk")
+// The generic facade (issue #46, spec/oauth-sdk-api.md): OAuthClient over the same protocol
+// core, for any conforming provider. Published as kz.versola:oauth-android.
+include(":oauth")
 // The conformance driver (#15): instrumented tests only, driving the SDK against a staged
 // auth + central + edge from an emulator. Nothing is published from it.
 include(":conformance-android")
+// A minimal app over the generic facade, minifyEnabled: R8 over the SDK is the proof that it
+// needs no consumer keep rules (architecture review F9). Nothing is published from it.
+include(":samples:oauth")

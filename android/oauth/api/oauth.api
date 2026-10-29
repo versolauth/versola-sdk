@@ -1,0 +1,110 @@
+public final class versola/oauth/LogcatLogger : versola/oauth/core/VersolaLogger {
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun info (Ljava/lang/String;)V
+	public fun warn (Ljava/lang/String;)V
+}
+
+public final class versola/oauth/LoginOptions {
+	public static final field Companion Lversola/oauth/LoginOptions$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/util/Set;Lversola/oauth/core/AuthorizationParameters$Prompt;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/lang/Long;Ljava/util/List;Ljava/util/Map;Z)V
+	public synthetic fun <init> (Ljava/util/Set;Lversola/oauth/core/AuthorizationParameters$Prompt;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/lang/Long;Ljava/util/List;Ljava/util/Map;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getAcrValues ()Ljava/util/List;
+	public final fun getEphemeralBrowser ()Z
+	public final fun getExtraParameters ()Ljava/util/Map;
+	public final fun getLoginHint ()Ljava/lang/String;
+	public final fun getMaxAge ()Ljava/lang/Long;
+	public final fun getPrompt ()Lversola/oauth/core/AuthorizationParameters$Prompt;
+	public final fun getResources ()Ljava/util/List;
+	public final fun getScopes ()Ljava/util/Set;
+	public final fun getUiLocales ()Ljava/util/List;
+}
+
+public final class versola/oauth/LoginOptions$Companion {
+	public final fun getDefault ()Lversola/oauth/LoginOptions;
+}
+
+public final class versola/oauth/LogoutOptions {
+	public static final field Companion Lversola/oauth/LogoutOptions$Companion;
+	public fun <init> ()V
+	public fun <init> (ZZ)V
+	public synthetic fun <init> (ZZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getEndSession ()Z
+	public final fun getRevoke ()Z
+}
+
+public final class versola/oauth/LogoutOptions$Companion {
+	public final fun getDefault ()Lversola/oauth/LogoutOptions;
+}
+
+public final class versola/oauth/OAuthClient {
+	public static final field Companion Lversola/oauth/OAuthClient$Companion;
+	public synthetic fun <init> (Lversola/oauth/OAuthConfiguration;Lversola/oauth/core/AuthorizationFlow;Lversola/oauth/core/SessionCoordinator;Lversola/oauth/core/UserInfoClient;Lversola/sdk/dpop/DpopProofFactory;Lversola/sdk/dpop/KeystoreDpopKey;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun accessToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun authenticatedClient (Ljava/util/Set;)Lokhttp3/OkHttpClient;
+	public static synthetic fun authenticatedClient$default (Lversola/oauth/OAuthClient;Ljava/util/Set;ILjava/lang/Object;)Lokhttp3/OkHttpClient;
+	public final fun call (Lokhttp3/Request;Ljava/util/Set;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun call$default (Lversola/oauth/OAuthClient;Lokhttp3/Request;Ljava/util/Set;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun getClaims ()Lversola/oauth/core/IdTokenClaims;
+	public final fun getConfiguration ()Lversola/oauth/OAuthConfiguration;
+	public final fun getSessionState ()Lkotlinx/coroutines/flow/Flow;
+	public final fun interceptor (Ljava/util/Set;)Lokhttp3/Interceptor;
+	public static synthetic fun interceptor$default (Lversola/oauth/OAuthClient;Ljava/util/Set;ILjava/lang/Object;)Lokhttp3/Interceptor;
+	public final fun keyAttestation (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun login (Lversola/oauth/LoginOptions;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun login$default (Lversola/oauth/OAuthClient;Lversola/oauth/LoginOptions;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun logout (Lversola/oauth/LogoutOptions;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun logout$default (Lversola/oauth/OAuthClient;Lversola/oauth/LogoutOptions;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun metadata (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun refresh (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun stepUp (Lversola/oauth/core/VersolaError$StepUp;Lversola/oauth/LoginOptions;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun stepUp$default (Lversola/oauth/OAuthClient;Lversola/oauth/core/VersolaError$StepUp;Lversola/oauth/LoginOptions;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun userInfo (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class versola/oauth/OAuthClient$Companion {
+	public final fun create (Landroid/content/Context;Lversola/oauth/OAuthConfiguration;)Lversola/oauth/OAuthClient;
+}
+
+public final class versola/oauth/OAuthConfiguration {
+	public static final field Companion Lversola/oauth/OAuthConfiguration$Companion;
+	public synthetic fun <init> (Ljava/lang/String;Lversola/oauth/ProviderEndpoints;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/Set;Lversola/oauth/core/TokenBinding;Lversola/oauth/core/PushedAuthorization;Ljava/util/Set;Ljava/lang/String;Lversola/oauth/core/RetryPolicy;Lversola/oauth/core/UnlockPolicy;JLversola/oauth/core/VersolaLogger;Lokhttp3/OkHttpClient;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Lversola/oauth/ProviderEndpoints;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/Set;Lversola/oauth/core/TokenBinding;Lversola/oauth/core/PushedAuthorization;Ljava/util/Set;Ljava/lang/String;Lversola/oauth/core/RetryPolicy;Lversola/oauth/core/UnlockPolicy;JLversola/oauth/core/VersolaLogger;Lokhttp3/OkHttpClient;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getClientId ()Ljava/lang/String;
+	public final fun getClockSkewTolerance-UwyO8pc ()J
+	public final fun getEffectiveScopes ()Ljava/util/Set;
+	public final fun getEndSessionEndpoint ()Ljava/lang/String;
+	public final fun getEndpoints ()Lversola/oauth/ProviderEndpoints;
+	public final fun getHttpClient ()Lokhttp3/OkHttpClient;
+	public final fun getIssuer ()Ljava/lang/String;
+	public final fun getIssuerIdentifier ()Ljava/lang/String;
+	public final fun getLogger ()Lversola/oauth/core/VersolaLogger;
+	public final fun getPostLogoutRedirectUri ()Ljava/lang/String;
+	public final fun getProtectedOrigins ()Ljava/util/Set;
+	public final fun getPushedAuthorization ()Lversola/oauth/core/PushedAuthorization;
+	public final fun getRedirectUri ()Ljava/lang/String;
+	public final fun getRetryPolicy ()Lversola/oauth/core/RetryPolicy;
+	public final fun getScopes ()Ljava/util/Set;
+	public final fun getTokenBinding ()Lversola/oauth/core/TokenBinding;
+	public final fun getUnlockPolicy ()Lversola/oauth/core/UnlockPolicy;
+}
+
+public final class versola/oauth/OAuthConfiguration$Companion {
+}
+
+public final class versola/oauth/ProviderEndpoints {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getAuthorizationEndpoint ()Ljava/lang/String;
+	public final fun getEndSessionEndpoint ()Ljava/lang/String;
+	public final fun getIdTokenSigningAlgValuesSupported ()Ljava/util/List;
+	public final fun getIssuer ()Ljava/lang/String;
+	public final fun getJwksUri ()Ljava/lang/String;
+	public final fun getPushedAuthorizationRequestEndpoint ()Ljava/lang/String;
+	public final fun getRevocationEndpoint ()Ljava/lang/String;
+	public final fun getTokenEndpoint ()Ljava/lang/String;
+	public final fun getUserinfoEndpoint ()Ljava/lang/String;
+}
+
