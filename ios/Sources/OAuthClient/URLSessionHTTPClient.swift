@@ -16,16 +16,16 @@ final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
 
 /// The SDK's own HTTP: discovery, JWKS, token, revocation, PAR, UserInfo. Wraps a `URLSession`
 /// (the app's, from the configuration) and never follows a redirect.
-public struct URLSessionHTTPClient: HTTPClient {
+package struct URLSessionHTTPClient: HTTPClient {
     private let session: URLSession
 
     /// - Parameter session: the session the requests go through; its timeouts, proxies and
     ///   protocol classes are honoured, its redirect handling is not.
-    public init(session: URLSession = .shared) {
+    package init(session: URLSession = .shared) {
         self.session = session
     }
 
-    public func send(_ request: HTTPRequest) async throws -> HTTPResponse {
+    package func send(_ request: HTTPRequest) async throws -> HTTPResponse {
         var urlRequest = URLRequest(url: request.url)
         urlRequest.httpMethod = request.method.rawValue
         for (name, value) in request.headers { urlRequest.setValue(value, forHTTPHeaderField: name) }

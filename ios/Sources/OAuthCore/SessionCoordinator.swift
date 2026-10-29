@@ -11,7 +11,7 @@ import Foundation
 /// its mutex, and a refresh flight that is an unstructured `Task`: a caller cancelled while it
 /// awaits the flight does not cancel the refresh, which is what keeps the rotation slot sound
 /// and the persistence of a token that already came back from being skipped.
-public actor SessionCoordinator: AccessTokenSource {
+package actor SessionCoordinator: AccessTokenSource {
     private let flow: AuthorizationFlow
     private let tokenClient: TokenClient
     private let credentialStore: CredentialStore
@@ -43,9 +43,9 @@ public actor SessionCoordinator: AccessTokenSource {
     private var flight: Task<TokenResponse, Error>?
 
     /// The claims of the validated ID token of this session, or nil when there is no session.
-    public private(set) var claims: IdTokenClaims?
+    package private(set) var claims: IdTokenClaims?
 
-    public init(
+    package init(
         flow: AuthorizationFlow,
         tokenClient: TokenClient,
         credentialStore: CredentialStore,
@@ -71,7 +71,7 @@ public actor SessionCoordinator: AccessTokenSource {
 
     /// The claims, read back from the stored ID token after a cold start: it was validated
     /// before it was stored, so a parse is enough (its `exp` says nothing about the session).
-    public func restoreClaims() async -> IdTokenClaims? {
+    package func restoreClaims() async -> IdTokenClaims? {
         if let claims { return claims }
         if idTokenValidator == nil || claimsRestored { return nil }
         let stored: String?
@@ -88,14 +88,14 @@ public actor SessionCoordinator: AccessTokenSource {
 
     // MARK: - Access token
 
-    public func accessToken() async throws -> AccessToken {
+    package func accessToken() async throws -> AccessToken {
         if claims == nil && !claimsRestored { _ = await restoreClaims() }
         if let cached = cachedAccessToken, usable(cached) { return accessToken(of: cached.response) }
         if memorySession != nil { try await expireMemorySession() }
         return accessToken(of: try await refresh(rejected: cachedAccessToken, onlyIfStale: true))
     }
 
-    public func renewAccessToken() async throws -> AccessToken {
+    package func renewAccessToken() async throws -> AccessToken {
         if memorySession != nil { try await expireMemorySession() }
         return accessToken(of: try await refresh(rejected: nil, onlyIfStale: false))
     }
@@ -126,7 +126,7 @@ public actor SessionCoordinator: AccessTokenSource {
     /// and only then `authenticated`. One attempt at the exchange, with no retry budget around
     /// it: a code is single-use and a replay can revoke what was issued from it.
     @discardableResult
-    public func login(
+    package func login(
         scopes: [String],
         acrValues: [String] = [],
         maxAge: Int? = nil,
@@ -186,7 +186,7 @@ public actor SessionCoordinator: AccessTokenSource {
         return response
     }
 
-    public func stepUpRequired() async {
+    package func stepUpRequired() async {
         await flow.enterStepUpRequired()
     }
 
@@ -194,7 +194,7 @@ public actor SessionCoordinator: AccessTokenSource {
 
     /// Spends the refresh token now, once, however many callers ask at the same time.
     @discardableResult
-    public func refresh() async throws -> TokenResponse {
+    package func refresh() async throws -> TokenResponse {
         try await refresh(rejected: nil, onlyIfStale: false)
     }
 
@@ -303,7 +303,7 @@ public actor SessionCoordinator: AccessTokenSource {
 
     /// Revokes (when asked and advertised), ends the provider's session through the browser
     /// (when asked and advertised), and wipes everything credential-shaped unconditionally.
-    public func logout(revoke: Bool = true, endSession: Bool = true) async -> LogoutOutcome {
+    package func logout(revoke: Bool = true, endSession: Bool = true) async -> LogoutOutcome {
         _ = await flow.states.current
         await flow.setState(.loggingOut)
         var serverSessionEnded = false

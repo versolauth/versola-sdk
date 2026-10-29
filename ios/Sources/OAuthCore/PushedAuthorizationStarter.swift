@@ -10,21 +10,21 @@ import Foundation
 ///
 /// Pushing changes only what crosses the browser. The verifier stays on the pending request and
 /// the grant carries no extension, so the code is redeemed at the token endpoint as it would be
-/// for the plain request. A public client has no credential, so the push carries none: the form
+/// for the plain request. A package client has no credential, so the push carries none: the form
 /// is exactly what the query would have been, `client_id` included. Nothing here retries; the
 /// caller's budget decides that, and the `HTTPClient` contract is that redirects are not followed.
-public struct PushedAuthorizationStarter: AuthorizationStarter {
+package struct PushedAuthorizationStarter: AuthorizationStarter {
     private let configuration: CoreConfiguration
     private let httpClient: HTTPClient
     private let policy: PushedAuthorization
 
-    public init(configuration: CoreConfiguration, httpClient: HTTPClient, policy: PushedAuthorization) {
+    package init(configuration: CoreConfiguration, httpClient: HTTPClient, policy: PushedAuthorization) {
         self.configuration = configuration
         self.httpClient = httpClient
         self.policy = policy
     }
 
-    public func start(request: AuthorizationRequest, metadata: ProviderMetadata, now: Date) async throws
+    package func start(request: AuthorizationRequest, metadata: ProviderMetadata, now: Date) async throws
         -> StartedAuthorization {
         let advertised = metadata.pushedAuthorizationRequestEndpoint.flatMap { $0.isEmpty ? nil : $0 }
         // The endpoint to push to, or nil for the plain request.

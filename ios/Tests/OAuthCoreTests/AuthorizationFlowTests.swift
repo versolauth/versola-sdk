@@ -135,7 +135,10 @@ final class AuthorizationFlowTests: XCTestCase {
         XCTAssertEqual(state, .unauthenticated)
     }
 
-    func testACancelledCallerLeavesThePendingRequestAndTheStateAsTheyWere() async {
+    func testACancelledCallerWipesThePendingRequestSinceTheSessionIsGone() async {
+        // On this platform the cancellation dismissed the sheet: nothing can redirect, and a
+        // request left behind would refuse every login for ten minutes (the iOS note in
+        // `spec/state-machine.md`'s cancel section).
         let f = fixture(browser: ScriptedBrowser.failing(CancellationError()))
         do {
             _ = try await f.flow.authorize(scopes: ["openid"])
@@ -146,8 +149,8 @@ final class AuthorizationFlowTests: XCTestCase {
         }
         let stored = await f.store.stored
         let state = await f.hub.current
-        XCTAssertNotNil(stored)
-        XCTAssertEqual(state, .authorizing)
+        XCTAssertNil(stored)
+        XCTAssertEqual(state, .unauthenticated)
     }
 
     // MARK: Redirect validation
@@ -315,45 +318,42 @@ final class AuthorizationFlowTests: XCTestCase {
 
     // MARK: Serialisation
 
-    func testASecondAuthorizeWhileTheFirstAwaitsTheBrowserWaitsItsTurn() async throws {
+    func testASecondAuthorizeWhileTheFirstAwaitsTheBrowserIsRefusedNotQueued() async throws {
+        // A double tap on Sign in: the second call is refused under the gate, so it cannot open
+        // a second sheet once the first completes (`spec/oauth-sdk-api.md` section 5).
         let browser = GatedBrowser()
         let f = fixture(browser: browser)
         let first = Task { try await f.flow.authorize(scopes: ["openid"]) }
         await AuthzKit.waitUntil("the first authorization opens the browser") { await browser.opened.count == 1 }
-        let second = Task { try await f.flow.authorize(scopes: ["openid"]) }
-        for _ in 0..<200 { await Task.yield() }
 
-        var opened = await browser.opened
-        var saves = await f.store.saveCount
-        XCTAssertEqual(opened.count, 1, "the second authorization opened the browser concurrently")
-        XCTAssertEqual(saves, 1, "the second authorization overwrote the pending request")
-
-        await browser.resolveNext(.redirect(AuthzKit.redirect(answering: opened[0])))
-        let firstGrant = try await first.value
-        await AuthzKit.waitUntil("the second authorization opens the browser after the first") {
-            await browser.opened.count == 2
+        do {
+            _ = try await f.flow.authorize(scopes: ["openid"])
+            XCTFail("the second authorization was not refused")
+        } catch let error as OAuthError {
+            guard case .configuration(.invalidConfiguration) = error else { return XCTFail("\(error)") }
         }
-        opened = await browser.opened
-        saves = await f.store.saveCount
-        XCTAssertEqual(saves, 2)
-        await browser.resolveNext(.redirect(AuthzKit.redirect(answering: opened[1])))
-        let secondGrant = try await second.value
 
-        XCTAssertEqual(firstGrant.state, AuthorizationResponseValidator.stateOf(opened[0]))
-        XCTAssertEqual(secondGrant.state, AuthorizationResponseValidator.stateOf(opened[1]))
-        XCTAssertNotEqual(firstGrant.state, secondGrant.state)
+        let opened = await browser.opened
+        let saves = await f.store.saveCount
+        XCTAssertEqual(opened.count, 1)
+        XCTAssertEqual(saves, 1, "the refused authorization overwrote the pending request")
+        await browser.resolveNext(.redirect(AuthzKit.redirect(answering: opened[0])))
+        let grant = try await first.value
+        XCTAssertEqual(grant.state, AuthorizationResponseValidator.stateOf(opened[0]))
     }
 
-    func testAWaitingCallerThatIsCancelledLeavesTheQueueWithoutOpeningTheBrowser() async throws {
+    func testAnEndSessionWaitingBehindTheBrowserThatIsCancelledLeavesTheQueue() async throws {
+        // `endSession` and `resumePendingAuthorization` still queue behind an open browser; a
+        // waiter cancelled while queued leaves without opening anything.
         let browser = GatedBrowser()
         let f = fixture(browser: browser)
         let first = Task { try await f.flow.authorize(scopes: ["openid"]) }
         await AuthzKit.waitUntil("the first authorization opens the browser") { await browser.opened.count == 1 }
-        let second = Task { try await f.flow.authorize(scopes: ["openid"]) }
+        let waiting = Task { try await f.flow.endSession(idTokenHint: nil) }
         for _ in 0..<200 { await Task.yield() }
-        second.cancel()
+        waiting.cancel()
         do {
-            _ = try await second.value
+            _ = try await waiting.value
             XCTFail("expected cancellation")
         } catch is CancellationError {}
 

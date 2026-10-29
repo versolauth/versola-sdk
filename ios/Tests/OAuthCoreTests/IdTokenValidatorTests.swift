@@ -110,13 +110,14 @@ final class IdTokenValidatorTests: XCTestCase {
 
     func testAdditionalHoldsTheOtherClaimsAsTextAndLeavesTheNonceAndTheTypedOnesOut() async throws {
         let claims = try await ok(["email_verified": true, "custom_number": 42, "azp": clientId, "profile": ["b": "x\"y", "a": [1, 2]], "locale": "en"])
-        XCTAssertEqual(claims.additional["email_verified"], "true")
-        XCTAssertEqual(claims.additional["custom_number"], "42")
-        XCTAssertEqual(claims.additional["azp"], clientId)
-        XCTAssertEqual(claims.additional["locale"], "en")
-        XCTAssertEqual(claims.additional["profile"], #"{"a":[1,2],"b":"x\"y"}"#)
-        XCTAssertNil(claims.additional["nonce"])
-        for typed in ["iss", "sub", "aud", "exp", "iat"] { XCTAssertNil(claims.additional[typed], typed) }
+        XCTAssertEqual(claims.all["email_verified"], "true")
+        XCTAssertEqual(claims.all["custom_number"], "42")
+        XCTAssertEqual(claims.all["azp"], clientId)
+        XCTAssertEqual(claims.all["locale"], "en")
+        XCTAssertEqual(claims.all["profile"], #"{"a":[1,2],"b":"x\"y"}"#)
+        XCTAssertNil(claims.all["nonce"])
+        for typed in ["iss", "sub", "aud", "exp", "iat"] { XCTAssertNotNil(claims.all[typed], "the typed claims are in the map too, as on Android") }
+        XCTAssertEqual(claims.authorizedParty, clientId)
     }
 
     func testPsAndRsFamiliesValidate() async throws {
@@ -239,6 +240,23 @@ final class IdTokenValidatorTests: XCTestCase {
         XCTAssertEqual(result.subject, "user-1")
         count = await stub.requestCount()
         XCTAssertEqual(count, 2)
+    }
+
+    func testAKnownKidWithABadSignatureIsRejectedWithoutARefetch() async throws {
+        // A forgery under a known key must not cost a JWKS request per attempt: the refetch is
+        // for a key the set does not have, never for a signature that fails under one it does
+        // (`spec/oauth-sdk-api.md` section 11).
+        let stub = JoseStubHTTP()
+        let jwks = JwksClient(httpClient: stub)
+        await stub.enqueue("/jwks.json", body: JoseTestTokens.jwks(JoseTestKeys.rsa.jwk(kid: "rsa")))
+        _ = try await validate(rsToken(), validator(stub, jwks: jwks))
+        await stub.enqueue("/jwks.json", body: JoseTestTokens.jwks(JoseTestKeys.rsa.jwk(kid: "rsa")))
+        let forged = JoseTestTokens.rsa("RS256", JoseTestKeys.rsaOther, payload: claims(), kid: "rsa")
+
+        let error = await joseThrown { _ = try await validate(forged, validator(stub, jwks: jwks)) }
+        XCTAssertEqual((error as? OAuthError), .configuration(.idTokenRejected(.signature)))
+        let count = await stub.requestCount()
+        XCTAssertEqual(count, 1)
     }
 
     func testSecondUnknownKidAfterTheRefetchIsSignatureAndNoThirdRequestIsMade() async throws {
@@ -510,7 +528,7 @@ final class IdTokenValidatorTests: XCTestCase {
     func testAtHashThatIsTheLeftHalfOfSha256OfTheAccessTokenValidates() async throws {
         let hash = atHash(Array(SHA256.hash(data: Data(accessToken.utf8))))
         let claims = try await ok(["at_hash": hash], access: accessToken)
-        XCTAssertEqual(claims.additional["at_hash"], hash)
+        XCTAssertEqual(claims.all["at_hash"], hash)
     }
 
     func testAtHashOfAnotherAccessTokenIsRefusedAsAccessTokenHash() async {
@@ -595,8 +613,8 @@ final class IdTokenValidatorTests: XCTestCase {
         XCTAssertEqual(stored.authTime, now.addingTimeInterval(-100))
         XCTAssertEqual(stored.amr, ["pwd"])
         XCTAssertEqual(stored.acr, "a")
-        XCTAssertEqual(stored.additional["email"], "u@example.com")
-        XCTAssertNil(stored.additional["nonce"])
+        XCTAssertEqual(stored.all["email"], "u@example.com")
+        XCTAssertNil(stored.all["nonce"])
     }
 
     func testStoredTokenThatNoLongerParsesIsRefusedAsMalformed() {

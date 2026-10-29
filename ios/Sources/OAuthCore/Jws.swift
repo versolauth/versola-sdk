@@ -14,12 +14,12 @@ import Security
 ///
 /// Not an `OAuthError`: it never leaves the validation code. A network failure or a missing
 /// capability while verifying is an `OAuthError` and passes through untouched.
-public struct JwsRejection: Error, Sendable, Equatable {
-    public let reason: IdTokenRejection
+package struct JwsRejection: Error, Sendable, Equatable {
+    package let reason: IdTokenRejection
     /// What was wrong, for a log line. Never carries a token, a claim value or a key.
-    public let detail: String
+    package let detail: String
 
-    public init(_ reason: IdTokenRejection, _ detail: String) {
+    package init(_ reason: IdTokenRejection, _ detail: String) {
         self.reason = reason
         self.detail = detail
     }
@@ -27,10 +27,10 @@ public struct JwsRejection: Error, Sendable, Equatable {
 
 /// The asymmetric JWS algorithms an ID token may use, and nothing else (`spec/oauth-sdk-api.md`
 /// section 11). `none` and the HMAC family are not members and cannot become one by
-/// configuration: a public client holds no secret to verify an HMAC with, so a token claiming
-/// `HS256` is either an attack (the key-confusion downgrade, where the provider's public key is
+/// configuration: a package client holds no secret to verify an HMAC with, so a token claiming
+/// `HS256` is either an attack (the key-confusion downgrade, where the provider's package key is
 /// used as the HMAC secret) or a provider this SDK cannot talk to.
-public enum JwsAlgorithm: String, Sendable, CaseIterable {
+package enum JwsAlgorithm: String, Sendable, CaseIterable {
     case RS256, RS384, RS512, PS256, PS384, PS512, ES256, ES384, ES512
 
     /// The JWK `kty` a key must have to verify with this algorithm.
@@ -81,17 +81,17 @@ public enum JwsAlgorithm: String, Sendable, CaseIterable {
 
 /// A compact JWS taken apart but not yet trusted: nothing in it means anything until a verifier
 /// has said the signature holds.
-public struct ParsedJws: Sendable, CustomStringConvertible {
+package struct ParsedJws: Sendable, CustomStringConvertible {
     /// The header's `alg`, `kid` and `typ` when they are strings.
-    public let alg: String?
-    public let kid: String?
-    public let typ: String?
+    package let alg: String?
+    package let kid: String?
+    package let typ: String?
     /// The raw JSON of the payload, the claims set of an ID token or a UserInfo response.
-    public let payload: Data
+    package let payload: Data
     /// `BASE64URL(header) "." BASE64URL(payload)` as it came: the exact bytes that were signed
     /// (RFC 7515 5.2).
-    public let signingInput: Data
-    public let signature: Data
+    package let signingInput: Data
+    package let signature: Data
 
     /// The payload as parsed, a JSON object by construction.
     let claims: [String: JoseJSON]
@@ -107,7 +107,7 @@ public struct ParsedJws: Sendable, CustomStringConvertible {
     }
 
     /// Claim values and the token itself are secrets-adjacent; print nothing of them.
-    public var description: String { "ParsedJws(redacted)" }
+    package var description: String { "ParsedJws(redacted)" }
 }
 
 enum Jws {
@@ -164,7 +164,7 @@ enum Jws {
 /// The signature check alone: one algorithm, one key, one message. Never throws and never
 /// crashes on a bad signature or an unusable key; a failure of any kind is `false`, so the caller
 /// cannot confuse "did not verify" with "could not be asked".
-public enum JwsSignatures {
+package enum JwsSignatures {
     /// An RSA key under this size is not one a provider published on purpose.
     static let minimumRSABits = 2048
 
@@ -172,7 +172,7 @@ public enum JwsSignatures {
     ///
     /// A key of the wrong type or size is refused rather than handed to the platform to fail (or,
     /// worse, not fail): ES256 with a P-384 key is not ES256.
-    public static func verifies(algorithm: JwsAlgorithm, key: JsonWebKey, signingInput: Data, signature: Data) -> Bool {
+    package static func verifies(algorithm: JwsAlgorithm, key: JsonWebKey, signingInput: Data, signature: Data) -> Bool {
         guard suits(key, algorithm) else { return false }
         return algorithm.keyType == "RSA"
             ? verifyRSA(algorithm, key, signingInput, signature)
@@ -188,7 +188,7 @@ public enum JwsSignatures {
             let modulus = DER.stripLeadingZeros(n)
             let exponent = DER.stripLeadingZeros(e)
             guard modulus.count * 8 - (modulus.first?.leadingZeroBitCount ?? 8) >= minimumRSABits else { return false }
-            // An even exponent is not an RSA public exponent; 1 is not one either.
+            // An even exponent is not an RSA package exponent; 1 is not one either.
             guard let last = exponent.last, last & 1 == 1, exponent != [1] else { return false }
             return true
         }
@@ -263,7 +263,7 @@ public enum JwsSignatures {
 /// signature from a key the provider retired). When no key verifies, the key set is fetched once
 /// more, because that is what a rotation looks like, and then the token is refused; a set that
 /// was fetched by this very call is never fetched again.
-public struct JwsVerifier: Sendable {
+package struct JwsVerifier: Sendable {
     private let jwksUri: @Sendable () async throws -> String?
     private let allowedAlgorithms: @Sendable () async throws -> [String]
     private let jwks: JwksClient
@@ -273,7 +273,7 @@ public struct JwsVerifier: Sendable {
     ///     closure because discovery is lazy and owned by another component.
     ///   - allowedAlgorithms: the provider's `id_token_signing_alg_values_supported`; empty means
     ///     it did not say, and the closed asymmetric set alone applies.
-    public init(
+    package init(
         jwksUri: @escaping @Sendable () async throws -> String?,
         allowedAlgorithms: @escaping @Sendable () async throws -> [String],
         jwks: JwksClient
@@ -287,7 +287,7 @@ public struct JwsVerifier: Sendable {
     /// - Throws: `JwsRejection` (`.malformed`, `.algorithm` or `.signature`);
     ///   `OAuthError.configuration(.providerUnsupported(capability: "jwks_uri"))` when discovery
     ///   has no `jwks_uri`; `OAuthError.recoverable` when the key set cannot be fetched.
-    public func verify(_ compact: String) async throws -> ParsedJws {
+    package func verify(_ compact: String) async throws -> ParsedJws {
         let token = try Jws.parse(compact)
         guard let algorithm = token.alg.flatMap(JwsAlgorithm.init(rawValue:)) else {
             throw JwsRejection(.algorithm, "alg is not in the closed asymmetric set")
@@ -301,23 +301,22 @@ public struct JwsVerifier: Sendable {
         }
 
         var loaded = try await jwks.keys(uri: uri, forceRefresh: false)
-        if try Self.someKeyVerifies(token, algorithm, loaded.keys) { return token }
-        if !loaded.fetched {
-            // One refetch, and only when the set in hand was not itself just fetched: a cold
-            // start that found no such key has already asked the provider, and a second miss
-            // after a forced fetch is final, so a flood of unknown `kid`s costs at most one
-            // request each and never a loop.
+        var candidates = try Self.select(loaded.keys, token, algorithm)
+        if candidates.isEmpty && !loaded.fetched {
+            // One refetch, and only for a key the set in hand does not have (a rotation),
+            // never for a signature that fails under a known key: a forgery must not cost a
+            // request per attempt (`spec/oauth-sdk-api.md` section 11). Not after a set that
+            // was itself just fetched, so a flood of unknown `kid`s costs at most one request
+            // each and never a loop.
             loaded = try await jwks.keys(uri: uri, forceRefresh: true)
-            if try Self.someKeyVerifies(token, algorithm, loaded.keys) { return token }
+            candidates = try Self.select(loaded.keys, token, algorithm)
+        }
+        if candidates.contains(where: { JwsSignatures.verifies(algorithm: algorithm, key: $0, signingInput: token.signingInput, signature: token.signature) }) {
+            return token
         }
         throw JwsRejection(.signature, "no key at jwks_uri verifies the signature")
     }
 
-    private static func someKeyVerifies(_ token: ParsedJws, _ algorithm: JwsAlgorithm, _ set: JsonWebKeySet) throws -> Bool {
-        try select(set, token, algorithm).contains {
-            JwsSignatures.verifies(algorithm: algorithm, key: $0, signingInput: token.signingInput, signature: token.signature)
-        }
-    }
 
     /// The keys that could have signed `token`: right type, usable for signing, not pinned to
     /// another `alg`, suited to the algorithm's curve or size, and matching `kid` when the token

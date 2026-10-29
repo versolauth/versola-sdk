@@ -59,7 +59,7 @@ actor PendingRedirects {
 /// The presentation anchor and the foreground check come from the app: the SDK does not go
 /// looking for a window (`ios-swift.md`). Works on macOS too (the anchor is an `NSWindow`
 /// there) so the package's host tests compile the same API.
-public final class WebAuthenticationBrowser: BrowserAuthorizationSession, Sendable {
+package final class WebAuthenticationBrowser: BrowserAuthorizationSession, Sendable {
     private let anchor: @Sendable @MainActor () -> ASPresentationAnchor
     private let isForeground: @Sendable @MainActor () -> Bool
     private let logger: (any OAuthLogger)?
@@ -70,7 +70,7 @@ public final class WebAuthenticationBrowser: BrowserAuthorizationSession, Sendab
     ///   - appState: whether the app is in the foreground right now. Asked at the moment a
     ///     `canceledLogin` arrives, to tell a user's dismissal from the system's teardown.
     ///   - logger: receives a warning when the session ends in a way the SDK did not expect.
-    public init(
+    package init(
         presentationAnchor: @escaping @Sendable @MainActor () -> ASPresentationAnchor,
         appState: @escaping @Sendable @MainActor () -> Bool,
         logger: (any OAuthLogger)? = nil
@@ -82,7 +82,7 @@ public final class WebAuthenticationBrowser: BrowserAuthorizationSession, Sendab
 
     // MARK: BrowserAuthorizationSession
 
-    public func authorize(_ uri: URL, options: BrowserSessionOptions) async throws -> BrowserOutcome {
+    package func authorize(_ uri: URL, options: BrowserSessionOptions) async throws -> BrowserOutcome {
         guard let redirectURI = options.redirectURI else {
             throw OAuthError.configuration(.invalidConfiguration(detail: "a redirect URI is needed to open the browser"))
         }
@@ -112,12 +112,12 @@ public final class WebAuthenticationBrowser: BrowserAuthorizationSession, Sendab
     /// The redirect of an authorization this process did not start: whatever the app handed to
     /// `deliver(_:)`. `ASWebAuthenticationSession` returns its own redirect, so on iOS nothing
     /// else feeds this.
-    public func awaitPendingRedirect() async throws -> BrowserOutcome {
+    package func awaitPendingRedirect() async throws -> BrowserOutcome {
         .redirect(try await redirects.next())
     }
 
     /// What the facade's `handleRedirect(_:)` calls: the URL the app's URL handler received.
-    public func deliver(_ url: URL) async {
+    package func deliver(_ url: URL) async {
         await redirects.deliver(url)
     }
 
@@ -211,9 +211,10 @@ private final class ActiveSession {
         case .customScheme(let scheme): callback = .customScheme(scheme)
         }
         let session = ASWebAuthenticationSession(url: url, callback: callback) { [weak self] callbackURL, error in
-            // Delivered on the main queue; the lifecycle state is read here, while it is the
-            // state the cancellation arrived in.
-            MainActor.assumeIsolated {
+            // Delivered on the main queue in practice, but no queue is documented: hop rather
+            // than assume, since an assumption that fails is a trap inside the SDK. The
+            // lifecycle state is read on the hop, still the state the cancellation arrived in.
+            Task { @MainActor in
                 let result: Result<URL, any Error>
                 if let callbackURL {
                     result = .success(callbackURL)

@@ -4,13 +4,13 @@ import Foundation
 /// for as long as the session lives; RFC 7009 revocation at sign-out.
 ///
 /// Deliberately no client secret anywhere in this interface or its implementation. A mobile
-/// client is public (#1 §2), and a parameter that cannot be expressed cannot be shipped by an
+/// client is package (#1 §2), and a parameter that cannot be expressed cannot be shipped by an
 /// integrator who was sure it would be fine.
 ///
 /// Single-flight coordination, the rotation slot and the retry budget are **not** here. This
 /// type performs one exchange per call; what decides how many calls there are, and in what
 /// order they touch storage, is the session coordinator above it.
-public protocol TokenClient: Sendable {
+package protocol TokenClient: Sendable {
     /// Redeems a validated authorization code. The PKCE verifier goes with it.
     func exchange(_ grant: AuthorizationGrant) async throws -> TokenResponse
 
@@ -25,7 +25,7 @@ public protocol TokenClient: Sendable {
     func revoke(refreshToken: String) async throws
 }
 
-/// The token endpoint over the injected `HTTPClient`, as a public client of the provider.
+/// The token endpoint over the injected `HTTPClient`, as a package client of the provider.
 ///
 /// Two protocol-shaped retries live here rather than in the caller's budget, because both are
 /// answers to a challenge rather than to a failure, and `spec/retry-policy.md` fixes each at
@@ -37,7 +37,7 @@ public protocol TokenClient: Sendable {
 /// The `HTTPClient` never follows redirects: a 307 or 308 repeats the method and the body, and
 /// one `Location` from anything able to answer as the token endpoint would repost a code or a
 /// refresh token to another origin, with the proof minted for this one.
-public struct HTTPTokenClient: TokenClient {
+package struct HTTPTokenClient: TokenClient {
     private let configuration: CoreConfiguration
     private let metadata: @Sendable () async throws -> ProviderMetadata
     private let httpClient: HTTPClient
@@ -49,7 +49,7 @@ public struct HTTPTokenClient: TokenClient {
     ///   - dpop: nil for a session that is not key-bound.
     ///   - sendIdempotencyKey: whether a refresh carries `Idempotency-Key`. Versola honours it;
     ///     no standard asks a provider to, so the generic facade passes false (ADR 0001).
-    public init(
+    package init(
         configuration: CoreConfiguration,
         metadata: @escaping @Sendable () async throws -> ProviderMetadata,
         httpClient: HTTPClient,
@@ -70,7 +70,7 @@ public struct HTTPTokenClient: TokenClient {
         self.sendIdempotencyKey = sendIdempotencyKey
     }
 
-    public func exchange(_ grant: AuthorizationGrant) async throws -> TokenResponse {
+    package func exchange(_ grant: AuthorizationGrant) async throws -> TokenResponse {
         if !grant.extensions.isEmpty {
             // A code a back channel pushed the request for is redeemable only there, with its
             // artefacts; presenting it here would spend it for an `invalid_grant`.
@@ -89,7 +89,7 @@ public struct HTTPTokenClient: TokenClient {
         return try await post(form, idempotencyKey: nil)
     }
 
-    public func refresh(refreshToken: String, idempotencyKey: String) async throws -> TokenResponse {
+    package func refresh(refreshToken: String, idempotencyKey: String) async throws -> TokenResponse {
         let form: [(String, String)] = [
             ("grant_type", "refresh_token"),
             ("refresh_token", refreshToken),
@@ -98,11 +98,11 @@ public struct HTTPTokenClient: TokenClient {
         return try await post(form, idempotencyKey: sendIdempotencyKey ? idempotencyKey : nil)
     }
 
-    /// `POST` to `revocation_endpoint` as a public client: `token`, `token_type_hint` and
+    /// `POST` to `revocation_endpoint` as a package client: `token`, `token_type_hint` and
     /// `client_id`, nothing else, and no `DPoP` header (RFC 9449 binds the token endpoint and
     /// resource access, not revocation). RFC 7009 §2.2 answers 200 for an unknown token too,
     /// so a 2xx says only that the server took the request.
-    public func revoke(refreshToken: String) async throws {
+    package func revoke(refreshToken: String) async throws {
         guard let endpoint = try await metadata().revocationEndpoint, !endpoint.isEmpty, let url = URL(string: endpoint) else { return }
         let body = FormEncoding.body([
             ("token_type_hint", "refresh_token"),
@@ -297,7 +297,7 @@ struct TokenErrorPayload: Sendable {
 }
 
 /// The `error` parameter of a `WWW-Authenticate` header, quoted or bare, across challenges.
-public func wwwAuthenticateError(_ header: String) -> String? {
+package func wwwAuthenticateError(_ header: String) -> String? {
     let pattern = try! NSRegularExpression(pattern: #"(?:^|[\s,])error\s*=\s*(?:"([^"]*)"|([^\s,]+))"#)
     let range = NSRange(header.startIndex..., in: header)
     guard let match = pattern.firstMatch(in: header, range: range) else { return nil }

@@ -47,7 +47,8 @@ an Auth Tab where the device's browser supports it and a Custom Tab otherwise; `
 can ask for an ephemeral session (off by default: it breaks passkeys and SSO).
 
 On iOS the same facade is the `VersolaOAuth` product (`ios/Sources/OAuthClient`, Swift 6,
-iOS 17.4): `OAuthClient.create(configuration:presentationAnchor:)`, `login()`, `authenticatedSession()`
+iOS 17.4; the manifest also lists macOS 14.4 so the tests run on a Mac host, which is not a
+supported platform): `OAuthClient.create(configuration:presentationAnchor:)`, `login()`, `authenticatedSession()`
 and `logout()` with the same states and the same four error categories.
 
 ```kotlin

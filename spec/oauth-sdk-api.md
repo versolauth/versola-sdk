@@ -131,7 +131,7 @@ the state before asking.
 | `maxAge` | `max_age` | seconds; when set, the ID token must carry `auth_time` and it is checked |
 | `resources` | `resource` (RFC 8707) | repeatable; also sent on the token request |
 | `ephemeralBrowser` | platform | `false`: an ephemeral session breaks passkeys and SSO; opt-in only. Best effort, as iOS's `prefersEphemeralWebBrowserSession`: Android passes it to the Auth Tab or Custom Tab when the provider supports ephemeral browsing, and otherwise logs one warning and opens the session shared. The end-session request is never ephemeral |
-| `extraParameters` | verbatim | a map for provider extensions (`audience`, `claims`, `kc_idp_hint`, …); a key that collides with a reserved parameter (`client_id`, `redirect_uri`, `response_type`, `scope`, `state`, `nonce`, `code_challenge*`, `request_uri`, `prompt`, `max_age`, `acr_values`, `resource`, `login_hint`, `ui_locales`) is `Configuration(InvalidConfiguration)` |
+| `extraParameters` | verbatim | a map for provider extensions (`audience`, `claims`, `kc_idp_hint`, …); a key that collides with a reserved parameter (`client_id`, `redirect_uri`, `response_type`, `scope`, `state`, `nonce`, `code_challenge*`, `request_uri`, `prompt`, `max_age`, `acr_values`, `resource`, `login_hint`, `ui_locales`, `dpop_jkt`) or names what the SDK keeps unrepresentable or outside its validator (`client_secret`, `request`, `response_mode`) is `Configuration(InvalidConfiguration)` |
 
 The SDK always sends `response_type=code`, `code_challenge_method=S256`, a fresh `state` and
 `nonce` (CSPRNG, at least 128 bits each), and `response_mode` unset (query). A discovery document

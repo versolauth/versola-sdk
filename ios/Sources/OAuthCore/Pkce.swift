@@ -3,17 +3,17 @@ import Foundation
 
 /// RFC 7636 PKCE. S256 always: there is deliberately no way to express `plain` or "no PKCE"
 /// here, because a provider that offers only those is one this SDK refuses to talk to.
-public struct CodeVerifier: Sendable, Equatable, CustomStringConvertible {
+package struct CodeVerifier: Sendable, Equatable, CustomStringConvertible {
     /// The secret itself. Read only to persist it with the pending request and to redeem the
     /// code; `description` never shows it.
-    public let value: String
+    package let value: String
 
     private init(trusted value: String) { self.value = value }
 
     /// A verifier restored from storage or handed over from a pending request. Validated
     /// against RFC 7636 section 4.1 (43 to 128 characters of the unreserved set), so a corrupt
     /// record fails here rather than at the token endpoint after the code is spent.
-    public init(value: String) throws {
+    package init(value: String) throws {
         let bytes = value.utf8
         guard (43...128).contains(bytes.count), bytes.allSatisfy(Self.isUnreserved) else {
             throw OAuthError.configuration(.invalidConfiguration(detail: "malformed PKCE code verifier"))
@@ -23,17 +23,17 @@ public struct CodeVerifier: Sendable, Equatable, CustomStringConvertible {
 
     /// 32 bytes of CSPRNG output, 43 base64url characters: the shortest verifier RFC 7636
     /// permits, and 256 bits of entropy.
-    public static func generate(_ random: RandomSource) -> CodeVerifier {
+    package static func generate(_ random: RandomSource) -> CodeVerifier {
         CodeVerifier(trusted: SecureTokens.generate(random, bytes: 32))
     }
 
     /// The `code_challenge`: base64url(SHA-256(ASCII(code_verifier))), RFC 7636 section 4.2.
-    public func challengeS256() -> String {
+    package func challengeS256() -> String {
         Base64Url.encode(Data(SHA256.hash(data: Data(value.utf8))))
     }
 
     /// Credential material: never printed, including through an accidental string interpolation.
-    public var description: String { "CodeVerifier(redacted)" }
+    package var description: String { "CodeVerifier(redacted)" }
 
     private static func isUnreserved(_ byte: UInt8) -> Bool {
         switch byte {

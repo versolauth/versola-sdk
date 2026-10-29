@@ -17,14 +17,14 @@ import Foundation
 /// continuations, held on this actor; a waiter that is cancelled leaves the queue and throws
 /// `CancellationError`. Android's equivalent lock is process-wide; here it is per instance,
 /// because Swift forbids a global mutable lock and the facade creates one flow per client.
-public actor AuthorizationFlow {
-    public nonisolated let configuration: CoreConfiguration
+package actor AuthorizationFlow {
+    package nonisolated let configuration: CoreConfiguration
 
     private let discovery: DiscoveryService
     private let pendingStore: PendingAuthorizationStore
     private let browser: BrowserAuthorizationSession
     /// The state machine both the flow and the coordinator publish on; the facade streams it.
-    public nonisolated let states: SessionStateHub
+    package nonisolated let states: SessionStateHub
     private let tokenBinding: TokenBinding
     private let dpopKey: DpopProofSource?
     private let clock: Clock
@@ -56,7 +56,7 @@ public actor AuthorizationFlow {
     ///     ("no grant") suits the browser leg on its own; a coordinator must supply the real one,
     ///     or a returning session reads as signed out on every cold start.
     ///   - starter: builds the request when it is not the plain PKCE request this class builds.
-    public init(
+    package init(
         configuration: CoreConfiguration,
         discovery: DiscoveryService,
         pendingStore: PendingAuthorizationStore,
@@ -85,7 +85,7 @@ public actor AuthorizationFlow {
     }
 
     /// The provider's metadata, fetched once and cached across restarts and logout.
-    public func metadata() async throws -> ProviderMetadata {
+    package func metadata() async throws -> ProviderMetadata {
         try await discovery.metadata()
     }
 
@@ -100,7 +100,7 @@ public actor AuthorizationFlow {
     /// clearing the slot, its code already redeemed, so resuming it could only fail as
     /// `invalid_grant`. A pending request older than ten minutes is discarded and remembered, so
     /// that `resumePendingAuthorization()` can say it expired rather than that nothing was there.
-    public func ensureRestored() async throws {
+    package func ensureRestored() async throws {
         if restored { return }
         if let restoreTask { return try await restoreTask.value }
         let task = Task { try await self.restore() }
@@ -137,7 +137,7 @@ public actor AuthorizationFlow {
     /// `resumePendingAuthorization` deliberately leave in place until this point, so a process
     /// killed between redeeming the code and persisting the token still finds an `authorizing`
     /// session to resume.
-    public func completeLogin() async throws {
+    package func completeLogin() async throws {
         try await pendingStore.clear()
         await states.set(.authenticated)
     }
@@ -145,7 +145,7 @@ public actor AuthorizationFlow {
     /// The exchange failed, or the caller walked away from it: the code is spent and the slot
     /// can never complete, so it goes, and the session settles where the authorization was
     /// entered from rather than on a state the grant on disk contradicts.
-    public func abandonLogin() async {
+    package func abandonLogin() async {
         do {
             try await pendingStore.clear()
         } catch {
@@ -157,14 +157,14 @@ public actor AuthorizationFlow {
     }
 
     /// `authenticated -> stepUpRequired`; nothing else moves, the grant is intact.
-    public func enterStepUpRequired() async {
+    package func enterStepUpRequired() async {
         if await states.current == .authenticated { await states.set(.stepUpRequired) }
     }
 
     /// `loggingOut -> unauthenticated`: the local half of logout. Wipes the pending request too,
     /// so a login abandoned mid-browser cannot survive a sign-out and resume into the next
     /// user's session.
-    public func completeLogout() async {
+    package func completeLogout() async {
         do {
             try await pendingStore.clear()
         } catch {
@@ -175,7 +175,7 @@ public actor AuthorizationFlow {
 
     /// Pushes a state the coordinator owns (`refreshing`, `locked`, a return to `authenticated`);
     /// this class performs none of those transitions itself, it only hosts the hub.
-    public func setState(_ next: SessionState) async {
+    package func setState(_ next: SessionState) async {
         await states.set(next)
     }
 
@@ -199,14 +199,14 @@ public actor AuthorizationFlow {
     ///
     /// On success the state stays `authorizing` and the pending request stays stored; the
     /// coordinator completes the login after the token exchange.
-    public func authorize(
+    package func authorize(
         scopes: [String],
         acrValues: [String] = [],
         maxAge: Int? = nil,
         parameters: AuthorizationParameters = .none,
         ephemeralBrowser: Bool = false
     ) async throws -> AuthorizationGrant {
-        try await exclusively {
+        try await exclusivelyOrRefuse {
             try await ensureRestored()
             let metadata = try await discovery.metadata()
             // `code_challenge_methods_supported` present without S256 is a provider this SDK
@@ -247,14 +247,16 @@ public actor AuthorizationFlow {
                 let first = try await browser.authorize(uri, options: options)
                 outcome = try await belongingTo(pending, first: first)
             } catch is CancellationError {
-                // The caller was cancelled, not the authorization. The browser may already be in
-                // the foreground and its redirect may still arrive, so the slot and the
-                // `authorizing` state are left as a process death would leave them and
-                // `resumePendingAuthorization()` can still finish the flow. A slot nothing will
-                // ever answer expires within ten minutes, which is the safe direction to be
-                // wrong in: a stale slot costs one expiry, wiping a live one loses a login the
-                // user already completed.
+                // The caller was cancelled, and on this platform that closed the sheet: the
+                // browser session's cancellation handler dismisses it, so no redirect can
+                // follow. The request and the `authorizing` state go with it; left behind they
+                // would refuse every `login()` for ten minutes (`spec/state-machine.md`, the
+                // iOS note under cancel). Android's Custom Tab outlives its caller and keeps
+                // the slot; that difference is the platform's, not the state machine's. The
+                // state is still remembered as abandoned: a redirect the app hands in later
+                // through other means with that state is discarded rather than failed.
                 rememberAbandoned(pending.state)
+                await abandonLogin()
                 throw CancellationError()
             } catch {
                 // Launching or awaiting the browser failed outright (no browser available, say).
@@ -280,7 +282,7 @@ public actor AuthorizationFlow {
     ///
     /// The `BrowserAuthorizationSession.awaitPendingRedirect()` implementation must return or
     /// throw when its task is cancelled, or the timeout cannot take effect.
-    public func resumePendingAuthorization() async throws -> AuthorizationGrant? {
+    package func resumePendingAuthorization() async throws -> AuthorizationGrant? {
         try await exclusively {
             try await ensureRestored()
             guard let pending = try await pendingStore.load() else {
@@ -338,7 +340,7 @@ public actor AuthorizationFlow {
     /// the page, the browser failed, a wrong `state`), and none of it is thrown, because only the
     /// local teardown is unconditional and the caller wipes regardless. Never ephemeral: the
     /// point is to end the session the shared browser holds.
-    public func endSession(idTokenHint: String?) async throws -> Bool {
+    package func endSession(idTokenHint: String?) async throws -> Bool {
         try await exclusively {
             try await ensureRestored()
             guard let endpoint = try await discovery.metadata().endSessionEndpoint, !endpoint.isEmpty else {
@@ -461,6 +463,19 @@ public actor AuthorizationFlow {
 
     private func exclusively<T: Sendable>(_ body: () async throws -> T) async throws -> T {
         try await acquire()
+        defer { release() }
+        return try await body()
+    }
+
+    /// `authorize` does not queue behind an open browser: a second `login()` while one is
+    /// outstanding is refused under the gate, so two calls in flight (a double tap) cannot both
+    /// read `unauthenticated` and open two sheets (`spec/oauth-sdk-api.md` section 5).
+    private func exclusivelyOrRefuse<T: Sendable>(_ body: () async throws -> T) async throws -> T {
+        try Task.checkCancellation()
+        if gateHeld {
+            throw OAuthError.configuration(.invalidConfiguration(detail: "an authorization is already in progress; observe sessionStates() before asking again"))
+        }
+        gateHeld = true
         defer { release() }
         return try await body()
     }

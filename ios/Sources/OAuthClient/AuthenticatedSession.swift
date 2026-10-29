@@ -4,18 +4,18 @@ import Foundation
 /// Which requests get a token. A token sent to a host the app did not name is a leak, so the
 /// scope is explicit: exactly these origins (`scheme://host[:port]`, the default port applied),
 /// any path. Another port, another scheme or another host is another origin.
-public struct RequestScope: Sendable {
+package struct RequestScope: Sendable {
     private let origins: Set<String>
 
     /// - Throws: `invalidConfiguration` for an empty set (a scope that matches nothing is a
     ///   mistake, not a safe default), for an origin that is not `https` (`http` only on a
     ///   loopback host), or one with a path, query or fragment.
-    public init(origins: Set<String>) throws {
+    package init(origins: Set<String>) throws {
         if origins.isEmpty { throw URLRules.invalid("at least one protected origin is required") }
         self.origins = Set(try origins.map { try URLRules.parseOrigin($0, name: "origins") })
     }
 
-    public func includes(_ url: URL) -> Bool {
+    package func includes(_ url: URL) -> Bool {
         guard let scheme = url.scheme, URLRules.normalizedHost(url.host) != nil else { return false }
         return origins.contains(URLRules.originString(scheme: scheme, host: url.host, port: url.port))
     }
@@ -41,7 +41,7 @@ public final class AuthenticatedSession: Sendable {
     /// `stepUpRequired` so the state machine shows the pause (`spec/state-machine.md`).
     private let onStepUp: (@Sendable () async -> Void)?
 
-    public init(tokens: any AccessTokenSource, scope: RequestScope, dpop: (any DpopProofSource)?, session: URLSession, onStepUp: (@Sendable () async -> Void)? = nil) {
+    package init(tokens: any AccessTokenSource, scope: RequestScope, dpop: (any DpopProofSource)?, session: URLSession, onStepUp: (@Sendable () async -> Void)? = nil) {
         self.tokens = tokens
         self.scope = scope
         self.dpop = dpop

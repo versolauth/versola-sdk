@@ -101,8 +101,8 @@ app shows a different thing.
 
 | Cause | Android | iOS |
 |---|---|---|
-| **User cancel** — user dismissed the browser | Auth Tab: the tab's result is `RESULT_CANCELED`. Custom Tabs fallback: tab closed with no redirect, app returned to foreground (a heuristic: Chrome's minimize button resumes the app too, which is why Auth Tab is preferred) | `ASWebAuthenticationSessionErrorCodeCanceledLogin` **while the app is foreground** |
-| **System cancel** — the OS tore the session down | activity destroyed while backgrounded, no redirect delivered; an Auth Tab result code the SDK does not know (for that cause alone the pending request is **wiped**, since the tab is gone and no redirect can follow) | the same error code **while the app is backgrounded or inactive** |
+| **User cancel** — user dismissed the browser | Auth Tab: the tab's result is `RESULT_CANCELED`. Custom Tabs fallback: tab closed with no redirect, app returned to foreground (a heuristic: Chrome's minimize button resumes the app too, which is why Auth Tab is preferred) | `ASWebAuthenticationSessionErrorCodeCanceledLogin` **while the app is not in the background** (`active` or `inactive`: the session's sheet makes the app `inactive` for as long as it is up, and the completion runs before it is active again) |
+| **System cancel** — the OS tore the session down | activity destroyed while backgrounded, no redirect delivered; an Auth Tab result code the SDK does not know (for that cause alone the pending request is **wiped**, since the tab is gone and no redirect can follow) | the same error code **while the app is in the background**; in practice the OS killing the process, which no completion reports |
 
 iOS reports both through one error code. Pairing it with app lifecycle state at the moment the
 error arrives is the only way to separate them, and it is required, not optional: a system
@@ -110,6 +110,11 @@ cancel should be retried silently, a user cancel must not be.
 
 The pending request is wiped on user cancel and **kept** on system cancel, so the flow can be
 resumed.
+
+iOS, a caller cancelled mid-browser (a SwiftUI `.task` torn down by navigation): the SDK's
+cancellation handler dismisses the `ASWebAuthenticationSession`, so nothing can redirect
+afterwards, and the pending request is **wiped** as for a user cancel. Android keeps it, because
+a Custom Tab outlives its caller and may still redirect; that difference is the platform's.
 
 ### `Authorizing → Authorizing` — process death
 

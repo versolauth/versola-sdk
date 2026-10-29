@@ -1,7 +1,7 @@
 import Foundation
 
 /// Fetches the provider's metadata document.
-public protocol DiscoveryClient: Sendable {
+package protocol DiscoveryClient: Sendable {
     func fetch(issuer: String) async throws -> ProviderMetadata
 }
 
@@ -12,14 +12,14 @@ func wellKnownURL(issuer: String) -> String {
 }
 
 /// Discovery over HTTP: one GET of `<issuer>/.well-known/openid-configuration`.
-public struct HTTPDiscoveryClient: DiscoveryClient {
+package struct HTTPDiscoveryClient: DiscoveryClient {
     private let httpClient: HTTPClient
 
-    public init(httpClient: HTTPClient) {
+    package init(httpClient: HTTPClient) {
         self.httpClient = httpClient
     }
 
-    public func fetch(issuer: String) async throws -> ProviderMetadata {
+    package func fetch(issuer: String) async throws -> ProviderMetadata {
         let location = wellKnownURL(issuer: issuer)
         guard let url = URL(string: location), url.scheme != nil else {
             throw OAuthError.configuration(.invalidConfiguration(detail: "issuer is not a URL: \(issuer)"))
@@ -64,32 +64,37 @@ public struct HTTPDiscoveryClient: DiscoveryClient {
 
 /// Serves a document handed in at construction: for a provider whose discovery endpoint is
 /// missing or wrong, and for tests.
-public struct StaticDiscoveryClient: DiscoveryClient {
+package struct StaticDiscoveryClient: DiscoveryClient {
     private let metadata: ProviderMetadata
 
-    public init(metadata: ProviderMetadata) {
+    package init(metadata: ProviderMetadata) {
         self.metadata = metadata
     }
 
-    public func fetch(issuer: String) async throws -> ProviderMetadata { metadata }
+    package func fetch(issuer: String) async throws -> ProviderMetadata { metadata }
 }
 
 /// A cache that lives as long as the process; the facade supplies a file-backed one.
-public actor MemoryMetadataCache: ProviderMetadataCache {
+package actor MemoryMetadataCache: ProviderMetadataCache {
     private var stored: ProviderMetadata?
+    private var storedAt: Date?
 
-    public init(_ initial: ProviderMetadata? = nil) {
+    package init(_ initial: ProviderMetadata? = nil) {
         stored = initial
+        storedAt = initial == nil ? nil : Date()
     }
 
-    public func load() async throws -> ProviderMetadata? { stored }
-
-    public func save(_ metadata: ProviderMetadata) async throws { stored = metadata }
+    package func load() async throws -> ProviderMetadata? { stored }
+    package func save(_ metadata: ProviderMetadata) async throws {
+        stored = metadata
+        storedAt = Date()
+    }
+    package func savedAt() async throws -> Date? { storedAt }
 }
 
 /// Discovery with its cache in front: at most one fetch per process, however many callers ask at
 /// once, and none at all when the cache already holds a document for this issuer.
-public actor DiscoveryService {
+package actor DiscoveryService {
     private let issuer: String
     private let client: DiscoveryClient
     private let cache: ProviderMetadataCache
@@ -97,14 +102,18 @@ public actor DiscoveryService {
     /// The fetch in flight, so concurrent callers share it rather than each hitting the network.
     /// A caller that is cancelled stops waiting; it does not cancel the fetch the others need.
     private var inFlight: Task<ProviderMetadata, Error>?
+    private let clock: Clock
+    /// `spec/oauth-sdk-api.md` section 4: a cached document older than this is refetched.
+    static let maxAge: TimeInterval = 24 * 3600
 
-    public init(issuer: String, client: DiscoveryClient, cache: ProviderMetadataCache) {
+    package init(issuer: String, client: DiscoveryClient, cache: ProviderMetadataCache, clock: Clock = .system) {
         self.issuer = issuer
         self.client = client
         self.cache = cache
+        self.clock = clock
     }
 
-    public func metadata() async throws -> ProviderMetadata {
+    package func metadata() async throws -> ProviderMetadata {
         if let inMemory { return inMemory }
         if let inFlight { return try await inFlight.value }
         // Created and stored in the same actor turn: the body cannot start before `inFlight` is
@@ -118,16 +127,30 @@ public actor DiscoveryService {
         defer { inFlight = nil }
         // A cache that cannot be read or written is a cache miss, never a failure: the document
         // is one round trip away, and the alternative is bricking login on a corrupt file.
-        if let cached = try? await cache.load() {
+        var fallback: ProviderMetadata?
+        if let cached = try? await cache.load(), (try? cached.validate(configuredIssuer: issuer)) != nil {
             // A document cached for another issuer belongs to a previous configuration of this
-            // app; it is treated as absent rather than trusted.
-            if (try? cached.validate(configuredIssuer: issuer)) != nil {
+            // app and is treated as absent. A fresh one is served as is; one older than a day
+            // is refetched (a rotated token_endpoint or jwks_uri is reachable again without the
+            // app being deleted), and kept as the answer when the refetch fails.
+            let age = (try? await cache.savedAt()).flatMap { $0 }.map { clock.now().timeIntervalSince($0) }
+            if let age, age >= 0, age < Self.maxAge {
                 inMemory = cached
                 return cached
             }
+            fallback = cached
         }
-        let fetched = try await client.fetch(issuer: issuer)
-        try fetched.validate(configuredIssuer: issuer)
+        let fetched: ProviderMetadata
+        do {
+            fetched = try await client.fetch(issuer: issuer)
+            try fetched.validate(configuredIssuer: issuer)
+        } catch {
+            if let fallback {
+                inMemory = fallback
+                return fallback
+            }
+            throw error
+        }
         try? await cache.save(fetched)
         inMemory = fetched
         return fetched

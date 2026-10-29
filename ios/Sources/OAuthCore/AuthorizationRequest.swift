@@ -6,20 +6,20 @@ import Foundation
 /// Everything outside the RFC 3986 unreserved set is percent-encoded, a space as `%20`. Form
 /// encoding proper would send `+`, which is legal but not understood by every server's parser,
 /// and `scope`, `acr_values` and `ui_locales` are space-delimited, so the difference shows.
-public enum FormEncoding {
+package enum FormEncoding {
     /// `name=value` pairs joined with `&`, each side percent-encoded, in the order given.
-    public static func encode(_ pairs: [(String, String)]) -> String {
+    package static func encode(_ pairs: [(String, String)]) -> String {
         pairs.map { "\(percentEncode($0.0))=\(percentEncode($0.1))" }.joined(separator: "&")
     }
 
     /// The encoded pairs as a request body.
-    public static func body(_ pairs: [(String, String)]) -> Data {
+    package static func body(_ pairs: [(String, String)]) -> Data {
         Data(encode(pairs).utf8)
     }
 
     /// `endpoint` with `pairs` as its query, appended with `&` when it already has one (a
     /// provider whose authorization endpoint carries a tenant parameter, say).
-    public static func withQuery(_ endpoint: String, _ pairs: [(String, String)]) throws -> URL {
+    package static func withQuery(_ endpoint: String, _ pairs: [(String, String)]) throws -> URL {
         let separator = endpoint.contains("?") ? "&" : "?"
         let text = pairs.isEmpty ? endpoint : endpoint + separator + encode(pairs)
         guard let url = URL(string: text), url.scheme != nil else {
@@ -50,21 +50,21 @@ public enum FormEncoding {
 ///
 /// PKCE, `state` and `nonce` are not parameters: they are generated here, always. There is no
 /// way for an integrator to supply, disable or weaken them.
-public struct AuthorizationRequest: Sendable {
-    public let configuration: CoreConfiguration
+package struct AuthorizationRequest: Sendable {
+    package let configuration: CoreConfiguration
     /// In the order given, without duplicates: the order is what the provider's consent page
     /// shows, and a `Set` would make the wire format vary from run to run.
-    public let scopes: [String]
-    public let state: String
-    public let nonce: String
-    public let codeVerifier: CodeVerifier
-    public let acrValues: [String]
-    public let maxAge: Int?
+    package let scopes: [String]
+    package let state: String
+    package let nonce: String
+    package let codeVerifier: CodeVerifier
+    package let acrValues: [String]
+    package let maxAge: Int?
     /// RFC 9449 section 10: commits the code to the DPoP key before it exists, so a stolen code
     /// cannot be redeemed against another key. Nil whenever the session is not key-bound.
-    public let dpopJkt: String?
+    package let dpopJkt: String?
     /// What `login()` added beyond scopes, `acr_values` and `max_age`; sent after `dpop_jkt`.
-    public let parameters: AuthorizationParameters
+    package let parameters: AuthorizationParameters
 
     init(
         configuration: CoreConfiguration, scopes: [String], state: String, nonce: String,
@@ -84,7 +84,7 @@ public struct AuthorizationRequest: Sendable {
 
     /// Generates `state`, `nonce` and the verifier from `random` (the platform CSPRNG in
     /// production, 256 bits each).
-    public static func create(
+    package static func create(
         configuration: CoreConfiguration,
         scopes: [String],
         acrValues: [String] = [],
@@ -111,8 +111,8 @@ public struct AuthorizationRequest: Sendable {
     /// query) and a pushed request (the form body, RFC 9126 section 2.1) are built from, so
     /// the two cannot drift. `resource` repeats once per value (RFC 8707 section 2.1) and
     /// `ui_locales` is one space-delimited value (OpenID Connect Core section 3.1.2.1). A
-    /// public client has no credential, so there is nothing here to authenticate with.
-    public func formParameters() -> [(String, String)] {
+    /// package client has no credential, so there is nothing here to authenticate with.
+    package func formParameters() -> [(String, String)] {
         var pairs: [(String, String)] = [
             ("response_type", "code"),
             ("client_id", configuration.clientId),
@@ -140,12 +140,12 @@ public struct AuthorizationRequest: Sendable {
     }
 
     /// The authorization URI: the endpoint with every `formParameters` pair as its query.
-    public func toUri(authorizationEndpoint: String) throws -> URL {
+    package func toUri(authorizationEndpoint: String) throws -> URL {
         try FormEncoding.withQuery(authorizationEndpoint, formParameters())
     }
 
     /// What is persisted before the browser opens.
-    public func toPending(createdAt: Date, issRequired: Bool) -> PendingAuthorizationRequest {
+    package func toPending(createdAt: Date, issRequired: Bool) -> PendingAuthorizationRequest {
         PendingAuthorizationRequest(
             state: state,
             nonce: nonce,

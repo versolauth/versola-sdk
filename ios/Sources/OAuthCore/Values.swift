@@ -64,12 +64,15 @@ public struct IdTokenClaims: Sendable, Equatable, CustomStringConvertible {
     public let authTime: Date?
     public let acr: String?
     public let amr: [String]
-    /// Every other claim, as JSON text per claim, for an app that reads provider-specific ones.
-    public let additional: [String: String]
+    /// `azp`, when the token carries one.
+    public let authorizedParty: String?
+    /// Every claim but `nonce` (spent by validation), the typed ones included, as text: strings
+    /// verbatim, anything else as compact JSON. The same map Android's `all` holds.
+    public let all: [String: String]
 
     public init(
         subject: String, issuer: String, audience: [String], issuedAt: Date, expiresAt: Date,
-        authTime: Date? = nil, acr: String? = nil, amr: [String] = [], additional: [String: String] = [:]
+        authTime: Date? = nil, acr: String? = nil, amr: [String] = [], authorizedParty: String? = nil, all: [String: String] = [:]
     ) {
         self.subject = subject
         self.issuer = issuer
@@ -79,7 +82,8 @@ public struct IdTokenClaims: Sendable, Equatable, CustomStringConvertible {
         self.authTime = authTime
         self.acr = acr
         self.amr = amr
-        self.additional = additional
+        self.authorizedParty = authorizedParty
+        self.all = all
     }
 
     public var description: String { "IdTokenClaims(issuer: \(issuer), subject: redacted)" }
@@ -114,6 +118,10 @@ public struct AuthorizationParameters: Sendable, Equatable {
         "client_id", "redirect_uri", "response_type", "scope", "state", "nonce", "code_challenge",
         "code_challenge_method", "request_uri", "prompt", "max_age", "acr_values", "resource",
         "login_hint", "ui_locales", "dpop_jkt",
+        // Not the SDK's to set, and not an app's either: a secret the type system keeps
+        // unrepresentable, a JAR object that would replace the whole request, a response
+        // mode that moves the response out of the query the validator reads.
+        "client_secret", "request", "response_mode",
     ]
 
     public init(

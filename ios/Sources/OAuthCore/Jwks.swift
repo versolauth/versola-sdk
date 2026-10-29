@@ -1,13 +1,13 @@
 import Foundation
 
 /// Process-local key cache, for tests and for an integrator who wants nothing on disk.
-public actor MemoryJwksCache: JwksCache {
+package actor MemoryJwksCache: JwksCache {
     private var stored: JsonWebKeySet?
 
-    public init() {}
+    package init() {}
 
-    public func load() async throws -> JsonWebKeySet? { stored }
-    public func save(_ set: JsonWebKeySet) async throws { stored = set }
+    package func load() async throws -> JsonWebKeySet? { stored }
+    package func save(_ set: JsonWebKeySet) async throws { stored = set }
 }
 
 /// Fetches and caches the provider's JWK Set (`jwks_uri`).
@@ -20,13 +20,13 @@ public actor MemoryJwksCache: JwksCache {
 /// What it does not do is decide when a refetch is warranted. That is the verifier's call, one
 /// per validation, so that a flood of tokens naming unknown `kid`s costs the provider at most
 /// one request each and never a loop.
-public actor JwksClient {
+package actor JwksClient {
     /// A key set and whether this very call fetched it, which tells the caller that a refetch
     /// would be a repeat.
-    public struct Loaded: Sendable {
-        public let keys: JsonWebKeySet
-        public let fetched: Bool
-        public init(keys: JsonWebKeySet, fetched: Bool) {
+    package struct Loaded: Sendable {
+        package let keys: JsonWebKeySet
+        package let fetched: Bool
+        package init(keys: JsonWebKeySet, fetched: Bool) {
             self.keys = keys
             self.fetched = fetched
         }
@@ -39,7 +39,7 @@ public actor JwksClient {
     /// a burst of validations would each fetch; with it they share one request.
     private var inFlight: Task<JsonWebKeySet, Error>?
 
-    public init(httpClient: HTTPClient, cache: JwksCache = MemoryJwksCache()) {
+    package init(httpClient: HTTPClient, cache: JwksCache = MemoryJwksCache()) {
         self.httpClient = httpClient
         self.cache = cache
     }
@@ -49,7 +49,7 @@ public actor JwksClient {
     /// - Throws: `OAuthError.recoverable(.network)` when the provider cannot be reached or
     ///   answers an error; `OAuthError.configuration(.discoveryMalformed)` when the answer is
     ///   not a JWK Set.
-    public func keys(uri: String, forceRefresh: Bool) async throws -> Loaded {
+    package func keys(uri: String, forceRefresh: Bool) async throws -> Loaded {
         if !forceRefresh {
             if let inMemory { return Loaded(keys: inMemory, fetched: false) }
             // A cache that cannot be read is a miss, never a failure: the document is one

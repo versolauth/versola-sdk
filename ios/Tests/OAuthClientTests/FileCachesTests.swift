@@ -29,7 +29,7 @@ final class FileCachesTests: XCTestCase {
         try await cache.save(metadata)
         let loaded = try await cache.load()
         XCTAssertEqual(loaded, metadata)
-        let savedAt = await cache.savedAt()
+        let savedAt = try await cache.savedAt()
         XCTAssertNotNil(savedAt)
     }
 

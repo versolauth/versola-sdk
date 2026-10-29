@@ -98,7 +98,7 @@ public struct OAuthConfiguration: Sendable {
     /// The scopes as they are sent: the configured set, with `openid` present.
     public let effectiveScopes: Set<String>
     /// What the protocol core is configured with.
-    public let core: CoreConfiguration
+    package let core: CoreConfiguration
     /// Non-nil exactly when the redirect URI is a private-use scheme, which any app on the device
     /// may also register. The client logs it as a warning on every create.
     public let redirectUriWarning: String?

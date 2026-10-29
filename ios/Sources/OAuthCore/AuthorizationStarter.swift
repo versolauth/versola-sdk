@@ -1,11 +1,11 @@
 import Foundation
 
 /// What `AuthorizationStarter.start` hands back: persist `pending`, then open `browserUri`.
-public struct StartedAuthorization: Sendable {
-    public let pending: PendingAuthorizationRequest
-    public let browserUri: URL
+package struct StartedAuthorization: Sendable {
+    package let pending: PendingAuthorizationRequest
+    package let browserUri: URL
 
-    public init(pending: PendingAuthorizationRequest, browserUri: URL) {
+    package init(pending: PendingAuthorizationRequest, browserUri: URL) {
         self.pending = pending
         self.browserUri = browserUri
     }
@@ -18,7 +18,7 @@ public struct StartedAuthorization: Sendable {
 /// `AuthorizationFlow` persists `pending` and then opens `browserUri`, in that order; the
 /// starter decides what the pending request carries, and whatever it needs at the exchange goes
 /// into `PendingAuthorizationRequest.extensions`, which the validator copies onto the grant.
-public protocol AuthorizationStarter: Sendable {
+package protocol AuthorizationStarter: Sendable {
     func start(request: AuthorizationRequest, metadata: ProviderMetadata, now: Date) async throws
         -> StartedAuthorization
 
@@ -30,5 +30,5 @@ public protocol AuthorizationStarter: Sendable {
 }
 
 extension AuthorizationStarter {
-    public var bindsDpopKeyItself: Bool { false }
+    package var bindsDpopKeyItself: Bool { false }
 }

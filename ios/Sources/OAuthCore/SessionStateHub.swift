@@ -7,20 +7,20 @@ import Foundation
 /// live stream, removed when the observer stops listening. Each stream starts with the current
 /// state, which is what lets an app that subscribes late (after a cold start restored
 /// `authorizing`, say) see the true state rather than wait for the next change.
-public actor SessionStateHub {
+package actor SessionStateHub {
     private var state: SessionState
     private var continuations: [UUID: AsyncStream<SessionState>.Continuation] = [:]
 
-    public init(initial: SessionState = .unauthenticated) {
+    package init(initial: SessionState = .unauthenticated) {
         state = initial
     }
 
     /// The state right now.
-    public var current: SessionState { state }
+    package var current: SessionState { state }
 
     /// Publishes `next` to every observer. A repeat of the current state is not re-published:
     /// observers drive UI, and a redundant element would redraw it for nothing.
-    public func set(_ next: SessionState) {
+    package func set(_ next: SessionState) {
         guard next != state else { return }
         state = next
         for continuation in continuations.values { continuation.yield(next) }
@@ -29,7 +29,7 @@ public actor SessionStateHub {
     /// A stream of the current state followed by every change. Unbounded buffering: a slow
     /// observer must not miss a transition, and the machine has seven states, so the backlog is
     /// bounded by how fast the session can change.
-    public func stream() -> AsyncStream<SessionState> {
+    package func stream() -> AsyncStream<SessionState> {
         let id = UUID()
         var captured: AsyncStream<SessionState>.Continuation?
         let stream = AsyncStream<SessionState>(bufferingPolicy: .unbounded) { captured = $0 }

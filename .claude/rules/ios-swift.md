@@ -28,7 +28,8 @@ transcripts, not against each other's code. Security rules are in `security.md`.
   contract. Do not add a `.binaryTarget`. CocoaPods is dormant in `release.yml`.
 - `Package.swift` is `swift-tools-version:6.0` with `.iOS("17.4")` (https callbacks in
   `ASWebAuthenticationSession`, architecture review F11, issue #46 decision 6) and `.macOS("14.4")`
-  so `swift test` on a host compiles the same AuthenticationServices API. Do not change the floor,
+  so `swift test` on a host compiles the same AuthenticationServices API; macOS is a test host,
+  not a supported platform (no CI run, no device tier, no promise). Do not change the floor,
   the tools version or the product list as a side effect; ask first. Adding an availability check
   that quietly narrows the floor is the same change.
 
@@ -63,9 +64,10 @@ transcripts, not against each other's code. Security rules are in `security.md`.
 - `prefersEphemeralWebBrowserSession` is `false` by default, with an opt-in that mirrors Android's
   ephemeral option, so the state machine stays one machine.
 - `canceledLogin` is one error code for two causes. Pair it with app lifecycle state at the moment
-  it arrives: while the app is foreground it is a user cancel (wipe the pending request); while
-  backgrounded or inactive it is a system cancel (keep it, retry silently). This is required, not
-  optional (`spec/state-machine.md`, "cancel").
+  it arrives: while the app is not in the background (`active` or `inactive`: the session's sheet
+  makes the app `inactive`) it is a user cancel (wipe the pending request); while in the background
+  it is a system cancel (keep it, retry silently). A caller cancelled mid-browser dismisses the
+  sheet, so that wipes too. This is required, not optional (`spec/state-machine.md`, "cancel").
 - The presentation anchor comes from the app. Do not reach for `UIApplication.shared.keyWindow` or
   any API that finds a window by itself.
 

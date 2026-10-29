@@ -9,7 +9,7 @@ import Foundation
 ///
 /// Fail closed throughout: nothing here has an off switch, and a claim that is present but of
 /// the wrong type is `.malformed` rather than ignored.
-public struct JwksIdTokenValidator: IdTokenValidator {
+package struct JwksIdTokenValidator: IdTokenValidator {
     private let issuer: @Sendable () async throws -> String
     private let clientId: String
     private let verifier: JwsVerifier
@@ -28,7 +28,7 @@ public struct JwksIdTokenValidator: IdTokenValidator {
     ///   - clockSkewTolerance: how far the device clock may be from the provider's; applied to
     ///     `exp`, `iat` and `auth_time`.
     ///   - clock: the injected time source, never read directly.
-    public init(
+    package init(
         issuer: @escaping @Sendable () async throws -> String,
         clientId: String,
         jwksUri: @escaping @Sendable () async throws -> String?,
@@ -44,7 +44,7 @@ public struct JwksIdTokenValidator: IdTokenValidator {
         self.clock = clock
     }
 
-    public func validate(
+    package func validate(
         idToken: String,
         expectedNonce: String?,
         accessToken: String?,
@@ -162,9 +162,8 @@ public struct JwksIdTokenValidator: IdTokenValidator {
             }
         }
 
-        // The typed claims are above; everything else is for an app reading provider-specific
-        // ones. The nonce is spent by this validation and is not exposed.
-        let typed: Set<String> = ["iss", "sub", "aud", "iat", "exp", "auth_time", "acr", "amr", "nonce"]
+        // Every claim is in the map, typed ones included; the nonce is spent by this
+        // validation and is not exposed.
         return IdTokenClaims(
             subject: sub,
             issuer: iss ?? issuer,
@@ -174,7 +173,8 @@ public struct JwksIdTokenValidator: IdTokenValidator {
             authTime: authTime,
             acr: acr,
             amr: amr ?? [],
-            additional: claims.filter { !typed.contains($0.key) }.mapValues { $0.claimText }
+            authorizedParty: try ClaimReader.text(claims, "azp"),
+            all: claims.filter { $0.key != "nonce" }.mapValues { $0.claimText }
         )
     }
 
@@ -190,14 +190,14 @@ public struct JwksIdTokenValidator: IdTokenValidator {
 /// The claims of an ID token that was validated before it was stored, read back without
 /// re-verifying: after process death a stored grant restores `authenticated`, and the app's
 /// `claims` and the refresh check against the previous `sub` need the values the token carried.
-public enum IdTokenClaimsParser {
+package enum IdTokenClaimsParser {
     /// Nothing here is trusted beyond what the original validation proved, and `exp` of an ID
     /// token says nothing about the session, so a missing time is the epoch rather than a
     /// failure. Lenient on purpose: a store that only holds what the SDK wrote never produces
     /// a token this refuses.
     ///
     /// - Throws: `JwsRejection(.malformed)` when the token no longer parses or has no `sub` or `iss`.
-    public static func parseStored(_ idToken: String) throws -> IdTokenClaims {
+    package static func parseStored(_ idToken: String) throws -> IdTokenClaims {
         let claims = try Jws.parse(idToken).claims
         func text(_ name: String) -> String? {
             if case .string(let value)? = claims[name] { return value }
@@ -219,7 +219,6 @@ public enum IdTokenClaimsParser {
         guard let subject = text("sub"), let issuer = text("iss") else {
             throw JwsRejection(.malformed, "stored ID token has no sub or iss")
         }
-        let typed: Set<String> = ["iss", "sub", "aud", "iat", "exp", "auth_time", "acr", "amr", "nonce"]
         return IdTokenClaims(
             subject: subject,
             issuer: issuer,
@@ -229,7 +228,8 @@ public enum IdTokenClaimsParser {
             authTime: time("auth_time"),
             acr: text("acr"),
             amr: list("amr"),
-            additional: claims.filter { !typed.contains($0.key) }.mapValues { $0.claimText }
+            authorizedParty: try ClaimReader.text(claims, "azp"),
+            all: claims.filter { $0.key != "nonce" }.mapValues { $0.claimText }
         )
     }
 }

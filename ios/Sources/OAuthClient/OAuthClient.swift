@@ -307,13 +307,17 @@ public final class OAuthClient: Sendable {
     }
 
     /// Whether the app is in the foreground at the moment the browser reports a cancel: the
-    /// pairing `spec/state-machine.md`'s cancel table requires.
+    /// pairing `spec/state-machine.md`'s cancel table requires. Foreground in UIKit's own terms,
+    /// `.active` or `.inactive`: the system sheet the session presents makes the app
+    /// `.inactive` for as long as it is up, and the completion runs before the app is active
+    /// again, so "active" alone would read every user cancel as a system one and strand the
+    /// pending request. Only `.background` is the system's doing. macOS has no such state.
     @MainActor
     private static func isForeground() -> Bool {
         #if canImport(UIKit)
-        return UIApplication.shared.applicationState == .active
+        return UIApplication.shared.applicationState != .background
         #else
-        return NSApplication.shared.isActive
+        return true
         #endif
     }
 }

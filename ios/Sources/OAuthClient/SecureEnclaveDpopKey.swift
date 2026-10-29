@@ -22,7 +22,7 @@ public struct KeyAttestation: Sendable, Equatable {
 /// Where a DPoP key's persisted representation lives. Synchronous on purpose: the key actor
 /// must not suspend between "is there one" and "store the new one", or two callers racing
 /// through actor reentrancy would each generate a key.
-public protocol DpopKeyStore: Sendable {
+package protocol DpopKeyStore: Sendable {
     func load() throws -> Data?
     func save(_ data: Data) throws
     func delete() throws
@@ -31,19 +31,19 @@ public protocol DpopKeyStore: Sendable {
 /// The DPoP key's persistent form in the Keychain: service "versola.oauth.<storageKey>",
 /// account "dpop-key", `AfterFirstUnlockThisDeviceOnly` and not synchronizable. Never gated on
 /// user presence: a gated key breaks the background refresh (#1 section 4).
-public struct KeychainDpopKeyStore: DpopKeyStore {
+package struct KeychainDpopKeyStore: DpopKeyStore {
     private let item: KeychainItem
 
-    public init(storageKey: String, accessGroup: String? = nil) {
+    package init(storageKey: String, accessGroup: String? = nil) {
         item = KeychainItem(
             service: KeychainItem.service(forStorageKey: storageKey), account: "dpop-key",
             accessibility: .afterFirstUnlock, accessGroup: accessGroup
         )
     }
 
-    public func load() throws -> Data? { try item.read() }
-    public func save(_ data: Data) throws { try item.write(data) }
-    public func delete() throws { try item.delete() }
+    package func load() throws -> Data? { try item.read() }
+    package func save(_ data: Data) throws { try item.write(data) }
+    package func delete() throws { try item.delete() }
 }
 
 /// An EC P-256 key for DPoP proofs: a `SecureEnclave.P256` key where the device has one, a
@@ -55,7 +55,7 @@ public struct KeychainDpopKeyStore: DpopKeyStore {
 /// (an encrypted blob only this device's enclave can use) or the software key's raw bytes,
 /// each behind a one-byte tag so a load reads back which one it is rather than guessing from
 /// the length. Destroyed on logout.
-public actor SecureEnclaveDpopKey: DpopSigningKey {
+package actor SecureEnclaveDpopKey: DpopSigningKey {
     private enum Tag: UInt8 {
         case secureEnclave = 1
         case software = 2
@@ -97,7 +97,7 @@ public actor SecureEnclaveDpopKey: DpopSigningKey {
     ///   - requireHardware: throw `hardwareBindingUnavailable` instead of falling back to a
     ///     software key (`TokenBinding.dpop` with a hardware requirement).
     ///   - logger: receives the one warning a software-tier key deserves.
-    public init(storageKey: String, accessGroup: String? = nil, requireHardware: Bool = false, logger: (any OAuthLogger)? = nil) {
+    package init(storageKey: String, accessGroup: String? = nil, requireHardware: Bool = false, logger: (any OAuthLogger)? = nil) {
         self.init(
             store: KeychainDpopKeyStore(storageKey: storageKey, accessGroup: accessGroup), requireHardware: requireHardware,
             logger: logger, secureEnclaveAvailable: SecureEnclave.isAvailable
@@ -106,7 +106,7 @@ public actor SecureEnclaveDpopKey: DpopSigningKey {
 
     /// For a store of the caller's own, and for tests, which also decide whether the enclave
     /// counts as present (a Mac host may report one it cannot use unsigned).
-    public init(
+    package init(
         store: any DpopKeyStore, requireHardware: Bool = false, logger: (any OAuthLogger)? = nil,
         secureEnclaveAvailable: Bool = SecureEnclave.isAvailable
     ) {
@@ -117,11 +117,11 @@ public actor SecureEnclaveDpopKey: DpopSigningKey {
     }
 
     /// The tier of the key in use, generating the key first if there is none.
-    public func attestation() async throws -> KeyAttestation { try key().attestation }
+    package func attestation() async throws -> KeyAttestation { try key().attestation }
 
-    /// The public key as a JWK: `kty`, `crv`, `x`, `y` and nothing else (RFC 9449 section 4.1
+    /// The package key as a JWK: `kty`, `crv`, `x`, `y` and nothing else (RFC 9449 section 4.1
     /// puts it in the proof's header, where extra members would be noise and `d` a catastrophe).
-    public func publicJwk() async throws -> JsonWebKey {
+    package func publicJwk() async throws -> JsonWebKey {
         // x9.63 is 0x04 || X || Y, 32 bytes each.
         let point = try key().publicKey.x963Representation
         return JsonWebKey(
@@ -132,14 +132,14 @@ public actor SecureEnclaveDpopKey: DpopSigningKey {
 
     /// `R || S`, 64 bytes: what JWS ES256 wants, and what CryptoKit's `rawRepresentation`
     /// already is, so Android's DER conversion has no counterpart here.
-    public func sign(_ data: Data) async throws -> Data {
+    package func sign(_ data: Data) async throws -> Data {
         try key().signature(for: data).rawRepresentation
     }
 
     /// Deletes the persisted key and forgets it: the next proof is signed by a freshly
     /// generated one with a different thumbprint. Logout does this, so one grant is bound to one
     /// device-installation and the next user of a shared device starts with a key of their own.
-    public func destroy() async throws {
+    package func destroy() async throws {
         try store.delete()
         loaded = nil
     }

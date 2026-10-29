@@ -2,7 +2,7 @@ import Foundation
 
 /// The session as the UserInfo client sees it: a token to present, and a way to get another one
 /// when the provider says the first is no good. The facade backs it with the coordinator.
-public protocol AccessTokenSource: Sendable {
+package protocol AccessTokenSource: Sendable {
     /// A token not within its refresh skew, refreshing once if needed.
     func accessToken() async throws -> AccessToken
     /// Forces a refresh: the provider just rejected the token this source handed out.
@@ -10,7 +10,7 @@ public protocol AccessTokenSource: Sendable {
 }
 
 /// Asks the provider who the access token's user is.
-public protocol UserInfoClient: Sendable {
+package protocol UserInfoClient: Sendable {
     /// - Parameters:
     ///   - tokens: the session: its token is sent as `Bearer`, or as `DPoP` with a proof when it
     ///     is key-bound; a bare 401 spends one renewal and one replay, then is
@@ -33,7 +33,7 @@ public protocol UserInfoClient: Sendable {
 /// No retries here. The caller's budget decides whether a transport failure is tried again
 /// (`spec/retry-policy.md`); the one exception is the DPoP nonce challenge, answered once,
 /// because it is a protocol step and not a retry (RFC 9449 section 9).
-public struct HTTPUserInfoClient: UserInfoClient {
+package struct HTTPUserInfoClient: UserInfoClient {
     private let userinfoEndpoint: @Sendable () async throws -> String?
     private let httpClient: HTTPClient
     private let dpop: DpopProofSource?
@@ -45,7 +45,7 @@ public struct HTTPUserInfoClient: UserInfoClient {
     ///     without a source cannot be presented and is refused as a misconfiguration.
     ///   - verifier: checks a signed (`application/jwt`) response against the provider's JWK
     ///     Set, the same one that verifies ID tokens (`spec/oauth-sdk-api.md` section 11).
-    public init(
+    package init(
         userinfoEndpoint: @escaping @Sendable () async throws -> String?,
         httpClient: HTTPClient,
         dpop: DpopProofSource?,
@@ -63,7 +63,7 @@ public struct HTTPUserInfoClient: UserInfoClient {
         case rejected
     }
 
-    public func fetch(tokens: AccessTokenSource, expectedSubject: String) async throws -> UserInfo {
+    package func fetch(tokens: AccessTokenSource, expectedSubject: String) async throws -> UserInfo {
         guard let endpoint = try await userinfoEndpoint() else {
             throw OAuthError.configuration(.providerUnsupported(capability: "userinfo"))
         }

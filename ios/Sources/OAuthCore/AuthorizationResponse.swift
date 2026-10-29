@@ -5,14 +5,14 @@ import Foundation
 /// The order is normative (`spec/state-machine.md`, `Authorizing -> Authenticated`) and every
 /// step happens before any network call: `state`, then `iss`, then the response's own error,
 /// then the presence of `code`. A failure at any step means nothing reaches the token endpoint.
-public enum AuthorizationResponseValidator {
+package enum AuthorizationResponseValidator {
 
     /// The `state` a redirect carries, or nil when it carries none.
     ///
     /// Only for telling which of this process's own authorizations a redirect answers. It
     /// decides nothing: a redirect that reaches `validate` is still compared against the
     /// pending request in constant time, an absent `state` included.
-    public static func stateOf(_ redirect: URL) -> String? {
+    package static func stateOf(_ redirect: URL) -> String? {
         parseQuery(redirect)["state"]
     }
 
@@ -20,7 +20,7 @@ public enum AuthorizationResponseValidator {
     /// percent escape stays as typed instead of trapping or failing, a repeated name keeps its
     /// first value, a name without `=` has an empty value. Query only: the SDK requests
     /// `response_type=code`, whose default response mode is `query`.
-    public static func parseQuery(_ url: URL) -> [String: String] {
+    package static func parseQuery(_ url: URL) -> [String: String] {
         var result: [String: String] = [:]
         for (name, value) in queryPairs(url) where result[name] == nil {
             result[name] = value
@@ -30,7 +30,7 @@ public enum AuthorizationResponseValidator {
 
     /// - Throws: `configuration(.stateMismatch)`, `.issuerMismatch`, `.malformedAuthorizationResponse`,
     ///   `.authorizationRejected`, or `reauthenticate(...)` for the provider's own refusals.
-    public static func validate(
+    package static func validate(
         redirect: URL,
         pending: PendingAuthorizationRequest,
         issuer: String,

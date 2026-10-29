@@ -123,12 +123,12 @@ struct KeychainItem: Sendable {
 /// The refresh token, the raw ID token and the rotation slot in the Keychain. Three items under
 /// one service, `AfterFirstUnlockThisDeviceOnly` (or `WhenUnlockedThisDeviceOnly` under
 /// `UnlockPolicy.onAppUnlock`), never synchronizable.
-public actor KeychainCredentialStore: CredentialStore {
+package actor KeychainCredentialStore: CredentialStore {
     private let refreshItem: KeychainItem
     private let idTokenItem: KeychainItem
     private let rotationItem: KeychainItem
 
-    public init(storageKey: String, unlockPolicy: UnlockPolicy, accessGroup: String? = nil) {
+    package init(storageKey: String, unlockPolicy: UnlockPolicy, accessGroup: String? = nil) {
         let service = KeychainItem.service(forStorageKey: storageKey)
         let accessibility = KeychainAccessibility(unlockPolicy)
         refreshItem = KeychainItem(service: service, account: "refresh-token", accessibility: accessibility, accessGroup: accessGroup)
@@ -137,15 +137,15 @@ public actor KeychainCredentialStore: CredentialStore {
     }
 
     /// Attributes only: a cold start must not turn into an unlock prompt under `onAppUnlock`.
-    public func hasGrant() async throws -> Bool { try refreshItem.exists() }
+    package func hasGrant() async throws -> Bool { try refreshItem.exists() }
 
-    public func refreshToken() async throws -> String? { try refreshItem.read().flatMap { String(data: $0, encoding: .utf8) } }
+    package func refreshToken() async throws -> String? { try refreshItem.read().flatMap { String(data: $0, encoding: .utf8) } }
 
-    public func rawIdToken() async throws -> String? { try idTokenItem.read().flatMap { String(data: $0, encoding: .utf8) } }
+    package func rawIdToken() async throws -> String? { try idTokenItem.read().flatMap { String(data: $0, encoding: .utf8) } }
 
     /// The refresh token first, then the ID token: if the process dies between the two the
     /// grant is the new one, which is the part that cannot be recovered.
-    public func save(refreshToken: String, rawIdToken: String?) async throws {
+    package func save(refreshToken: String, rawIdToken: String?) async throws {
         try refreshItem.write(Data(refreshToken.utf8))
         if let rawIdToken {
             try idTokenItem.write(Data(rawIdToken.utf8))
@@ -155,7 +155,7 @@ public actor KeychainCredentialStore: CredentialStore {
         }
     }
 
-    public func savePendingRotation(_ idempotencyKey: String?) async throws {
+    package func savePendingRotation(_ idempotencyKey: String?) async throws {
         if let idempotencyKey {
             try rotationItem.write(Data(idempotencyKey.utf8))
         } else {
@@ -163,9 +163,9 @@ public actor KeychainCredentialStore: CredentialStore {
         }
     }
 
-    public func pendingRotation() async throws -> String? { try rotationItem.read().flatMap { String(data: $0, encoding: .utf8) } }
+    package func pendingRotation() async throws -> String? { try rotationItem.read().flatMap { String(data: $0, encoding: .utf8) } }
 
-    public func clear() async throws {
+    package func clear() async throws {
         try refreshItem.delete()
         try idTokenItem.delete()
         try rotationItem.delete()
@@ -176,21 +176,21 @@ public actor KeychainCredentialStore: CredentialStore {
 
 /// The pending authorization request in the Keychain, as JSON (the code verifier is in it, so
 /// it is a credential and gets the same class as the refresh token).
-public actor KeychainPendingAuthorizationStore: PendingAuthorizationStore {
+package actor KeychainPendingAuthorizationStore: PendingAuthorizationStore {
     private let item: KeychainItem
 
-    public init(storageKey: String, unlockPolicy: UnlockPolicy, accessGroup: String? = nil) {
+    package init(storageKey: String, unlockPolicy: UnlockPolicy, accessGroup: String? = nil) {
         item = KeychainItem(
             service: KeychainItem.service(forStorageKey: storageKey), account: "pending-authorization",
             accessibility: KeychainAccessibility(unlockPolicy), accessGroup: accessGroup
         )
     }
 
-    public func save(_ request: PendingAuthorizationRequest) async throws {
+    package func save(_ request: PendingAuthorizationRequest) async throws {
         try item.write(try PendingRequestCoding.encode(request))
     }
 
-    public func load() async throws -> PendingAuthorizationRequest? {
+    package func load() async throws -> PendingAuthorizationRequest? {
         guard let data = try item.read() else { return nil }
         // A record this version cannot read is no record: the flow starts over rather than
         // failing every launch. It is removed so the next save is not an update of garbage.
@@ -201,7 +201,7 @@ public actor KeychainPendingAuthorizationStore: PendingAuthorizationStore {
         return request
     }
 
-    public func clear() async throws { try item.delete() }
+    package func clear() async throws { try item.delete() }
 }
 
 enum PendingRequestCoding {
@@ -222,26 +222,26 @@ enum PendingRequestCoding {
 
 /// A `CredentialStore` in memory. NEVER SECURE and never shipped in an app: nothing is encrypted,
 /// nothing survives the process. It exists for unit tests and for the conformance driver.
-public actor InMemoryCredentialStore: CredentialStore {
+package actor InMemoryCredentialStore: CredentialStore {
     private var refresh: String?
     private var idToken: String?
     private var rotation: String?
 
-    public init() {}
+    package init() {}
 
-    public func hasGrant() async throws -> Bool { refresh != nil }
-    public func refreshToken() async throws -> String? { refresh }
-    public func rawIdToken() async throws -> String? { idToken }
+    package func hasGrant() async throws -> Bool { refresh != nil }
+    package func refreshToken() async throws -> String? { refresh }
+    package func rawIdToken() async throws -> String? { idToken }
 
-    public func save(refreshToken: String, rawIdToken: String?) async throws {
+    package func save(refreshToken: String, rawIdToken: String?) async throws {
         refresh = refreshToken
         idToken = rawIdToken
     }
 
-    public func savePendingRotation(_ idempotencyKey: String?) async throws { rotation = idempotencyKey }
-    public func pendingRotation() async throws -> String? { rotation }
+    package func savePendingRotation(_ idempotencyKey: String?) async throws { rotation = idempotencyKey }
+    package func pendingRotation() async throws -> String? { rotation }
 
-    public func clear() async throws {
+    package func clear() async throws {
         refresh = nil
         idToken = nil
         rotation = nil
@@ -250,12 +250,12 @@ public actor InMemoryCredentialStore: CredentialStore {
 
 /// A `PendingAuthorizationStore` in memory. NEVER SECURE and never shipped in an app: see
 /// `InMemoryCredentialStore`.
-public actor InMemoryPendingAuthorizationStore: PendingAuthorizationStore {
+package actor InMemoryPendingAuthorizationStore: PendingAuthorizationStore {
     private var request: PendingAuthorizationRequest?
 
-    public init() {}
+    package init() {}
 
-    public func save(_ request: PendingAuthorizationRequest) async throws { self.request = request }
-    public func load() async throws -> PendingAuthorizationRequest? { request }
-    public func clear() async throws { request = nil }
+    package func save(_ request: PendingAuthorizationRequest) async throws { self.request = request }
+    package func load() async throws -> PendingAuthorizationRequest? { request }
+    package func clear() async throws { request = nil }
 }

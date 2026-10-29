@@ -52,14 +52,14 @@ public struct RetryPolicy: Sendable, Equatable {
 extension RetryPolicy {
     /// A budget for one operation: retries `recoverable(.network)` failures only, per origin
     /// and in total, with jittered exponential backoff, within the wall-clock budget.
-    public func newBudget(clock: Clock = .system, random: RandomSource = SystemRandomSource(), sleep: @escaping @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }) -> RetryBudget {
+    package func newBudget(clock: Clock = .system, random: RandomSource = SystemRandomSource(), sleep: @escaping @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }) -> RetryBudget {
         RetryBudget(policy: self, clock: clock, random: random, sleep: sleep)
     }
 }
 
 /// The retries of one operation (`spec/retry-policy.md`). Everything but a network failure
 /// is final: a nonce loop, a locked store and every other category pass through untouched.
-public actor RetryBudget {
+package actor RetryBudget {
     private let policy: RetryPolicy
     private let clock: Clock
     private let random: RandomSource
@@ -77,7 +77,7 @@ public actor RetryBudget {
         self.startedAt = clock.now()
     }
 
-    public func execute<T: Sendable>(origin: String, _ call: @Sendable () async throws -> T) async throws -> T {
+    package func execute<T: Sendable>(origin: String, _ call: @Sendable () async throws -> T) async throws -> T {
         while true {
             try refuseIfSpent(origin)
             attemptsPerOrigin[origin, default: 0] += 1

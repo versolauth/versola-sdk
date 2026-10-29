@@ -13,15 +13,15 @@ public protocol OAuthLogger: Sendable {
 
 /// One HTTP exchange, as the core sees it: the facade hands in a `URLSession`-backed
 /// implementation, tests a stub. Redirects are never followed for the SDK's own requests.
-public struct HTTPRequest: Sendable, Equatable {
-    public enum Method: String, Sendable { case get = "GET", post = "POST" }
-    public var method: Method
-    public var url: URL
-    public var headers: [String: String]
+package struct HTTPRequest: Sendable, Equatable {
+    package enum Method: String, Sendable { case get = "GET", post = "POST" }
+    package var method: Method
+    package var url: URL
+    package var headers: [String: String]
     /// `application/x-www-form-urlencoded` when set together with the matching header.
-    public var body: Data?
+    package var body: Data?
 
-    public init(method: Method, url: URL, headers: [String: String] = [:], body: Data? = nil) {
+    package init(method: Method, url: URL, headers: [String: String] = [:], body: Data? = nil) {
         self.method = method
         self.url = url
         self.headers = headers
@@ -29,29 +29,29 @@ public struct HTTPRequest: Sendable, Equatable {
     }
 }
 
-public struct HTTPResponse: Sendable {
-    public var statusCode: Int
+package struct HTTPResponse: Sendable {
+    package var statusCode: Int
     /// Header names lower-cased, so lookups are case-insensitive as HTTP is.
-    public var headers: [String: String]
-    public var body: Data
+    package var headers: [String: String]
+    package var body: Data
 
-    public init(statusCode: Int, headers: [String: String] = [:], body: Data = Data()) {
+    package init(statusCode: Int, headers: [String: String] = [:], body: Data = Data()) {
         self.statusCode = statusCode
         self.headers = Dictionary(uniqueKeysWithValues: headers.map { ($0.key.lowercased(), $0.value) })
         self.body = body
     }
 
-    public func header(_ name: String) -> String? { headers[name.lowercased()] }
+    package func header(_ name: String) -> String? { headers[name.lowercased()] }
 }
 
-public protocol HTTPClient: Sendable {
+package protocol HTTPClient: Sendable {
     /// Throws only on a transport failure (no connection, timeout, TLS); a non-2xx answer is
     /// a returned response, which the caller interprets.
     func send(_ request: HTTPRequest) async throws -> HTTPResponse
 }
 
 /// How the browser leg ended.
-public enum BrowserOutcome: Sendable, Equatable {
+package enum BrowserOutcome: Sendable, Equatable {
     /// The redirect URI was delivered back to the app. Not yet validated.
     case redirect(URL)
     /// The user dismissed the browser while the app was in the foreground: the pending request
@@ -63,13 +63,13 @@ public enum BrowserOutcome: Sendable, Equatable {
 }
 
 /// What one browser leg may ask beyond the URI (`spec/oauth-sdk-api.md` section 6).
-public struct BrowserSessionOptions: Sendable, Equatable {
+package struct BrowserSessionOptions: Sendable, Equatable {
     /// `prefersEphemeralWebBrowserSession`. Off by default: it breaks passkeys and SSO.
-    public var ephemeral: Bool
+    package var ephemeral: Bool
     /// The URI the provider will redirect to; what `ASWebAuthenticationSession` matches on.
-    public var redirectURI: URL?
+    package var redirectURI: URL?
 
-    public init(ephemeral: Bool = false, redirectURI: URL? = nil) {
+    package init(ephemeral: Bool = false, redirectURI: URL? = nil) {
         self.ephemeral = ephemeral
         self.redirectURI = redirectURI
     }
@@ -77,7 +77,7 @@ public struct BrowserSessionOptions: Sendable, Equatable {
 
 /// The system browser leg. Takes and returns URIs and nothing else: no implementation can
 /// accept a web view, which is what keeps one unrepresentable (RFC 8252, #1 §4).
-public protocol BrowserAuthorizationSession: Sendable {
+package protocol BrowserAuthorizationSession: Sendable {
     func authorize(_ uri: URL, options: BrowserSessionOptions) async throws -> BrowserOutcome
     /// A redirect for an authorization this process did not start (the app was killed with the
     /// browser open). Opens nothing; the facade's `handleRedirect` feeds it.
@@ -86,7 +86,7 @@ public protocol BrowserAuthorizationSession: Sendable {
 
 /// The durable half of a session (`spec/state-machine.md`, persistence summary): the refresh
 /// token, the raw ID token and the rotation slot, wrapped by the platform's secure store.
-public protocol CredentialStore: Sendable {
+package protocol CredentialStore: Sendable {
     /// Whether a refresh grant is stored, answered without unlocking anything.
     func hasGrant() async throws -> Bool
     func refreshToken() async throws -> String?
@@ -103,26 +103,29 @@ public protocol CredentialStore: Sendable {
 
 /// The pending authorization request, persisted before the browser opens so a process death
 /// mid-browser can resume (scenario 12).
-public protocol PendingAuthorizationStore: Sendable {
+package protocol PendingAuthorizationStore: Sendable {
     func save(_ request: PendingAuthorizationRequest) async throws
     func load() async throws -> PendingAuthorizationRequest?
     func clear() async throws
 }
 
 /// The discovered metadata, cached across restarts and logout.
-public protocol ProviderMetadataCache: Sendable {
+package protocol ProviderMetadataCache: Sendable {
     func load() async throws -> ProviderMetadata?
     func save(_ metadata: ProviderMetadata) async throws
+    /// When the cached document was saved, for the 24-hour refetch of
+    /// `spec/oauth-sdk-api.md` section 4; nil when unknown, which counts as stale.
+    func savedAt() async throws -> Date?
 }
 
-/// The provider's key set, cached unencrypted (public keys).
-public protocol JwksCache: Sendable {
+/// The provider's key set, cached unencrypted (package keys).
+package protocol JwksCache: Sendable {
     func load() async throws -> JsonWebKeySet?
     func save(_ set: JsonWebKeySet) async throws
 }
 
 /// Mints DPoP proofs (RFC 9449) for a key the facade owns; the core never sees the key.
-public protocol DpopProofSource: Sendable {
+package protocol DpopProofSource: Sendable {
     /// The key's JWK thumbprint, for `dpop_jkt`.
     func thumbprint() async throws -> String
     /// A proof for `method` on `url`, carrying `nonce` and the hash of `accessToken` when given.
@@ -134,7 +137,7 @@ public protocol DpopProofSource: Sendable {
 }
 
 /// Validates an ID token before anything is persisted (`spec/oauth-sdk-api.md` section 11).
-public protocol IdTokenValidator: Sendable {
+package protocol IdTokenValidator: Sendable {
     /// - Parameters:
     ///   - expectedNonce: the nonce the request carried; nil on a refresh.
     ///   - previous: the claims of the session being refreshed, whose `sub` must not change.
@@ -150,21 +153,21 @@ public protocol IdTokenValidator: Sendable {
 }
 
 /// Time and randomness are injected so tests need no sleeps and no luck (`testing.md`).
-public struct Clock: Sendable {
-    public var now: @Sendable () -> Date
-    public init(now: @escaping @Sendable () -> Date) { self.now = now }
-    public static let system = Clock(now: { Date() })
+package struct Clock: Sendable {
+    package var now: @Sendable () -> Date
+    package init(now: @escaping @Sendable () -> Date) { self.now = now }
+    package static let system = Clock(now: { Date() })
 }
 
-public protocol RandomSource: Sendable {
+package protocol RandomSource: Sendable {
     /// `count` cryptographically random bytes.
     func bytes(_ count: Int) -> [UInt8]
 }
 
 /// The platform CSPRNG (`SystemRandomNumberGenerator`): `state`, `nonce`, verifiers and `jti`.
-public struct SystemRandomSource: RandomSource {
-    public init() {}
-    public func bytes(_ count: Int) -> [UInt8] {
+package struct SystemRandomSource: RandomSource {
+    package init() {}
+    package func bytes(_ count: Int) -> [UInt8] {
         var generator = SystemRandomNumberGenerator()
         return (0..<count).map { _ in UInt8.random(in: .min ... .max, using: &generator) }
     }
