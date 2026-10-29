@@ -84,6 +84,21 @@ class Scenario24GenericHappyPathTest : ProviderConformance() {
             assertEquals("refresh_token", revoke.form["token_type_hint"])
             assertEquals(Provider.CLIENT_ID, revoke.form["client_id"])
             assertNoSecretOnTheWire(revoke)
+            // RFC 7009's observable for a public client: the revoked refresh token no longer
+            // buys a token. The value is the one the token response carried.
+            val refreshToken = token.responseJson!!["refresh_token"]!!.toString().trim('"')
+            val replay = okhttp3.OkHttpClient().newCall(
+                Request.Builder().url(metadata.tokenEndpoint).post(
+                    okhttp3.FormBody.Builder()
+                        .add("grant_type", "refresh_token")
+                        .add("refresh_token", refreshToken)
+                        .add("client_id", Provider.CLIENT_ID)
+                        .build(),
+                ).build(),
+            ).execute()
+            val replayBody = replay.text()
+            assertEquals(replayBody, 400, replay.code)
+            assertTrue(replayBody, replayBody.contains("invalid_grant"))
         }
         if (metadata.endSessionEndpoint != null) {
             val endSession = browser.opened.last()
