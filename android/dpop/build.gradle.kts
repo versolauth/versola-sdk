@@ -38,21 +38,21 @@ dependencies {
     // Claims are built as a JsonObject rather than concatenated, so escaping is the library's
     // problem. Same artifact and pin as :core; the serialization compiler plugin is not
     // applied because nothing here is @Serializable.
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
 
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.12.0")
     // Test-only, never shipped. #6 requires proofs be verified byte-equivalent against the
     // server repo's DpopProver, and the honest way to do that from here is to verify them
     // with the same library the server verifies with — a hand-rolled test verifier would
     // share this module's own assumptions and prove much less.
-    testImplementation("com.nimbusds:nimbus-jose-jwt:10.6")
+    testImplementation("com.nimbusds:nimbus-jose-jwt:10.10")
 
     // Instrumented only. Same coroutines-test pin as the unit tests; the runner and the
     // AndroidX JUnit extension are what `connectedDebugAndroidTest` needs to find and run them.
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
-    androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
+    androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.12.0")
 }
 
 apiValidation {

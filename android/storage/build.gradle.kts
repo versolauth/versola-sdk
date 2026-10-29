@@ -47,7 +47,7 @@ dependencies {
     // the pending slot did not: several fields, written from several places, on one
     // consistent view. implementation, not api — no DataStore type is on this module's ABI,
     // so a consumer never has to know it is there.
-    implementation("androidx.datastore:datastore:1.2.1")
+    implementation("androidx.datastore:datastore:1.3.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
