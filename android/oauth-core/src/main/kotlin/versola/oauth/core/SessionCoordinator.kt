@@ -59,6 +59,22 @@ public class SessionCoordinator(
      */
     private val onCredentialsWiped: suspend () -> Unit = {},
     private val logger: VersolaLogger? = null,
+    /**
+     * Whether a session needs a refresh token. [RefreshTokenPolicy.Required] is the Versola
+     * facade's model: `offline_access` is asked for and an exchange without a refresh token
+     * is refused. [RefreshTokenPolicy.Optional] is the generic facade's
+     * (`spec/oauth-sdk-api.md` section 8): nothing is added to the scopes, and a session
+     * without a refresh token lives in memory until its access token expires, then ends in
+     * `Reauthenticate(SessionExpired)`.
+     */
+    private val refreshTokens: RefreshTokenPolicy = RefreshTokenPolicy.Required,
+    /**
+     * Validates the ID token before the token response is persisted, at login and on a
+     * refresh that returns one (OpenID Connect Core 3.1.3.7, 12.2). Null validates nothing,
+     * which is the Versola facade's state until architecture review F5 is scheduled; the
+     * generic facade always passes one.
+     */
+    private val idTokenValidator: IdTokenValidator? = null,
 ) : AccessTokenSource {
 
     init {
@@ -94,6 +110,24 @@ public class SessionCoordinator(
     private class Cached(val response: TokenResponse, val receivedAt: Long)
 
     /**
+     * The claims of the last validated ID token, memory only (`spec/state-machine.md`'s
+     * persistence table): null until a login validated one, after a sign-out, and always
+     * when no [idTokenValidator] was given.
+     */
+    @Volatile
+    public var claims: IdTokenClaims? = null
+        private set
+
+    /**
+     * A session the provider issued no refresh token for, held in memory only. Its ID token
+     * is kept here for `id_token_hint`, since nothing was written to the credential store.
+     */
+    @Volatile
+    private var memorySession: MemorySession? = null
+
+    private class MemorySession(val rawIdToken: String?)
+
+    /**
      * The most recently issued token response, held in memory only — `spec/state-machine.md`'s
      * persistence summary keeps the access token out of storage because it is short-lived and
      * re-derivable. Null before this process's first [login] or [refresh].
@@ -118,6 +152,7 @@ public class SessionCoordinator(
     override suspend fun accessToken(): AccessToken {
         val cached = cachedAccessToken
         if (cached != null && cached.usable()) return AccessToken.of(cached.response)
+        if (memorySession != null) expireMemorySession()
         // The entry judged stale is handed on, because this verdict was taken outside the
         // lock that hands out a refresh flight and a flight can finish before this caller
         // reaches it. [refresh] re-reads the cache under that lock and rotates only if it
@@ -129,7 +164,27 @@ public class SessionCoordinator(
     private fun Cached.usable(): Boolean =
         elapsedMillis() - receivedAt < RefreshSkew.usableForMillis(response)
 
-    override suspend fun renewAccessToken(): AccessToken = AccessToken.of(refresh())
+    override suspend fun renewAccessToken(): AccessToken {
+        if (memorySession != null) expireMemorySession()
+        return AccessToken.of(refresh())
+    }
+
+    /**
+     * `Authenticated → Unauthenticated` for a session without a refresh token: there is
+     * nothing to spend, so no token request is made and the browser is not opened; the ID
+     * token and claims go, the state says so, and the caller is told to sign in again.
+     */
+    private suspend fun expireMemorySession(): Nothing {
+        refreshFlight.mutex.withLock {
+            epoch.incrementAndGet()
+            cachedAccessToken = null
+            memorySession = null
+            claims = null
+        }
+        logger?.warn("the access token expired and the provider issued no refresh token; the session is over")
+        flow.completeLogout()
+        throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.SessionExpired)
+    }
 
     /**
      * `login()`, in full: [AuthorizationFlow.authorize] for the browser leg, the code exchange,
@@ -147,13 +202,18 @@ public class SessionCoordinator(
         scopes: Set<String>,
         acrValues: List<String> = emptyList(),
         maxAge: Long? = null,
+        parameters: AuthorizationParameters = AuthorizationParameters(),
     ): TokenResponse {
         // OpenID Connect Core §11: a refresh token is issued for a grant that asked for
         // `offline_access`, and auth issues none otherwise. This session model has nothing to
         // hold without one — the exchange below refuses a response that omits it — so the
         // scope is asked for here rather than left for every integrator to discover from a
         // failed first login. An app that listed it already is unchanged.
-        val grant = flow.authorize(scopes + OFFLINE_ACCESS, acrValues, maxAge)
+        // Under [RefreshTokenPolicy.Optional] the scopes go as given: the generic facade adds
+        // nothing silently, and `providers.md` says per provider which scope buys a refresh
+        // token.
+        val requested = if (refreshTokens == RefreshTokenPolicy.Required) scopes + OFFLINE_ACCESS else scopes
+        val grant = flow.authorize(requested, acrValues, maxAge, parameters)
         // One attempt, with no retry budget around it. An authorization code is single-use
         // and the token endpoint offers no idempotency for `authorization_code` —
         // `Idempotency-Key` is honoured for the refresh family alone (`OAuthTokenService`) —
@@ -163,15 +223,26 @@ public class SessionCoordinator(
         // draws exactly this line: a retry is only safe on an operation the server can
         // recognise as a repeat. The nonce and clock-skew retries inside [TokenClient] still
         // apply — those answer a challenge raised before the code was redeemed.
+        var validated: IdTokenClaims? = null
         val response = try {
             val issued = tokenClient.exchange(grant)
-            // RFC 6749 permits an authorization_code response to omit refresh_token, but the
-            // SDK's whole session model has nothing to hold on to without one: there is no
-            // prior value to fall back to the way a refresh's BoundRenewal omission falls
-            // back to the one already on disk.
-            issued.refreshToken ?: throw VersolaError.Configuration(
-                VersolaError.Configuration.Detail.TokenResponseMalformed("refresh_token is missing"),
-            )
+            // Validated before anything is persisted (`spec/oauth-sdk-api.md` section 11): a
+            // rejected ID token leaves the store exactly as it was.
+            validated = idTokenValidator?.let { validator ->
+                val idToken = issued.idToken ?: throw VersolaError.Configuration(
+                    VersolaError.Configuration.Detail.IdTokenRejected(IdTokenRejection.Malformed),
+                )
+                validator.validate(idToken, expectedNonce = grant.nonce, accessToken = issued.accessToken, maxAge = maxAge, previous = null)
+            }
+            if (refreshTokens == RefreshTokenPolicy.Required) {
+                // RFC 6749 permits an authorization_code response to omit refresh_token, but
+                // this session model has nothing to hold on to without one: there is no prior
+                // value to fall back to the way a refresh's BoundRenewal omission falls back
+                // to the one already on disk.
+                issued.refreshToken ?: throw VersolaError.Configuration(
+                    VersolaError.Configuration.Detail.TokenResponseMalformed("refresh_token is missing"),
+                )
+            }
             issued
         } catch (e: CancellationException) {
             // The caller walked away mid-exchange. The response may still arrive at a server
@@ -183,7 +254,19 @@ public class SessionCoordinator(
             flow.abandonLogin()
             throw e
         }
-        credentialStore.save(checkNotNull(response.refreshToken), response.idToken)
+        val refreshToken = response.refreshToken
+        if (refreshToken != null) {
+            credentialStore.save(refreshToken, response.idToken)
+            memorySession = null
+        } else {
+            // Nothing to persist: the session is the access token in memory and ends with it
+            // (`spec/state-machine.md`, "no refresh token"). Said once, here, so an
+            // integrator who expected a refresh token learns it from the log rather than
+            // from a sign-in an hour later.
+            memorySession = MemorySession(response.idToken)
+            logger?.warn("the provider issued no refresh token; the session lasts as long as the access token")
+        }
+        claims = validated
         flow.completeLogin()
         cachedAccessToken = Cached(response, elapsedMillis())
         return response
@@ -383,11 +466,19 @@ public class SessionCoordinator(
                 // `spec/state-machine.md`'s `Locked` section states for every other caller.
                 credentialStore.useRefreshToken { tokenClient.refresh(it, idempotencyKey) } ?: noGrantStored()
             }
+            // An ID token on a refresh response is validated with the login rules minus the
+            // nonce, and against the claims it replaces (OpenID Connect Core 12.2), before the
+            // response is persisted. A refusal is a `Configuration` fault handled below: the
+            // grant stays, nothing from this response is kept.
+            val refreshedClaims = idTokenValidator?.let { validator ->
+                issued.idToken?.let { validator.validate(it, expectedNonce = null, accessToken = issued.accessToken, maxAge = null, previous = claims) }
+            }
             refreshFlight.mutex.withLock {
                 // The grant was wiped while this request was out — a `logout()`, or another
                 // caller's `invalid_grant`. The server's answer is for a session that has
                 // ended, and persisting it would resurrect the session; the wipe's state stands.
                 if (epoch.get() != startedIn) throw WipedMeanwhile()
+                refreshedClaims?.let { claims = it }
                 // Step 2. Persisted before returning to any caller — including the one whose
                 // call triggered this refresh. `BoundRenewal` echoes the same `refresh_token`,
                 // which is stored again as it was; a response omitting it leaves the stored
@@ -483,41 +574,37 @@ public class SessionCoordinator(
      * Returns whether auth acknowledged the end of its session, so an app that cares can tell
      * "signed out everywhere" from "signed out here". Most will not look.
      */
-    public suspend fun logout(): Boolean {
+    public suspend fun logout(revoke: Boolean = true, endSession: Boolean = true): LogoutOutcome {
         flow.sessionState.first()
         flow.setState(SessionState.LoggingOut)
         var serverSessionEnded = false
+        var revoked = false
         try {
-            // A refresh already in flight is let finish first, so the revocation below
-            // revokes the generation the server will actually hold afterwards rather than
-            // racing it. Its outcome is of no interest here; the epoch fence inside it is
-            // what guarantees nothing it persists survives the wipe below regardless.
             refreshFlight.mutex.withLock { refreshFlight.pending }?.let { flight -> runCatching { flight.await() } }
-            revokeQuietly()
-            // The hint is read, not required: under `OnAppUnlock` an elapsed window makes it
-            // unreadable, and the server then shows its own confirmation page rather than
-            // the SDK refusing to sign out at all.
-            val hint = try {
-                credentialStore.rawIdToken()
-            } catch (e: VersolaError) {
-                logger?.warn("logout: id_token_hint unavailable (${e.message}); ending the session without it")
-                null
+            if (revoke) revoked = revokeQuietly()
+            if (endSession) {
+                val hint = try {
+                    memorySession?.rawIdToken ?: credentialStore.rawIdToken()
+                } catch (e: VersolaError) {
+                    logger?.warn("logout: id_token_hint unavailable (${e.message}); ending the session without it")
+                    null
+                }
+                serverSessionEnded = flow.endSession(hint)
             }
-            serverSessionEnded = flow.endSession(hint)
         } finally {
             withContext(NonCancellable) { wipe() }
         }
-        return serverSessionEnded
+        return LogoutOutcome(sessionEnded = serverSessionEnded, tokenRevoked = revoked)
     }
 
-    private suspend fun revokeQuietly() {
-        try {
-            credentialStore.useRefreshToken { tokenClient.revoke(it) }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: VersolaError) {
-            logger?.warn("logout: revocation failed (${e.message}); the grant dies at expiry instead")
-        }
+    /** True when the provider took the revocation (RFC 7009: taken, not necessarily live). */
+    private suspend fun revokeQuietly(): Boolean = try {
+        credentialStore.useRefreshToken { tokenClient.revoke(it) } != null
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: VersolaError) {
+        logger?.warn("logout: revocation failed (${e.message}); the grant dies at expiry instead")
+        false
     }
 
     /**
@@ -530,6 +617,8 @@ public class SessionCoordinator(
         refreshFlight.mutex.withLock {
             epoch.incrementAndGet()
             cachedAccessToken = null
+            memorySession = null
+            claims = null
         }
         try {
             credentialStore.clear()
@@ -607,3 +696,23 @@ internal object RefreshSkew {
         return lifetimeMillis - minOf(MAX_SKEW_MILLIS, lifetimeMillis / LIFETIME_FRACTION)
     }
 }
+
+/** Whether a session needs a refresh token; see [SessionCoordinator]'s constructor. */
+public enum class RefreshTokenPolicy {
+    /** `offline_access` is requested and an exchange without a refresh token is refused. */
+    Required,
+
+    /** Scopes go as given; a session without a refresh token lives as long as its access token. */
+    Optional,
+}
+
+/**
+ * What the server-side half of a sign-out achieved. The local wipe is unconditional and not
+ * reported: `Unauthenticated` is published whatever these say (`spec/state-machine.md`).
+ */
+public class LogoutOutcome(
+    /** The provider acknowledged RP-initiated logout: the browser came back with the `state` sent. */
+    public val sessionEnded: Boolean,
+    /** The provider took the refresh token's revocation. False when none is advertised or it failed. */
+    public val tokenRevoked: Boolean,
+)

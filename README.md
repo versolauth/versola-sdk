@@ -37,6 +37,29 @@ val versola = Versola.configure(
 )
 ```
 
+## The generic facade
+
+The same core serves any conforming provider through `OAuthClient` (`android/oauth`,
+`spec/oauth-sdk-api.md`): Bearer by default, DPoP when the app opts in and the provider
+advertises it, PAR when advertised, the ID token validated against the provider's keys before
+anything is stored, and a token attached only to the origins the app names.
+
+```kotlin
+val oauth = OAuthClient.create(
+    context,
+    OAuthConfiguration(
+        issuer = "https://keycloak.example.com/realms/app",
+        clientId = "mobile",
+        redirectUri = "https://app.example.com/oauth",
+        scopes = setOf("openid", "profile", "offline_access"),
+        protectedOrigins = setOf("https://api.example.com"),
+    ),
+)
+oauth.login()
+val response = oauth.call(request)
+oauth.logout()
+```
+
 ## Status
 
 Phase 1 — Android — is functionally complete on `main`: discovery and browser authorization
@@ -61,7 +84,8 @@ spec/            state machine, errors, retry policy, conformance scenarios,
                  the generic facade's API (oauth-sdk-api.md) and provider matrix (providers.md)
 android/         Gradle multi-project: oauth-core (the protocol engine, plain JVM, package
                  versola.oauth.core), core (the edge back channel, versola.sdk.core), dpop,
-                 storage, browser, okhttp, sdk (the Versola facade)
+                 storage, browser, okhttp, sdk (the Versola facade), oauth (the generic OAuthClient facade,
+                 spec/oauth-sdk-api.md)
 ios/Sources/     Swift targets
 Package.swift    at the repo root; SPM cannot resolve a manifest from a subdirectory
 flutter/         plugin + Pigeon bridge

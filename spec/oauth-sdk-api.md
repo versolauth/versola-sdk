@@ -108,7 +108,7 @@ val oauth = OAuthClient.create(context, configuration)
 | `refresh()` | the refresh completed | nothing | as `accessToken()` |
 | `claims` | — (property, memory) | `IdTokenClaims?` of the last validated ID token; null when unauthenticated or when the provider issued none | — |
 | `userInfo()` | the UserInfo response is validated | `UserInfo` (the standard claims typed, the rest as a read-only map); `sub` must equal the ID token's `sub` (OIDC Core 5.3.2) | `Configuration(ProviderUnsupported)` when no endpoint, `Recoverable`, `Reauthenticate` |
-| `stepUp(challenge, options)` | as `login()` | re-authorizes with the challenge's `acr_values` and `max_age`; the app re-issues the refused call | as `login()` |
+| `stepUp(challenge, options)` | as `login()` | re-authorizes with the challenge's `acr_values` and `max_age` and the configured scopes (or the options'); the app re-issues the refused call | as `login()` |
 | `metadata()` | discovery is cached | `ProviderMetadata` | `Configuration(Discovery*)`, `Recoverable(Network)` |
 | `authenticatedClient(origins)` / `interceptor(origins)` / `authenticatedSession(origins)` | — | section 10 | — |
 | `keyAttestation()` | the DPoP key exists | `KeyAttestation?` (null under `Bearer`) | — |
@@ -130,7 +130,7 @@ the state before asking.
 | `acrValues` | `acr_values` | list; also set by `stepUp()` |
 | `maxAge` | `max_age` | seconds; when set, the ID token must carry `auth_time` and it is checked |
 | `resources` | `resource` (RFC 8707) | repeatable; also sent on the token request |
-| `ephemeralBrowser` | platform | `false`: an ephemeral session breaks passkeys and SSO; opt-in only |
+| `ephemeralBrowser` | platform | `false`: an ephemeral session breaks passkeys and SSO; opt-in only. Not yet on Android: it arrives with the Auth Tab browser leg (B3b) |
 | `extraParameters` | verbatim | a map for provider extensions (`audience`, `claims`, `kc_idp_hint`, …); a key that collides with a reserved parameter (`client_id`, `redirect_uri`, `response_type`, `scope`, `state`, `nonce`, `code_challenge*`, `request_uri`, `prompt`, `max_age`, `acr_values`, `resource`, `login_hint`, `ui_locales`) is `Configuration(InvalidConfiguration)` |
 
 The SDK always sends `response_type=code`, `code_challenge_method=S256`, a fresh `state` and
@@ -264,7 +264,7 @@ handled in app code after `logout()` has wiped locally; the SDK does not special
 |---|---|---|---|
 | Entry point | `OAuthClient.create(context, config)` | `OAuthClient(configuration:)` | `OAuthClient.create(config)` |
 | Configuration | `OAuthConfiguration(...)` data class | `OAuthConfiguration` struct | `OAuthConfiguration` |
-| State | `StateFlow<SessionState>` | `sessionStates() -> AsyncStream<SessionState>` (one stream per observer) + `currentState` | `Stream<SessionState>` + `currentState` |
+| State | `Flow<SessionState>` (cold; the first emission is the restored state, which a `StateFlow` could not promise) | `sessionStates() -> AsyncStream<SessionState>` (one stream per observer) | `Stream<SessionState>` |
 | Sign-in | `suspend fun login(options)` | `func login(_ options:) async throws` | `Future<void> login([options])` |
 | Options | `LoginOptions` data class | `LoginOptions` struct | `LoginOptions` |
 | Sign-out | `suspend fun logout(options): LogoutOutcome` | `func logout(_:) async -> LogoutOutcome` | `Future<LogoutOutcome> logout([options])` |
@@ -293,10 +293,10 @@ As `state-machine.md`'s persistence summary, minus the edge-mode rows, plus:
 |---|---|---|---|
 | JWKS | Disk, unencrypted | yes | yes |
 | Configuration hash (storage key) | Disk | yes | yes |
-| Granted scopes | Encrypted, with the grant | yes | no |
 
-Granted scopes are persisted so `stepUp()` after process death can re-request them; the Versola
-facade's reason for requiring them as a parameter does not apply once they are stored.
+Granted scopes are not persisted: `stepUp()` re-requests the configured scopes, or the ones its
+options carry, which an app that changed them per login still has. The Versola facade requires
+them as a parameter for the same reason.
 
 ## 15. Logging
 
@@ -311,8 +311,8 @@ refresh token issued, `offline_access` advertised but not configured, a response
 1. `IdTokenRejected` as `Configuration` (section 11) versus a fifth category; the spec's
    four-category rule argues for `Configuration`.
 2. `login()` while `Authorizing` refused (section 5) versus cancelling the outstanding request.
-3. Granted scopes persisted (section 14) versus the Versola facade's explicit parameter; the two
-   facades would differ in `stepUp()`'s signature.
+3. `stepUp()` takes the configured scopes by default (section 5); the Versola facade requires
+   them as a parameter. The two differ in signature, not in what is sent.
 4. The 24-hour discovery cache age and the 30-second refresh skew: both fixed, not configurable.
 5. Whether `authenticatedSession` on iOS should be a `URLSession` subclass or a wrapper; a wrapper
    keeps the surface small.

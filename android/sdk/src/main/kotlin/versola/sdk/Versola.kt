@@ -155,7 +155,7 @@ public class Versola internal constructor(
      * browser is dismissed mid-flow or either server call fails. Only the server-side teardown
      * is best effort, and the return value says whether auth acknowledged it.
      */
-    public suspend fun logout(): Boolean = coordinator.logout()
+    public suspend fun logout(): Boolean = coordinator.logout().sessionEnded
 
     /**
      * A client that authenticates every call to edge: the access token, a DPoP proof over it,

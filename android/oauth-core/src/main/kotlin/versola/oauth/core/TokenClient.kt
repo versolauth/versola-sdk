@@ -71,6 +71,14 @@ public class HttpTokenClient(
     /** Null for a session that is not key-bound; see [TokenBinding]. */
     private val dpop: DpopProofSource? = null,
     private val tokenBinding: TokenBinding = if (dpop == null) TokenBinding.Bearer else TokenBinding.Dpop(),
+    /**
+     * Whether a refresh carries `Idempotency-Key`. Auth honours it so a retry after a dropped
+     * response resolves to the same rotation (`spec/state-machine.md`); no standard asks a
+     * provider to, and the generic facade sends only what a standard defines (ADR 0001), so it
+     * passes false. The key is still derived and persisted either way: it is what makes a
+     * process death mid-rotation replay the same request.
+     */
+    private val sendIdempotencyKey: Boolean = true,
 ) : TokenClient {
 
     /**
@@ -124,6 +132,9 @@ public class HttpTokenClient(
             .add("redirect_uri", grant.redirectUri)
             .add("code_verifier", grant.codeVerifier.value)
             .add("client_id", configuration.clientId)
+        // RFC 8707 §2.2: repeated on the code exchange, so the token is issued for the
+        // audience the user consented to. Not on `refresh`: the grant's audience is fixed.
+        grant.resources.forEach { form.add("resource", it) }
         return post(form, idempotencyKey = null)
     }
 
@@ -136,7 +147,7 @@ public class HttpTokenClient(
             .addBytes("refresh_token", refreshToken)
             .add("client_id", configuration.clientId)
         refreshToken.fill(0)
-        return post(form, idempotencyKey)
+        return post(form, idempotencyKey.takeIf { sendIdempotencyKey })
     }
 
     /**

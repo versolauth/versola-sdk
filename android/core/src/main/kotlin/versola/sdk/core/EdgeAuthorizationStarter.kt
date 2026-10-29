@@ -34,6 +34,9 @@ public class EdgeAuthorizationStarter(
     private val native: NativeAuthorizationStarter,
 ) : AuthorizationStarter {
 
+    /** Edge sets `dpop_jkt` at `/par` from the proof on `/native/start`; see [AuthorizationStarter.bindsDpopKeyItself]. */
+    override val bindsDpopKeyItself: Boolean get() = true
+
     init {
         if (tokenBinding !is TokenBinding.Dpop) {
             throw VersolaError.Configuration(

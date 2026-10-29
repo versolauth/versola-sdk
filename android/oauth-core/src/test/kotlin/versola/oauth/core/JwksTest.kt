@@ -1,0 +1,239 @@
+package versola.oauth.core
+
+import java.io.File
+import kotlinx.coroutines.test.runTest
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
+import okhttp3.OkHttpClient
+import org.junit.After
+import org.junit.Assert.assertArrayEquals
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Before
+import org.junit.Rule
+import org.junit.Test
+import org.junit.rules.TemporaryFolder
+
+class JwksTest {
+
+    @get:Rule
+    val folder: TemporaryFolder = TemporaryFolder()
+
+    private lateinit var server: MockWebServer
+    private lateinit var uri: String
+
+    @Before
+    fun start() {
+        server = MockWebServer()
+        server.start()
+        uri = server.url("/jwks.json").toString()
+    }
+
+    @After
+    fun stop() {
+        server.close()
+    }
+
+    private fun serve(body: String, code: Int = 200) {
+        server.enqueue(MockResponse.Builder().code(code).body(body).build())
+    }
+
+    private val document = Jose.jwks(
+        Jose.jwk(Jose.rsa, "rsa"),
+        Jose.jwk(Jose.p256, "p256"),
+        Jose.jwk(Jose.p384, "p384"),
+        Jose.jwk(Jose.p521, "p521"),
+    )
+
+    @Test
+    fun `RSA and EC P-256 P-384 and P-521 keys parse into the public keys they were made from`() {
+        val set = JsonWebKeySet.parse(document)
+
+        assertEquals(listOf("rsa", "p256", "p384", "p521"), set.keys.map { it.keyId })
+        assertArrayEquals(Jose.rsa.public.encoded, set.keys[0].publicKey.encoded)
+        assertArrayEquals(Jose.p256.public.encoded, set.keys[1].publicKey.encoded)
+        assertArrayEquals(Jose.p384.public.encoded, set.keys[2].publicKey.encoded)
+        assertArrayEquals(Jose.p521.public.encoded, set.keys[3].publicKey.encoded)
+    }
+
+    @Test
+    fun `kty alg and use are carried and absent members are null`() {
+        val set = JsonWebKeySet.parse(
+            Jose.jwks(Jose.jwk(Jose.rsa, "a", alg = "RS256", extra = "\"use\":\"sig\""), Jose.jwk(Jose.p256, null)),
+        )
+
+        assertEquals("RSA", set.keys[0].keyType)
+        assertEquals("RS256", set.keys[0].algorithm)
+        assertEquals("sig", set.keys[0].use)
+        assertNull(set.keys[1].keyId)
+        assertNull(set.keys[1].algorithm)
+        assertNull(set.keys[1].use)
+    }
+
+    @Test
+    fun `keys the SDK cannot use are skipped and the usable ones kept`() {
+        val set = JsonWebKeySet.parse(
+            Jose.jwks(
+                """{"kty":"oct","k":"AAAA","kid":"secret"}""",
+                """{"kty":"EC","crv":"secp256k1","x":"AA","y":"AA","kid":"odd-curve"}""",
+                """{"kty":"RSA","n":"!!","e":"AQAB","kid":"bad-base64"}""",
+                """{"kty":"EC","crv":"P-256","x":"AA","y":"AA","kid":"short-coordinates"}""",
+                """{"kid":"no-kty"}""",
+                Jose.jwk(Jose.p256, "good"),
+            ),
+        )
+
+        assertEquals(listOf("good"), set.keys.map { it.keyId })
+    }
+
+    @Test
+    fun `an EC point that is not on the curve is skipped`() {
+        val good = Jose.jwk(Jose.p256, "x")
+        val offCurve = good.replace("\"kid\":\"x\"", "\"kid\":\"off\"").let {
+            // Swap y for x's own value: a valid-width coordinate that is not this point's y.
+            val x = Regex("\"x\":\"([^\"]+)\"").find(it)!!.groupValues[1]
+            it.replace(Regex("\"y\":\"[^\"]+\""), "\"y\":\"$x\"")
+        }
+
+        assertTrue(JsonWebKeySet.parse(Jose.jwks(offCurve)).keys.isEmpty())
+    }
+
+    @Test
+    fun `a document that is not JSON or has no keys array is not a JWK Set`() {
+        for (bad in listOf("nope", "[]", """{"keys":{}}""", """{"other":[]}""")) {
+            try {
+                JsonWebKeySet.parse(bad)
+                throw AssertionError("accepted $bad")
+            } catch (e: IllegalArgumentException) {
+                // expected
+            }
+        }
+    }
+
+    @Test
+    fun `the client GETs jwks_uri and then answers from memory`() = runTest {
+        serve(document)
+        val client = JwksClient(OkHttpClient())
+
+        val first = client.keys(uri, forceRefresh = false)
+        val second = client.keys(uri, forceRefresh = false)
+
+        assertTrue(first.fetched)
+        assertFalse(second.fetched)
+        assertEquals(4, second.keys.keys.size)
+        assertEquals(1, server.requestCount)
+        val request = server.takeRequest()
+        assertEquals("GET", request.method)
+        assertEquals("/jwks.json", request.target)
+    }
+
+    @Test
+    fun `forcing a refresh fetches again and replaces the keys`() = runTest {
+        serve(Jose.jwks(Jose.jwk(Jose.rsa, "old")))
+        serve(Jose.jwks(Jose.jwk(Jose.rsa, "new")))
+        val client = JwksClient(OkHttpClient())
+
+        client.keys(uri, forceRefresh = false)
+        val refreshed = client.keys(uri, forceRefresh = true)
+
+        assertEquals(listOf("new"), refreshed.keys.keys.map { it.keyId })
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun `a file cache serves a later client without any request`() = runTest {
+        val file = File(folder.newFolder(), "jwks.json")
+        serve(document)
+        JwksClient(OkHttpClient(), FileJwksCache(file)).keys(uri, forceRefresh = false)
+
+        val later = JwksClient(OkHttpClient(), FileJwksCache(file)).keys(uri, forceRefresh = false)
+
+        assertFalse(later.fetched)
+        assertEquals(4, later.keys.keys.size)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun `a corrupt cache is dropped and the keys are fetched`() = runTest {
+        val file = File(folder.newFolder(), "jwks.json")
+        file.writeText("}{ not a key set")
+        serve(document)
+
+        val loaded = JwksClient(OkHttpClient(), FileJwksCache(file)).keys(uri, forceRefresh = false)
+
+        assertTrue(loaded.fetched)
+        assertEquals(1, server.requestCount)
+        assertEquals(document, file.readText())
+    }
+
+    @Test
+    fun `a malformed answer is DiscoveryMalformed and does not replace the cache`() = runTest {
+        val cache = MemoryJwksCache().also { it.save(document) }
+        serve("<html>not keys</html>")
+
+        val error = failure { JwksClient(OkHttpClient(), cache).keys(uri, forceRefresh = true) }
+
+        val configuration = error as VersolaError.Configuration
+        assertTrue(configuration.detail is VersolaError.Configuration.Detail.DiscoveryMalformed)
+        assertEquals(document, cache.load())
+    }
+
+    @Test
+    fun `a 5xx is a Network failure`() = runTest {
+        serve("", code = 503)
+
+        val error = failure { JwksClient(OkHttpClient()).keys(uri, forceRefresh = false) }
+
+        val recoverable = error as VersolaError.Recoverable
+        assertTrue(recoverable.reason is VersolaError.Recoverable.Cause.Network)
+    }
+
+    @Test
+    fun `an unreachable provider is a Network failure`() = runTest {
+        val dead = server.url("/jwks.json").toString()
+        server.close()
+
+        val error = failure { JwksClient(OkHttpClient()).keys(dead, forceRefresh = false) }
+
+        val recoverable = error as VersolaError.Recoverable
+        assertTrue(recoverable.reason is VersolaError.Recoverable.Cause.Network)
+    }
+
+    @Test
+    fun `a redirect is not followed`() = runTest {
+        server.enqueue(MockResponse.Builder().code(302).addHeader("Location", server.url("/elsewhere").toString()).build())
+        serve(document)
+
+        val error = failure { JwksClient(OkHttpClient()).keys(uri, forceRefresh = false) }
+
+        val configuration = error as VersolaError.Configuration
+        assertTrue(configuration.detail is VersolaError.Configuration.Detail.DiscoveryMalformed)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun `the memory cache saves loads and clears`() = runTest {
+        val cache = MemoryJwksCache()
+        assertNull(cache.load())
+
+        cache.save("x")
+        assertEquals("x", cache.load())
+
+        cache.clear()
+        assertNull(cache.load())
+    }
+
+    @Test
+    fun `the file cache saves loads and clears`() = runTest {
+        val cache = FileJwksCache(File(folder.newFolder(), "nested/jwks.json"))
+        assertNull(cache.load())
+
+        cache.save("""{"keys":[]}""")
+        assertEquals("""{"keys":[]}""", cache.load())
+
+        cache.clear()
+        assertNull(cache.load())
+    }
+}

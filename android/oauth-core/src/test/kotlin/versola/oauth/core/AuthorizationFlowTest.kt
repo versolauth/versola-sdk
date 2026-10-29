@@ -184,6 +184,28 @@ class AuthorizationFlowTest {
     }
 
     @Test
+    fun `login parameters reach the authorization request and the resources reach the grant`() = runTest {
+        val store = RecordingStore()
+        val browser = FakeBrowser(redirectFor(store), store)
+
+        val grant = flow(store, browser).authorize(
+            setOf("openid"),
+            parameters = AuthorizationParameters(
+                prompt = AuthorizationParameters.Prompt.Login,
+                loginHint = "ada@example.com",
+                resources = listOf("https://api.example.com/a"),
+            ),
+        )
+
+        val uri = browser.launchedUri!!
+        assertTrue(uri.contains("prompt=login"))
+        assertTrue(uri.contains("login_hint=ada%40example.com"))
+        assertTrue(uri.contains("resource=https%3A%2F%2Fapi.example.com%2Fa"))
+        assertEquals(listOf("https://api.example.com/a"), store.stored!!.resources)
+        assertEquals(listOf("https://api.example.com/a"), grant.resources)
+    }
+
+    @Test
     fun `the pending request is persisted before the browser opens`() = runTest {
         // The kill lands between the two often enough that AppAuth's in-memory version is the
         // documented reason mobile-demo rejected flutter_appauth. Order, not presence.
