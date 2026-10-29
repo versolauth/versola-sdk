@@ -46,6 +46,11 @@ anything is stored, and a token attached only to the origins the app names. The 
 an Auth Tab where the device's browser supports it and a Custom Tab otherwise; `LoginOptions`
 can ask for an ephemeral session (off by default: it breaks passkeys and SSO).
 
+On iOS the same facade is the `VersolaOAuth` product (`ios/Sources/OAuthClient`, Swift 6,
+iOS 17.4; the manifest also lists macOS 14.4 so the tests run on a Mac host, which is not a
+supported platform): `OAuthClient.create(configuration:presentationAnchor:)`, `login()`, `authenticatedSession()`
+and `logout()` with the same states and the same four error categories.
+
 ```kotlin
 val oauth = OAuthClient.create(
     context,
@@ -89,7 +94,8 @@ android/         Gradle multi-project: oauth-core (the protocol engine, plain JV
                  storage, browser, okhttp, sdk (the Versola facade), oauth (the generic OAuthClient facade,
                  spec/oauth-sdk-api.md), conformance-android and conformance-oauth (the drivers),
                  samples/oauth (a minified app over the generic facade: the R8 proof)
-ios/Sources/     Swift targets
+ios/Sources/     Swift targets: OAuthCore (the protocol engine) and OAuthClient (the generic
+                 facade, product VersolaOAuth); the Versola* targets are placeholders
 Package.swift    at the repo root; SPM cannot resolve a manifest from a subdirectory
 flutter/         plugin + Pigeon bridge
 conformance/     harness driving every SDK against a staged auth + edge, and the provider
