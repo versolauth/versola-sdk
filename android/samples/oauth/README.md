@@ -28,7 +28,6 @@ cd android && ./gradlew :samples:oauth:assembleRelease
 The APK is under `android/samples/oauth/build/outputs/apk/release/`. A missing-class warning or
 error from R8 is a bug in the SDK to fix there; do not paper over it with rules in this module.
 
-
 ## Run the smoke test
 
 Needs a booted emulator or a device (API 26 or newer):
