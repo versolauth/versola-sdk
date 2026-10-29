@@ -72,7 +72,7 @@ jobs:
         if: ${{ matrix.language == 'java-kotlin' }}
         with:
           distribution: temurin
-          java-version: "17"
+          java-version: "21"
       - name: Build Android modules
         if: ${{ matrix.language == 'java-kotlin' }}
         working-directory: android

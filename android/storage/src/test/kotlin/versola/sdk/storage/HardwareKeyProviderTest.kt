@@ -19,7 +19,6 @@ import org.robolectric.annotation.Config
 class HardwareKeyProviderTest {
 
     @Test
-    @Config(sdk = [34])
     fun `default policy does not gate the key`() {
         val spec = HardwareKeyProvider.keySpec("alias", UnlockPolicy.None)
 
@@ -27,7 +26,6 @@ class HardwareKeyProviderTest {
     }
 
     @Test
-    @Config(sdk = [34])
     fun `OnAppUnlock gates the key for a window rather than per operation`() {
         val spec = HardwareKeyProvider.keySpec("alias", UnlockPolicy.OnAppUnlock)
 
@@ -50,7 +48,6 @@ class HardwareKeyProviderTest {
     }
 
     @Test
-    @Config(sdk = [34])
     fun `the window matches the cross-platform constant`() {
         // iOS cannot exceed 300s; a divergence here would be two machines, not one.
         assertEquals(

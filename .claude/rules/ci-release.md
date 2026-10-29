@@ -8,8 +8,8 @@ paths: [".github/**", "conformance/**", "tools/**"]
 
 | Workflow | Runs | Proves | Does not prove |
 |---|---|---|---|
-| `android.yml` `build` | push to `main` and PRs touching `android/**` | `./gradlew assemble`, `test` (unit, Robolectric), `lint`, `apiCheck` on JDK 17 with `platforms;android-36` | anything on a device or against a server |
-| `android.yml` `instrumented` | PR #44 adds it: `:storage` and `:dpop` on an emulator, API 28 and 34 | the platform half: real Keystore, GCM wrapping, key tiers | the browser leg, the server |
+| `android.yml` `build` | push to `main` and PRs touching `android/**` | `./gradlew assemble`, `test` (unit, Robolectric on API 36), `lint`, `apiCheck` on JDK 21 with `platforms;android-36` | anything on a device or against a server |
+| `android.yml` `instrumented` | `:storage` and `:dpop` on an emulator, API 36 (`google_apis`) | the platform half: real Keystore, GCM wrapping, key tiers | the browser leg, the server |
 | `ios.yml` | push to `main` and PRs touching `ios/**`, `Package.swift` | `swift package resolve` from a clean checkout, `xcodebuild build` and `test` of scheme `Versola-Package` on a simulator | Secure Enclave, a real Keychain group, `-strict-concurrency=complete` until it is added to the step |
 | `spec.yml` | every PR and push to `main` | `tools/validate-scenarios.py` (schema, `id` = file name, index rows) and markdownlint over `**/*.md` | that a scenario's states exist on every platform |
 | `conformance.yml` `scenarios` | on demand (nightly once the checkout token exists) | scenarios against a staged `auth` + `central` + `edge` from `versolauth/versola`, driven from an emulator | everything the driver does not yet run (`conformance/README.md`, order of work) |
@@ -55,13 +55,13 @@ paths: [".github/**", "conformance/**", "tools/**"]
 ## Emulator and conformance jobs
 
 - Emulator jobs run on `ubuntu-latest` with KVM enabled (the udev rule step) and
-  `reactivecircus/android-emulator-runner`, `arch: x86_64`; the instrumented job uses
-  `target: default`, the conformance job `google_apis`. The API matrix is 28 (the pre-R
-  `setUserAuthenticationValidityDurationSeconds` branch) and 34; API 36 is planned, with
-  `google_apis` because Auth Tab needs Chrome. A job added to the matrix says in a comment what
-  each level covers.
+  `reactivecircus/android-emulator-runner`, `arch: x86_64`, `google_apis` (Auth Tab needs
+  Chrome). The API matrix is the latest release, 36; the pre-R
+  `setUserAuthenticationValidityDurationSeconds` branch is proven at the unit tier (API 29
+  under Robolectric), and a 28 row can return if a device below 30 disagrees. A job added to the
+  matrix says in a comment what each level covers.
 - `conformance.yml` stages the server exactly as `versolauth/versola`'s own `ci-cd.yml` does (JDK 25
-  for the server, JDK 17 for the SDK, `gen-env.scala`, forms build, `sbt stage`, central, auth, the
+  for the server, JDK 21 for the SDK, `gen-env.scala`, forms build, `sbt stage`, central, auth, the
   internal TLS terminator and edge). Keep the stack half a copy so the two cannot drift; when the
   server's CI changes how it stages, change this one in the same sweep.
 - The checkout of the private server repository needs the `VERSOLA_CHECKOUT_TOKEN` secret. Until it

@@ -25,12 +25,20 @@ android {
 
     testOptions {
         unitTests.isIncludeAndroidResources = true
+        unitTests.all {
+            // Robolectric's API 36 image on JDK 21: ApplicationSharedMemory reaches the raw
+            // file descriptor through jdk.internal.access, which the module system hides from
+            // the unnamed module unless exported here.
+            it.jvmArgs("--add-exports", "java.base/jdk.internal.access=ALL-UNNAMED")
+        }
     }
 }
 
 kotlin {
     explicitApi()
     compilerOptions {
+        // Java 17 bytecode for consumers, whatever JDK runs the build (develop.md: 21).
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
         // The facade is the wiring: it constructs the flow and the coordinator, which are
         // opt-in for everyone else.
         optIn.add("versola.oauth.core.VersolaInternalApi")

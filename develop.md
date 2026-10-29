@@ -20,11 +20,12 @@ right and this file is stale.
 | jq | any recent | the agent hooks under `.claude/` |
 | Node | 22 | `npx markdownlint-cli2` |
 
-Gradle needs a JDK 17 on `JAVA_HOME`. A newer JDK as the default breaks the Android build in
-ways that look like plugin errors, so point `JAVA_HOME` at 17 explicitly:
+Gradle needs a JDK 21 on `JAVA_HOME` (Robolectric's android-all image for API 36 requires
+it; the artefacts' bytecode stays Java 17). A different JDK as the default breaks the Android
+build in ways that look like plugin errors, so point `JAVA_HOME` at 21 explicitly:
 
 ```bash
-export JAVA_HOME=~/Library/Java/JavaVirtualMachines/ms-17.0.17/Contents/Home
+export JAVA_HOME=~/Library/Java/JavaVirtualMachines/corretto-21.0.4/Contents/Home
 export ANDROID_HOME=~/Library/Android/sdk
 export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
 ```

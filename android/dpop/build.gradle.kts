@@ -31,6 +31,8 @@ android {
 kotlin {
     explicitApi()
     compilerOptions {
+        // Java 17 bytecode for consumers, whatever JDK runs the build (develop.md: 21).
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
         // The instrumented tests prove the protocol core's JCA names on a real Android (the
         // PSS family), which means reaching the core's wiring entry point for that.
         optIn.add("versola.oauth.core.VersolaInternalApi")

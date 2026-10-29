@@ -22,7 +22,6 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
-import org.robolectric.annotation.Config
 import versola.oauth.core.IdTokenRejection
 import versola.oauth.core.PushedAuthorization
 import versola.oauth.core.SessionState
@@ -40,7 +39,6 @@ private class RecordingLogger : VersolaLogger {
 }
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
 class OAuthClientTest {
 
     private val application = ApplicationProvider.getApplicationContext<Application>()

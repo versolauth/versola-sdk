@@ -65,9 +65,9 @@ a single example test cannot catch that.
 ## Device tests
 
 - Run on an emulator or simulator: Keystore tiers, wrapping and unwrapping, the auth window,
-  process death with the browser foreground, redirect delivery. Android: API 28 and 34 in the
-  instrumented job, 36 planned. Assert the tier you read back (`KeyAttestation`), not the one you
-  asked for.
+  process death with the browser foreground, redirect delivery. Android: API 36 in the
+  instrumented job; the pre-R Keystore branch is a Robolectric test pinned to API 29. Assert the
+  tier you read back (`KeyAttestation`), not the one you asked for.
 - They do not need network access to a real provider; the conformance tier does.
 - Browser-leg findings (F1 minimize versus cancel, F10 redirect hardening) are provable only here,
   with UI Automator on a real Custom Tab or Auth Tab. Do not claim them from a unit test.

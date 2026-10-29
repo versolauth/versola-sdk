@@ -12,7 +12,6 @@ import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
-import org.robolectric.annotation.Config
 import versola.oauth.OAuthClient
 import versola.oauth.OAuthConfiguration
 import versola.oauth.ProviderEndpoints
@@ -33,7 +32,6 @@ import versola.oauth.core.VersolaLogger
  * its KDoc (`testing.md`, Conformance tests).
  */
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
 abstract class ProviderConformance {
 
     protected val application: Application = ApplicationProvider.getApplicationContext()

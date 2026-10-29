@@ -35,7 +35,7 @@ npx markdownlint-cli2 "**/*.md"                        # spec.yml's markdown job
 ```
 
 Flutter commands (`flutter analyze`, `flutter test` in the plugin directory) apply once the plugin
-exists; the toolchain pin is described in `develop.md`. JDK 17 is required for Gradle (`JAVA_HOME`);
+exists; the toolchain pin is described in `develop.md`. JDK 21 is required for Gradle (`JAVA_HOME`);
 the exact emulator and staged-stack recipes are in `develop.md`. Do not paste them from memory.
 
 ## Definition of Done

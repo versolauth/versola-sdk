@@ -72,6 +72,8 @@ android {
 
 kotlin {
     compilerOptions {
+        // Java 17 bytecode for consumers, whatever JDK runs the build (develop.md: 21).
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
         // Only the instrumented test uses the opt-in: it substitutes the browser leg, since a
         // test cannot drive a real Custom Tab. The app itself uses the public API alone.
         optIn.add("versola.oauth.core.VersolaInternalApi")
