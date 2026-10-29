@@ -24,7 +24,7 @@ dependencies {
     // api, not implementation: SessionState is exposed as a Flow (spec/state-machine.md,
     // "Observability"), so the coroutines types are part of this module's ABI. The JVM
     // artifact rather than -android: this module has no Android dispatcher to offer.
-    api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.12.0")
+    api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
 
     // Discovery and the token endpoint need an HTTP client and a JSON parser.
     //
@@ -39,7 +39,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
 
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.12.0")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     testImplementation("com.squareup.okhttp3:mockwebserver3:5.5.1")
 }
 

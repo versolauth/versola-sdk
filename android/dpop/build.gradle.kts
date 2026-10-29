@@ -46,7 +46,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
 
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.12.0")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     // Test-only, never shipped. #6 requires proofs be verified byte-equivalent against the
     // server repo's DpopProver, and the honest way to do that from here is to verify them
     // with the same library the server verifies with — a hand-rolled test verifier would
@@ -57,7 +57,7 @@ dependencies {
     // AndroidX JUnit extension are what `connectedDebugAndroidTest` needs to find and run them.
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
-    androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.12.0")
+    androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
 }
 
 apiValidation {
