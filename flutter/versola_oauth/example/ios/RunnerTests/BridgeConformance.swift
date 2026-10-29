@@ -1,4 +1,3 @@
-import CryptoKit
 import Flutter
 import Foundation
 import OAuthCore
@@ -68,8 +67,8 @@ class BridgeConformance: ProviderConformance {
     }
 
     /// Wires the native client of one configuration the way the native driver does, then creates
-    /// it through the host API exactly as Dart's `OAuth.create` would (the handle is its
-    /// derivation: base64url(SHA-256(issuer + "\n" + clientId))[0..16]). The parameters are those
+    /// it through the host API exactly as Dart's `OAuth.create` would (the handle is what
+    /// native answers with, not derived here). The parameters are those
     /// of `configuration(...)`; the message is built from the same values.
     func bridge(
         clientId: String = Provider.clientId,
@@ -82,15 +81,17 @@ class BridgeConformance: ProviderConformance {
         let native = try await client(
             configuration(clientId: clientId, endpoints: endpoints, redirectUri: redirectUri, scopes: scopes, protectedOrigins: protectedOrigins, pushedAuthorization: pushedAuthorization)
         )
-        let message = message(clientId: clientId, endpoints: endpoints, redirectUri: redirectUri, scopes: scopes, protectedOrigins: protectedOrigins, pushedAuthorization: pushedAuthorization)
-        let dart = dart(handle: Self.handle(for: message))
-        try ok(await dart.create(message))
+        let dart = dart()
+        let created = try await dart.create(message(clientId: clientId, endpoints: endpoints, redirectUri: redirectUri, scopes: scopes, protectedOrigins: protectedOrigins, pushedAuthorization: pushedAuthorization))
+        if let failure = created as? CreateFailure {
+            throw BridgeFailure("expected CreateOk, got \(failure.error.category)/\(failure.error.kind): \(failure.error.message)")
+        }
         return Bridge(native: native, dart: dart)
     }
 
-    /// A Dart side for a handle no client was created for: what a failing `create` is sent through.
-    func dart(handle: String) -> DartSide {
-        let dart = DartSide(messenger, handle: handle)
+    /// A Dart side with no client yet: what `create` is sent through, a failing one included.
+    func dart() -> DartSide {
+        let dart = DartSide(messenger)
         darts.append(dart)
         return dart
     }
@@ -135,16 +136,13 @@ class BridgeConformance: ProviderConformance {
         )
     }
 
-    /// The handle Dart derives (`handleFor` in `lib/src/mapping.dart`): the plugin's one-channel-per-client key.
-    static func handle(for configuration: ConfigurationMessage) -> String {
-        var issuer = configuration.issuer ?? configuration.endpoints?.issuer ?? ""
-        if issuer.hasSuffix("/") { issuer.removeLast() }
-        let digest = SHA256.hash(data: Data("\(issuer)\n\(configuration.clientId)".utf8))
-        let encoded = Data(digest).base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
-        return String(encoded.prefix(16))
-    }
-
     // MARK: the typed answers, as a Flutter app reads them
+
+    /// The error a `create` answered with, or fails when it succeeded.
+    func failure(_ result: CreateResult) throws -> ErrorMessage {
+        guard let failure = result as? CreateFailure else { throw BridgeFailure("expected CreateFailure, the client was created") }
+        return failure.error
+    }
 
     func ok(_ result: VoidResult, file: StaticString = #filePath, line: UInt = #line) throws {
         if let failure = result as? VoidFailure {

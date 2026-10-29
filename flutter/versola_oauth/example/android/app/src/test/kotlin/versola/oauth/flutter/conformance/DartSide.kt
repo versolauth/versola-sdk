@@ -5,6 +5,18 @@ import java.nio.ByteBuffer
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CopyOnWriteArrayList
 import versola.oauth.flutter.AccessTokenResult
+import versola.oauth.flutter.ClaimsFailure
+import versola.oauth.flutter.ClaimsOk
+import versola.oauth.flutter.ClaimsResult
+import versola.oauth.flutter.CreateOk
+import versola.oauth.flutter.CreateResult
+import versola.oauth.flutter.ErrorMessage
+import versola.oauth.flutter.LogoutFailure
+import versola.oauth.flutter.LogoutOk
+import versola.oauth.flutter.LogoutResult
+import versola.oauth.flutter.SessionStateFailure
+import versola.oauth.flutter.SessionStateOk
+import versola.oauth.flutter.SessionStateResult
 import versola.oauth.flutter.ConfigurationMessage
 import versola.oauth.flutter.IdTokenClaimsMessage
 import versola.oauth.flutter.LoginOptionsMessage
@@ -16,6 +28,10 @@ import versola.oauth.flutter.SessionStateMessage
 import versola.oauth.flutter.UserInfoResult
 import versola.oauth.flutter.VoidResult
 
+/** An operation that has no failure of interest to a scenario answered one anyway. */
+class HostApiFailed(method: String, error: ErrorMessage) :
+    AssertionError("$method answered ${error.category}/${error.kind}: ${error.message}")
+
 /** The host API answered with an error envelope instead of a Result: a `PlatformException` in Dart, which the bridge must never produce (`flutter.md`, Bridge). */
 class HostApiThrew(method: String, code: Any?, message: Any?) :
     AssertionError("$method answered with a PlatformException instead of a typed result: $code: $message")
@@ -26,10 +42,14 @@ class HostApiThrew(method: String, code: Any?, message: Any?) :
  * decoded by the same codec, so an enum that does not survive the wire, a nullable that arrives
  * as something else or a type the codec cannot carry fails here as it would in a Flutter app.
  *
- * One instance per client handle. Everything that came back, replies and events alike, is kept in
+ * One instance per client. Everything that came back, replies and events alike, is kept in
  * [received] so a test can assert that nothing credential-shaped crossed the bridge.
  */
-class DartSide(private val messenger: FakeBinaryMessenger, val handle: String) {
+class DartSide(private val messenger: FakeBinaryMessenger) {
+
+    /** The handle `create` answered with: native chooses it, Dart derives nothing. Empty until a `create` succeeded. */
+    var handle: String = ""
+        private set
 
     /** `toString()` of every decoded reply and event, and of the access token's reply apart. */
     val received = CopyOnWriteArrayList<String>()
@@ -55,20 +75,34 @@ class DartSide(private val messenger: FakeBinaryMessenger, val handle: String) {
         return value
     }
 
-    fun create(configuration: ConfigurationMessage): VoidResult = remember("create", call("create", handle, configuration) as VoidResult)
+    fun create(configuration: ConfigurationMessage): CreateResult {
+        val result = remember("create", call("create", configuration) as CreateResult)
+        if (result is CreateOk) handle = result.handle
+        return result
+    }
 
-    fun sessionState(): SessionStateMessage = remember("sessionState", call("sessionState", handle) as SessionStateMessage)
+    /** The state, or fails the test naming the error when the host answered a failure. */
+    fun sessionState(): SessionStateMessage = when (val r = remember("sessionState", call("sessionState", handle) as SessionStateResult)) {
+        is SessionStateOk -> r.state
+        is SessionStateFailure -> throw HostApiFailed("sessionState", r.error)
+    }
 
     fun login(options: LoginOptionsMessage = loginOptions()): VoidResult = remember("login", call("login", handle, options) as VoidResult)
 
     fun logout(options: LogoutOptionsMessage = LogoutOptionsMessage(endSession = true, revoke = true)): LogoutOutcomeMessage =
-        remember("logout", call("logout", handle, options) as LogoutOutcomeMessage)
+        when (val r = remember("logout", call("logout", handle, options) as LogoutResult)) {
+            is LogoutOk -> r.outcome
+            is LogoutFailure -> throw HostApiFailed("logout", r.error)
+        }
 
     fun accessToken(): AccessTokenResult = remember("accessToken", call("accessToken", handle) as AccessTokenResult)
 
     fun refresh(): VoidResult = remember("refresh", call("refresh", handle) as VoidResult)
 
-    fun claims(): IdTokenClaimsMessage? = call("claims", handle)?.let { remember("claims", it as IdTokenClaimsMessage) }
+    fun claims(): IdTokenClaimsMessage? = when (val r = remember("claims", call("claims", handle) as ClaimsResult)) {
+        is ClaimsOk -> r.claims
+        is ClaimsFailure -> throw HostApiFailed("claims", r.error)
+    }
 
     fun userInfo(): UserInfoResult = remember("userInfo", call("userInfo", handle) as UserInfoResult)
 

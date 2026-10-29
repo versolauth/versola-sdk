@@ -45,9 +45,9 @@ class Scenario32ProtectedOriginsBridgeTest : BridgeConformance() {
     @Test
     fun `an empty origin set and a non-https origin are refused with InvalidConfiguration`() {
         // A non-https origin (not loopback) and an origin carrying a path are refused by create itself.
-        val plain = dart("plain-origin").create(message(protectedOrigins = setOf("http://api.example.com"))).failure()
+        val plain = dart().create(message(protectedOrigins = setOf("http://api.example.com"))).failure()
         assertError(plain, ErrorCategoryMessage.CONFIGURATION, "invalidConfiguration")
-        val withPath = dart("origin-with-path").create(message(protectedOrigins = setOf("https://api.example.com/v1"))).failure()
+        val withPath = dart().create(message(protectedOrigins = setOf("https://api.example.com/v1"))).failure()
         assertError(withPath, ErrorCategoryMessage.CONFIGURATION, "invalidConfiguration")
 
         // An empty set is a valid configuration: only the authenticated client, which Flutter does not have, needs origins.

@@ -24,6 +24,8 @@ import versola.oauth.flutter.AccessTokenMessage
 import versola.oauth.flutter.AccessTokenOk
 import versola.oauth.flutter.AccessTokenResult
 import versola.oauth.flutter.ConfigurationMessage
+import versola.oauth.flutter.CreateFailure
+import versola.oauth.flutter.CreateResult
 import versola.oauth.flutter.EndpointsMessage
 import versola.oauth.flutter.ErrorCategoryMessage
 import versola.oauth.flutter.ErrorMessage
@@ -111,8 +113,8 @@ abstract class BridgeConformance : ProviderConformance() {
 
     /**
      * Wires the native client of one configuration the way the native driver does, then creates
-     * it through the host API exactly as Dart's `OAuth.create` would (the handle is its derivation:
-     * base64url(SHA-256(issuer + "\n" + clientId))[0..16]). The parameters are those of
+     * it through the host API exactly as Dart's `OAuth.create` would (the handle is what native answers
+     * with, not derived here). The parameters are those of
      * [configuration]; the message is built from the same values.
      */
     protected fun bridge(
@@ -129,14 +131,15 @@ abstract class BridgeConformance : ProviderConformance() {
             browser = OffTheMainThread(browser),
             keyProvider = ReversingKeyProvider,
         )
-        val message = message(clientId, endpoints, redirectUri, scopes, protectedOrigins, pushedAuthorization)
-        val dart = dart(handleFor(message))
-        dart.create(message).assertOk()
+        val dart = dart()
+        dart.create(message(clientId, endpoints, redirectUri, scopes, protectedOrigins, pushedAuthorization)).failureOrNull()?.let {
+            throw AssertionError("expected CreateOk, got ${it.category}/${it.kind}: ${it.message}")
+        }
         return Bridge(native, dart)
     }
 
-    /** A Dart side for a handle no client was created for: what a failing `create` is sent through. */
-    protected fun dart(handle: String): DartSide = DartSide(messenger, handle).also { darts += it }
+    /** A Dart side with no client yet: what `create` is sent through, a failing one included. */
+    protected fun dart(): DartSide = DartSide(messenger).also { darts += it }
 
     /** The configuration Dart's `toMessage` produces for the values [bridge] takes; every other field at its documented default. */
     protected fun message(
@@ -181,6 +184,11 @@ abstract class BridgeConformance : ProviderConformance() {
 
     // ---- the typed answers, as a Flutter app reads them ----
 
+    private fun CreateResult.failureOrNull(): ErrorMessage? = (this as? CreateFailure)?.error
+
+    /** The error a `create` answered with, or fails when it succeeded. */
+    protected fun CreateResult.failure(): ErrorMessage = failureOrNull() ?: throw AssertionError("expected CreateFailure, the client was created")
+
     protected fun VoidResult.assertOk() {
         if (this is VoidFailure) throw AssertionError("expected VoidOk, got ${error.category}/${error.kind}: ${error.message}")
     }
@@ -224,13 +232,6 @@ abstract class BridgeConformance : ProviderConformance() {
     }
 
     companion object {
-        /** The handle Dart derives (`handleFor` in `lib/src/mapping.dart`): the plugin's one-channel-per-client key. */
-        fun handleFor(configuration: ConfigurationMessage): String {
-            val issuer = (configuration.issuer ?: configuration.endpoints?.issuer ?: "").trimEnd('/')
-            val digest = java.security.MessageDigest.getInstance("SHA-256").digest("$issuer\n${configuration.clientId}".toByteArray())
-            return java.util.Base64.getUrlEncoder().withoutPadding().encodeToString(digest).take(16)
-        }
-
         /** A Java `@NonNull` parameter the code under test never reads (the engine, the texture registry): null, honestly. */
         @Suppress("UNCHECKED_CAST")
         private fun <T> unsafeNull(): T = null as T

@@ -11,6 +11,13 @@ struct HostApiThrew: Error, CustomStringConvertible {
     var description: String { "\(method) answered with a PlatformException instead of a typed result: \(detail)" }
 }
 
+/// An operation that has no failure of interest to a scenario answered one anyway.
+struct HostApiFailed: Error, CustomStringConvertible {
+    let method: String
+    let error: ErrorMessage
+    var description: String { "\(method) answered \(error.category)/\(error.kind): \(error.message)" }
+}
+
 struct BridgeFailure: Error, CustomStringConvertible {
     let description: String
     init(_ description: String) { self.description = description }
@@ -26,12 +33,12 @@ struct BridgeFailure: Error, CustomStringConvertible {
 /// in `received` so a test can assert that nothing credential-shaped crossed the bridge.
 final class DartSide: @unchecked Sendable {
     private let messenger: FakeMessenger
-    let handle: String
+    /// The handle `create` answered with: native chooses it, Dart derives nothing. Empty until a `create` succeeded.
+    private(set) var handle = ""
     private let log = OSAllocatedUnfairLock(initialState: [String]())
 
-    init(_ messenger: FakeMessenger, handle: String) {
+    init(_ messenger: FakeMessenger) {
         self.messenger = messenger
-        self.handle = handle
     }
 
     /// `description` of every decoded reply and event except the access token's own reply.
@@ -58,12 +65,17 @@ final class DartSide: @unchecked Sendable {
         return value
     }
 
-    func create(_ configuration: ConfigurationMessage) async throws -> VoidResult {
-        remember("create", try await call("create", [handle, configuration]) as! VoidResult)
+    func create(_ configuration: ConfigurationMessage) async throws -> CreateResult {
+        let result = remember("create", try await call("create", [configuration]) as! CreateResult)
+        if let ok = result as? CreateOk { handle = ok.handle }
+        return result
     }
 
+    /// The state, or throws naming the error when the host answered a failure.
     func sessionState() async throws -> SessionStateMessage {
-        remember("sessionState", try await call("sessionState", [handle]) as! SessionStateMessage)
+        let result = remember("sessionState", try await call("sessionState", [handle]) as! SessionStateResult)
+        if let ok = result as? SessionStateOk { return ok.state }
+        throw HostApiFailed(method: "sessionState", error: (result as! SessionStateFailure).error)
     }
 
     func login(_ options: LoginOptionsMessage = DartSide.loginOptions()) async throws -> VoidResult {
@@ -71,7 +83,9 @@ final class DartSide: @unchecked Sendable {
     }
 
     func logout(_ options: LogoutOptionsMessage = LogoutOptionsMessage(endSession: true, revoke: true)) async throws -> LogoutOutcomeMessage {
-        remember("logout", try await call("logout", [handle, options]) as! LogoutOutcomeMessage)
+        let result = remember("logout", try await call("logout", [handle, options]) as! LogoutResult)
+        if let ok = result as? LogoutOk { return ok.outcome }
+        throw HostApiFailed(method: "logout", error: (result as! LogoutFailure).error)
     }
 
     func accessToken() async throws -> AccessTokenResult {
@@ -83,7 +97,9 @@ final class DartSide: @unchecked Sendable {
     }
 
     func claims() async throws -> IdTokenClaimsMessage? {
-        try await call("claims", [handle]).map { remember("claims", $0 as! IdTokenClaimsMessage) }
+        let result = remember("claims", try await call("claims", [handle]) as! ClaimsResult)
+        if let ok = result as? ClaimsOk { return ok.claims }
+        throw HostApiFailed(method: "claims", error: (result as! ClaimsFailure).error)
     }
 
     func userInfo() async throws -> UserInfoResult {

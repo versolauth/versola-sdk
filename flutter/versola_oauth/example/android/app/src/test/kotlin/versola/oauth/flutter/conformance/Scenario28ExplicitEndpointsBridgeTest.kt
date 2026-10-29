@@ -88,7 +88,7 @@ class Scenario28ExplicitEndpointsBridgeTest : BridgeConformance() {
     @Test
     fun `issuer together with endpoints, or an endpoint that is not https, is refused at construction`() {
         val endpoints = endpoints()
-        val both = dart("issuer-and-endpoints").create(message(endpoints = endpoints, issuer = proxy.issuer)).failure()
+        val both = dart().create(message(endpoints = endpoints, issuer = proxy.issuer)).failure()
         assertError(both, ErrorCategoryMessage.CONFIGURATION, "invalidConfiguration")
 
         val plain = message(endpoints = ProviderEndpoints(
@@ -97,6 +97,6 @@ class Scenario28ExplicitEndpointsBridgeTest : BridgeConformance() {
             tokenEndpoint = "http://provider.example.com/token",
             jwksUri = "http://provider.example.com/jwks",
         ), protectedOrigins = emptySet())
-        assertError(dart("plain-endpoints").create(plain).failure(), ErrorCategoryMessage.CONFIGURATION, "invalidConfiguration")
+        assertError(dart().create(plain).failure(), ErrorCategoryMessage.CONFIGURATION, "invalidConfiguration")
     }
 }

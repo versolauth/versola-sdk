@@ -78,7 +78,7 @@ final class Scenario28ExplicitEndpointsBridgeTest: BridgeConformance {
 
     func test28IssuerTogetherWithEndpointsOrAnEndpointThatIsNotHttpsIsRefusedAtConstruction() async throws {
         let endpoints = try await endpoints()
-        let both = try await dart(handle: "issuer-and-endpoints").create(message(endpoints: endpoints, issuer: proxyIssuer))
+        let both = try await dart().create(message(endpoints: endpoints, issuer: proxyIssuer))
         assertError(try failure(both), .configuration, "invalidConfiguration")
 
         let plain = message(
@@ -90,7 +90,7 @@ final class Scenario28ExplicitEndpointsBridgeTest: BridgeConformance {
             ),
             protectedOrigins: []
         )
-        let refused = try await dart(handle: "plain-endpoints").create(plain)
+        let refused = try await dart().create(plain)
         assertError(try failure(refused), .configuration, "invalidConfiguration")
     }
 }
