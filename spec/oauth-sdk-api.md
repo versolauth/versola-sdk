@@ -262,7 +262,7 @@ handled in app code after `logout()` has wiped locally; the SDK does not special
 
 | Concept | Kotlin (`versola.oauth`) | Swift (`VersolaOAuth`) | Dart (`versola_oauth`) |
 |---|---|---|---|
-| Entry point | `OAuthClient.create(context, config)` | `OAuthClient(configuration:)` | `OAuthClient.create(config)` |
+| Entry point | `OAuthClient.create(context, config)` | `OAuthClient.create(configuration:presentationAnchor:)` (static, async: one instance per configuration per process, as on Android; an `init` could not return an existing one) | `OAuthClient.create(config)` |
 | Configuration | `OAuthConfiguration(...)` data class | `OAuthConfiguration` struct | `OAuthConfiguration` |
 | State | `Flow<SessionState>` (cold; the first emission is the restored state, which a `StateFlow` could not promise) | `sessionStates() -> AsyncStream<SessionState>` (one stream per observer) | `Stream<SessionState>` |
 | Sign-in | `suspend fun login(options)` | `func login(_ options:) async throws` | `Future<void> login([options])` |
@@ -271,11 +271,11 @@ handled in app code after `logout()` has wiped locally; the SDK does not special
 | Token | `suspend fun accessToken(): AccessToken` | `func accessToken() async throws -> AccessToken` | `Future<AccessToken> accessToken()` |
 | Claims | `val claims: IdTokenClaims?` | `var claims: IdTokenClaims? { get async }` | `IdTokenClaims? get claims` |
 | UserInfo | `suspend fun userInfo(): UserInfo` | `func userInfo() async throws -> UserInfo` | `Future<UserInfo> userInfo()` |
-| Step-up | `suspend fun stepUp(challenge, options)` | `func stepUp(_:_:) async throws` | `Future<void> stepUp(challenge, [options])` |
+| Step-up | `suspend fun stepUp(challenge, options)` | `func stepUp(acrValues:maxAge:options:) async throws` (the challenge is the `stepUp` case's payload) | `Future<void> stepUp(challenge, [options])` |
 | HTTP | `interceptor(origins)`, `authenticatedClient(origins)` | `authenticatedSession(origins)` | `accessToken()` |
 | Browser leg | Auth Tab (androidx.browser, activity result) where the Custom Tabs provider supports it, Custom Tabs otherwise, any browser last; `WebView` unrepresentable | `ASWebAuthenticationSession` | native |
-| Redirect | an Auth Tab returns it as its result; otherwise the manifest-declared activity | `handleRedirect(_ url: URL) -> Bool` | native |
-| Errors | `sealed class OAuthError : Exception` | `enum OAuthError: Error, Sendable` | `sealed class OAuthError implements Exception` |
+| Redirect | an Auth Tab returns it as its result; otherwise the manifest-declared activity | `ASWebAuthenticationSession` returns it; `handleRedirect(_ url: URL) async -> Bool` feeds a Universal Link received while the app was cold to `resumePendingAuthorization()` | native |
+| Errors | `sealed class VersolaError : Exception` (the rename to `OAuthError` is deferred, ADR 0001) | `enum OAuthError: Error, Sendable` with the same four cases and payloads | `sealed class OAuthError implements Exception` |
 | Internal wiring | `@VersolaInternalApi` (`RequiresOptIn`, error level) | `package` access / `_` prefix, not in products | `src/` private, not exported |
 
 Threading: Kotlin APIs are `suspend` and main-safe; the SDK never blocks the caller's thread except

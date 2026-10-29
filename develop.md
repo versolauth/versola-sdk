@@ -13,7 +13,7 @@ right and this file is stale.
 | Android Gradle Plugin | 9.4.1 | pinned in `android/build.gradle.kts` |
 | Kotlin | 2.4.20 | pinned in `android/build.gradle.kts`; `explicitApi()` is on |
 | Gradle | 9.7.1 | through the wrapper, never a system Gradle |
-| Xcode | 16.3 or newer, with an iOS simulator | `Package.swift` (swift-tools 5.9) |
+| Xcode | 16.3 or newer, with an iOS simulator | `Package.swift` (swift-tools 6.0, Swift 6 language mode) |
 | Flutter | not installed yet | `flutter/` is a placeholder; the plan is to pin it with fvm |
 | Python | 3.12 | `tools/validate-scenarios.py` |
 | Docker | any recent | the conformance stack and, once #46 lands, the provider containers |
@@ -43,7 +43,7 @@ spec/            normative: state machine, errors, retry policy, conformance sce
 android/         Gradle multi-project: oauth-core (protocol engine, plain Kotlin/JVM), core (the
                  edge back channel), dpop, storage, browser, okhttp, sdk (the Versola facade),
                  oauth (the generic OAuthClient facade)
-ios/Sources/     Swift targets; the manifest is Package.swift at the repo root
+ios/Sources/     Swift targets (OAuthCore, OAuthClient; Versola* placeholders); the manifest is Package.swift at the repo root
 flutter/         plugin + Pigeon bridge (placeholder)
 conformance/     harness driving every SDK against a staged Versola stack
 tools/           validate-scenarios.py
@@ -86,9 +86,10 @@ xcodebuild build -scheme Versola-Package -destination "platform=iOS Simulator,na
 xcodebuild test  -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 17"
 ```
 
-Prefer `xcodebuild` with a simulator destination over `swift build` and `swift test`: it is
-what CI runs, and the targets use iOS-only APIs (Keychain, Secure Enclave, ASWebAuthenticationSession)
-that the host build target does not have. The simulator name is whatever your Xcode ships. CI's name drifts on
+`swift build` and `swift test` on the Mac host work too (the manifest lists macOS 14.4, so the
+AuthenticationServices, Keychain and CryptoKit APIs compile there), and are the fast loop; the
+Keychain round-trip test runs only with `OAUTH_KEYCHAIN_TESTS=1`. `xcodebuild` with a simulator
+destination is what CI runs and is the run to report. The simulator name is whatever your Xcode ships. CI's name drifts on
 Xcode upgrades (it moved from "iPhone 16" to "iPhone 17"); list yours with
 `xcrun simctl list devices available` and use the same name if it exists.
 

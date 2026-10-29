@@ -13,6 +13,8 @@
 /ios/Sources/VersolaStorage/        @goshacodes
 /ios/Sources/VersolaBrowser/        @goshacodes
 /ios/Sources/VersolaCore/           @goshacodes
+/ios/Sources/OAuthCore/             @goshacodes
+/ios/Sources/OAuthClient/           @goshacodes
 /spec/                              @goshacodes
 /.github/                           @goshacodes
 /Package.swift                      @goshacodes

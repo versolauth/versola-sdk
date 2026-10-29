@@ -4,9 +4,9 @@ paths: ["ios/**", "Package.swift"]
 
 # iOS / Swift
 
-`ios/Sources/*` and `ios/Tests/*` are placeholders today; these rules hold from the first real
-commit. Copy the Android module of the same name for behaviour (`android-kotlin.md`), and the spec
-for what it must do (`spec/`). The two implementations are written against the same conformance
+`OAuthCore` and `OAuthClient` (product `VersolaOAuth`) are real since issue #46's B5; the
+`Versola*` targets are still placeholders. Copy the Android module of the same name for behaviour
+(`android-kotlin.md`), and the spec for what it must do (`spec/`). The two implementations are written against the same conformance
 transcripts, not against each other's code. Security rules are in `security.md`.
 
 ## Package layout
@@ -16,26 +16,26 @@ transcripts, not against each other's code. Security rules are in `security.md`.
   `path: "ios/Sources/<Name>"` and test targets `path: "ios/Tests/<Name>Tests"`, so Xcode sees a
   normal `ios/` tree. A new target is added in the manifest, in `ios/Sources`, in `ios/Tests`, and
   in the products list only if integrators import it.
-- Targets today: `VersolaCore`, `VersolaDPoP`, `VersolaStorage`, `VersolaBrowser`,
-  `VersolaURLSession`. Direction mirrors Android: everything depends on `VersolaCore`;
-  `VersolaURLSession` also on `VersolaDPoP`; `VersolaStorage` and `VersolaBrowser` never on each
-  other. `VersolaCore` has no Versola-specific URLs or routing. The planned `OAuthCore` and
-  `OAuthClient` targets (product `VersolaOAuth`, issue #46) follow the same rule.
+- Targets: `OAuthCore` (the protocol engine, Android's `:oauth-core`: Foundation, CryptoKit and
+  Security only, no UI, no Keychain, no browser) and `OAuthClient` (the generic facade and the
+  platform halves it wires: Keychain stores, `ASWebAuthenticationSession`, the authenticated
+  `URLSession` wrapper, the Secure Enclave DPoP key; product `VersolaOAuth`). The placeholder
+  `VersolaCore`, `VersolaDPoP`, `VersolaStorage`, `VersolaBrowser`, `VersolaURLSession` targets are
+  for the Versola facade, which does not exist on iOS yet; when it does it depends on `OAuthCore`
+  the way Android's `:core` does, and `OAuthCore` never on it.
 - The package is source, not a binary XCFramework: the licence is Apache-2.0, there is nothing to
   hide, and a binary would force library-evolution mode and make every dependency's ABI part of the
   contract. Do not add a `.binaryTarget`. CocoaPods is dormant in `release.yml`.
-- `Package.swift` is `swift-tools-version:5.9` with `.iOS(.v16)` today. Issue #46 decides moving the
-  floor to 17.4 (https callbacks in `ASWebAuthenticationSession`, architecture review F11). Do not
-  change the floor, the tools version or the product list as a side effect; ask first. Adding an
-  availability check that quietly narrows the floor is the same change.
+- `Package.swift` is `swift-tools-version:6.0` with `.iOS("17.4")` (https callbacks in
+  `ASWebAuthenticationSession`, architecture review F11, issue #46 decision 6) and `.macOS("14.4")`
+  so `swift test` on a host compiles the same AuthenticationServices API. Do not change the floor,
+  the tools version or the product list as a side effect; ask first. Adding an availability check
+  that quietly narrows the floor is the same change.
 
 ## Swift 6 and concurrency
 
-- Swift 6 language mode from the first commit (`swiftLanguageMode(.v6)` per target, as the
-  architecture review specifies), and CI builds with `-strict-concurrency=complete`. A warning from
-  the concurrency checker is an error in review. The manifest is `swift-tools-version:5.9` today;
-  the per-target language mode setting needs a newer tools version, so raising it is part of the
-  first real commit and is asked about, not slipped in.
+- Swift 6 language mode (`swiftLanguageMode(.v6)` per target, which makes strict concurrency
+  part of the language), so a concurrency diagnostic is a compile error, not a warning to review.
 - The public surface is `Sendable` value types: `struct` and `enum` with associated values.
   `SessionState` and the four-category error are `Sendable` enums (`spec/errors.md`).
 - Shared mutable state lives in an `actor`. The session coordinator is the textbook case: a single
@@ -45,7 +45,8 @@ transcripts, not against each other's code. Security rules are in `security.md`.
   (`spec/state-machine.md`).
 - No `@unchecked Sendable`, no `nonisolated(unsafe)`, no global mutable `var`. If a type does not
   fit, change the design; if a framework type forces it, wrap it in an actor and say why in a
-  comment.
+  comment. A synchronous read a `Clock` or a logger needs is `OSAllocatedUnfairLock`, not a lock
+  behind `@unchecked`.
 - `AsyncStream` is single-consumer, so two observers would starve one another. Expose
   `sessionStates()` as a function that creates a stream per call, backed by an actor-held set of
   continuations, with `onTermination` removing the continuation.

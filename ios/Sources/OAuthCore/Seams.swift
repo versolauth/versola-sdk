@@ -93,6 +93,11 @@ public protocol CredentialStore: Sendable {
     func rawIdToken() async throws -> String?
     /// Writes the new grant over the old one atomically: a crash between the two cannot lose it.
     func save(refreshToken: String, rawIdToken: String?) async throws
+    /// The rotation slot (`spec/state-machine.md`, `Refreshing`): the idempotency key of the
+    /// refresh in flight, persisted before the request and cleared after the new token is
+    /// stored, so a process death between the two replays the same rotation. nil clears it.
+    func savePendingRotation(_ idempotencyKey: String?) async throws
+    func pendingRotation() async throws -> String?
     func clear() async throws
 }
 
