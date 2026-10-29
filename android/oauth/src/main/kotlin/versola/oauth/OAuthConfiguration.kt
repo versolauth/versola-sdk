@@ -79,7 +79,11 @@ public class OAuthConfiguration(
     public val clientId: String,
     /** A verified `https` link (preferred), a loopback URI, or a private-use scheme (warned about). */
     public val redirectUri: String,
-    /** Where RP-initiated logout sends the browser; not sent when absent. */
+    /**
+     * Where RP-initiated logout sends the browser; not sent when absent. Under Auth Tab the
+     * tab intercepts it, so an `https` host must be a verified App Link of this app like
+     * [redirectUri]'s; a page on the product's website is reported as `sessionEnded = false`.
+     */
     public val postLogoutRedirectUri: String? = null,
     /** The scopes `login()` asks for unless its options say otherwise; `openid` is always included. */
     public val scopes: Set<String> = setOf("openid"),

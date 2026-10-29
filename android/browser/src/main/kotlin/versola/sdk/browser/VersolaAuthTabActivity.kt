@@ -1,5 +1,6 @@
 package versola.sdk.browser
 
+import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -16,8 +17,10 @@ import versola.oauth.core.VersolaError
  * registered its launcher before being started: the SDK is given an application context and
  * must not reach into the integrator's activities, so this one exists. It is transparent, sits
  * under the tab for as long as the tab lives, and finishes the moment the result is in. On a
- * process death while the tab is open the system restores it with the tab's result, so the
- * redirect still reaches a buffered dispatcher for the next cold start to resume (scenario 12).
+ * process death while the tab is open the system restores it with the tab's result, and the
+ * result is delivered to the dispatcher's buffer; finishing the authorization from there on a
+ * cold start (scenario 12) is the facade's `awaitPendingRedirect()` call, which `OAuthClient`
+ * does not wire yet (`spec/oauth-sdk-api.md` section 4).
  *
  * Nothing credential-shaped passes through here: the extras are the authorization URI and the
  * redirect URI to intercept, both of which the browser sees anyway.
@@ -44,11 +47,25 @@ internal class VersolaAuthTabActivity : ComponentActivity() {
         // The provider the session chose, so the launch cannot land in a browser without
         // Auth Tab support and fall back to a plain tab that never answers.
         intent.getStringExtra(EXTRA_PROVIDER)?.let { authTab.intent.setPackage(it) }
-        if (redirect.scheme.equals("https", ignoreCase = true)) {
-            authTab.launch(launcher, uri, redirect.host.orEmpty(), redirect.path.orEmpty())
-        } else {
-            authTab.launch(launcher, uri, redirect.scheme.orEmpty())
+        try {
+            if (redirect.scheme.equals("https", ignoreCase = true)) {
+                authTab.launch(launcher, uri, redirect.host.orEmpty(), redirect.path.orEmpty())
+            } else {
+                authTab.launch(launcher, uri, redirect.scheme.orEmpty())
+            }
+        } catch (e: ActivityNotFoundException) {
+            // The provider went away between the session's check and this launch, or answers
+            // the Auth Tab query without a BROWSABLE handler. An SDK activity must not take the
+            // host app down; the waiter gets the same answer a missing browser gives.
+            noBrowser(e)
+        } catch (e: SecurityException) {
+            noBrowser(e)
         }
+    }
+
+    private fun noBrowser(cause: Exception) {
+        RedirectDispatcher.fail(VersolaError.Configuration(VersolaError.Configuration.Detail.NoBrowserAvailable, cause))
+        finish()
     }
 
     private fun deliver(resultCode: Int, resultUri: Uri?) {
@@ -68,7 +85,9 @@ internal class VersolaAuthTabActivity : ComponentActivity() {
                 ),
             )
             // A result this version of the browser library does not know: the tab is gone and
-            // nothing arrived, which is what a system cancel looks like.
+            // nothing arrived. Reported as a system cancel, but the pending request is wiped
+            // (the flow treats a failed browser leg that way), since no redirect can follow;
+            // `spec/state-machine.md`'s cancel table says so for this cause.
             else -> RedirectDispatcher.fail(VersolaError.Recoverable(VersolaError.Recoverable.Cause.SystemCancelled))
         }
     }

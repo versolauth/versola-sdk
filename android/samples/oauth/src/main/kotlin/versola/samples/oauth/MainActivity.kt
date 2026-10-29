@@ -24,8 +24,8 @@ import versola.oauth.core.VersolaError
  *
  * What it proves is its build, not its screen: the release variant is minified by R8 with the
  * stock rules and an empty `proguard-rules.pro`, so the SDK needs no consumer keep rules. The
- * instrumented `MinifiedSmokeTest` then runs discovery, sign-in and an authenticated call on that
- * minified APK.
+ * instrumented `SmokeTest` runs discovery, sign-in and an authenticated call on the debug build;
+ * the build file says why not on the minified one.
  *
  * The configuration comes from Gradle properties baked into `BuildConfig`
  * (`-PsampleIssuer=...`, `-PsampleClientId=...`, `-PsampleRedirectUri=...`,

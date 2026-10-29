@@ -273,6 +273,19 @@ class AuthTabAuthorizationSessionTest {
     }
 
     @Test
+    fun `a provider that cannot take the launch is NoBrowserAvailable, not a crash`() = runTest {
+        // Robolectric records a start that resolves to nothing unless told to behave like the
+        // device; no browser is installed here at all, so the launch for result throws.
+        shadowOf(application).checkActivities(true)
+
+        val controller = trampoline()
+
+        val error = runCatching { RedirectDispatcher.await() }.exceptionOrNull() as VersolaError.Configuration
+        assertEquals(VersolaError.Configuration.Detail.NoBrowserAvailable, error.detail)
+        assertTrue(controller.get().isFinishing)
+    }
+
+    @Test
     fun `a recreated trampoline registers its launcher and launches nothing twice`() {
         val controller = trampoline()
         val activity = controller.get()

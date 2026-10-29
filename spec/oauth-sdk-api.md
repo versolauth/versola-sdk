@@ -56,7 +56,7 @@ construction, never behind a login screen.
 | `endpoints` | `ProviderEndpoints` | none | for a provider without discovery: `authorizationEndpoint`, `tokenEndpoint`, `issuer`, optional `jwksUri`, `userinfoEndpoint`, `revocationEndpoint`, `endSessionEndpoint`, `pushedAuthorizationRequestEndpoint`, `idTokenSigningAlgValuesSupported`; all `https`; mutually exclusive with discovery, and the SDK then treats unlisted capabilities as absent |
 | `clientId` | string | required | non-blank |
 | `redirectUri` | URI | required | absolute, no fragment; `https` (verified link, preferred), loopback, or a private-use scheme (accepted with a logged warning on every `create()`); cleartext `http` to a non-loopback host refused |
-| `postLogoutRedirectUri` | URI | none | same rules as `redirectUri`; when absent `post_logout_redirect_uri` is not sent |
+| `postLogoutRedirectUri` | URI | none | same rules as `redirectUri`; when absent `post_logout_redirect_uri` is not sent. Android, under Auth Tab: the tab intercepts this URI, so an `https` host must be a verified App Link of the app like `redirectUri`'s, or the tab closes unverified and `logout()` reports `sessionEnded = false` (a Custom Tab would have shown the page instead) |
 | `scopes` | set of strings | `{"openid"}` | the default scope set for `login()`; `openid` is added if missing (this is an OIDC SDK); nothing else is added silently, including `offline_access` (see section 8) |
 | `tokenBinding` | `Bearer` or `Dpop(required: Boolean = false)` | `Bearer` | section 9 |
 | `pushedAuthorization` | `Never`, `WhenAdvertised`, `Required` | `WhenAdvertised` | section 7 |
