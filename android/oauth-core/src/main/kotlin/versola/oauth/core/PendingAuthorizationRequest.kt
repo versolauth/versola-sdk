@@ -1,6 +1,9 @@
 package versola.oauth.core
 
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 
 /**
  * What must survive the app's process being killed while the browser is in the foreground.
@@ -68,11 +71,33 @@ public object PendingAuthorizationCodec {
         discoveryJson.encodeToString(PendingAuthorizationRequest.serializer(), request)
             .toByteArray(Charsets.UTF_8)
 
-    public fun decode(bytes: ByteArray): PendingAuthorizationRequest =
-        discoveryJson.decodeFromString(
-            PendingAuthorizationRequest.serializer(),
-            bytes.toString(Charsets.UTF_8),
-        )
+    /**
+     * A record written before [PendingAuthorizationRequest.extension] existed kept a starter's
+     * artefacts as top-level members of its own (the edge flow's `blob` and endpoints). Such a
+     * record, unexpired, can be on disk across an update: so when the record carries no
+     * `extension`, every unknown string member is kept under its own name in it rather than
+     * dropped, and the starter that wrote the old names reads them back. This module knows no
+     * names; it only refuses to lose what it did not understand.
+     */
+    public fun decode(bytes: ByteArray): PendingAuthorizationRequest {
+        val text = bytes.toString(Charsets.UTF_8)
+        val record = discoveryJson.parseToJsonElement(text).jsonObject
+        if (EXTENSION in record) {
+            return discoveryJson.decodeFromJsonElement(PendingAuthorizationRequest.serializer(), record)
+        }
+        val legacy = record.filter { (name, value) ->
+            name !in KNOWN_MEMBERS && value is JsonPrimitive && value.isString
+        }
+        val migrated = JsonObject(record + (EXTENSION to JsonObject(legacy)))
+        return discoveryJson.decodeFromJsonElement(PendingAuthorizationRequest.serializer(), migrated)
+    }
+
+    private const val EXTENSION = "extension"
+
+    private val KNOWN_MEMBERS = setOf(
+        "state", "nonce", "codeVerifier", "scopes", "redirectUri", "acrValues", "maxAge",
+        "createdAtEpochMillis", "issRequired",
+    )
 }
 
 /**

@@ -1,6 +1,8 @@
 package versola.sdk.core
 
 import versola.oauth.core.AuthorizationGrant
+import versola.oauth.core.AuthorizationResponseValidator
+import versola.oauth.core.PendingAuthorizationCodec
 import versola.oauth.core.CodeVerifier
 import versola.oauth.core.DiscoveryClient
 import versola.oauth.core.DiscoveryService
@@ -163,6 +165,52 @@ class EdgeNativeTokenClientTest {
         assertTrue(response.isDpopBound)
         // Remembered for the refreshes that follow, in this process and the next.
         assertEquals(NativeEndpoints("$AUTH_MTLS/token", "$AUTH_MTLS/revoke"), endpoints.stored)
+    }
+
+    @Test
+    fun `a grant restored from a pending record written before the extension existed still reaches edge`() = runTest {
+        server.enqueue(issued())
+        val endpoints = MemoryEndpoints()
+        val legacy = """{"state":"edge-state","nonce":"n","codeVerifier":"","scopes":["openid"],""" +
+            """"redirectUri":"https://app.example.com/oauth","acrValues":[],"maxAge":null,"createdAtEpochMillis":1,""" +
+            """"blob":"sealed","tokenEndpoint":"$AUTH_MTLS/token","revocationEndpoint":"$AUTH_MTLS/revoke"}"""
+        val pending = PendingAuthorizationCodec.decode(legacy.toByteArray())
+        val grant = AuthorizationResponseValidator.validate(
+            redirect = "https://app.example.com/oauth?code=the-code&state=edge-state&iss=https%3A%2F%2Fid.versola.kz",
+            pending = pending,
+            issuer = "https://id.versola.kz",
+            issParameterSupported = false,
+        )
+
+        client(endpoints).exchange(grant)
+
+        val request = server.takeRequest()
+        assertEquals("/native/complete/mobile-app", request.url.encodedPath)
+        assertTrue(request.body!!.utf8().contains("blob=sealed"))
+        assertEquals(listOf("$AUTH_MTLS/token"), proofs.proofsFor)
+        assertEquals(NativeEndpoints("$AUTH_MTLS/token", "$AUTH_MTLS/revoke"), endpoints.stored)
+    }
+
+    @Test
+    fun `a redirect without iss onto a pending record written before the extension existed is refused before any request`() = runTest {
+        // The old record did not say that iss is required, so the validator lets a redirect
+        // without one through when discovery does not advertise it; the exchange is the last
+        // check before the code would be spent, and it refuses.
+        val legacy = """{"state":"edge-state","nonce":"n","codeVerifier":"","scopes":["openid"],""" +
+            """"redirectUri":"https://app.example.com/oauth","acrValues":[],"maxAge":null,"createdAtEpochMillis":1,""" +
+            """"blob":"sealed","tokenEndpoint":"$AUTH_MTLS/token"}"""
+        val pending = PendingAuthorizationCodec.decode(legacy.toByteArray())
+        val grant = AuthorizationResponseValidator.validate(
+            redirect = "https://app.example.com/oauth?code=the-code&state=edge-state",
+            pending = pending,
+            issuer = "https://id.versola.kz",
+            issParameterSupported = false,
+        )
+
+        val error = failure { client().exchange(grant) } as VersolaError.Configuration
+
+        assertTrue(error.detail is VersolaError.Configuration.Detail.IssuerMismatch)
+        assertEquals(0, server.requestCount)
     }
 
     @Test

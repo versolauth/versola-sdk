@@ -803,6 +803,28 @@ class AuthorizationFlowTest {
         assertTrue(roundTrip.issRequired)
     }
 
+    @Test
+    fun `a pending request persisted with a starter's artefacts as fields of its own keeps them`() {
+        // The shape a back channel wrote before the extension existed: its artefacts were
+        // top-level members, and an unexpired one can be on disk across an update.
+        val legacy = """{"state":"s","nonce":"n","codeVerifier":"","scopes":["openid"],""" +
+            """"redirectUri":"https://app.example.com/oauth","acrValues":[],"maxAge":null,"createdAtEpochMillis":1,""" +
+            """"blob":"sealed","tokenEndpoint":"https://id.example.com:9008/token","revocationEndpoint":"https://id.example.com:9008/revoke"}"""
+
+        val decoded = PendingAuthorizationCodec.decode(legacy.toByteArray())
+
+        assertEquals(
+            mapOf("blob" to "sealed", "tokenEndpoint" to "https://id.example.com:9008/token", "revocationEndpoint" to "https://id.example.com:9008/revoke"),
+            decoded.extension,
+        )
+        assertEquals("s", decoded.state)
+        // Only what this module did not understand is kept; a record that names its extension
+        // is taken as written, unknown members and all dropped.
+        val explicit = """{"state":"s","nonce":"n","codeVerifier":"v","scopes":[],"redirectUri":"r","acrValues":[],"maxAge":null,""" +
+            """"createdAtEpochMillis":1,"extension":{"k":"v"},"stray":"x"}"""
+        assertEquals(mapOf("k" to "v"), PendingAuthorizationCodec.decode(explicit.toByteArray()).extension)
+    }
+
     // ---- review findings M3 / M4 --------------------------------------------------------
 
     @Test

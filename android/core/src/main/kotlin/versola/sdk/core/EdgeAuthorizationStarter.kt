@@ -10,6 +10,7 @@ import versola.oauth.core.StartedAuthorization
 import versola.oauth.core.TokenBinding
 import versola.oauth.core.VersolaConfiguration
 import versola.oauth.core.VersolaError
+import versola.oauth.core.VersolaInternalApi
 
 /**
  * [BackChannel.Edge]'s version of building the request: edge builds it, pushes it to `/par`
@@ -26,6 +27,7 @@ import versola.oauth.core.VersolaError
  * back to; and the server registers an edge-fronted native client with https redirect URIs
  * only, so anything else fails at `/par` rather than here. Both are refused at construction.
  */
+@VersolaInternalApi
 public class EdgeAuthorizationStarter(
     private val configuration: VersolaConfiguration,
     tokenBinding: TokenBinding,
@@ -93,5 +95,21 @@ public class EdgeAuthorizationStarter(
         public const val BLOB: String = "blob"
         public const val TOKEN_ENDPOINT: String = "token_endpoint"
         public const val REVOCATION_ENDPOINT: String = "revocation_endpoint"
+
+        /**
+         * The names the same artefacts had as fields of the pending record before the
+         * extension map existed. A record written by that version can still be on disk,
+         * unexpired, after an update; [PendingAuthorizationCodec] keeps its members under
+         * these names and the exchange reads either.
+         */
+        public const val LEGACY_TOKEN_ENDPOINT: String = "tokenEndpoint"
+        public const val LEGACY_REVOCATION_ENDPOINT: String = "revocationEndpoint"
+
+        /** The endpoints a grant's extension names, under the current or the pre-extension keys. */
+        public fun tokenEndpointOf(extension: Map<String, String>): String? =
+            extension[TOKEN_ENDPOINT] ?: extension[LEGACY_TOKEN_ENDPOINT]
+
+        public fun revocationEndpointOf(extension: Map<String, String>): String? =
+            extension[REVOCATION_ENDPOINT] ?: extension[LEGACY_REVOCATION_ENDPOINT]
     }
 }

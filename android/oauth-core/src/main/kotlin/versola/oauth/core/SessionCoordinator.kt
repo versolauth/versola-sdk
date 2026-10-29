@@ -34,6 +34,7 @@ import kotlinx.coroutines.withContext
  * slot that was never load-bearing to begin with — inert, not skipped, which is why this class
  * runs the same three steps unconditionally rather than branching on the token binding.
  */
+@VersolaInternalApi
 public class SessionCoordinator(
     private val flow: AuthorizationFlow,
     private val tokenClient: TokenClient,

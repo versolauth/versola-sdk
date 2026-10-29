@@ -42,3 +42,10 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     testImplementation("com.squareup.okhttp3:mockwebserver3:5.4.0")
 }
+
+apiValidation {
+    // Wiring behind the opt-in marker is not public API: keep it out of the dump so that
+    // apiCheck holds this module to the surface an app can actually use (architecture
+    // review F6).
+    nonPublicMarkers.add("versola.oauth.core.VersolaInternalApi")
+}

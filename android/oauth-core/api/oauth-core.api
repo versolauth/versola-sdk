@@ -15,33 +15,14 @@ public final class versola/oauth/core/AccessTokenSource$DefaultImpls {
 	public static fun stepUpRequired (Lversola/oauth/core/AccessTokenSource;)V
 }
 
-public final class versola/oauth/core/AuthorizationFlow {
-	public fun <init> (Lversola/oauth/core/VersolaConfiguration;Lversola/oauth/core/DiscoveryService;Lversola/oauth/core/PendingAuthorizationStore;Lversola/oauth/core/BrowserAuthorizationSession;Lversola/oauth/core/DpopKeyBinding;Lversola/oauth/core/TokenBinding;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function1;Lversola/oauth/core/AuthorizationStarter;)V
-	public synthetic fun <init> (Lversola/oauth/core/VersolaConfiguration;Lversola/oauth/core/DiscoveryService;Lversola/oauth/core/PendingAuthorizationStore;Lversola/oauth/core/BrowserAuthorizationSession;Lversola/oauth/core/DpopKeyBinding;Lversola/oauth/core/TokenBinding;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function1;Lversola/oauth/core/AuthorizationStarter;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun authorize (Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun authorize$default (Lversola/oauth/core/AuthorizationFlow;Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
-	public final fun endSession (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public final fun getConfiguration ()Lversola/oauth/core/VersolaConfiguration;
-	public final fun getSessionState ()Lkotlinx/coroutines/flow/Flow;
-	public final fun metadata (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public final fun resumePendingAuthorization (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-}
-
 public final class versola/oauth/core/AuthorizationGrant {
-	public fun <init> (Ljava/lang/String;Lversola/oauth/core/CodeVerifier;Ljava/lang/String;Ljava/lang/String;Ljava/util/Set;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;)V
-	public synthetic fun <init> (Ljava/lang/String;Lversola/oauth/core/CodeVerifier;Ljava/lang/String;Ljava/lang/String;Ljava/util/Set;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun getCode ()Ljava/lang/String;
-	public final fun getExtension ()Ljava/util/Map;
-	public final fun getIss ()Ljava/lang/String;
 	public final fun getNonce ()Ljava/lang/String;
 	public final fun getRedirectUri ()Ljava/lang/String;
 	public final fun getScopes ()Ljava/util/Set;
-	public final fun getState ()Ljava/lang/String;
 	public fun toString ()Ljava/lang/String;
 }
 
 public final class versola/oauth/core/AuthorizationRequest {
-	public static final field Companion Lversola/oauth/core/AuthorizationRequest$Companion;
 	public final fun getAcrValues ()Ljava/util/List;
 	public final fun getMaxAge ()Ljava/lang/Long;
 	public final fun getNonce ()Ljava/lang/String;
@@ -50,18 +31,9 @@ public final class versola/oauth/core/AuthorizationRequest {
 	public final fun toUri (Ljava/lang/String;)Ljava/lang/String;
 }
 
-public final class versola/oauth/core/AuthorizationRequest$Companion {
-	public final fun create (Lversola/oauth/core/VersolaConfiguration;Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Ljava/lang/String;Ljava/security/SecureRandom;)Lversola/oauth/core/AuthorizationRequest;
-	public static synthetic fun create$default (Lversola/oauth/core/AuthorizationRequest$Companion;Lversola/oauth/core/VersolaConfiguration;Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Ljava/lang/String;Ljava/security/SecureRandom;ILjava/lang/Object;)Lversola/oauth/core/AuthorizationRequest;
-}
-
 public final class versola/oauth/core/AuthorizationResponseValidator {
 	public static final field INSTANCE Lversola/oauth/core/AuthorizationResponseValidator;
 	public final fun validate (Ljava/lang/String;Lversola/oauth/core/PendingAuthorizationRequest;Ljava/lang/String;Z)Lversola/oauth/core/AuthorizationGrant;
-}
-
-public abstract interface class versola/oauth/core/AuthorizationStarter {
-	public abstract fun start (Lversola/oauth/core/AuthorizationRequest;Lversola/oauth/core/ProviderMetadata;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public abstract interface class versola/oauth/core/BrowserAuthorizationSession {
@@ -92,7 +64,6 @@ public final class versola/oauth/core/BrowserOutcome$UserCancelled : versola/oau
 
 public final class versola/oauth/core/CodeVerifier {
 	public static final field Companion Lversola/oauth/core/CodeVerifier$Companion;
-	public fun <init> (Ljava/lang/String;)V
 	public final fun challengeS256 ()Ljava/lang/String;
 	public fun toString ()Ljava/lang/String;
 }
@@ -124,10 +95,6 @@ public abstract interface class versola/oauth/core/DiscoveryClient {
 	public abstract fun fetch (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
-public final class versola/oauth/core/DiscoveryKt {
-	public static final fun getDiscoveryJson ()Lkotlinx/serialization/json/Json;
-}
-
 public final class versola/oauth/core/DiscoveryService {
 	public fun <init> (Ljava/lang/String;Lversola/oauth/core/DiscoveryClient;Lversola/oauth/core/ProviderMetadataCache;)V
 	public final fun metadata (ZLkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -153,14 +120,6 @@ public final class versola/oauth/core/FileProviderMetadataCache : versola/oauth/
 	public fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun load (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun save (Lversola/oauth/core/ProviderMetadata;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-}
-
-public final class versola/oauth/core/FormBody {
-	public fun <init> ()V
-	public final fun add (Ljava/lang/String;Ljava/lang/String;)Lversola/oauth/core/FormBody;
-	public final fun addBytes (Ljava/lang/String;[B)Lversola/oauth/core/FormBody;
-	public final fun clear ()V
-	public final fun toByteArray ()[B
 }
 
 public final class versola/oauth/core/HttpDiscoveryClient : versola/oauth/core/DiscoveryClient {
@@ -352,20 +311,6 @@ public final class versola/oauth/core/RetryPolicy$Companion {
 	public final fun getPatient ()Lversola/oauth/core/RetryPolicy;
 }
 
-public final class versola/oauth/core/SessionCoordinator : versola/oauth/core/AccessTokenSource {
-	public fun <init> (Lversola/oauth/core/AuthorizationFlow;Lversola/oauth/core/TokenClient;Lversola/oauth/core/CredentialStore;Lversola/oauth/core/RetryPolicy;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function1;Lversola/oauth/core/VersolaLogger;)V
-	public synthetic fun <init> (Lversola/oauth/core/AuthorizationFlow;Lversola/oauth/core/TokenClient;Lversola/oauth/core/CredentialStore;Lversola/oauth/core/RetryPolicy;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function1;Lversola/oauth/core/VersolaLogger;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public fun accessToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public final fun currentAccessToken ()Lversola/oauth/core/TokenResponse;
-	public final fun getSessionState ()Lkotlinx/coroutines/flow/Flow;
-	public final fun login (Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun login$default (Lversola/oauth/core/SessionCoordinator;Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
-	public final fun logout (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public final fun refresh (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun renewAccessToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun stepUpRequired ()V
-}
-
 public abstract interface class versola/oauth/core/SessionState {
 }
 
@@ -418,12 +363,6 @@ public final class versola/oauth/core/SessionState$Unauthenticated : versola/oau
 	public fun toString ()Ljava/lang/String;
 }
 
-public final class versola/oauth/core/StartedAuthorization {
-	public fun <init> (Lversola/oauth/core/PendingAuthorizationRequest;Ljava/lang/String;)V
-	public final fun getBrowserUri ()Ljava/lang/String;
-	public final fun getPending ()Lversola/oauth/core/PendingAuthorizationRequest;
-}
-
 public abstract class versola/oauth/core/TokenBinding {
 }
 
@@ -453,21 +392,6 @@ public abstract interface class versola/oauth/core/TokenClient {
 	public abstract fun revoke ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
-public final class versola/oauth/core/TokenClientKt {
-	public static final fun acceptIssued (Lversola/oauth/core/TokenBinding;Lversola/oauth/core/TokenResponse;)V
-	public static final fun originOf (Ljava/lang/String;)Ljava/lang/String;
-	public static final fun wwwAuthenticateError (Ljava/util/List;)Ljava/lang/String;
-}
-
-public final class versola/oauth/core/TokenErrorPayload {
-	public static final field Companion Lversola/oauth/core/TokenErrorPayload$Companion;
-	public fun <init> ()V
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun getError ()Ljava/lang/String;
-	public final fun getErrorDescription ()Ljava/lang/String;
-}
-
 public final synthetic class versola/oauth/core/TokenErrorPayload$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
 	public static final field INSTANCE Lversola/oauth/core/TokenErrorPayload$$serializer;
 	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
@@ -481,14 +405,6 @@ public final synthetic class versola/oauth/core/TokenErrorPayload$$serializer : 
 
 public final class versola/oauth/core/TokenErrorPayload$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
-}
-
-public final class versola/oauth/core/TokenRequestExecutor {
-	public fun <init> (Lokhttp3/OkHttpClient;Lversola/oauth/core/DpopProofSource;)V
-	public final fun execute (Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun execute$default (Lversola/oauth/core/TokenRequestExecutor;Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
-	public final fun revoke (Ljava/lang/String;[BLjava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun revoke$default (Lversola/oauth/core/TokenRequestExecutor;Ljava/lang/String;[BLjava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 }
 
 public final class versola/oauth/core/TokenResponse {

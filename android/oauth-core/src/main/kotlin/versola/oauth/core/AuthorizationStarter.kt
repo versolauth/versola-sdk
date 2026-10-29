@@ -11,6 +11,7 @@ package versola.oauth.core
  * request carries. Whatever the starter needs at the exchange goes into
  * [PendingAuthorizationRequest.extension], which the validator copies onto the grant.
  */
+@VersolaInternalApi
 public fun interface AuthorizationStarter {
     public suspend fun start(
         request: AuthorizationRequest,
@@ -20,6 +21,7 @@ public fun interface AuthorizationStarter {
 }
 
 /** What [AuthorizationStarter.start] hands back: persist [pending], then open [browserUri]. */
+@VersolaInternalApi
 public class StartedAuthorization(
     public val pending: PendingAuthorizationRequest,
     public val browserUri: String,

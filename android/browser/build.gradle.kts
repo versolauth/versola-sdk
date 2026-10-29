@@ -44,3 +44,10 @@ dependencies {
     testImplementation("org.robolectric:robolectric:4.17")
     testImplementation("androidx.test:core:1.7.0")
 }
+
+apiValidation {
+    // Wiring behind the opt-in marker is not public API: keep it out of the dump so that
+    // apiCheck holds this module to the surface an app can actually use (architecture
+    // review F6).
+    nonPublicMarkers.add("versola.oauth.core.VersolaInternalApi")
+}

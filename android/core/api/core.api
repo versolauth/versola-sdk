@@ -15,16 +15,9 @@ public final class versola/sdk/core/BackChannel$Edge : versola/sdk/core/BackChan
 	public fun toString ()Ljava/lang/String;
 }
 
-public final class versola/sdk/core/EdgeAuthorizationStarter : versola/oauth/core/AuthorizationStarter {
-	public static final field BLOB Ljava/lang/String;
-	public static final field Companion Lversola/sdk/core/EdgeAuthorizationStarter$Companion;
-	public static final field REVOCATION_ENDPOINT Ljava/lang/String;
-	public static final field TOKEN_ENDPOINT Ljava/lang/String;
-	public fun <init> (Lversola/oauth/core/VersolaConfiguration;Lversola/oauth/core/TokenBinding;Lversola/sdk/core/NativeAuthorizationStarter;)V
-	public fun start (Lversola/oauth/core/AuthorizationRequest;Lversola/oauth/core/ProviderMetadata;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
-}
-
 public final class versola/sdk/core/EdgeAuthorizationStarter$Companion {
+	public final fun revocationEndpointOf (Ljava/util/Map;)Ljava/lang/String;
+	public final fun tokenEndpointOf (Ljava/util/Map;)Ljava/lang/String;
 }
 
 public final class versola/sdk/core/EdgeClientUnknown : versola/oauth/core/VersolaError$Configuration$Detail$Extension {

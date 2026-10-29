@@ -22,6 +22,7 @@ import kotlinx.coroutines.withTimeoutOrNull
  *
  * Nothing here knows about Versola. Every URL it uses comes from discovery.
  */
+@VersolaInternalApi
 public class AuthorizationFlow(
     public val configuration: VersolaConfiguration,
     private val discovery: DiscoveryService,

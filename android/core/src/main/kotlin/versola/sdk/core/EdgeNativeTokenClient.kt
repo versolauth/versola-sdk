@@ -70,7 +70,7 @@ public class EdgeNativeTokenClient(
         // here would hand edge a code it did not push the request for. Wiring, not the
         // user's problem, and it fails before the code is spent on anything.
         val blob = grant.extension[EdgeAuthorizationStarter.BLOB]
-        val tokenEndpoint = grant.extension[EdgeAuthorizationStarter.TOKEN_ENDPOINT]
+        val tokenEndpoint = EdgeAuthorizationStarter.tokenEndpointOf(grant.extension)
         val iss = grant.iss
         if (blob == null || tokenEndpoint == null) {
             throw VersolaError.Configuration(
@@ -95,7 +95,7 @@ public class EdgeNativeTokenClient(
         // Remembered for the refreshes and the revocation that follow, in this process and
         // the next: a refresh does not go through /native/start and has no other way to learn
         // what to sign for.
-        endpoints.save(NativeEndpoints(tokenEndpoint, grant.extension[EdgeAuthorizationStarter.REVOCATION_ENDPOINT] ?: tokenEndpoint.replaceAfterLast('/', "revoke")))
+        endpoints.save(NativeEndpoints(tokenEndpoint, EdgeAuthorizationStarter.revocationEndpointOf(grant.extension) ?: tokenEndpoint.replaceAfterLast('/', "revoke")))
         return issued
     }
 
