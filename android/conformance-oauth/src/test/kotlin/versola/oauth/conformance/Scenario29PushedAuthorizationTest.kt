@@ -23,10 +23,27 @@ class Scenario29PushedAuthorizationTest : ProviderConformance() {
         val client = client()
         val metadata = client.metadata()
         assumeTrue("the provider advertises no PAR endpoint", metadata.pushedAuthorizationRequestEndpoint != null)
+        // The moment the browser opens: the state (Authorizing only once the pending request
+        // is persisted), how much of the transcript preceded it, and when.
+        var stateAtOpen: SessionState? = null
+        var transcriptAtOpen = -1
+        var openedAt = 0L
+        browser.onOpen = {
+            stateAtOpen = kotlinx.coroutines.runBlocking { client.state() }
+            transcriptAtOpen = transcript.entries.size
+            openedAt = System.currentTimeMillis()
+        }
 
         client.login()
 
         val pushed = theRequest("POST", metadata.pushedAuthorizationRequestEndpoint!!.substringAfter(proxy.origin))
+        // Persisted after the PAR response and before the browser opened.
+        assertEquals(SessionState.Authorizing, stateAtOpen)
+        assertTrue(transcript.entries.indexOf(pushed) < transcriptAtOpen)
+        // The request_uri was used once, within the lifetime the PAR response gave it.
+        val expiresIn = pushed.responseJson!!["expires_in"]!!.toString().trim('"').toLong()
+        assertTrue("opened ${openedAt - pushed.at} ms after a PAR response valid for $expiresIn s", openedAt - pushed.at < expiresIn * 1000)
+        assertEquals(1, browser.opened.count { it.contains("request_uri=") })
         assertTrue(pushed.form.containsKey("code_challenge"))
         assertTrue(pushed.form.containsKey("state"))
         assertTrue(pushed.form.containsKey("nonce"))

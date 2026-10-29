@@ -27,6 +27,8 @@ class Transcript : Interceptor {
         val status: Int,
         val responseHeaders: Map<String, List<String>>,
         val responseBody: String?,
+        /** When the response arrived, epoch millis: what "within its expires_in" is measured from. */
+        val at: Long = System.currentTimeMillis(),
     ) {
         val path: String get() = url.substringAfter("://").substringAfter('/').substringBefore('?').let { "/$it" }
         fun header(name: String): String? = headers.entries.firstOrNull { it.key.equals(name, ignoreCase = true) }?.value?.firstOrNull()

@@ -17,6 +17,6 @@ steps:
     action: Call accessToken() and then the protected resource.
 assertions:
   - accessToken() fails with Reauthenticate SessionExpired; no request reaches the token endpoint.
-  - The authenticated client makes no refresh attempt and surfaces the same Reauthenticate.
+  - The authenticated client makes no refresh attempt and surfaces Reauthenticate too, with SessionExpired when it is the call that observes the expiry, and GrantRejected once the session has been wiped by an earlier observation (nothing is left to refresh with).
   - SessionState moves from Authenticated to Unauthenticated when the expiry is observed, and the ID token and claims are wiped.
   - The SDK did not open a browser on its own.

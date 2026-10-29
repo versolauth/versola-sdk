@@ -36,6 +36,9 @@ class HttpLoginBrowser(
     /** When set, the next open is dismissed without a request, as a user closing the tab. */
     var dismissNext: Boolean = false
 
+    /** Called with each URI as it is opened, before any request: where a test observes "the moment the browser opens". */
+    var onOpen: (String) -> Unit = {}
+
     private val cookies = object : CookieJar {
         private val store = mutableMapOf<String, Cookie>()
         override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {
@@ -48,6 +51,7 @@ class HttpLoginBrowser(
 
     override suspend fun authorize(uri: String): BrowserOutcome {
         opened += uri
+        onOpen(uri)
         if (dismissNext) {
             dismissNext = false
             return BrowserOutcome.UserCancelled
