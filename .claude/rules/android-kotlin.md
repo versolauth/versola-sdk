@@ -46,7 +46,9 @@ for API 36. If you cannot start an emulator, say the device tier was not run (`t
   and the errors only edge produces), `:dpop`, `:storage` and `:browser` depend on `:oauth-core`;
   `:okhttp` on `:oauth-core` and `:dpop`; the two facades sit on top: `:sdk` (Versola, on `:core`
   too) and `:oauth` (generic, `OAuthClient`, package `versola.oauth`, never on `:core`)
-  (`android/settings.gradle.kts`, ADR 0001). `:storage` and `:browser` never depend on each other;
+  (`android/settings.gradle.kts`, ADR 0001). The two drivers, `:conformance-android` (instrumented,
+  the Versola facade against a staged stack) and `:conformance-oauth` (Robolectric, the generic
+  facade against a provider container), depend on their facade and publish nothing. `:storage` and `:browser` never depend on each other;
   the facade is the one place that sees both. A new edge in this graph needs a reason in the PR.
 - `:oauth-core`, `:core` and `:okhttp` contain no `android.*` import, and
   `.claude/hooks/check-core-purity.sh` fails on one. `:oauth-core` knows nothing about Versola:
@@ -123,7 +125,8 @@ for API 36. If you cannot start an emulator, say the device tier was not run (`t
 - JUnit 4 with `kotlinx-coroutines-test` (virtual time) and MockWebServer (`mockwebserver3:5.4.0`)
   for HTTP. No sleeps, no real network.
 - Robolectric is for framework interactions (Custom Tabs launch, `KeyGenParameterSpec` per API
-  level) in `:browser`, `:storage` and `:sdk`; `:oauth-core`, `:core`, `:dpop` and `:okhttp` stay plain JVM tests.
+  level) in `:browser`, `:storage`, `:sdk` and `:oauth` (and in `:conformance-oauth`, whose tests
+  need only a `Context`); `:oauth-core`, `:core`, `:dpop` and `:okhttp` stay plain JVM tests.
   Do not add Robolectric to a module that does not have it, or `isIncludeAndroidResources` with it.
 - The Keystore has no JVM implementation: what the hardware does is proved on an emulator
   (`src/androidTest`, `connectedDebugAndroidTest`), API 28 and 34 in the instrumented job and API

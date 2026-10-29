@@ -169,10 +169,28 @@ A scenario with no driver yet is proven against stubs only. Say so in the pull r
 
 ## Provider containers
 
-Planned by #46, not present yet: `conformance/providers/` with compose files for Keycloak and
-Ory Hydra, so the generic OAuth SDK can be exercised against providers other than Versola. When
-they land this section gets the `docker compose up` commands and the realm and client setup. Until then
-the only provider the harness runs against is a staged Versola stack.
+The generic facade (`OAuthClient`, issue #46) is proven against providers other than Versola
+from `conformance/providers/<name>/`: a compose file plus the provider's pre-provisioned
+configuration (Keycloak's `realm.json`: the `conformance` realm, the public clients
+`conformance-app` and `conformance-app-norefresh`, the user `alice`; Hydra's `hydra.yml` and
+`clients.json`, with Ory's reference login-consent app as the user). The driver is
+`android/conformance-oauth`, Robolectric unit tests over a real network, skipped unless the
+provider's issuer is in the environment.
+
+```bash
+docker compose -f conformance/providers/keycloak/docker-compose.yml up -d --wait
+cd android && OAUTH_CONFORMANCE_ISSUER=http://localhost:8080/realms/conformance \
+  OAUTH_CONFORMANCE_PROVIDER=keycloak ./gradlew :conformance-oauth:testDebugUnitTest
+docker compose -f conformance/providers/keycloak/docker-compose.yml down -v   # also before re-importing an edited realm.json
+
+docker compose -f conformance/providers/hydra/docker-compose.yml up -d   # ports 4444, 4445, 3000; the proxy takes 14444
+cd android && OAUTH_CONFORMANCE_ISSUER=http://localhost:4444 \
+  OAUTH_CONFORMANCE_PROVIDER=hydra ./gradlew :conformance-oauth:testDebugUnitTest
+```
+
+A run takes about half a minute, most of it scenario 31 waiting for ten-second tokens to
+expire. `conformance/README.md` ("Providers") says how the proxy, the HTTP browser leg and the
+resource server work, what differs per provider, and what this tier does not prove.
 
 ## Agent setup
 

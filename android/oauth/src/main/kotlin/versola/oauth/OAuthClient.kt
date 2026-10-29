@@ -268,6 +268,18 @@ public class OAuthClient private constructor(
             }
         }
 
+        /**
+         * Wiring: forgets every client this process created, so the next [create] builds anew.
+         * For a conformance driver whose tests each stage a provider at the same address with
+         * a different configuration; an app has no reason to call it. The instances are not
+         * closed: a forgotten client over a live store must not be used again, and a test's
+         * stores are its own temporary directories.
+         */
+        @VersolaInternalApi
+        public fun forgetAll() {
+            synchronized(clients) { clients.clear() }
+        }
+
         private fun build(
             context: Context,
             configuration: OAuthConfiguration,
