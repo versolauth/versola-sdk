@@ -113,6 +113,11 @@ The example's Android build includes `android/` as a composite build and substit
 needs the same `JAVA_HOME` (21) and `ANDROID_HOME` as the Android build. The iOS half depends on
 the repository package by path (Swift Package Manager only; the SDK is not on CocoaPods).
 
+The bridge conformance tests are the example app's native tests (below, "Provider containers"):
+Robolectric unit tests under `example/android/app/src/test` and XCTest in `example/ios/RunnerTests`.
+Both are skipped without a provider in the environment, so `flutter build` and a plain
+`xcodebuild test` of the example stay unit runs.
+
 ### Spec and Markdown
 
 ```bash
@@ -208,6 +213,26 @@ The iOS driver runs against the same containers from the repository root, on the
 (`OAUTH_CONFORMANCE_ISSUER=… OAUTH_CONFORMANCE_PROVIDER=… swift test --filter OAuthConformanceTests`)
 or on a simulator (the same variables with a `TEST_RUNNER_` prefix and
 `xcodebuild test … -only-testing:OAuthConformanceTests`).
+
+The Flutter plugin has the same scenarios through its bridge: the plugin's own Pigeon host API
+is driven by native tests in the example app, with the driver's wiring underneath (see
+`conformance/README.md`, "Through the Flutter bridge"). Against Keycloak, from
+`flutter/versola_oauth/example/`:
+
+```bash
+export JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=~/Library/Android/sdk   # your SDK path
+cd android && OAUTH_CONFORMANCE_ISSUER=http://localhost:8080/realms/conformance \
+  OAUTH_CONFORMANCE_PROVIDER=keycloak ./gradlew :app:testDebugUnitTest
+
+fvm flutter build ios --config-only --simulator   # once, and after a plugin change: writes the Swift package Xcode resolves
+cd ios && TEST_RUNNER_OAUTH_CONFORMANCE_ISSUER=http://localhost:8080/realms/conformance \
+  TEST_RUNNER_OAUTH_CONFORMANCE_PROVIDER=keycloak xcodebuild test -workspace Runner.xcworkspace -scheme Runner \
+  -destination "platform=iOS Simulator,id=<udid from: xcrun simctl list devices available>" -only-testing:RunnerTests
+```
+
+Name the simulator by `id` when two devices share a name. Hydra is the same with its issuer and
+`hydra`. Do not enable parallel testing for `RunnerTests` (the scheme sets it off): the virtual
+network is one per process, as in the native iOS driver.
 
 A run takes about a minute per provider, most of it scenario 31 waiting for ten-second tokens
 to expire. `conformance/README.md` ("Providers") says how the proxy, the HTTP browser leg and the

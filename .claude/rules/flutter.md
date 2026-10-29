@@ -42,6 +42,10 @@ in `security.md`; what the platform SDKs do is in `android-kotlin.md` and `ios-s
   native collection when the Dart subscription cancels. One channel per client: the Pigeon
   `instanceName` is the client handle, base64url(SHA-256(issuer + "\n" + clientId))[0..16], the
   same derivation as the native storage key, so Dart and native agree on which client is which.
+- A channel handler is registered on the platform thread. On iOS a Pigeon call reaches the plugin
+  on the Swift concurrency pool, and the engine aborts a debug build that registers an event
+  channel from there, so `create` hops to the main actor for it; the bridge conformance run is what
+  found that. Android's handlers already run on the main dispatcher.
 - Generated files (`*.g.dart`, the generated Kotlin and Swift) are never hand-edited, and the guard
   hook denies it; change the Pigeon definition (`pigeons/messages.dart`) and regenerate with
   `fvm dart run pigeon --input pigeons/messages.dart`. They are not exported from
@@ -75,8 +79,12 @@ cd example && flutter build ios --no-codesign   # and on iOS
 - The example app builds on both platforms and exercises sign-in, refresh, sign-out and the error
   categories; a change to the Pigeon definition is not done until both example builds pass. Use
   `example.com` configuration and no real client ids.
-- When the generic SDK's scenarios run through the bridge (issue #46, B6), a scenario that passes
-  natively but fails through the bridge is a finding in the bridge.
+- The generic SDK's scenarios 24 to 32 run through the bridge as native tests in the example app
+  (`example/android/app/src/test`, `example/ios/RunnerTests`; `conformance/README.md`, "Through the
+  Flutter bridge"), against the same provider containers as the native drivers. A scenario that
+  passes natively but fails through the bridge is a finding in the bridge. The driver's wiring is
+  never added to the plugin: the tests reach it by creating the native client first and letting
+  the plugin's `create` resolve the same configuration.
 
 ## Packages and dependencies
 
