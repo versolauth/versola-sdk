@@ -87,11 +87,13 @@ spec/            state machine, errors, retry policy, conformance scenarios,
 android/         Gradle multi-project: oauth-core (the protocol engine, plain JVM, package
                  versola.oauth.core), core (the edge back channel, versola.sdk.core), dpop,
                  storage, browser, okhttp, sdk (the Versola facade), oauth (the generic OAuthClient facade,
-                 spec/oauth-sdk-api.md), samples/oauth (a minified app over it: the R8 proof)
+                 spec/oauth-sdk-api.md), conformance-android and conformance-oauth (the drivers),
+                 samples/oauth (a minified app over the generic facade: the R8 proof)
 ios/Sources/     Swift targets
 Package.swift    at the repo root; SPM cannot resolve a manifest from a subdirectory
 flutter/         plugin + Pigeon bridge
-conformance/     harness driving every SDK against a staged auth + edge
+conformance/     harness driving every SDK against a staged auth + edge, and the provider
+                 containers (providers/) the generic facade is proven against
 ```
 
 ## Portability

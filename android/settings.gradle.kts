@@ -42,3 +42,8 @@ include(":conformance-android")
 // A minimal app over the generic facade, minifyEnabled: R8 over the SDK is the proof that it
 // needs no consumer keep rules (architecture review F9). Nothing is published from it.
 include(":samples:oauth")
+// The generic facade's conformance driver (#46, B4): Robolectric unit tests that drive OAuthClient
+// against a real OpenID Provider in Docker (conformance/providers/) through a rewriting proxy, for
+// the scenarios tagged `facade: [oauth]`. Skipped unless OAUTH_CONFORMANCE_ISSUER is set, so the
+// build job's `test` stays a unit run. Nothing is published from it.
+include(":conformance-oauth")
