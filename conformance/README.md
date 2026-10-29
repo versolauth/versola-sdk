@@ -9,11 +9,12 @@ nothing is published from it) and runs scenarios 01 and 21 — with the refresh,
 logout steps of 02, 11 and 18 and the blob-less replay of 22 — green against a stack staged
 from `versolauth/versola` at `d6203f93`, from an emulator. The rest of the catalogue, the
 fault-injection proxy and the transcript comparison with the reference client are the order
-of work at the bottom. iOS has no driver yet.
+of work at the bottom. iOS has no driver for the Versola facade yet.
 
-The generic facade has its own driver, `android/conformance-oauth` (Robolectric unit tests,
-real network), which runs scenarios 24 to 32 green against Keycloak 26.4 and Ory Hydra 26.2
-staged from [`providers/`](providers/); see [Providers](#providers) below.
+The generic facade has its own drivers, `android/conformance-oauth` (Robolectric unit tests,
+real network) and `ios/Tests/OAuthConformanceTests` (XCTest, on the Mac host or an iOS
+simulator), which run scenarios 24 to 32 green against Keycloak 26.4 and Ory Hydra 26.2 staged
+from [`providers/`](providers/); see [Providers](#providers) below.
 
 ## Why it is not more unit tests
 
@@ -127,6 +128,26 @@ the provider's test user. Keycloak imports its realm at container start and leav
 realm alone, so `down` before `up` after editing `realm.json`; Hydra keeps everything in memory
 and a one-shot container imports `clients.json` after each start.
 
+The iOS driver is the same design in Swift, run from the repository root against the same
+containers, on the host or on a simulator (`xcodebuild` forwards `TEST_RUNNER_`-prefixed
+variables to the test process):
+
+```bash
+OAUTH_CONFORMANCE_ISSUER=http://localhost:8080/realms/conformance OAUTH_CONFORMANCE_PROVIDER=keycloak \
+  swift test --filter OAuthConformanceTests
+TEST_RUNNER_OAUTH_CONFORMANCE_ISSUER=http://localhost:4444 TEST_RUNNER_OAUTH_CONFORMANCE_PROVIDER=hydra \
+  xcodebuild test -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 17" \
+  -only-testing:OAuthConformanceTests
+```
+
+Its proxy is in process: a `URLProtocol` on the SDK's and the browser leg's sessions
+(`VirtualNetwork`) forwards the proxy origin `http://localhost:14444` to the real provider
+with that origin as `Host` (`URLSession` honours a custom `Host` header), so no listener is
+opened and the same code runs on a simulator; the resource origins are virtual too. The
+login conversation, the provider profiles and the scenario assertions are the Android
+driver's, ported one to one. It has no CI job: GitHub's macOS runners have no Docker daemon,
+so the iOS driver runs locally and the PR says which provider it ran against.
+
 What differs per provider is a `Provider.Profile` in the driver: the issuer's path, the proxy's
 port, the scopes that buy a refresh token, the login conversation. Keycloak derives its issuer
 from the request, so the proxy takes any free port; Hydra builds every URL from `urls.self` in
@@ -209,4 +230,6 @@ it with the stack's addresses as instrumentation arguments:
 8. ~~The generic facade against Keycloak (scenarios 24–32, `android/conformance-oauth`).~~ Done.
 9. ~~The generic facade against Ory Hydra (`providers/hydra/`, `HydraLogin`).~~ Done; 25 of
    27 tests, the two PAR tests skipped by assumption.
-10. The hosted providers on demand (`spec/providers.md` section 4).
+10. ~~The iOS driver for the generic facade (`ios/Tests/OAuthConformanceTests`).~~ Done, local
+    runs only (no Docker on the macOS runners).
+11. The hosted providers on demand (`spec/providers.md` section 4).

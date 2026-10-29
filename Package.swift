@@ -55,6 +55,16 @@ let package = Package(
             path: "ios/Tests/OAuthClientTests",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        // The generic facade's conformance driver (conformance/README.md, "Providers"; the
+        // twin of android/conformance-oauth): scenarios 24 to 32 against a provider container,
+        // through an in-process proxy, with the provider's login form driven over HTTP. Every
+        // test is skipped unless OAUTH_CONFORMANCE_ISSUER is set.
+        .testTarget(
+            name: "OAuthConformanceTests",
+            dependencies: ["OAuthClient"],
+            path: "ios/Tests/OAuthConformanceTests",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
 
         // Protocol core: state machine, error taxonomy, discovery, token/authorization
         // requests. No Versola-specific URLs or routing (see #4's licence decision).

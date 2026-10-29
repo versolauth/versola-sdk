@@ -22,7 +22,9 @@ transcripts, not against each other's code. Security rules are in `security.md`.
   `URLSession` wrapper, the Secure Enclave DPoP key; product `VersolaOAuth`). The placeholder
   `VersolaCore`, `VersolaDPoP`, `VersolaStorage`, `VersolaBrowser`, `VersolaURLSession` targets are
   for the Versola facade, which does not exist on iOS yet; when it does it depends on `OAuthCore`
-  the way Android's `:core` does, and `OAuthCore` never on it.
+  the way Android's `:core` does, and `OAuthCore` never on it. `OAuthConformanceTests` is the
+  generic facade's conformance driver (`conformance/README.md`, "Providers"): skipped without
+  `OAUTH_CONFORMANCE_ISSUER`, never a place for a stub of the SDK's own behaviour.
 - The package is source, not a binary XCFramework: the licence is Apache-2.0, there is nothing to
   hide, and a binary would force library-evolution mode and make every dependency's ABI part of the
   contract. Do not add a `.binaryTarget`. CocoaPods is dormant in `release.yml`.

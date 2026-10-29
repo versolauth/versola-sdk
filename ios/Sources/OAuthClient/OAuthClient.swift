@@ -52,7 +52,7 @@ public final class OAuthClient: Sendable {
         presentationAnchor: @escaping @MainActor @Sendable () -> ASPresentationAnchor
     ) async throws -> OAuthClient {
         try await registry.resolve(configuration) {
-            try build(configuration: configuration, presentationAnchor: presentationAnchor, browser: nil, credentialStore: nil, pendingStore: nil)
+            try build(configuration: configuration, presentationAnchor: presentationAnchor, browser: nil, credentialStore: nil, pendingStore: nil, metadataCache: nil, jwksCache: nil)
         }
     }
 
@@ -62,10 +62,14 @@ public final class OAuthClient: Sendable {
         configuration: OAuthConfiguration,
         browser: BrowserAuthorizationSession,
         credentialStore: CredentialStore,
-        pendingStore: PendingAuthorizationStore
+        pendingStore: PendingAuthorizationStore,
+        /// In-memory caches for a driver whose every test stages the provider anew; the file
+        /// caches would otherwise serve one test's discovery and keys to the next.
+        metadataCache: ProviderMetadataCache? = nil,
+        jwksCache: JwksCache? = nil
     ) async throws -> OAuthClient {
         try await registry.resolve(configuration) {
-            try build(configuration: configuration, presentationAnchor: nil, browser: browser, credentialStore: credentialStore, pendingStore: pendingStore)
+            try build(configuration: configuration, presentationAnchor: nil, browser: browser, credentialStore: credentialStore, pendingStore: pendingStore, metadataCache: metadataCache, jwksCache: jwksCache)
         }
     }
 
@@ -202,7 +206,9 @@ public final class OAuthClient: Sendable {
         presentationAnchor: (@MainActor @Sendable () -> ASPresentationAnchor)?,
         browser injectedBrowser: BrowserAuthorizationSession?,
         credentialStore injectedCredentials: CredentialStore?,
-        pendingStore injectedPending: PendingAuthorizationStore?
+        pendingStore injectedPending: PendingAuthorizationStore?,
+        metadataCache injectedMetadataCache: ProviderMetadataCache?,
+        jwksCache injectedJwksCache: JwksCache?
     ) throws -> OAuthClient {
         let logger = configuration.logger
         if let warning = configuration.redirectUriWarning { logger.warn(warning) }
@@ -219,7 +225,7 @@ public final class OAuthClient: Sendable {
             discovery = DiscoveryService(
                 issuer: core.issuer,
                 client: EndSessionOverride(delegate: HTTPDiscoveryClient(httpClient: httpClient), endSessionEndpoint: configuration.endSessionEndpoint),
-                cache: FileProviderMetadataCache(directory: directory)
+                cache: injectedMetadataCache ?? FileProviderMetadataCache(directory: directory)
             )
         }
 
@@ -249,7 +255,7 @@ public final class OAuthClient: Sendable {
             starter: PushedAuthorizationStarter(configuration: core, httpClient: httpClient, policy: configuration.pushedAuthorization),
             logger: logger
         )
-        let jwks = JwksClient(httpClient: httpClient, cache: FileJwksCache(directory: directory))
+        let jwks = JwksClient(httpClient: httpClient, cache: injectedJwksCache ?? FileJwksCache(directory: directory))
         let validator = JwksIdTokenValidator(
             // The issuer the provider signs under: discovery's, which may carry a trailing slash.
             issuer: { try await discovery.metadata().issuer },
