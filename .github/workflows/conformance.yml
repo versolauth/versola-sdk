@@ -137,11 +137,11 @@ jobs:
           --health-timeout=5s
           --health-retries=10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: sdk
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: versolauth/versola
           ref: ${{ inputs.versola_ref || 'main' }}
