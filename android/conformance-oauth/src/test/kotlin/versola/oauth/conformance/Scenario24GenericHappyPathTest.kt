@@ -18,10 +18,13 @@ class Scenario24GenericHappyPathTest : ProviderConformance() {
     @Test
     fun `sign-in, authenticated call, userinfo and sign-out against the staged provider`() = runTest {
         val client = client()
+        // Discovery first (the one request of it; the login reuses the cached document), for
+        // the paths the assertions below are keyed on.
+        val metadata = client.metadata()
         // The ID token must be validated before Authenticated is published: the state the
         // SDK is in when it asks for the keys is the proof (second assertion).
         var stateAtJwksFetch: SessionState? = null
-        proxy.rewrite("/certs") { body ->
+        proxy.rewrite(metadata.jwksUri!!.substringAfter(proxy.origin)) { body ->
             stateAtJwksFetch = runBlocking { client.state() }
             body
         }
@@ -32,12 +35,12 @@ class Scenario24GenericHappyPathTest : ProviderConformance() {
         assertEquals(SessionState.Authorizing, stateAtJwksFetch)
         val claims = checkNotNull(client.claims) { "claims after login" }
         assertTrue(claims.subject.isNotBlank())
-        assertEquals(proxy.issuer, claims.issuer)
+        // The issuer as discovery announces it, trailing slash included (Hydra, Auth0).
+        assertEquals(metadata.issuer, claims.issuer)
 
         // Exactly one discovery request; the request the browser opened is code + S256 with
         // state and nonce, either in the query or pushed first (PAR when advertised).
         assertEquals(1, transcript.matching("GET", "/.well-known/openid-configuration").size)
-        val metadata = client.metadata()
         val opened = browser.opened.single()
         assertTrue(opened.startsWith(metadata.authorizationEndpoint + "?"))
         val authorizationParameters = if (metadata.pushedAuthorizationRequestEndpoint != null) {

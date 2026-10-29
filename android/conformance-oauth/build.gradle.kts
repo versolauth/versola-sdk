@@ -37,6 +37,11 @@ android {
             it.environment("OAUTH_CONFORMANCE_PASSWORD", System.getenv("OAUTH_CONFORMANCE_PASSWORD") ?: "")
             // A scenario that failed is diagnosed from its transcript.
             it.testLogging { events("failed", "skipped"); showStandardStreams = true }
+            // A run against a live provider is never up to date and never worth caching: the
+            // environment is not a tracked input, so the build cache would otherwise serve a
+            // previous run's results (27 skipped, from a run with no provider) for a new one.
+            it.outputs.upToDateWhen { false }
+            it.outputs.doNotCacheIf("runs against a live provider") { true }
         }
     }
 }

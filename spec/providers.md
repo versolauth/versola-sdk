@@ -78,19 +78,19 @@ tenant here, and "documented" there means documented in that file.
 | Public client + PKCE | Yes, client authentication off (documented [2, 3]) | Yes, `token_endpoint_auth_method` `none` (documented [24, 25]) | Yes, application type Native (documented [49, 50]) | Yes, mobile and desktop platform (documented [75, 76, 77]) | Yes, Native app, client auth None requires PKCE (reported [95]) | Yes, app client without secret (documented [113]) | Standard tenant only; `fapi2` tenant refuses public clients at `/token`, `/revoke`, `/par`, `/introspect` (documented) |
 | S256 enforced | Per-client method setting and `pkce-enforcer` executor; option list from 21.0.2 (documented [2, 4]; list reported [5]) | `S256` only; enforcement is server-wide config, default not found (documented [24, 27]) | `S256` only, challenge required (reported [52]); a discovery sample also lists `plain` (reported [53], conflicts) | `plain` and `S256` both accepted, not enforced for native (documented [75]) | "Always S256" (reported [95]); `plain` rejected: not found | `S256` only, PKCE itself optional (documented [114, 115]) | Mandatory, `S256`: `AuthorizeRequestParser` refuses a request without a code challenge (documented, issue #1 section 2) |
 | Client secret for native apps | Not required (documented [3]) | Not required; CLI default is `client_secret_basic`, set `none` explicitly (documented [26]) | Not needed for Native; whether one is allowed: not found (documented [50]) | Must not be used by public clients (documented [75]); `none` absent from discovery's auth methods | Auth None is the default; whether a secret is allowed: not found (reported [95]) | Client must have no secret; fixed at creation (documented [113]) | None for a public client on a `standard` tenant; `fapi2` takes confidential clients only (documented) |
-| RFC 9207 `iss` | Supported since 23.0; per-client opt-out reported; `authorization_response_iss_parameter_supported: true` and `iss` on the redirect (verified, B4) | Not found | Tenant setting "Include Issuer in Authorization Responses"; default not found (documented [54]) | Not found | Not found | Not found | Always on the redirect, success and error; discovery advertises `authorization_response_iss_parameter_supported: true` (documented) |
-| PAR | Supported, feature `par:v1` on by default; `…/protocol/openid-connect/ext/par/request` advertised, public client accepted (verified, B4) | Not found | `/oauth/par`; tenant toggle off by default, Enterprise plan plus add-on; public apps reportedly unsupported (documented [56, 57]; limitation reported) | Not found | `/par` exists and discovery lists it; use by public clients not found (reported [98]) | Not found | `/par` exists and is advertised; required for `fapi2`; per-client `requirePushedAuthorizationRequests`; discovery says `request_uri_parameter_supported: false` (documented) |
-| DPoP | Supported since 26.4, per-client "Require DPoP bound tokens"; `dpop_signing_alg_values_supported` advertised (ES/RS/PS 256–512, EdDSA) (verified, B4; DPoP flow not driven) | Not found | Supported for public clients, server nonce required; algorithms beyond ES256 examples not found; plan not confirmed (documented [58]) | Not found at the v2.0 token endpoint; only `Bearer` (documented [75]); MSAL PoP needs a broker (reported [80]) | Per-app setting, nonce flow; ES256 in the reported algorithm list; native clients not found (reported [99, 100]) | Not found | `ES256` and `PS256` advertised; client needs `dpopBoundAccessTokens = true` (and `accessTokenTtl >= 3600s`); nonce when the tenant sets `requireDpopNonce` (default false) (documented) |
-| Refresh token for public clients, and scope | Returned by default from most flows; `offline_access` yields an offline token (documented [3, 15]) | `offline_access` (or `offline`) and the consent app must grant it (documented [24, 32]) | `offline_access` plus "Allow Offline Access" on the application and the API (documented [55]) | `offline_access` required (documented [82]) | `offline_access` on `/authorize`; mobile apps default to persistent tokens (reported [101]) | Always issued for the code grant; `offline_access` has no effect (documented [114, 116]) | Scope needed: not found. Expiry fixed at the code exchange, default 180 days, never extended (documented) |
+| RFC 9207 `iss` | Supported since 23.0; per-client opt-out reported; `authorization_response_iss_parameter_supported: true` and `iss` on the redirect (verified, B4) | Not advertised by v26.2.0 OSS: no `authorization_response_iss_parameter_supported`, no `iss` on the redirect (verified, B4) | Tenant setting "Include Issuer in Authorization Responses"; default not found (documented [54]) | Not found | Not found | Not found | Always on the redirect, success and error; discovery advertises `authorization_response_iss_parameter_supported: true` (documented) |
+| PAR | Supported, feature `par:v1` on by default; `…/protocol/openid-connect/ext/par/request` advertised, public client accepted (verified, B4) | Not advertised by v26.2.0 OSS (verified, B4) | `/oauth/par`; tenant toggle off by default, Enterprise plan plus add-on; public apps reportedly unsupported (documented [56, 57]; limitation reported) | Not found | `/par` exists and discovery lists it; use by public clients not found (reported [98]) | Not found | `/par` exists and is advertised; required for `fapi2`; per-client `requirePushedAuthorizationRequests`; discovery says `request_uri_parameter_supported: false` (documented) |
+| DPoP | Supported since 26.4, per-client "Require DPoP bound tokens"; `dpop_signing_alg_values_supported` advertised (ES/RS/PS 256–512, EdDSA) (verified, B4; DPoP flow not driven) | Not advertised by v26.2.0 OSS (verified, B4) | Supported for public clients, server nonce required; algorithms beyond ES256 examples not found; plan not confirmed (documented [58]) | Not found at the v2.0 token endpoint; only `Bearer` (documented [75]); MSAL PoP needs a broker (reported [80]) | Per-app setting, nonce flow; ES256 in the reported algorithm list; native clients not found (reported [99, 100]) | Not found | `ES256` and `PS256` advertised; client needs `dpopBoundAccessTokens = true` (and `accessTokenTtl >= 3600s`); nonce when the tenant sets `requireDpopNonce` (default false) (documented) |
+| Refresh token for public clients, and scope | Returned by default from most flows; `offline_access` yields an offline token (documented [3, 15]) | `offline_access` (or `offline`) and the consent app must grant it; issued for `openid profile offline_access`, not for `openid profile` (verified, B4; documented [24, 32]) | `offline_access` plus "Allow Offline Access" on the application and the API (documented [55]) | `offline_access` required (documented [82]) | `offline_access` on `/authorize`; mobile apps default to persistent tokens (reported [101]) | Always issued for the code grant; `offline_access` has no effect (documented [114, 116]) | Scope needed: not found. Expiry fixed at the code exchange, default 180 days, never extended (documented) |
 | Refresh rotation and reuse detection | Realm "Revoke Refresh Token" (`revokeRefreshToken`, `refreshTokenMaxReuse`); default not stated; with it on, reuse is 400 `invalid_grant` and revokes the session (verified, B4) | Always single-use; reuse revokes the consent chain; grace period default 0 s, at most 5 min (documented [24, 31, 32]) | Opt-in per app; reuse invalidates the family; overlap window default 0 (reported [60, 62]) | New token each use, old one not revoked; no reuse detection documented (documented [83]) | `ROTATE` or `STATIC`, grace 30 s (0 to 60); reuse invalidates the latest token (reported [101]) | Optional per app client, grace up to 60 s; reuse detection after grace not found (documented [114, 116]) | DPoP: renewed in place, same token echoed, no rotation. Bearer: rotation, replay revokes the family; `Idempotency-Key` honoured (documented; scenarios 09, 10, 11) |
-| Revocation endpoint (RFC 7009) | `/revoke`; a public client sends `client_id` only (verified, B4) | `/oauth2/revoke`; public client with `client_id` only: not found (documented [28]) | `/oauth/revoke` with `client_id` and `token` (documented [51]) | No RFC 7009 endpoint documented (documented [83]; Q&A unverified [85]) | `/revoke`, public clients send `client_id` only (reported [103]) | `/oauth2/revoke`, `client_id` required for public clients, refresh tokens only (documented [118]) | `/revoke` exists and reads no proof; public-client call on a `standard` tenant not found (documented) |
-| RP-initiated logout and its parameters | `.../openid-connect/logout`; with `id_token_hint` and a registered `post_logout_redirect_uri` a direct 302 carrying `state`, no confirmation page (verified, B4) | `{public}/oauth2/sessions/logout`; `id_token_hint` optional; needs a logout UI app (documented [33, 34]) | `end_session_endpoint` advertised for tenants created from 2023-11-14; legacy `/v2/logout` with `returnTo`; `/oidc/logout` path unverified (reported [63, 64]) | `/{tenant}/oauth2/v2.0/logout`; `post_logout_redirect_uri`, `logout_hint`; `id_token_hint` not in the documented table (documented [73]) | `/oauth2/v1/logout`; `id_token_hint` required; discovery member not found (reported [100, 102]) | Own `/logout` with `client_id` and `logout_uri`; no `id_token_hint`; discovery member not found (documented [117]) | `/logout` renders a signed-out page with `post_logout_redirect_uri` and `state`; tenant-level URI list; expired `id_token_hint` silently ignored; discovery member not found (documented) |
+| Revocation endpoint (RFC 7009) | `/revoke`; a public client sends `client_id` only (verified, B4) | `/oauth2/revoke`; a public client sends `client_id` only, 200, and the revoked refresh token is then 400 `invalid_grant` (verified, B4) | `/oauth/revoke` with `client_id` and `token` (documented [51]) | No RFC 7009 endpoint documented (documented [83]; Q&A unverified [85]) | `/revoke`, public clients send `client_id` only (reported [103]) | `/oauth2/revoke`, `client_id` required for public clients, refresh tokens only (documented [118]) | `/revoke` exists and reads no proof; public-client call on a `standard` tenant not found (documented) |
+| RP-initiated logout and its parameters | `.../openid-connect/logout`; with `id_token_hint` and a registered `post_logout_redirect_uri` a direct 302 carrying `state`, no confirmation page (verified, B4) | `{public}/oauth2/sessions/logout`; with `id_token_hint`, a registered `post_logout_redirect_uri` and `state`: redirect to the logout UI app, which confirms, then 302 to the post-logout URI with `state` (verified, B4; documented [33, 34]) | `end_session_endpoint` advertised for tenants created from 2023-11-14; legacy `/v2/logout` with `returnTo`; `/oidc/logout` path unverified (reported [63, 64]) | `/{tenant}/oauth2/v2.0/logout`; `post_logout_redirect_uri`, `logout_hint`; `id_token_hint` not in the documented table (documented [73]) | `/oauth2/v1/logout`; `id_token_hint` required; discovery member not found (reported [100, 102]) | Own `/logout` with `client_id` and `logout_uri`; no `id_token_hint`; discovery member not found (documented [117]) | `/logout` renders a signed-out page with `post_logout_redirect_uri` and `state`; tenant-level URI list; expired `id_token_hint` silently ignored; discovery member not found (documented) |
 | UserInfo | Present, bearer (documented [1, 12]) | Advertised `/userinfo` (documented [28]) | `GET /userinfo`, accepts DPoP (documented [65]) | `https://graph.microsoft.com/oidc/userinfo`; token may not be a JWT (documented [86]) | `/oauth2/v1/userinfo` or per custom AS (reported [100]) | `/oauth2/userInfo`, token must come from the token endpoint (documented [120]) | `/userinfo` exists; answers 401 with `WWW-Authenticate: DPoP error="use_dpop_nonce"` (documented) |
-| ID-token algorithms | RS256 by default; discovery lists RS/PS/ES 256–512, EdDSA and HS256/384/512 (verified, B4) | `RS256` in the discovery example (documented [23]) | App setting HS256 or RS256 (documented [50]); sample lists HS256, RS256, PS256 (reported [53]) | Asymmetric, "such as RS256" (documented [74]); RS256-only list from a Q&A thread (unverified) | RS256 in token headers; discovery list not found (reported [100]) | RS256 only (documented [121]) | Not found |
+| ID-token algorithms | RS256 by default; discovery lists RS/PS/ES 256–512, EdDSA and HS256/384/512 (verified, B4) | `RS256` only in `id_token_signing_alg_values_supported` (verified, B4) | App setting HS256 or RS256 (documented [50]); sample lists HS256, RS256, PS256 (reported [53]) | Asymmetric, "such as RS256" (documented [74]); RS256-only list from a Q&A thread (unverified) | RS256 in token headers; discovery list not found (reported [100]) | RS256 only (documented [121]) | Not found |
 | Redirect URI rules | Exact match, wildcard only at the end; loopback IP literal advised; custom scheme and loopback port not found (documented [1, 2, 19]) | Exact, pre-registered; no wildcards; custom schemes allowed; loopback port rules reported (documented [25]; loopback reported [35]) | Allowed Callback URLs, `*` subdomain wildcard discouraged; custom scheme and https forms in the iOS guide (documented [50, 67]) | `https` except loopback (port ignored, `[::1]` unsupported); plain custom scheme: conflicting docs (documented [76, 77]) | Exact match; reverse-domain custom scheme in the mobile guide (reported [96]) | `https` except `http://localhost`; app schemes supported; wildcards not found (documented [115]) | `fapi2` edge-fronted client: `https` only, no private-use scheme, no loopback (documented); `standard` tenant rules: not found |
 | RFC 9470 step-up and `acr_values` | `acr_values` and `claims` with LoA mapping; RFC 9470 not found (documented [10, 17, 20]) | Not found | `acr_values` with the multi-factor URI; RFC 9470 not found (documented [68]) | Claims challenge with `insufficient_claims`, not RFC 9470; `acr_values` not found (documented [90]) | `acr_values` `urn:okta:loa:*`; RFC 9470 not found (documented [106]) | `acr_values` and `max_age` in managed login on Essentials or Plus; RFC 9470 not found (documented [122]) | Edge answers 401 `insufficient_user_authentication`; unknown `acr_values` dropped, not refused (documented, `errors.md`) |
 | Rate limiting at the token endpoint | Brute-force detection only (password, OTP), off by default; no 429 documented (documented [21]) | Self-hosted: none in config. Ory Network: 429 with `x-ratelimit-reset`, no `Retry-After` mentioned (documented [27, 39]) | 429 with `X-RateLimit-*`; `Retry-After` only in custom policies (documented [71]; reported [72]) | Limits unpublished; 429 with `Retry-After` (reported [91, 92]) | 429 with `X-Rate-Limit-*`; `Retry-After` not mentioned (documented [105]) | Per-account quotas; 429 and `Retry-After` not found (documented [123]) | Nothing emits 429 or `Retry-After` as of 2026-10-11; versola#310 open (documented) |
-| Issuer quirks | `{base}/realms/{realm}`; none documented (documented [1]) | Must match exactly, trailing slashes included (documented [23]) | Trailing slash; with a custom domain `iss` follows the domain used (reported [47, 48]) | `common` and `organizations` return a `{tenantid}` template (documented [73]) | Org AS and custom AS have different issuers (documented [93]) | Two issuer forms, `cognito-idp` and `issuer-cognito-idp` (documented [112]) | No trailing slash in the README example; PAR works while `request_uri_parameter_supported` is false (documented) |
+| Issuer quirks | `{base}/realms/{realm}`; none documented (documented [1]) | Must match exactly, trailing slashes included: `urls.self.issuer` is announced verbatim (`http://host:port/` in the CI config) and the ID token repeats it; the SDK tolerates the one trailing slash at discovery and holds the ID token to the discovered value (verified, B4; documented [23]) | Trailing slash; with a custom domain `iss` follows the domain used (reported [47, 48]) | `common` and `organizations` return a `{tenantid}` template (documented [73]) | Org AS and custom AS have different issuers (documented [93]) | Two issuer forms, `cognito-idp` and `issuer-cognito-idp` (documented [112]) | No trailing slash in the README example; PAR works while `request_uri_parameter_supported` is false (documented) |
 
 ## 3. What the SDK does with each difference
 
@@ -163,23 +163,44 @@ Verified in B4 against `quay.io/keycloak/keycloak:26.4` from
 
 ### Ory Hydra
 
-- Image `oryd/hydra` (quickstart pins `v26.2.0`; versions are CalVer now) and the reference app
-  `oryd/hydra-login-consent-node` at the same tag [42, 43].
-- Stack: the quickstart compose file shows a `hydra` service (public 4444, admin 4445), a
-  `hydra-migrate` step and a `consent` service; the config points `urls.login`, `urls.consent` and
-  `urls.logout` at the consent app and sets `urls.self.issuer` [43, 44].
-- Pre-provisioning: create the client after startup through the CLI or the admin API, for example
-  `hydra create oauth2-client --endpoint http://127.0.0.1:4445 --token-endpoint-auth-method none
-  --grant-type authorization_code,refresh_token --response-type code --scope openid,offline_access
-  --redirect-uri <scheme>:/callback --id <id>`. The flags are documented [26]; this combination is a
-  suggestion. Set `oauth2.pkce.enforced_for_public_clients: true` to exercise PKCE enforcement.
-- Browser leg: `/oauth2/auth` redirects to the consent app with a `login_challenge`; the harness
-  follows the redirects over HTTP through the login and consent steps and the consent app
-  accepts through the admin API [24, 40]. That the reference app accepts any login is from memory
-  (unverified); the docs call it "exemplary".
-- Open: loopback redirects with a dynamic port in current OSS builds; the defaults of the PKCE
-  enforcement keys; whether a public client may revoke with `client_id` only; whether Kratos is
-  wanted for a real identity flow (not researched).
+Verified in B4 against `oryd/hydra:v26.2.0` with `oryd/hydra-login-consent-node:v26.2.0` from
+`conformance/providers/hydra/` (scenarios 24 to 32, `android/conformance-oauth`: 25 of 27 tests
+green, the two PAR tests skipped because no PAR endpoint is advertised):
+
+- Stack as the quickstart's: `hydra serve all --dev` (plain HTTP, non-secure cookies) with
+  `DSN=memory` (no migration step, nothing survives a restart), the admin API on 4445 for the
+  client import only, and the consent app on 3000 with `HYDRA_ADMIN_URL=http://hydra:4445`.
+- Hydra builds its issuer and every URL it hands the browser from `urls.self.issuer` and
+  `urls.self.public`, never from the request. The driver's proxy therefore listens on a fixed
+  port (14444) that `hydra.yml` names, and the login and consent redirects go through it.
+- Pre-provisioning: `hydra import oauth2-client clients.json --endpoint http://hydra:4445`, the
+  file being a JSON **array** of clients (one object is refused). Fields that work:
+  `client_id`, `token_endpoint_auth_method: none`, `grant_types`, `response_types`, `scope`,
+  `redirect_uris`, `post_logout_redirect_uris`, `skip_consent`, and
+  `authorization_code_grant_access_token_lifespan: "10s"` per client (scenario 31).
+  `oauth2.pkce.enforced_for_public_clients: true` is set; the SDK always sends `S256`.
+- Live discovery: `issuer` verbatim from the config with its trailing slash,
+  `code_challenge_methods_supported: [plain, S256]`, `id_token_signing_alg_values_supported:
+  [RS256]`, `scopes_supported: [offline_access, offline, openid]` (the clients' `profile` and
+  `email` are not listed), `end_session_endpoint`, `revocation_endpoint`, `userinfo_endpoint`,
+  `jwks_uri` under `/.well-known/jwks.json`; no `pushed_authorization_request_endpoint`, no
+  `authorization_response_iss_parameter_supported`, no `dpop_signing_alg_values_supported`.
+- Browser leg: `/oauth2/auth` 302s to the consent app's `/login?login_challenge=…`, a form
+  with `_csrf` (paired with the app's `_csrf` cookie), `challenge`, `email`, `password`,
+  `submit`; the app accepts `foo@bar.com` / `foobar` only, then 302s to hydra, which 302s to
+  `/consent?consent_challenge=…`, a form with `_csrf`, `challenge`, one `grant_scope` checkbox
+  per requested scope and `submit=Allow access`; then hydra 302s to the client with `code`,
+  `state` and `scope`, no `iss`. About ten hops in all.
+- A refresh token is issued when `offline_access` is requested and granted; a client whose
+  scope lacks it gets none. Access tokens are opaque by default and UserInfo accepts them.
+- Revocation by a public client with `client_id` only is accepted; the revoked refresh token
+  then answers 400 `invalid_grant` at `/oauth2/token`.
+- RP-initiated logout with `id_token_hint`, a registered `post_logout_redirect_uri` and
+  `state` 302s to the logout UI app (`/logout?logout_challenge=…`, a form with `_csrf` and
+  `challenge`; anything but `submit=No` confirms), then back through hydra to the post-logout
+  URI with `state`.
+- The token response carries no `Date` header either, so the SDK's server-time skew path is
+  exercised only through the proxy's header.
 
 ### Auth0, Microsoft Entra ID, Okta, Amazon Cognito
 
@@ -225,10 +246,12 @@ What B4 closed is in section 4. Still open:
 
 ### Ory Hydra and Ory Network
 
-- Whether Hydra OSS (not the Enterprise build) supports RFC 9207, PAR or DPoP: absence is inferred
-  from schemas, the discovery example and the Enterprise changelog; no live discovery was read.
-- Defaults of `oauth2.pkce.enforced` and `oauth2.pkce.enforced_for_public_clients`.
-- Revocation by a public client without a secret; logout with an expired `id_token_hint`.
+What B4 closed is in section 4 (OSS `oryd/hydra:v26.2.0`). Still open:
+
+- Whether the Enterprise build adds RFC 9207, PAR or DPoP (absence is verified for OSS only).
+- The default of `oauth2.pkce.enforced` (the CI config sets `enforced_for_public_clients`); that a
+  request without PKCE is refused was not driven.
+- Logout with an expired `id_token_hint`; refresh-token reuse detection and its grace period.
 - Loopback dynamic-port behaviour in current OSS builds (issue 1732 closed in 2020; the v26.3.17 note
   is from the Enterprise changelog; the `localhost` versus IP-literal limit is a search summary).
 - `acr_values` and `acr` handling (issues 1032 and 3637 seen only in search results).
@@ -236,8 +259,7 @@ What B4 closed is in section 4. Still open:
   was a search summary of a page not read).
 - Ory Network custom-domain discovery URL; per-bucket 429 limits for `/oauth2/token`; whether
   Ory Network sends `Retry-After` (the docs do not mention it).
-- That the last semver tag was 2.3.0 before CalVer (search summary); v25.4.0 and v26.2.0 were read.
-- That the reference login and consent app accepts any login, and the Kratos option: memory.
+- The Kratos option for a real identity flow: not researched.
 - Enterprise-changelog items apply to that build, not necessarily to `oryd/hydra`.
 
 ### Auth0

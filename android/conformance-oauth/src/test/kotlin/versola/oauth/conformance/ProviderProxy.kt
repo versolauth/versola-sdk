@@ -50,9 +50,10 @@ class ProviderProxy(private val provider: Provider) : Dispatcher() {
     /** The issuer the SDK is configured with: the provider's issuer path at the proxy's origin. */
     val issuer: String get() = origin + provider.issuerPath
 
-    fun start() {
+    /** [port] 0 picks a free one; a provider that is told the proxy's address in advance (Hydra) needs a fixed one. */
+    fun start(port: Int = 0) {
         server.dispatcher = this
-        server.start()
+        server.start(port)
     }
 
     fun stop() = server.close()

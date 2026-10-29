@@ -82,7 +82,8 @@ class Scenario29PushedAuthorizationTest : ProviderConformance() {
         assertEquals(VersolaError.Configuration.Detail.ProviderUnsupported("par"), error.detail)
         assertTrue(browser.opened.isEmpty())
         assertTrue(transcript.entries.none { it.url.startsWith(metadata.authorizationEndpoint) })
-        assertTrue(transcript.matching("POST", metadata.pushedAuthorizationRequestEndpoint!!.substringAfter(proxy.origin)).isEmpty())
+        // Nothing was pushed either, where there is an endpoint to push to.
+        metadata.pushedAuthorizationRequestEndpoint?.let { assertTrue(transcript.matching("POST", it.substringAfter(proxy.origin)).isEmpty()) }
     }
 
     @Test

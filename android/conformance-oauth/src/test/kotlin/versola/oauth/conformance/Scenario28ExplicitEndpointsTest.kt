@@ -18,6 +18,10 @@ import versola.oauth.core.VersolaError
 /** `28-explicit-endpoints`: a provider without discovery, configured from explicit endpoints. */
 class Scenario28ExplicitEndpointsTest : ProviderConformance() {
 
+    private companion object {
+        const val DISCOVERY = "/.well-known/openid-configuration"
+    }
+
     /** The provider's real endpoints, read from its own discovery once and re-rooted at the proxy. */
     private fun endpoints(): ProviderEndpoints {
         val discovery = HarnessSigner.parse(
@@ -25,7 +29,9 @@ class Scenario28ExplicitEndpointsTest : ProviderConformance() {
         )
         fun at(name: String): String? = discovery[name]?.jsonPrimitive?.content?.replace(provider.origin, proxy.origin)
         return ProviderEndpoints(
-            issuer = proxy.issuer,
+            // As the provider announces it, trailing slash included (Hydra): with explicit
+            // endpoints the ID token's iss is held to this value byte for byte.
+            issuer = at("issuer")!!,
             authorizationEndpoint = at("authorization_endpoint")!!,
             tokenEndpoint = at("token_endpoint")!!,
             jwksUri = at("jwks_uri")!!,
@@ -37,8 +43,10 @@ class Scenario28ExplicitEndpointsTest : ProviderConformance() {
 
     @Test
     fun `the whole flow runs without ever requesting discovery`() = runTest {
+        // The discovery document only: a provider may serve its JWKS under /.well-known/ too
+        // (Hydra's /.well-known/jwks.json), and that is a configured endpoint here.
         proxy.intercept = { request ->
-            if (request.url.encodedPath.contains("/.well-known/")) MockResponse.Builder().code(404).build() else null
+            if (request.url.encodedPath.endsWith(DISCOVERY)) MockResponse.Builder().code(404).build() else null
         }
         val endpoints = endpoints()
         val client = client(configuration(endpoints = endpoints))
@@ -46,8 +54,8 @@ class Scenario28ExplicitEndpointsTest : ProviderConformance() {
         client.login()
 
         assertEquals(SessionState.Authenticated, client.state())
-        assertTrue(transcript.entries.none { it.url.contains("/.well-known/") })
-        assertTrue(proxy.requests.none { it.url.encodedPath.contains("/.well-known/") })
+        assertTrue(transcript.entries.none { it.url.endsWith(DISCOVERY) })
+        assertTrue(proxy.requests.none { it.url.encodedPath.endsWith(DISCOVERY) })
         // The ID token was validated against the configured jwksUri (the only one there is).
         assertEquals(1, transcript.matching("GET", endpoints.jwksUri.substringAfter(proxy.origin)).size)
         // PAR was not attempted: the only request before the browser opened was the JWKS one
@@ -68,7 +76,7 @@ class Scenario28ExplicitEndpointsTest : ProviderConformance() {
         assertEquals(SessionState.Unauthenticated, client.state())
         assertNull(client.claims)
         failsWith<VersolaError.Reauthenticate> { runBlocking { client.accessToken() } }
-        assertTrue(transcript.entries.none { it.url.contains("/.well-known/") })
+        assertTrue(transcript.entries.none { it.url.endsWith(DISCOVERY) })
     }
 
     @Test

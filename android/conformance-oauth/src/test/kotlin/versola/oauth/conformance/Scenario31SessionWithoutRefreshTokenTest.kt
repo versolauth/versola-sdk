@@ -31,7 +31,7 @@ class Scenario31SessionWithoutRefreshTokenTest : ProviderConformance() {
 
     @Test
     fun `the session ends at access-token expiry with Reauthenticate SessionExpired and no token request`() = runTest(timeout = 2.minutes) {
-        val client = client(configuration(clientId = Provider.NO_REFRESH_CLIENT_ID))
+        val client = client(configuration(clientId = Provider.NO_REFRESH_CLIENT_ID, scopes = provider.noRefreshScopes))
         client.login()
         val metadata = client.metadata()
         val tokenPath = metadata.tokenEndpoint.substringAfter(proxy.origin)
@@ -68,7 +68,7 @@ class Scenario31SessionWithoutRefreshTokenTest : ProviderConformance() {
 
     @Test
     fun `the authenticated client observing the expiry first surfaces SessionExpired without a refresh attempt`() = runTest(timeout = 2.minutes) {
-        val client = client(configuration(clientId = Provider.NO_REFRESH_CLIENT_ID))
+        val client = client(configuration(clientId = Provider.NO_REFRESH_CLIENT_ID, scopes = provider.noRefreshScopes))
         client.login()
         val tokenPath = client.metadata().tokenEndpoint.substringAfter(proxy.origin)
         val request = Request.Builder().url(resource.url("/api")).build()

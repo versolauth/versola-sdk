@@ -50,7 +50,10 @@ abstract class ProviderConformance {
         val staged = Provider.fromEnvironment()
         assumeTrue("OAUTH_CONFORMANCE_ISSUER is not set: no provider to run against (conformance/README.md)", staged != null)
         provider = staged!!
-        proxy = ProviderProxy(provider).also { it.start() }
+        // A provider told the proxy's address in advance (Hydra) means the same issuer in
+        // every test; the per-process registry would refuse the next test's configuration.
+        OAuthClient.forgetAll()
+        proxy = ProviderProxy(provider).also { it.start(provider.proxyPort) }
         // The browser leg has its own client: what it sends to the login form is the user's
         // traffic, not the SDK's, and must not appear in the transcript.
         browser = HttpLoginBrowser(OkHttpClient(), provider)
@@ -82,7 +85,7 @@ abstract class ProviderConformance {
         clientId: String = Provider.CLIENT_ID,
         endpoints: ProviderEndpoints? = null,
         redirectUri: String = Provider.REDIRECT_URI,
-        scopes: Set<String> = setOf("openid", "profile"),
+        scopes: Set<String> = provider.scopes,
         protectedOrigins: Set<String> = setOf(resource.origin),
         pushedAuthorization: PushedAuthorization = PushedAuthorization.WhenAdvertised,
     ): OAuthConfiguration = OAuthConfiguration(

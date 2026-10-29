@@ -1,0 +1,51 @@
+# Ory Hydra as a conforming OpenID Provider for the generic facade's scenarios
+# (conformance/README.md, "Providers"; spec/providers.md section 4), with Ory's reference
+# login-consent app as the user-facing half, the way the quickstart stages it. An in-memory
+# store (nothing survives a restart, which is the point) and `--dev` (plain HTTP, non-secure
+# cookies): a throwaway provider, never a deployment.
+#
+# Hydra does not derive its issuer from the request (Keycloak does): `urls.self` in hydra.yml
+# names the driver's proxy, which therefore listens on the fixed port 14444 for this provider
+# (OAUTH_CONFORMANCE_PROXY_PORT), and the login and consent redirects go through it too.
+#
+#   docker compose -f conformance/providers/hydra/docker-compose.yml up -d --wait
+#   OAUTH_CONFORMANCE_PROVIDER=hydra OAUTH_CONFORMANCE_ISSUER=http://localhost:4444 \
+#     ./gradlew :conformance-oauth:testDebugUnitTest
+#   # after editing clients: `down -v` first; the import leaves an existing client alone
+#
+services:
+  hydra:
+    # Pinned to the quickstart's release (CalVer); bump deliberately, with the matrix row in
+    # spec/providers.md.
+    image: oryd/hydra:v26.2.0
+    environment:
+      DSN: memory
+    command: serve -c /etc/config/hydra/hydra.yml all --dev
+    ports:
+      - "4444:4444"   # public
+      - "4445:4445"   # admin: the import below and nothing else
+    volumes:
+      - ./hydra.yml:/etc/config/hydra/hydra.yml:ro
+    restart: unless-stopped
+
+  # The public clients (an array in clients.json: the import's file format), imported once
+  # hydra's admin API answers (restart: on-failure is the readiness wait: the image has no shell
+  # tool to poll with), with the fixed client ids the driver uses for every provider.
+  hydra-import:
+    image: oryd/hydra:v26.2.0
+    command: import oauth2-client /etc/config/clients.json --endpoint http://hydra:4445
+    volumes:
+      - ./clients.json:/etc/config/clients.json:ro
+    depends_on:
+      - hydra
+    restart: on-failure
+
+  # Ory's reference login and consent app: the forms the driver's HydraLogin submits
+  # (foo@bar.com / foobar, consent with every requested scope, logout confirmed).
+  consent:
+    image: oryd/hydra-login-consent-node:v26.2.0
+    environment:
+      HYDRA_ADMIN_URL: http://hydra:4445
+    ports:
+      - "3000:3000"
+    restart: unless-stopped

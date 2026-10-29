@@ -12,8 +12,8 @@ fault-injection proxy and the transcript comparison with the reference client ar
 of work at the bottom. iOS has no driver yet.
 
 The generic facade has its own driver, `android/conformance-oauth` (Robolectric unit tests,
-real network), which runs scenarios 24 to 32 green against Keycloak 26.4 staged from
-[`providers/keycloak/`](providers/keycloak/); see [Providers](#providers) below.
+real network), which runs scenarios 24 to 32 green against Keycloak 26.4 and Ory Hydra 26.2
+staged from [`providers/`](providers/); see [Providers](#providers) below.
 
 ## Why it is not more unit tests
 
@@ -115,12 +115,28 @@ takes a `Context` for its storage directory; the network is real.
 docker compose -f conformance/providers/keycloak/docker-compose.yml up -d --wait
 cd android && OAUTH_CONFORMANCE_ISSUER=http://localhost:8080/realms/conformance \
   OAUTH_CONFORMANCE_PROVIDER=keycloak ./gradlew :conformance-oauth:testDebugUnitTest
+
+docker compose -f conformance/providers/hydra/docker-compose.yml up -d --wait
+cd android && OAUTH_CONFORMANCE_ISSUER=http://localhost:4444 \
+  OAUTH_CONFORMANCE_PROVIDER=hydra ./gradlew :conformance-oauth:testDebugUnitTest
 ```
 
 Without `OAUTH_CONFORMANCE_ISSUER` every test is skipped (a JUnit assumption), so the build
 job's `./gradlew test` stays a unit run. `OAUTH_CONFORMANCE_USERNAME` / `_PASSWORD` default to
-the realm's test user. The realm is imported at container start and an existing realm is left
-alone, so `down` before `up` after editing `realm.json`.
+the provider's test user. Keycloak imports its realm at container start and leaves an existing
+realm alone, so `down` before `up` after editing `realm.json`; Hydra keeps everything in memory
+and a one-shot container imports `clients.json` after each start.
+
+What differs per provider is a `Provider.Profile` in the driver: the issuer's path, the proxy's
+port, the scopes that buy a refresh token, the login conversation. Keycloak derives its issuer
+from the request, so the proxy takes any free port; Hydra builds every URL from `urls.self` in
+`hydra.yml`, which therefore names the proxy's fixed port 14444 (`OAUTH_CONFORMANCE_PROXY_PORT`
+overrides it), and its login and consent redirects go through the proxy as well. Hydra's
+user-facing half is Ory's reference login-consent app (`foo@bar.com` / `foobar`, consent
+granted for every requested scope, logout confirmed), driven by `HydraLogin`. A refresh token on
+Hydra needs `offline_access`, so the main client's scopes include it there and the
+refresh-less client's do not; Hydra 26.2 advertises no PAR, so scenario 29's two PAR tests skip
+by assumption and its two `ProviderUnsupported` tests run.
 
 How it drives the provider:
 
@@ -191,5 +207,6 @@ it with the stack's addresses as instrumentation arguments:
 6. `conformance.yml` on a schedule once a `VERSOLA_CHECKOUT_TOKEN` secret exists.
 7. iOS, unchanged scenarios, once #11–#14 exist.
 8. ~~The generic facade against Keycloak (scenarios 24–32, `android/conformance-oauth`).~~ Done.
-9. The generic facade against Ory Hydra (`providers/hydra/`, a second `ProviderLogin`), then
-   the hosted providers on demand (`spec/providers.md` section 4).
+9. ~~The generic facade against Ory Hydra (`providers/hydra/`, `HydraLogin`).~~ Done; 25 of
+   27 tests, the two PAR tests skipped by assumption.
+10. The hosted providers on demand (`spec/providers.md` section 4).

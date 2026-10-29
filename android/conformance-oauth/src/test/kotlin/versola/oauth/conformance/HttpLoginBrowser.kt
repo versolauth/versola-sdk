@@ -57,10 +57,11 @@ class HttpLoginBrowser(
             return BrowserOutcome.UserCancelled
         }
         var response = http.newCall(Request.Builder().url(uri).get().build()).execute()
-        // Hops: the provider's own redirects (PAR lands on the login page through one), then
-        // the login form, then the redirect to the client. A fresh user with a password form and
-        // no consent step takes three; the bound is for a provider that loops.
-        repeat(8) {
+        // Hops: the provider's own redirects (PAR lands on the login page through one; Hydra
+        // bounces between itself and its consent app), the login form, a consent form, then the
+        // redirect to the client. Keycloak takes three, Hydra about ten; the bound is for a
+        // provider that loops.
+        repeat(24) {
             val location = response.header("Location")
             when {
                 response.code in 300..399 && location != null && clientUris.any { location.startsWith(it) } -> {
@@ -74,11 +75,10 @@ class HttpLoginBrowser(
                 response.code == 200 -> {
                     val page = response.body.string()
                     val pageUrl = response.request.url.toString()
-                    // A 200 with no login form is where a browser would stay: the end-session
-                    // confirmation page a provider shows when it will not redirect, or an error
-                    // page. The user "closes the tab".
-                    if (!provider.login.hasLoginForm(page)) return BrowserOutcome.UserCancelled
-                    response = provider.login.submit(http, page, pageUrl, provider.username, provider.password)
+                    // A 200 with nothing to act on is where a browser would stay: an error page,
+                    // a confirmation the provider will not redirect from. The user "closes the tab".
+                    response = provider.login.step(http, page, pageUrl, provider.username, provider.password)
+                        ?: return BrowserOutcome.UserCancelled
                 }
                 else -> error("the provider answered ${response.code} at ${response.request.url}: ${response.body.string().take(300)}")
             }
@@ -88,12 +88,6 @@ class HttpLoginBrowser(
 
     override suspend fun awaitPendingRedirect(): BrowserOutcome =
         throw UnsupportedOperationException("process death is scenario 12's, driven differently")
-}
-
-/** Whether [page] is the provider's login page; a page without the form is left as is. */
-fun ProviderLogin.hasLoginForm(page: String): Boolean = when (this) {
-    KeycloakLogin -> page.contains("id=\"kc-form-login\"")
-    else -> true
 }
 
 /** Reads [Response]'s body as text and closes it. */

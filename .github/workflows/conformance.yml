@@ -42,10 +42,10 @@ permissions:
 jobs:
   # The generic facade (issue #46, B4) against a provider that is not Versola: scenarios 24 to
   # 32 (`facade: [oauth]`) from android/conformance-oauth, Robolectric tests over a real
-  # network against Keycloak in Docker (conformance/providers/keycloak). One matrix row per
-  # provider; Ory Hydra joins when its compose file and login driver exist. No emulator: the
-  # browser leg is the provider's login form driven over HTTP, and what that does not prove
-  # is listed in conformance/README.md ("Providers").
+  # network against a provider in Docker (conformance/providers/<name>). One matrix row per
+  # provider: Keycloak and Ory Hydra. No emulator: the browser leg is the provider's login
+  # form driven over HTTP, and what that does not prove is listed in conformance/README.md
+  # ("Providers").
   providers:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -55,6 +55,13 @@ jobs:
         include:
           - provider: keycloak
             issuer: http://localhost:8080/realms/conformance
+            # The realm is imported before the health check passes; discovery answering is enough.
+            ready: curl -fs http://localhost:8080/realms/conformance/.well-known/openid-configuration
+          - provider: hydra
+            issuer: http://localhost:4444
+            # The clients are imported by a one-shot container that retries until hydra's admin
+            # API answers; the driver needs both clients, so wait for the second one.
+            ready: curl -fs http://localhost:4445/admin/clients | grep -q conformance-app-norefresh
     defaults:
       run:
         working-directory: android
@@ -74,11 +81,18 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
 
-      # `--wait` returns once the compose health check (Keycloak's /health/ready on the
-      # management port) passes; the realm is imported by then.
+      # `--wait` returns once the compose health checks pass (Keycloak's /health/ready on the
+      # management port; Hydra has none and counts as up when running), then the provider's own
+      # readiness condition from the matrix is polled, since a one-shot import can still be
+      # retrying. The condition is a fixed string from this file, not from an input.
       - name: Start ${{ matrix.provider }}
         working-directory: conformance/providers/${{ matrix.provider }}
-        run: docker compose up -d --wait
+        env:
+          READY: ${{ matrix.ready }}
+        run: |
+          docker compose up -d --wait
+          for i in $(seq 1 60); do sh -c "$READY" && exit 0; sleep 2; done
+          echo "provider not ready after 120 s" >&2; docker compose logs --no-color | tail -50; exit 1
 
       - name: Scenarios 24 to 32 against ${{ matrix.provider }}
         env:
