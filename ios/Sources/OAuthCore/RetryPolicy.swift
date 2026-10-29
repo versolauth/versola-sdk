@@ -14,23 +14,45 @@ public struct RetryPolicy: Sendable, Equatable {
     public static let maxAttemptsPerOriginCeiling = 5
     public static let maxTotalAttemptsCeiling = 8
     public static let totalBudgetCeiling: TimeInterval = 60
+    public static let backoffMultiplierCeiling = 4.0
+    public static let maxBackoffCeiling: TimeInterval = 30
 
     public init(
         maxAttemptsPerOrigin: Int = 3, maxTotalAttempts: Int = 4, initialBackoff: TimeInterval = 0.5,
         backoffMultiplier: Double = 2, maxBackoff: TimeInterval = 8, totalBudget: TimeInterval = 20
     ) throws {
+        func invalid(_ detail: String) -> OAuthError {
+            OAuthError.configuration(.invalidConfiguration(detail: detail))
+        }
         func bounded(_ name: String, _ value: Int, _ lower: Int, _ upper: Int) throws {
             if value < lower || value > upper {
-                throw OAuthError.configuration(.invalidConfiguration(detail: "\(name) must be between \(lower) and \(upper): \(value)"))
+                throw invalid("\(name) must be between \(lower) and \(upper): \(value)")
+            }
+        }
+        // Written as a negated `contains` so a NaN, which fails every comparison, is outside
+        // the range rather than inside it: `value < lower || value > upper` accepts it, and a
+        // NaN backoff then traps in `Duration.seconds` on the first retry (spec/retry-policy.md,
+        // "not a silent clamp"; Android's `bounded` refuses it the same way).
+        func bounded(_ name: String, _ value: Double, _ range: ClosedRange<Double>) throws {
+            if !range.contains(value) {
+                throw invalid("\(name) must be between \(range.lowerBound) and \(range.upperBound): \(value)")
             }
         }
         try bounded("maxAttemptsPerOrigin", maxAttemptsPerOrigin, 1, Self.maxAttemptsPerOriginCeiling)
         try bounded("maxTotalAttempts", maxTotalAttempts, 1, Self.maxTotalAttemptsCeiling)
-        if initialBackoff < 0 || maxBackoff < initialBackoff || backoffMultiplier < 1 {
-            throw OAuthError.configuration(.invalidConfiguration(detail: "backoff must be non-negative, non-decreasing, multiplier at least 1"))
+        try bounded("backoffMultiplier", backoffMultiplier, 1...Self.backoffMultiplierCeiling)
+        try bounded("initialBackoff", initialBackoff, 0...Self.maxBackoffCeiling)
+        try bounded("maxBackoff", maxBackoff, 0...Self.maxBackoffCeiling)
+        if maxBackoff < initialBackoff {
+            throw invalid("maxBackoff (\(maxBackoff)) must not be below initialBackoff (\(initialBackoff))")
         }
-        if totalBudget <= 0 || totalBudget > Self.totalBudgetCeiling {
-            throw OAuthError.configuration(.invalidConfiguration(detail: "totalBudget must be between 0 and \(Self.totalBudgetCeiling) s: \(totalBudget)"))
+        if !(0...Self.totalBudgetCeiling).contains(totalBudget) || totalBudget == 0 {
+            throw invalid("totalBudget must be above 0 and at most \(Self.totalBudgetCeiling) s: \(totalBudget)")
+        }
+        // Two different promises, of which the smaller silently wins; say so here, where it
+        // is one line to fix.
+        if maxAttemptsPerOrigin > maxTotalAttempts {
+            throw invalid("maxAttemptsPerOrigin (\(maxAttemptsPerOrigin)) exceeds maxTotalAttempts (\(maxTotalAttempts)), so the per-origin allowance can never be reached")
         }
         self.maxAttemptsPerOrigin = maxAttemptsPerOrigin
         self.maxTotalAttempts = maxTotalAttempts
