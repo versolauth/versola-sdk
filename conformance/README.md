@@ -11,6 +11,10 @@ from `versolauth/versola` at `d6203f93`, from an emulator. The rest of the catal
 fault-injection proxy and the transcript comparison with the reference client are the order
 of work at the bottom. iOS has no driver yet.
 
+The generic facade has its own driver, `android/conformance-oauth` (Robolectric unit tests,
+real network), which runs scenarios 24 to 32 green against Keycloak 26.4 and Ory Hydra 26.2
+staged from [`providers/`](providers/); see [Providers](#providers) below.
+
 ## Why it is not more unit tests
 
 Everything under `android/*/src/test` proves a rule against a stub. The wiring — Central's
@@ -100,6 +104,66 @@ tier proves; they are the device tier's.
    (`e2e/.../support/OAuthClient`, `NativeAppFlowSpec`), ignoring `jti`, `iat` and nonce
    values. A divergence is a failure, and the diff is the report (#15, "one report").
 
+## Providers
+
+Issue #46 (B4): the scenarios tagged `facade: [oauth]` run the generic `OAuthClient` facade
+against an OpenID Provider other than Versola, staged in Docker from `providers/<name>/`. The
+driver is `android/conformance-oauth`: Robolectric is there only because `OAuthClient.create`
+takes a `Context` for its storage directory; the network is real.
+
+```bash
+docker compose -f conformance/providers/keycloak/docker-compose.yml up -d --wait
+cd android && OAUTH_CONFORMANCE_ISSUER=http://localhost:8080/realms/conformance \
+  OAUTH_CONFORMANCE_PROVIDER=keycloak ./gradlew :conformance-oauth:testDebugUnitTest
+
+docker compose -f conformance/providers/hydra/docker-compose.yml up -d
+cd android && OAUTH_CONFORMANCE_ISSUER=http://localhost:4444 \
+  OAUTH_CONFORMANCE_PROVIDER=hydra ./gradlew :conformance-oauth:testDebugUnitTest
+```
+
+Without `OAUTH_CONFORMANCE_ISSUER` every test is skipped (a JUnit assumption), so the build
+job's `./gradlew test` stays a unit run. `OAUTH_CONFORMANCE_USERNAME` / `_PASSWORD` default to
+the provider's test user. Keycloak imports its realm at container start and leaves an existing
+realm alone, so `down` before `up` after editing `realm.json`; Hydra keeps everything in memory
+and a one-shot container imports `clients.json` after each start.
+
+What differs per provider is a `Provider.Profile` in the driver: the issuer's path, the proxy's
+port, the scopes that buy a refresh token, the login conversation. Keycloak derives its issuer
+from the request, so the proxy takes any free port; Hydra builds every URL from `urls.self` in
+`hydra.yml`, which therefore names the proxy's fixed port 14444 (`OAUTH_CONFORMANCE_PROXY_PORT`
+overrides it), and its login and consent redirects go through the proxy as well. Hydra's
+user-facing half is Ory's reference login-consent app (`foo@bar.com` / `foobar`, consent
+granted for every requested scope, logout confirmed), driven by `HydraLogin`. A refresh token on
+Hydra needs `offline_access`, so the main client's scopes include it there and the
+refresh-less client's do not; Hydra 26.2 advertises no PAR, so scenario 29's two PAR tests skip
+by assumption and its two `ProviderUnsupported` tests run.
+
+How it drives the provider:
+
+- **`ProviderProxy`**, a MockWebServer in front of the provider that forwards every request
+  with its own origin as `Host`. Keycloak in development mode derives its issuer, endpoints
+  and login-form action from the request, so it announces the proxy as itself and the SDK's
+  issuer check, the ID token's `iss` and the redirect's `iss` agree. The proxy is also the
+  fault-injection seam: `omit-discovery-field` is a rewrite of the discovery document, an
+  ID-token fault is a re-signed `id_token` under a substituted JWKS, a dead revocation endpoint
+  is a canned 503, and the server's clock is a `Date` header it adds.
+- **`HttpLoginBrowser`**, the browser leg over HTTP: follows the provider's redirects, submits
+  the test user's credentials through the provider's `ProviderLogin` (Keycloak's
+  `kc-form-login`), and hands the SDK the redirect to the client. It keeps cookies per name
+  and sends them `Secure` or not, as a browser does on loopback.
+- **`ResourceServer`**, a protected resource that accepts the provider's access tokens by
+  asking its UserInfo endpoint, and answers 401 with a `Bearer` challenge otherwise.
+- **`Transcript`**, a network interceptor on the SDK's client; the assertions read it, and the
+  browser leg uses a separate client so its traffic never appears there.
+
+What this tier does not prove for the generic facade: Custom Tabs / Auth Tab and redirect
+delivery (device tier); the DPoP case of scenario 32 (Keystore, device tier); the `http`
+origin case of scenario 32 (the facade allows `http` on loopback, where the proxy and the
+resources live); scenario 31's clock step, which is real time against ten-second tokens rather
+than a moved device clock; and the comparison with a reference transcript. Keycloak sends no
+`Date` header on its token response, so the server-time path is exercised through the
+proxy's header only.
+
 ## Fault injection
 
 The capabilities `spec/conformance/README.md` lists, and where each lives:
@@ -108,9 +172,9 @@ The capabilities `spec/conformance/README.md` lists, and where each lives:
 |---|---|
 | `drop-response` | A small TCP proxy in front of auth and edge (`stack/chaos`) that, on a control call from the driver, lets the next matching request through and discards the response. |
 | `force-dpop-nonce`, `always-demand-dpop-nonce` | The same proxy, answering a scripted `use_dpop_nonce` for the next N requests to an origin. |
-| `clock-skew` | `adb shell date` on the emulator before the scenario, restored after. |
+| `clock-skew` | `adb shell date` on the emulator before the scenario, restored after. For the generic facade's JVM driver, a `Date` header the proxy adds (the server's clock) and short-lived tokens (scenario 31); the device clock is not moved. |
 | `process-death` | `adb shell am kill` on the harness package at the named point; the test re-launches through `am instrument` with the scenario's second half. |
-| `omit-discovery-field` | The proxy rewriting `/.well-known/openid-configuration`. |
+| `omit-discovery-field` | The proxy rewriting `/.well-known/openid-configuration`. For the generic facade, `ProviderProxy.rewriteJson` in `android/conformance-oauth`. |
 | `network-partition` | `adb shell svc wifi disable` / `svc data disable` for a bounded window. |
 
 ## Running it
@@ -142,3 +206,7 @@ it with the stack's addresses as instrumentation arguments:
    "it is equivalent".
 6. `conformance.yml` on a schedule once a `VERSOLA_CHECKOUT_TOKEN` secret exists.
 7. iOS, unchanged scenarios, once #11–#14 exist.
+8. ~~The generic facade against Keycloak (scenarios 24–32, `android/conformance-oauth`).~~ Done.
+9. ~~The generic facade against Ory Hydra (`providers/hydra/`, `HydraLogin`).~~ Done; 25 of
+   27 tests, the two PAR tests skipped by assumption.
+10. The hosted providers on demand (`spec/providers.md` section 4).

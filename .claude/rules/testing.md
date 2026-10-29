@@ -14,7 +14,7 @@ kind of test is allowed to claim. Rules about the code under test are in `androi
 |---|---|---|---|
 | Unit | JVM (JUnit, Robolectric), `swift test`, `flutter test`, against stubs | the rule: given this input and these collaborators the SDK does X | that the real Keystore, Keychain, browser or server agree |
 | Device | Emulator or simulator (`src/androidTest`, XCTest on a simulator) | the platform half: key tiers, GCM wrapping, Keystore behaviour per API level, browser and redirect delivery, process death | that a server accepts what the SDK sends |
-| Conformance | Scenarios in `spec/conformance/` against a real staged provider | the wiring: Central's API, the exact `WWW-Authenticate`, the idempotency key, the replay detection | the browser leg when `HttpLoginBrowser` stands in for it |
+| Conformance | Scenarios in `spec/conformance/` against a real staged provider (`versolauth/versola` for the Versola facade, a provider container under `conformance/providers/` for the generic one) | the wiring: Central's API, the exact `WWW-Authenticate`, the idempotency key, the replay detection; for the generic facade, what a real provider's discovery, login form, token endpoint and logout actually do | the browser leg when `HttpLoginBrowser` stands in for it |
 
 - A stub cannot disagree with the code that wrote it. Every `MockWebServer` response and every
   fake collaborator is an assumption about the other side; only the conformance tier tests the
@@ -49,7 +49,8 @@ kind of test is allowed to claim. Rules about the code under test are in `androi
 - HTTP is `mockwebserver3` on JVM and a `URLProtocol` stub on iOS. Never reach a real network
   from a unit test.
 - Robolectric is for framework interactions in the modules that already have it (`:browser`,
-  `:storage`, `:sdk`); do not spread it to protocol tests that run as plain JVM.
+  `:storage`, `:sdk`, `:oauth`, `:conformance-oauth`); do not spread it to protocol tests that run
+  as plain JVM.
 
 ## Parsers facing untrusted input
 
@@ -81,6 +82,9 @@ a single example test cannot catch that.
 - Fault injection uses the capability vocabulary in `spec/conformance/schema.json`; the mechanism
   per capability is in `conformance/README.md`. A new fault is added there, not improvised in a test.
 - Transcripts compare with the reference client's, ignoring `jti`, `iat` and nonce values.
+- A generic-facade scenario (`facade: [oauth]`) runs in `android/conformance-oauth` against the
+  provider container, through `ProviderProxy`; it is skipped, never failed, when no provider is
+  configured, and the PR says which provider it ran against.
 
 ## Keeping tests honest
 

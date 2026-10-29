@@ -1,0 +1,34 @@
+# Hydra's configuration for the conformance run (spec/providers.md section 4, Ory Hydra).
+serve:
+  cookies:
+    same_site_mode: Lax
+
+urls:
+  # The driver's proxy, not hydra's own port: the issuer the SDK validates, the ID token's
+  # iss and every redirect hydra sends the browser to must all name the proxy, and hydra
+  # builds them from here rather than from the request (docker-compose.yml).
+  self:
+    issuer: http://localhost:14444/
+    public: http://localhost:14444/
+  consent: http://localhost:3000/consent
+  login: http://localhost:3000/login
+  logout: http://localhost:3000/logout
+
+secrets:
+  system:
+    - conformance-only-not-a-real-secret-32b
+
+oidc:
+  subject_identifiers:
+    supported_types:
+      - public
+    pairwise:
+      salt: conformance-only-not-a-real-salt-32b
+
+oauth2:
+  pkce:
+    # The SDK always sends S256; a public client without PKCE must be refused.
+    enforced_for_public_clients: true
+
+ttl:
+  access_token: 5m

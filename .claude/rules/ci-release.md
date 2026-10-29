@@ -12,7 +12,8 @@ paths: [".github/**", "conformance/**", "tools/**"]
 | `android.yml` `instrumented` | `:storage` and `:dpop` on an emulator, API 36 (`google_apis`) | the platform half: real Keystore, GCM wrapping, key tiers | the browser leg, the server |
 | `ios.yml` | push to `main` and PRs touching `ios/**`, `Package.swift` | `swift package resolve` from a clean checkout, `xcodebuild build` and `test` of scheme `Versola-Package` on a simulator | Secure Enclave, a real Keychain group, `-strict-concurrency=complete` until it is added to the step |
 | `spec.yml` | every PR and push to `main` | `tools/validate-scenarios.py` (schema, `id` = file name, index rows) and markdownlint over `**/*.md` | that a scenario's states exist on every platform |
-| `conformance.yml` | PR #44 adds it: nightly and on demand | scenarios against a staged `auth` + `central` + `edge` from `versolauth/versola`, driven from an emulator | everything the driver does not yet run (`conformance/README.md`, order of work) |
+| `conformance.yml` `scenarios` | on demand (nightly once the checkout token exists) | scenarios against a staged `auth` + `central` + `edge` from `versolauth/versola`, driven from an emulator | everything the driver does not yet run (`conformance/README.md`, order of work) |
+| `conformance.yml` `providers` | PRs touching the generic facade, the modules under it or the drivers, nightly, on demand | scenarios 24 to 32 of the generic facade against Keycloak and Ory Hydra in Docker (`android/conformance-oauth`), one matrix row each | the device tier and what `conformance/README.md` ("Providers") lists as not proven |
 | `security.yml` | every PR and push to `main` | verified-secret scan (gates); dependency review and CodeQL only while the repository is public, each job commented with whether it gates or reports | a scanner that was skipped because the repository is private |
 | `release.yml` | `release: published`, but every job is `if: false` | nothing today: it is dormant | |
 
@@ -69,7 +70,8 @@ paths: [".github/**", "conformance/**", "tools/**"]
 - Upload transcripts and the server logs as artifacts with `if: always()`: a failing scenario is
   diagnosed from them.
 - The Docker compose files in `conformance/` are for local runs and the provider containers of
-  issue #46; they use throwaway credentials only.
+  issue #46; they use throwaway credentials only. A provider container is pinned to a release
+  (`keycloak:26.4`, `hydra:v26.2.0`) so the matrix row in `spec/providers.md` names what was tested.
 
 ## Scanners and the private repository
 
