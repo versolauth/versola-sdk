@@ -17,7 +17,7 @@ jobs:
   build:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The acceptance criterion in #4 this exists to verify: SPM cannot resolve
       # Package.swift from a subdirectory, which is why it sits at the repo root with
