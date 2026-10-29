@@ -84,7 +84,7 @@ dependencies {
 
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
-    androidTestImplementation("com.squareup.okhttp3:mockwebserver3:5.5.1")
-    androidTestImplementation("com.squareup.okhttp3:okhttp:5.5.1")
+    androidTestImplementation("com.squareup.okhttp3:mockwebserver3:5.4.0")
+    androidTestImplementation("com.squareup.okhttp3:okhttp:5.4.0")
     androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
 }

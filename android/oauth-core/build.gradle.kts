@@ -35,12 +35,12 @@ dependencies {
     // kotlinx-serialization rather than org.json: reflection-free, so it survives R8 without
     // keep rules, and available on a plain JVM. api, not implementation: HttpDiscoveryClient
     // takes an OkHttpClient, so the type is on this module's ABI.
-    api("com.squareup.okhttp3:okhttp:5.5.1")
+    api("com.squareup.okhttp3:okhttp:5.4.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
-    testImplementation("com.squareup.okhttp3:mockwebserver3:5.5.1")
+    testImplementation("com.squareup.okhttp3:mockwebserver3:5.4.0")
 }
 
 apiValidation {
