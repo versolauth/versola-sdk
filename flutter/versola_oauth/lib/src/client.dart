@@ -78,6 +78,9 @@ final class OAuthClient {
   );
 
   /// Finishes an authorization that outlived the process that started it (scenario 12).
+  /// On iOS this is the SDK's own resume entry point; on Android the redirect activity
+  /// finishes a pending authorization itself, so this forwards to `login()`, which ends in
+  /// the same state either way.
   Future<void> resumePendingAuthorization() =>
       unwrapVoid(_host.resumePendingAuthorization(_handle));
 
