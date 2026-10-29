@@ -1,0 +1,20 @@
+id: 25-id-token-nonce-mismatch
+title: An ID token whose nonce is not the one the SDK sent is rejected before anything is persisted
+issues: [46]
+applies_to: [android, ios, flutter]
+facade: [versola, oauth]
+mode: any
+fault_injection: [omit-discovery-field]
+preconditions:
+  - A proxy in front of the provider can rewrite the token response body.
+  - An authorization request is outstanding with a known persisted nonce.
+steps:
+  - actor: harness
+    action: Let the login proceed to the code exchange; rewrite the token response so the id_token carries a different nonce, re-signed with a test key the proxy serves from a substituted jwks_uri, or a nonce-less id_token where the harness cannot re-sign.
+  - actor: sdk
+    action: Validate the ID token.
+assertions:
+  - Configuration surfaces with detail IdTokenRejected and reason Nonce.
+  - No refresh token, ID token or claims are persisted; the credential store is in the state it had before login().
+  - SessionState settles on what it was before login() (Unauthenticated, or Authenticated over a stored grant).
+  - No request reaches userinfo or any protected origin after the rejection.

@@ -40,6 +40,26 @@ behaviour must be the same. Scenarios 21–23 exist for what only the edge flow 
 | 21 | Login through edge's native endpoints (FAPI 2.0 tenant) | dpop | 40 |
 | 22 | Stolen code, blob or refresh token is useless without the device key | dpop | 40 |
 | 23 | Edge's and auth's nonce challenges answered once each, from their own cache | dpop | 40, 6 |
+| 24 | Generic facade: sign-in, authenticated call and sign-out against a conforming provider | bearer | 46 |
+| 25 | ID token `nonce` mismatch rejected before persistence | any | 46 |
+| 26 | ID token signature or algorithm refused | any | 46 |
+| 27 | ID token `iss`, `aud`, `exp`, `iat`, `auth_time` rejected with the matching reason | any | 46 |
+| 28 | Explicit endpoints without discovery | bearer | 46 |
+| 29 | PAR when advertised, required, and rejected before the browser | any | 46 |
+| 30 | Logout without `end_session_endpoint` | any | 46 |
+| 31 | Session without a refresh token ends in `Reauthenticate` | any | 46 |
+| 32 | Token attached only to protected origins | any | 46 |
+
+## Facades
+
+A scenario carries `facade:` naming the facades it holds for: `versola` (the `Versola` facade,
+the default when the key is absent) and `oauth` (the generic facade of
+[`../oauth-sdk-api.md`](../oauth-sdk-api.md)). A scenario tagged with both runs under both; under
+`oauth` it runs once per provider in [`../providers.md`](../providers.md), and the `provider`
+actor stands for whichever OpenID Provider is staged. Scenarios 24 to 32 exist for what only the
+generic facade does (explicit endpoints, PAR policy, providers without an `end_session_endpoint`
+or without refresh tokens, protected origins) and for ID-token validation, which both facades
+share.
 
 ## Fault injection
 

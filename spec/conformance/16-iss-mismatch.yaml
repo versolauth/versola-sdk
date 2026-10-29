@@ -2,6 +2,7 @@ id: 16-iss-mismatch
 title: iss mismatch on redirect is a hard failure
 issues: [5, 11, 15]
 applies_to: [android, ios, flutter]
+facade: [versola, oauth]
 mode: any
 preconditions:
   - An authorization request is outstanding.

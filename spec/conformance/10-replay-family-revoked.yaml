@@ -2,6 +2,7 @@ id: 10-replay-family-revoked
 title: Bearer mode, genuine replay of a retired token surfaces Reauthenticate
 issues: [8, 14, 15]
 applies_to: [android, ios, flutter]
+facade: [versola, oauth]
 mode: bearer
 preconditions:
   - The session is Authenticated in bearer mode.

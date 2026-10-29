@@ -187,13 +187,29 @@ Not every error comes from a server.
 | Discovery document missing a required field | `Configuration` | A missing `dpop_signing_alg_values_supported` is **not** this: it means bearer mode, logged, not failed. |
 | Pending authorization request older than 10 minutes | `Recoverable`, cause `Expired` | Discarded on restore. |
 
+## Generic facade additions
+
+The generic facade (`oauth-sdk-api.md`) adds conditions the Versola facade cannot meet, each in
+exactly one category. The Versola facade may raise the ID-token and UserInfo rows too once it
+validates ID tokens (architecture review F5).
+
+| Condition | Category | Detail / reason | Notes |
+|---|---|---|---|
+| ID token fails validation (signature, algorithm, `iss`, `aud`/`azp`, `exp`, `iat`, `nonce`, `auth_time`, `at_hash`, malformed) | `Configuration` | `IdTokenRejected(reason)` with a closed reason enum | Nothing is persisted; the state settles on its pre-`login()` value. Every cause is a deployment mistake or an attack; the user trying again fixes neither. Scenarios 25 to 27. |
+| UserInfo `sub` differs from the ID token's, or a signed UserInfo response does not verify | `Configuration` | `UserInfoRejected` | OIDC Core 5.3.2. |
+| A capability the configuration requires is not advertised (`TokenBinding.Dpop(required)`, `pushedAuthorization = Required`, `require_pushed_authorization_requests` with `Never`, `userInfo()` without an endpoint, `code_challenge_methods_supported` present without `S256`) | `Configuration` | `ProviderUnsupported(capability)` | Raised at the first operation that needs the capability, never by a silent downgrade. An absent `code_challenge_methods_supported` is unknown, not a refusal. |
+| Access token expired and the provider issued no refresh token | `Reauthenticate` | `SessionExpired` | No token request is made. Scenario 31. |
+| `login()` called while `Authorizing` | `Configuration` | `InvalidConfiguration` | The app observes `sessionState` before asking. |
+| A resource server answers 401 with `error="insufficient_user_authentication"` (RFC 9470) | `StepUp(acrValues, maxAge)` | | Same as edge's row; any resource server in `protectedOrigins`. |
+| A resource server answers 401 otherwise | refresh once, replay once, then `Reauthenticate`, reason `SessionRejected` | | As edge's bare 401. |
+
 ## Cross-platform naming
 
 Semantics are identical; spelling follows each language.
 
 | Concept | Kotlin | Swift | Dart |
 |---|---|---|---|
-| Base | `sealed class VersolaError` | `enum VersolaError: Error` | `sealed class VersolaError` |
+| Base | `sealed class OAuthError` (`VersolaError` is a type alias in the Versola facade, ADR 0001) | `enum OAuthError: Error` | `sealed class OAuthError` |
 | Recoverable | `VersolaError.Recoverable(cause)` | `.recoverable(Cause)` | `Recoverable(cause)` |
 | Reauthenticate | `VersolaError.Reauthenticate(reason)` | `.reauthenticate(Reason)` | `Reauthenticate(reason)` |
 | Step-up | `VersolaError.StepUp(acrValues, maxAge)` | `.stepUp(acrValues:maxAge:)` | `StepUp(acrValues, maxAge)` |

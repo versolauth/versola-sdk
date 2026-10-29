@@ -2,6 +2,7 @@ id: 08-single-flight-refresh
 title: Concurrent 401s produce exactly one token request
 issues: [8, 14, 15]
 applies_to: [android, ios, flutter]
+facade: [versola, oauth]
 mode: any
 preconditions:
   - The session is Authenticated with an expired access token.

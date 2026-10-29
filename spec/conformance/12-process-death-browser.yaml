@@ -2,6 +2,7 @@ id: 12-process-death-browser
 title: Killed while the browser is foreground; the redirect still completes
 issues: [5, 11, 15]
 applies_to: [android, ios, flutter]
+facade: [versola, oauth]
 mode: any
 fault_injection: [process-death]
 preconditions:

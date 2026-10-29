@@ -1,0 +1,19 @@
+id: 27-id-token-claims-rejected
+title: An ID token with a wrong issuer, audience, expiry or issued-at is rejected with the matching reason
+issues: [46]
+applies_to: [android, ios, flutter]
+facade: [versola, oauth]
+mode: any
+fault_injection: [clock-skew]
+preconditions:
+  - A proxy in front of the provider can re-sign an id_token with a key it also serves from a substituted jwks_uri, so that only the claim under test is wrong.
+  - An authorization request is outstanding.
+steps:
+  - actor: harness
+    action: Deliver an id_token with iss differing by a trailing slash (A); aud equal to another client id (B); aud as a two-element array without azp (C); exp one minute in the past relative to the server's Date header (D); iat absent (E); auth_time older than the max_age the request carried (F).
+  - actor: sdk
+    action: Validate the ID token in each case.
+assertions:
+  - Reasons are Issuer (A), Audience (B and C), Expired (D), IssuedAt (E), AuthTime (F), each under Configuration with detail IdTokenRejected.
+  - Case D is not rescued by clockSkewTolerance when the skew exceeds it, and is accepted when the harness instead offsets the device clock by less than the tolerance after the SDK learned the offset from the Date header.
+  - Nothing is persisted in any case and the state settles on its pre-login value.

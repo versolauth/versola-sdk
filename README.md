@@ -56,7 +56,8 @@ document every other issue assumes; read it before opening a pull request, and
 ## Layout
 
 ```text
-spec/            state machine, errors, retry policy, conformance scenarios
+spec/            state machine, errors, retry policy, conformance scenarios,
+                 the generic facade's API (oauth-sdk-api.md) and provider matrix (providers.md)
 android/         Gradle multi-project
 ios/Sources/     Swift targets
 Package.swift    at the repo root; SPM cannot resolve a manifest from a subdirectory

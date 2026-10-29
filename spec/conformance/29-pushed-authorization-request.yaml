@@ -1,0 +1,29 @@
+id: 29-pushed-authorization-request
+title: PAR is used when advertised, required when the provider says so, and a rejection surfaces before the browser opens
+issues: [46]
+applies_to: [android, ios, flutter]
+facade: [oauth]
+mode: any
+fault_injection: [omit-discovery-field]
+preconditions:
+  - The provider advertises pushed_authorization_request_endpoint.
+  - The proxy can rewrite the discovery document and the PAR response.
+steps:
+  - actor: app
+    action: login() with the default pushedAuthorization WhenAdvertised.
+  - actor: sdk
+    action: POST the authorization parameters to the PAR endpoint with code_challenge, state and nonce; open the browser with client_id and request_uri only.
+    expect: The browser URL carries no scope, redirect_uri, code_challenge, state or nonce parameter.
+  - actor: harness
+    action: Make the PAR endpoint answer 400 invalid_request for an unregistered redirect_uri on the next login().
+    expect: Configuration AuthorizationRejected with the provider's error code; the browser never opened; no pending request persisted.
+  - actor: harness
+    action: Rewrite discovery to require_pushed_authorization_requests true and configure pushedAuthorization Never; login().
+    expect: Configuration ProviderUnsupported naming par; no request to the authorization endpoint.
+  - actor: harness
+    action: Remove pushed_authorization_request_endpoint from discovery and configure pushedAuthorization Required; login().
+    expect: Configuration ProviderUnsupported naming par.
+assertions:
+  - With PAR the request_uri from the PAR response is used exactly once and within its expires_in.
+  - The PAR request carries client_id and no client authentication.
+  - The pending request is persisted after the PAR response and before the browser opens.
