@@ -9,6 +9,7 @@ import java.net.URLEncoder
 import java.security.SecureRandom
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * The browser leg of the state machine: `Unauthenticated → Authorizing → (validated grant)`,
@@ -139,6 +140,30 @@ public class AuthorizationFlow(
         pendingStore.clear()
         state.value = SessionState.Authenticated
     }
+
+    /**
+     * The exchange failed, or the caller walked away from it: the code is spent and the slot
+     * can never complete, so it goes, and the session settles where the authorization was
+     * entered from rather than on a state the grant on disk contradicts.
+     */
+    internal suspend fun abandonLogin() {
+        pendingStore.clear()
+        state.value = settledState()
+    }
+
+    /** `Authenticated → StepUpRequired`; nothing else moves, the grant is intact. */
+    internal fun enterStepUpRequired() {
+        if (state.value == SessionState.Authenticated) state.value = SessionState.StepUpRequired
+    }
+
+    /**
+     * Where a browser leg that did not end in a grant leaves the session: `Authenticated`
+     * while a grant is stored — a step-up or a re-authorization the user cancelled is not a
+     * sign-out, and UI bound to the state must not show one over a live session —
+     * otherwise `Unauthenticated`.
+     */
+    private suspend fun settledState(): SessionState =
+        if (hasStoredGrant()) SessionState.Authenticated else SessionState.Unauthenticated
 
     /**
      * `LoggingOut → Unauthenticated`: the local half of `logout()` (#10), which is the half
@@ -281,7 +306,7 @@ public class AuthorizationFlow(
             // would otherwise look resumable and wait forever for a redirect that can never
             // arrive.
             pendingStore.clear()
-            state.value = SessionState.Unauthenticated
+            state.value = settledState()
             throw e
         }
         complete(outcome, pending, metadata)
@@ -311,11 +336,21 @@ public class AuthorizationFlow(
             }
         if (pending.isExpired(clock())) {
             pendingStore.clear()
-            state.value = SessionState.Unauthenticated
+            state.value = settledState()
             throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.PendingRequestExpired)
         }
         state.value = SessionState.Authorizing
-        val outcome = belongingTo(pending, browser.awaitPendingRedirect())
+        // Bounded by what is left of the request's ten minutes: the redirect it waits for may
+        // never come — a code spent by a login killed mid-exchange, a tab the user closed
+        // before the process died — and an unbounded wait here holds the authorize lock, and
+        // with it every later `login()`, for as long as the app lives.
+        val remaining = PendingAuthorizationRequest.MAX_AGE_MILLIS - (clock() - pending.createdAtEpochMillis)
+        val outcome = withTimeoutOrNull(remaining) { belongingTo(pending, browser.awaitPendingRedirect()) }
+            ?: run {
+                pendingStore.clear()
+                state.value = settledState()
+                throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.PendingRequestExpired)
+            }
         complete(outcome, pending, discovery.metadata())
     }
 
@@ -399,7 +434,7 @@ public class AuthorizationFlow(
         return when (outcome) {
             is BrowserOutcome.UserCancelled -> {
                 pendingStore.clear()
-                state.value = SessionState.Unauthenticated
+                state.value = settledState()
                 throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.UserCancelled)
             }
 
@@ -417,7 +452,7 @@ public class AuthorizationFlow(
                 // A rejected response is unsafe to continue from, whichever way it was
                 // rejected.
                 pendingStore.clear()
-                state.value = SessionState.Unauthenticated
+                state.value = settledState()
                 throw e
             }
         }

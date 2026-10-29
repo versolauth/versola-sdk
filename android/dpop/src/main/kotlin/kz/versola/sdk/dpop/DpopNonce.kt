@@ -1,6 +1,5 @@
 package kz.versola.sdk.dpop
 
-import java.net.URI
 import java.util.concurrent.ConcurrentHashMap
 import kz.versola.sdk.core.VersolaError
 
@@ -21,16 +20,50 @@ internal data class Origin(val value: String) {
 
     companion object {
         fun of(url: String): Origin {
-            val uri = URI(url)
-            val scheme = uri.scheme?.lowercase()
-                ?: throw IllegalArgumentException("a DPoP request URL must be absolute: $url")
-            val host = uri.host?.lowercase()
-                ?: throw IllegalArgumentException("a DPoP request URL must have a host: $url")
+            val (scheme, authority, _) = split(url)
+            // Userinfo is not part of an origin; a bracketed IPv6 literal keeps its brackets
+            // and its colons, so the port is whatever follows the closing bracket.
+            val hostPort = authority.substringAfterLast('@')
+            val (host, port) = if (hostPort.startsWith("[")) {
+                val end = hostPort.indexOf(']')
+                require(end > 0) { "a DPoP request URL has an unterminated IPv6 literal: $url" }
+                hostPort.substring(0, end + 1) to hostPort.substring(end + 1).removePrefix(":")
+            } else {
+                hostPort.substringBefore(':') to hostPort.substringAfter(':', "")
+            }
+            require(host.isNotEmpty()) { "a DPoP request URL must have a host: $url" }
             // The default port is normalised away rather than kept, so that a server reached
             // once as `https://host` and once as `https://host:443` does not end up holding
             // two entries and challenging on alternate requests.
-            val port = if (uri.port == -1 || uri.port == defaultPort(scheme)) "" else ":${uri.port}"
-            return Origin("$scheme://$host$port")
+            val normalisedPort = port.toIntOrNull()?.takeIf { it != defaultPort(scheme) }?.let { ":$it" } ?: ""
+            return Origin("$scheme://${host.lowercase(java.util.Locale.ROOT)}$normalisedPort")
+        }
+
+        /**
+         * RFC 9449 §4.3 step 9: the request URI with query and fragment removed — scheme,
+         * authority and path exactly as they went on the wire, which is what `Dpop.normalizeHtu`
+         * on the server rebuilds. Decoding first would collapse `/a%2Fb` and `/a/b` into one
+         * string, which is exactly the confusion `htu` exists to rule out.
+         *
+         * Split by hand rather than through `java.net.URI`, which refuses characters OkHttp
+         * legitimately leaves raw in a query (`{`, `}`, `|`, `^`): a JSON filter in a query
+         * string is an ordinary REST idiom, and a proof builder must not throw on it.
+         */
+        fun htuOf(url: String): String {
+            val (scheme, authority, path) = split(url)
+            return "$scheme://$authority$path"
+        }
+
+        private fun split(url: String): Triple<String, String, String> {
+            val schemeEnd = url.indexOf("://")
+            require(schemeEnd > 0) { "a DPoP request URL must be absolute: $url" }
+            val scheme = url.substring(0, schemeEnd).lowercase(java.util.Locale.ROOT)
+            val rest = url.substring(schemeEnd + 3).substringBefore('#').substringBefore('?')
+            val slash = rest.indexOf('/')
+            val authority = if (slash < 0) rest else rest.substring(0, slash)
+            val path = if (slash < 0) "" else rest.substring(slash)
+            require(authority.isNotEmpty()) { "a DPoP request URL must have a host: $url" }
+            return Triple(scheme, authority, path)
         }
 
         private fun defaultPort(scheme: String): Int = when (scheme) {

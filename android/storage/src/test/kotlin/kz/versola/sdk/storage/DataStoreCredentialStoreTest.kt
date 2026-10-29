@@ -234,4 +234,18 @@ class DataStoreCredentialStoreTest {
 
         assertFalse(DataStoreCredentialStore(corrupt, keyProvider, scope).hasGrant())
     }
+
+    @Test
+    fun `forFile hands back the one store already open on a path`() = runTest {
+        val shared = File(folder.newFolder(), "credentials")
+
+        val first = DataStoreCredentialStore.forFile(shared, keyProvider)
+        val second = DataStoreCredentialStore.forFile(File(shared.parentFile, "./credentials"), keyProvider)
+
+        // A second DataStore over the same file throws on its first read; a second
+        // configure() in a process must not get one.
+        assertSame(first, second)
+        first.save("token".toByteArray(), null)
+        assertTrue(second.hasGrant())
+    }
 }

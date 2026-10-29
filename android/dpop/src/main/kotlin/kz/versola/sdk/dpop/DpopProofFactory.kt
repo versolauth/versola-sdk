@@ -1,6 +1,5 @@
 package kz.versola.sdk.dpop
 
-import java.net.URI
 import java.util.UUID
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
@@ -72,12 +71,7 @@ public class DpopProofFactory(
      * decoding first would collapse `/a%2Fb` and `/a/b` into one string, which is exactly the
      * confusion `htu` exists to rule out.
      */
-    private fun htu(url: String): String {
-        val uri = URI(url)
-        val authority = uri.rawAuthority ?: ""
-        val path = uri.rawPath ?: ""
-        return "${uri.scheme}://$authority$path"
-    }
+    private fun htu(url: String): String = Origin.htuOf(url)
 
     /** §4.2: `base64url(SHA-256(ASCII(access token)))`. */
     private fun ath(accessToken: String): String =

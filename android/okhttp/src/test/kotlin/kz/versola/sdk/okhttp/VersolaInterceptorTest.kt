@@ -26,6 +26,13 @@ private class FakeTokenSource(
     var issued = 0
     var renewals = 0
     var renewalFailure: VersolaError? = null
+    var stepUps = 0
+    /** A non-VersolaError failure, standing in for a Keystore or DataStore refusing. */
+    var unexpectedFailure: Throwable? = null
+
+    override fun stepUpRequired() {
+        stepUps++
+    }
 
     /** Runs on every accessToken() call, numbered from 1, so a test can simulate a
      *  concurrent refresh landing in the cache between two calls within one operation. */
@@ -33,6 +40,7 @@ private class FakeTokenSource(
 
     override suspend fun accessToken(): AccessToken {
         issued++
+        unexpectedFailure?.let { throw it }
         onAccessToken?.invoke(issued)
         return current
     }
@@ -391,5 +399,30 @@ class VersolaInterceptorTest {
         assertEquals(0, tokens.renewals)
         server.takeRequest()
         assertEquals("DPoP racy-refresh", server.takeRequest().headers["Authorization"])
+    }
+
+    // ---- review findings H3 / M4 --------------------------------------------------------
+
+    @Test
+    fun `a failure that is not a VersolaError still reaches the caller as VersolaHttpException`() {
+        // Anything else leaving an interceptor is rethrown onto OkHttp's dispatcher thread
+        // for an enqueued call, where Android's default handler ends the process.
+        tokens.unexpectedFailure = IllegalStateException("There are multiple DataStores active for the same file")
+
+        val error = failure() as VersolaError.Configuration
+
+        assertTrue(error.detail is VersolaError.Configuration.Detail.InvalidConfiguration)
+        assertTrue(error.cause is IllegalStateException)
+    }
+
+    @Test
+    fun `a step-up challenge publishes StepUpRequired before it is surfaced`() {
+        server.enqueue(challenge("""Bearer error="insufficient_user_authentication", acr_values="mfa""""))
+
+        val error = failure() as VersolaError.StepUp
+
+        assertEquals(listOf("mfa"), error.acrValues)
+        assertEquals(1, tokens.stepUps)
+        assertEquals(0, tokens.renewals)
     }
 }

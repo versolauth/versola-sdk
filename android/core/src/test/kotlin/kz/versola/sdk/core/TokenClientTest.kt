@@ -562,4 +562,15 @@ class TokenClientTest {
         val unavailable = failure { client().revoke(refreshToken.toByteArray(Charsets.UTF_8)) }
         assertTrue(unavailable is VersolaError.Recoverable)
     }
+
+    @Test
+    fun `408 and 429 are transient, not deployment faults`() = runTest {
+        for (status in listOf(408, 429, 503)) {
+            server.enqueue(MockResponse.Builder().code(status).build())
+            val error = failure { client().refresh(refreshToken.toByteArray(), "idem-key-1") }
+            assertTrue("HTTP $status should be Recoverable", error is VersolaError.Recoverable)
+        }
+        server.enqueue(MockResponse.Builder().code(429).build())
+        assertTrue(failure { client().revoke(refreshToken.toByteArray()) } is VersolaError.Recoverable)
+    }
 }

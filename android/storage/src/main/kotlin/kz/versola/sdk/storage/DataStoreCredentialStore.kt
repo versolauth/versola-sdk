@@ -23,8 +23,10 @@ import kz.versola.sdk.core.VersolaError
  * slot, logout — and `updateData` serialises them onto one consistent view.
  *
  * **One instance per [file] per process.** That is DataStore's own constraint, not this
- * class's; a second instance over the same file corrupts both. Construct it where the rest of
- * the SDK's singletons are constructed.
+ * class's: a second active instance over the same file throws `IllegalStateException` on its
+ * first read. [forFile] is the constructor to use — it hands back the instance already open
+ * on that path, so a `configure()` repeated on every `Activity.onCreate` keeps working. The
+ * public constructor stays for a caller that owns its own file and scope, tests above all.
  *
  * Callers should place [file] under `Context.noBackupFilesDir`. A refresh token restored onto
  * a different device from a cloud backup cannot be unwrapped there — the Keystore key does not
@@ -102,6 +104,21 @@ public class DataStoreCredentialStore(
 
     override suspend fun clear() {
         dataStore.updateData { CredentialBlob.EMPTY }
+    }
+
+    public companion object {
+        private val instances = HashMap<String, DataStoreCredentialStore>()
+
+        /**
+         * The store for [file], opened once per process and shared by every caller naming
+         * the same path. [keyProvider] is bound at the first call; a later call with another
+         * provider gets the store as first opened, because the ciphertext on disk belongs to
+         * the key that wrote it.
+         */
+        public fun forFile(file: File, keyProvider: CredentialKeyProvider): DataStoreCredentialStore =
+            synchronized(instances) {
+                instances.getOrPut(file.canonicalPath) { DataStoreCredentialStore(file, keyProvider) }
+            }
     }
 
     /**

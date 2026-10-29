@@ -155,4 +155,21 @@ class DpopProofFactoryTest {
 
     private fun ath(token: String): String = Base64.getUrlEncoder().withoutPadding()
         .encodeToString(MessageDigest.getInstance("SHA-256").digest(token.toByteArray(Charsets.US_ASCII)))
+
+    @Test
+    fun `a query OkHttp leaves raw does not break the proof builder`() = runTest {
+        // A JSON filter in a query string is an ordinary REST idiom, and `{`, `}`, `|` and
+        // `^` are characters OkHttp does not percent-encode there. java.net.URI refuses them;
+        // the proof must not, and htu strips the query regardless.
+        val jwt = parse(factory().proof("GET", """https://versola.kz/resources/42/search?filter={"a":1}|x^y#frag"""))
+
+        assertEquals("https://versola.kz/resources/42/search", jwt.jwtClaimsSet.getStringClaim("htu"))
+    }
+
+    @Test
+    fun `htu keeps the raw path and the port, and drops userinfo nothing`() = runTest {
+        val jwt = parse(factory().proof("GET", "HTTPS://Versola.kz:8443/a%2Fb/c?x=1"))
+
+        assertEquals("https://Versola.kz:8443/a%2Fb/c", jwt.jwtClaimsSet.getStringClaim("htu"))
+    }
 }

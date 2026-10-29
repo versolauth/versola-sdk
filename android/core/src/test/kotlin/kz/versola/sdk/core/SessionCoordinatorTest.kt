@@ -12,6 +12,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -51,9 +52,12 @@ private class FixedRedirectBrowser(private val store: RecordingPendingStore) : B
         BrowserOutcome.Redirect("https://app.example.com/signed-out?state=${stateOf(uri)}")
     }
 
+    var loginOutcome: (suspend (String) -> BrowserOutcome)? = null
+
     override suspend fun authorize(uri: String): BrowserOutcome {
         launched += uri
         if (uri.startsWith("$ISSUER/logout")) return logoutOutcome(uri)
+        loginOutcome?.let { return it(uri) }
         val pending = checkNotNull(store.stored) { "authorize() must persist before opening the browser" }
         return BrowserOutcome.Redirect(
             "https://app.example.com/oauth?code=the-code&state=${pending.state}&iss=$ISSUER",
@@ -129,7 +133,13 @@ private class FakeCredentialStore : CredentialStore {
         }
     }
 
-    override suspend fun hasGrant(): Boolean = refreshToken != null
+    /** Suspends [hasGrant] until completed, so a restore can be cancelled mid-probe. */
+    var hasGrantGate: CompletableDeferred<Unit>? = null
+
+    override suspend fun hasGrant(): Boolean {
+        hasGrantGate?.await()
+        return refreshToken != null
+    }
 
     override suspend fun rawIdToken(): String? = rawIdToken
 
@@ -279,7 +289,7 @@ class SessionCoordinatorTest {
     }
 
     @Test
-    fun `a failed exchange leaves the pending request exactly where authorize left it`() = runTest {
+    fun `a failed exchange abandons the login rather than leaving a slot nothing can resume`() = runTest {
         val pendingStore = RecordingPendingStore()
         val (coordinator, tokenClient, _) = coordinator(pendingStore)
         tokenClient.exchangeResult = {
@@ -290,12 +300,28 @@ class SessionCoordinatorTest {
 
         failure { coordinator.login(setOf("openid")) }
 
-        // Still Authorizing, pending request intact: this class does not shorten the
-        // request's own ten-minute lifetime on a failure that has nothing to do with the
-        // authorization response itself.
-        assertNotNull(pendingStore.stored)
-        assertEquals(0, pendingStore.clears)
-        assertEquals(SessionState.Authorizing, coordinator.sessionState.first())
+        // The redirect was consumed and the code spent: a slot kept here would make the next
+        // cold start report Authorizing and resumePendingAuthorization() wait for a redirect
+        // that can never come, holding the authorize lock against every later login().
+        assertNull(pendingStore.stored)
+        assertEquals(1, pendingStore.clears)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a failed step-up exchange settles back on Authenticated, not on a login screen`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val (coordinator, tokenClient, credentialStore) = coordinator(pendingStore)
+        credentialStore.refreshToken = stored()
+        tokenClient.exchangeResult = {
+            throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.Network("dropped"))
+        }
+
+        failure { coordinator.login(setOf("openid"), acrValues = listOf("mfa")) }
+
+        assertNull(pendingStore.stored)
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+        assertNotNull(credentialStore.refreshToken)
     }
 
     @Test
@@ -863,6 +889,84 @@ class SessionCoordinatorTest {
         coordinator.login(setOf("openid", "profile"))
 
         assertEquals(setOf("openid", "profile", "offline_access"), tokenClient.exchangeCalls.single().scopes)
+    }
+
+    // ---- review findings H1 / H2 / M4 ---------------------------------------------------
+
+    @Test
+    fun `a winner cancelled during the lazy restore does not wedge every later refresh`() = runTest {
+        val credentialStore = FakeCredentialStore().apply { refreshToken = stored() }
+        val gate = CompletableDeferred<Unit>()
+        credentialStore.hasGrantGate = gate
+        val tokenClient = FakeTokenClient().apply { refreshActions = mutableListOf({ issued(accessToken = "after") }) }
+        val coordinator = SessionCoordinator(
+            authFlow(RecordingPendingStore(), credentialStore), tokenClient, credentialStore,
+            elapsedMillis = { elapsed },
+        )
+
+        // The first refresh of a process performs the restore; a lifecycleScope torn down on
+        // rotation is a routine way to cancel it exactly there.
+        val first = async(start = CoroutineStart.UNDISPATCHED) { coordinator.refresh() }
+        first.cancelAndJoin()
+        gate.complete(Unit)
+
+        val second = withTimeoutOrNull(5_000) { coordinator.refresh() }
+
+        assertNotNull("the abandoned flight was never retired", second)
+        assertEquals("after", second!!.accessToken)
+        assertEquals(1, tokenClient.refreshCalls.size)
+    }
+
+    @Test
+    fun `a refresh in flight during logout cannot re-persist the grant after the wipe`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val browser = FixedRedirectBrowser(pendingStore)
+        val credentialStore = FakeCredentialStore().apply { refreshToken = stored() }
+        val responseGate = CompletableDeferred<Unit>()
+        val tokenClient = FakeTokenClient().apply {
+            refreshActions = mutableListOf({ responseGate.await(); issued(accessToken = "late") })
+        }
+        val coordinator = SessionCoordinator(
+            authFlow(pendingStore, credentialStore, browser), tokenClient, credentialStore,
+            elapsedMillis = { elapsed },
+            onCredentialsWiped = { teardowns++ },
+        )
+        val refreshing = async(start = CoroutineStart.UNDISPATCHED) { runCatching { coordinator.refresh() } }
+        // logout() lets the flight finish before it revokes, so the server's answer is in
+        // before the wipe — and whatever it answered is wiped with everything else.
+        val loggingOut = async(start = CoroutineStart.UNDISPATCHED) { coordinator.logout() }
+        responseGate.complete(Unit)
+        loggingOut.await()
+        refreshing.await()
+
+        assertNull("grant re-persisted after logout", credentialStore.refreshToken)
+        assertNull(coordinator.currentAccessToken())
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+        // The late answer was persisted (the flight finished first) and then wiped — never
+        // the other way round.
+        assertEquals(1, credentialStore.clears)
+        assertTrue(credentialStore.events.contains("save"))
+        assertTrue(refreshing.await().isSuccess)
+    }
+
+    @Test
+    fun `stepUpRequired publishes StepUpRequired over the live grant, and a cancelled step-up settles on Authenticated`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val browser = FixedRedirectBrowser(pendingStore)
+        val (coordinator, _, credentialStore) = coordinator(pendingStore, browser = browser)
+        credentialStore.refreshToken = stored()
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+
+        coordinator.stepUpRequired()
+        assertEquals(SessionState.StepUpRequired, coordinator.sessionState.first())
+
+        browser.loginOutcome = { BrowserOutcome.UserCancelled }
+        failure { coordinator.login(setOf("openid"), acrValues = listOf("mfa")) }
+
+        // The grant is intact; UI bound to the state must not show a login screen over it.
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+        assertNotNull(credentialStore.refreshToken)
+        assertNull(pendingStore.stored)
     }
 
     // ---- logout() ----------------------------------------------------------------------

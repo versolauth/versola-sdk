@@ -284,11 +284,12 @@ public class Versola internal constructor(
                 client = HttpDiscoveryClient(httpClient),
                 cache = FileProviderMetadataCache(File(directory, "provider-metadata.json")),
             )
-            // One instance per file per process, which is DataStore's constraint and the
-            // reason it is built here rather than per caller. Constructing it opens nothing:
-            // the file is read on first access, and the Keystore is not touched until
-            // something asks to unwrap.
-            val credentialStore = DataStoreCredentialStore(
+            // One instance per file per process, which is DataStore's constraint: a second
+            // `configure()` in the same process — every `Activity.onCreate`, every rotation —
+            // shares the store the first one opened. Opening it reads nothing; the file is
+            // read on first access, and the Keystore is not touched until something asks to
+            // unwrap.
+            val credentialStore = DataStoreCredentialStore.forFile(
                 file = File(directory, "credentials"),
                 keyProvider = HardwareKeyProvider(),
             )

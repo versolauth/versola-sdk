@@ -271,7 +271,7 @@ public class HttpNativeAuthorizationStarter(
                 ),
             )
         }
-        if (status >= 500) {
+        if (status >= 500 || status == 408 || status == 429) {
             return VersolaError.Recoverable(
                 VersolaError.Recoverable.Cause.Network("edge returned HTTP $status to /native/start"),
             )
