@@ -7,7 +7,7 @@ plugins {
 }
 
 android {
-    namespace = "kz.versola.sdk.okhttp"
+    namespace = "versola.sdk.okhttp"
     compileSdk = 36
 
     defaultConfig {
@@ -28,7 +28,7 @@ kotlin {
 }
 
 dependencies {
-    api(project(":core"))
+    api(project(":oauth-core"))
     implementation(project(":dpop"))
     // Pinned to 5.4.0: 5.5.0's AAR declares minCompileSdk=37, ahead of any SDK Platform
     // release available at scaffolding time. Revisit once compileSdk 37 is installable.
@@ -37,4 +37,11 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     testImplementation("com.squareup.okhttp3:mockwebserver3:5.4.0")
+}
+
+apiValidation {
+    // Wiring behind the opt-in marker is not public API: keep it out of the dump so that
+    // apiCheck holds this module to the surface an app can actually use (architecture
+    // review F6).
+    nonPublicMarkers.add("versola.oauth.core.VersolaInternalApi")
 }

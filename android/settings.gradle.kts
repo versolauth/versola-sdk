@@ -20,6 +20,10 @@ rootProject.name = "versola-android"
 // dpop/storage/browser depend only on core, okhttp depends on core and dpop,
 // and sdk sits on top of all of them.
 // See #1 §4 for why DPoP and storage are separate modules from the transport.
+// The protocol core: discovery, PKCE, the token client, the session coordinator, the error
+// taxonomy. Plain JVM, no Versola vocabulary (ADR 0001). Every other module depends on it.
+include(":oauth-core")
+// What is Versola-specific: the edge back channel and its native endpoints.
 include(":core")
 include(":dpop")
 include(":storage")

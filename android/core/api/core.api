@@ -1,198 +1,66 @@
-public final class kz/versola/sdk/core/AccessToken {
-	public fun <init> (Ljava/lang/String;Z)V
-	public final fun getValue ()Ljava/lang/String;
-	public final fun isDpopBound ()Z
-	public fun toString ()Ljava/lang/String;
+public abstract class versola/sdk/core/BackChannel {
 }
 
-public abstract interface class kz/versola/sdk/core/AccessTokenSource {
-	public abstract fun accessToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun renewAccessToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun stepUpRequired ()V
-}
-
-public final class kz/versola/sdk/core/AccessTokenSource$DefaultImpls {
-	public static fun stepUpRequired (Lkz/versola/sdk/core/AccessTokenSource;)V
-}
-
-public final class kz/versola/sdk/core/AuthorizationFlow {
-	public fun <init> (Lkz/versola/sdk/core/VersolaConfiguration;Lkz/versola/sdk/core/DiscoveryService;Lkz/versola/sdk/core/PendingAuthorizationStore;Lkz/versola/sdk/core/BrowserAuthorizationSession;Lkz/versola/sdk/core/DpopKeyBinding;Lkz/versola/sdk/core/TokenBinding;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function1;Lkz/versola/sdk/core/NativeAuthorizationStarter;)V
-	public synthetic fun <init> (Lkz/versola/sdk/core/VersolaConfiguration;Lkz/versola/sdk/core/DiscoveryService;Lkz/versola/sdk/core/PendingAuthorizationStore;Lkz/versola/sdk/core/BrowserAuthorizationSession;Lkz/versola/sdk/core/DpopKeyBinding;Lkz/versola/sdk/core/TokenBinding;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function1;Lkz/versola/sdk/core/NativeAuthorizationStarter;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun authorize (Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun authorize$default (Lkz/versola/sdk/core/AuthorizationFlow;Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
-	public final fun endSession (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public final fun getConfiguration ()Lkz/versola/sdk/core/VersolaConfiguration;
-	public final fun getSessionState ()Lkotlinx/coroutines/flow/Flow;
-	public final fun metadata (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public final fun resumePendingAuthorization (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-}
-
-public final class kz/versola/sdk/core/AuthorizationGrant {
-	public final fun getNonce ()Ljava/lang/String;
-	public final fun getRedirectUri ()Ljava/lang/String;
-	public final fun getScopes ()Ljava/util/Set;
-	public final fun getViaEdge ()Z
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/AuthorizationRequest {
-	public final fun getAcrValues ()Ljava/util/List;
-	public final fun getMaxAge ()Ljava/lang/Long;
-	public final fun getNonce ()Ljava/lang/String;
-	public final fun getScopes ()Ljava/util/Set;
-	public final fun getState ()Ljava/lang/String;
-	public final fun toUri (Ljava/lang/String;)Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/AuthorizationResponseValidator {
-	public static final field INSTANCE Lkz/versola/sdk/core/AuthorizationResponseValidator;
-	public final fun validate (Ljava/lang/String;Lkz/versola/sdk/core/PendingAuthorizationRequest;Ljava/lang/String;Z)Lkz/versola/sdk/core/AuthorizationGrant;
-}
-
-public abstract class kz/versola/sdk/core/BackChannel {
-}
-
-public final class kz/versola/sdk/core/BackChannel$Auth : kz/versola/sdk/core/BackChannel {
-	public static final field INSTANCE Lkz/versola/sdk/core/BackChannel$Auth;
+public final class versola/sdk/core/BackChannel$Auth : versola/sdk/core/BackChannel {
+	public static final field INSTANCE Lversola/sdk/core/BackChannel$Auth;
 	public fun equals (Ljava/lang/Object;)Z
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
 
-public final class kz/versola/sdk/core/BackChannel$Edge : kz/versola/sdk/core/BackChannel {
-	public static final field INSTANCE Lkz/versola/sdk/core/BackChannel$Edge;
+public final class versola/sdk/core/BackChannel$Edge : versola/sdk/core/BackChannel {
+	public static final field INSTANCE Lversola/sdk/core/BackChannel$Edge;
 	public fun equals (Ljava/lang/Object;)Z
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
 
-public abstract interface class kz/versola/sdk/core/BrowserAuthorizationSession {
-	public abstract fun authorize (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun awaitPendingRedirect (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+public final class versola/sdk/core/EdgeAuthorizationStarter$Companion {
+	public final fun revocationEndpointOf (Ljava/util/Map;)Ljava/lang/String;
+	public final fun tokenEndpointOf (Ljava/util/Map;)Ljava/lang/String;
 }
 
-public abstract interface class kz/versola/sdk/core/BrowserOutcome {
-}
-
-public final class kz/versola/sdk/core/BrowserOutcome$Redirect : kz/versola/sdk/core/BrowserOutcome {
+public final class versola/sdk/core/EdgeClientUnknown : versola/oauth/core/VersolaError$Configuration$Detail$Extension {
 	public fun <init> (Ljava/lang/String;)V
 	public final fun component1 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;)Lkz/versola/sdk/core/BrowserOutcome$Redirect;
-	public static synthetic fun copy$default (Lkz/versola/sdk/core/BrowserOutcome$Redirect;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/BrowserOutcome$Redirect;
+	public final fun copy (Ljava/lang/String;)Lversola/sdk/core/EdgeClientUnknown;
+	public static synthetic fun copy$default (Lversola/sdk/core/EdgeClientUnknown;Ljava/lang/String;ILjava/lang/Object;)Lversola/sdk/core/EdgeClientUnknown;
 	public fun equals (Ljava/lang/Object;)Z
-	public final fun getUri ()Ljava/lang/String;
+	public final fun getClientId ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }
 
-public final class kz/versola/sdk/core/BrowserOutcome$UserCancelled : kz/versola/sdk/core/BrowserOutcome {
-	public static final field INSTANCE Lkz/versola/sdk/core/BrowserOutcome$UserCancelled;
-	public fun equals (Ljava/lang/Object;)Z
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/CodeVerifier {
-	public static final field Companion Lkz/versola/sdk/core/CodeVerifier$Companion;
-	public final fun challengeS256 ()Ljava/lang/String;
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/CodeVerifier$Companion {
-}
-
-public abstract interface class kz/versola/sdk/core/CredentialKeyProvider {
-	public abstract fun unwrap ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun wrap ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
-}
-
-public abstract interface class kz/versola/sdk/core/CredentialStore {
-	public abstract fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun hasGrant (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun pendingRotation (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun rawIdToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun save ([BLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun save$default (Lkz/versola/sdk/core/CredentialStore;[BLjava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
-	public abstract fun savePendingRotation (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun useRefreshToken (Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-}
-
-public final class kz/versola/sdk/core/CredentialStore$DefaultImpls {
-	public static synthetic fun save$default (Lkz/versola/sdk/core/CredentialStore;[BLjava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
-}
-
-public abstract interface class kz/versola/sdk/core/DiscoveryClient {
-	public abstract fun fetch (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-}
-
-public final class kz/versola/sdk/core/DiscoveryService {
-	public fun <init> (Ljava/lang/String;Lkz/versola/sdk/core/DiscoveryClient;Lkz/versola/sdk/core/ProviderMetadataCache;)V
-	public final fun metadata (ZLkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun metadata$default (Lkz/versola/sdk/core/DiscoveryService;ZLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
-}
-
-public abstract interface class kz/versola/sdk/core/DpopKeyBinding {
-	public abstract fun jkt (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-}
-
-public abstract interface class kz/versola/sdk/core/DpopProofSource {
-	public abstract fun observe (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
-	public abstract fun proof (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun proof$default (Lkz/versola/sdk/core/DpopProofSource;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
-}
-
-public final class kz/versola/sdk/core/DpopProofSource$DefaultImpls {
-	public static synthetic fun proof$default (Lkz/versola/sdk/core/DpopProofSource;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
-}
-
-public final class kz/versola/sdk/core/EdgeNativeTokenClient : kz/versola/sdk/core/TokenClient {
-	public fun <init> (Lkz/versola/sdk/core/VersolaConfiguration;Ljava/lang/String;Lokhttp3/OkHttpClient;Lkz/versola/sdk/core/DpopProofSource;Lkz/versola/sdk/core/DiscoveryService;Lkz/versola/sdk/core/NativeEndpointsStore;Lkz/versola/sdk/core/TokenBinding$Dpop;)V
-	public synthetic fun <init> (Lkz/versola/sdk/core/VersolaConfiguration;Ljava/lang/String;Lokhttp3/OkHttpClient;Lkz/versola/sdk/core/DpopProofSource;Lkz/versola/sdk/core/DiscoveryService;Lkz/versola/sdk/core/NativeEndpointsStore;Lkz/versola/sdk/core/TokenBinding$Dpop;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public fun exchange (Lkz/versola/sdk/core/AuthorizationGrant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+public final class versola/sdk/core/EdgeNativeTokenClient : versola/oauth/core/TokenClient {
+	public fun <init> (Lversola/oauth/core/VersolaConfiguration;Ljava/lang/String;Lokhttp3/OkHttpClient;Lversola/oauth/core/DpopProofSource;Lversola/oauth/core/DiscoveryService;Lversola/sdk/core/NativeEndpointsStore;Lversola/oauth/core/TokenBinding$Dpop;)V
+	public synthetic fun <init> (Lversola/oauth/core/VersolaConfiguration;Ljava/lang/String;Lokhttp3/OkHttpClient;Lversola/oauth/core/DpopProofSource;Lversola/oauth/core/DiscoveryService;Lversola/sdk/core/NativeEndpointsStore;Lversola/oauth/core/TokenBinding$Dpop;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun exchange (Lversola/oauth/core/AuthorizationGrant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun refresh ([BLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun revoke ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
-public final class kz/versola/sdk/core/FileNativeEndpointsStore : kz/versola/sdk/core/NativeEndpointsStore {
+public final class versola/sdk/core/FileNativeEndpointsStore : versola/sdk/core/NativeEndpointsStore {
 	public fun <init> (Ljava/io/File;)V
 	public fun load (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun save (Lkz/versola/sdk/core/NativeEndpoints;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun save (Lversola/sdk/core/NativeEndpoints;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
-public final class kz/versola/sdk/core/FileProviderMetadataCache : kz/versola/sdk/core/ProviderMetadataCache {
-	public fun <init> (Ljava/io/File;)V
-	public fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun load (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun save (Lkz/versola/sdk/core/ProviderMetadata;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+public final class versola/sdk/core/HttpNativeAuthorizationStarter : versola/sdk/core/NativeAuthorizationStarter {
+	public fun <init> (Lversola/oauth/core/VersolaConfiguration;Ljava/lang/String;Lokhttp3/OkHttpClient;Lversola/oauth/core/DpopProofSource;)V
+	public fun start (Lversola/sdk/core/NativeStartRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
-public final class kz/versola/sdk/core/HttpDiscoveryClient : kz/versola/sdk/core/DiscoveryClient {
-	public fun <init> (Lokhttp3/OkHttpClient;)V
-	public fun fetch (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+public abstract interface class versola/sdk/core/NativeAuthorizationStarter {
+	public abstract fun start (Lversola/sdk/core/NativeStartRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
-public final class kz/versola/sdk/core/HttpNativeAuthorizationStarter : kz/versola/sdk/core/NativeAuthorizationStarter {
-	public fun <init> (Lkz/versola/sdk/core/VersolaConfiguration;Ljava/lang/String;Lokhttp3/OkHttpClient;Lkz/versola/sdk/core/DpopProofSource;)V
-	public fun start (Lkz/versola/sdk/core/NativeStartRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-}
-
-public final class kz/versola/sdk/core/HttpTokenClient : kz/versola/sdk/core/TokenClient {
-	public fun <init> (Lkz/versola/sdk/core/VersolaConfiguration;Lkz/versola/sdk/core/DiscoveryService;Lokhttp3/OkHttpClient;Lkz/versola/sdk/core/DpopProofSource;Lkz/versola/sdk/core/TokenBinding;)V
-	public synthetic fun <init> (Lkz/versola/sdk/core/VersolaConfiguration;Lkz/versola/sdk/core/DiscoveryService;Lokhttp3/OkHttpClient;Lkz/versola/sdk/core/DpopProofSource;Lkz/versola/sdk/core/TokenBinding;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public fun exchange (Lkz/versola/sdk/core/AuthorizationGrant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun refresh ([BLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun revoke ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
-}
-
-public final class kz/versola/sdk/core/MtlsEndpointAliases {
-	public static final field Companion Lkz/versola/sdk/core/MtlsEndpointAliases$Companion;
-	public fun <init> ()V
+public final class versola/sdk/core/NativeEndpoints {
+	public static final field Companion Lversola/sdk/core/NativeEndpoints$Companion;
 	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun component1 ()Ljava/lang/String;
 	public final fun component2 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lkz/versola/sdk/core/MtlsEndpointAliases;
-	public static synthetic fun copy$default (Lkz/versola/sdk/core/MtlsEndpointAliases;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/MtlsEndpointAliases;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lversola/sdk/core/NativeEndpoints;
+	public static synthetic fun copy$default (Lversola/sdk/core/NativeEndpoints;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lversola/sdk/core/NativeEndpoints;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getRevocationEndpoint ()Ljava/lang/String;
 	public final fun getTokenEndpoint ()Ljava/lang/String;
@@ -200,61 +68,28 @@ public final class kz/versola/sdk/core/MtlsEndpointAliases {
 	public fun toString ()Ljava/lang/String;
 }
 
-public final synthetic class kz/versola/sdk/core/MtlsEndpointAliases$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
-	public static final field INSTANCE Lkz/versola/sdk/core/MtlsEndpointAliases$$serializer;
+public final synthetic class versola/sdk/core/NativeEndpoints$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lversola/sdk/core/NativeEndpoints$$serializer;
 	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
 	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
-	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lkz/versola/sdk/core/MtlsEndpointAliases;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lversola/sdk/core/NativeEndpoints;
 	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
 	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
-	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lkz/versola/sdk/core/MtlsEndpointAliases;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lversola/sdk/core/NativeEndpoints;)V
 	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
 }
 
-public final class kz/versola/sdk/core/MtlsEndpointAliases$Companion {
+public final class versola/sdk/core/NativeEndpoints$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
-public abstract interface class kz/versola/sdk/core/NativeAuthorizationStarter {
-	public abstract fun start (Lkz/versola/sdk/core/NativeStartRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-}
-
-public final class kz/versola/sdk/core/NativeEndpoints {
-	public static final field Companion Lkz/versola/sdk/core/NativeEndpoints$Companion;
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun component2 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lkz/versola/sdk/core/NativeEndpoints;
-	public static synthetic fun copy$default (Lkz/versola/sdk/core/NativeEndpoints;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/NativeEndpoints;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getRevocationEndpoint ()Ljava/lang/String;
-	public final fun getTokenEndpoint ()Ljava/lang/String;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final synthetic class kz/versola/sdk/core/NativeEndpoints$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
-	public static final field INSTANCE Lkz/versola/sdk/core/NativeEndpoints$$serializer;
-	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
-	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
-	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lkz/versola/sdk/core/NativeEndpoints;
-	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
-	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
-	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lkz/versola/sdk/core/NativeEndpoints;)V
-	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
-}
-
-public final class kz/versola/sdk/core/NativeEndpoints$Companion {
-	public final fun serializer ()Lkotlinx/serialization/KSerializer;
-}
-
-public abstract interface class kz/versola/sdk/core/NativeEndpointsStore {
+public abstract interface class versola/sdk/core/NativeEndpointsStore {
 	public abstract fun load (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun save (Lkz/versola/sdk/core/NativeEndpoints;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun save (Lversola/sdk/core/NativeEndpoints;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
-public final class kz/versola/sdk/core/NativeStart {
-	public static final field Companion Lkz/versola/sdk/core/NativeStart$Companion;
+public final class versola/sdk/core/NativeStart {
+	public static final field Companion Lversola/sdk/core/NativeStart$Companion;
 	public fun <init> ()V
 	public fun <init> (Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
 	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
@@ -266,8 +101,8 @@ public final class kz/versola/sdk/core/NativeStart {
 	public final fun component6 ()Ljava/lang/String;
 	public final fun component7 ()Ljava/lang/String;
 	public final fun component8 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lkz/versola/sdk/core/NativeStart;
-	public static synthetic fun copy$default (Lkz/versola/sdk/core/NativeStart;Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/NativeStart;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lversola/sdk/core/NativeStart;
+	public static synthetic fun copy$default (Lversola/sdk/core/NativeStart;Ljava/lang/String;Ljava/lang/String;JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lversola/sdk/core/NativeStart;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getAuthorizationEndpoint ()Ljava/lang/String;
 	public final fun getBlob ()Ljava/lang/String;
@@ -281,581 +116,27 @@ public final class kz/versola/sdk/core/NativeStart {
 	public fun toString ()Ljava/lang/String;
 }
 
-public final synthetic class kz/versola/sdk/core/NativeStart$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
-	public static final field INSTANCE Lkz/versola/sdk/core/NativeStart$$serializer;
+public final synthetic class versola/sdk/core/NativeStart$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lversola/sdk/core/NativeStart$$serializer;
 	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
 	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
-	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lkz/versola/sdk/core/NativeStart;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lversola/sdk/core/NativeStart;
 	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
 	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
-	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lkz/versola/sdk/core/NativeStart;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lversola/sdk/core/NativeStart;)V
 	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
 }
 
-public final class kz/versola/sdk/core/NativeStart$Companion {
+public final class versola/sdk/core/NativeStart$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
 }
 
-public final class kz/versola/sdk/core/NativeStartRequest {
+public final class versola/sdk/core/NativeStartRequest {
 	public fun <init> (Ljava/lang/String;Ljava/util/Set;Ljava/lang/String;Ljava/util/List;Ljava/lang/Long;)V
 	public final fun getAcrValues ()Ljava/util/List;
 	public final fun getMaxAge ()Ljava/lang/Long;
 	public final fun getNonce ()Ljava/lang/String;
 	public final fun getRedirectUri ()Ljava/lang/String;
 	public final fun getScopes ()Ljava/util/Set;
-}
-
-public final class kz/versola/sdk/core/PendingAuthorizationCodec {
-	public static final field INSTANCE Lkz/versola/sdk/core/PendingAuthorizationCodec;
-	public final fun decode ([B)Lkz/versola/sdk/core/PendingAuthorizationRequest;
-	public final fun encode (Lkz/versola/sdk/core/PendingAuthorizationRequest;)[B
-}
-
-public final class kz/versola/sdk/core/PendingAuthorizationRequest {
-	public static final field Companion Lkz/versola/sdk/core/PendingAuthorizationRequest$Companion;
-	public static final field MAX_AGE_MILLIS J
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/util/List;Ljava/lang/Long;JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/util/List;Ljava/lang/Long;JLjava/lang/String;Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun getAcrValues ()Ljava/util/List;
-	public final fun getBlob ()Ljava/lang/String;
-	public final fun getCreatedAtEpochMillis ()J
-	public final fun getMaxAge ()Ljava/lang/Long;
-	public final fun getNonce ()Ljava/lang/String;
-	public final fun getRedirectUri ()Ljava/lang/String;
-	public final fun getRevocationEndpoint ()Ljava/lang/String;
-	public final fun getScopes ()Ljava/util/List;
-	public final fun getState ()Ljava/lang/String;
-	public final fun getTokenEndpoint ()Ljava/lang/String;
-	public final fun getViaEdge ()Z
-	public final fun isExpired (J)Z
-	public fun toString ()Ljava/lang/String;
-}
-
-public final synthetic class kz/versola/sdk/core/PendingAuthorizationRequest$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
-	public static final field INSTANCE Lkz/versola/sdk/core/PendingAuthorizationRequest$$serializer;
-	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
-	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
-	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lkz/versola/sdk/core/PendingAuthorizationRequest;
-	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
-	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
-	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lkz/versola/sdk/core/PendingAuthorizationRequest;)V
-	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
-}
-
-public final class kz/versola/sdk/core/PendingAuthorizationRequest$Companion {
-	public final fun serializer ()Lkotlinx/serialization/KSerializer;
-}
-
-public abstract interface class kz/versola/sdk/core/PendingAuthorizationStore {
-	public abstract fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun load (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun save (Lkz/versola/sdk/core/PendingAuthorizationRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-}
-
-public final class kz/versola/sdk/core/ProviderMetadata {
-	public static final field Companion Lkz/versola/sdk/core/ProviderMetadata$Companion;
-	public fun <init> ()V
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;ZLkz/versola/sdk/core/MtlsEndpointAliases;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;ZLkz/versola/sdk/core/MtlsEndpointAliases;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun component10 ()Ljava/util/List;
-	public final fun component11 ()Ljava/util/List;
-	public final fun component12 ()Ljava/util/List;
-	public final fun component13 ()Z
-	public final fun component14 ()Lkz/versola/sdk/core/MtlsEndpointAliases;
-	public final fun component2 ()Ljava/lang/String;
-	public final fun component3 ()Ljava/lang/String;
-	public final fun component4 ()Ljava/lang/String;
-	public final fun component5 ()Ljava/lang/String;
-	public final fun component6 ()Ljava/lang/String;
-	public final fun component7 ()Ljava/lang/String;
-	public final fun component8 ()Ljava/util/List;
-	public final fun component9 ()Ljava/util/List;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;ZLkz/versola/sdk/core/MtlsEndpointAliases;)Lkz/versola/sdk/core/ProviderMetadata;
-	public static synthetic fun copy$default (Lkz/versola/sdk/core/ProviderMetadata;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;ZLkz/versola/sdk/core/MtlsEndpointAliases;ILjava/lang/Object;)Lkz/versola/sdk/core/ProviderMetadata;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getAuthorizationEndpoint ()Ljava/lang/String;
-	public final fun getAuthorizationResponseIssParameterSupported ()Z
-	public final fun getCodeChallengeMethodsSupported ()Ljava/util/List;
-	public final fun getDpopSigningAlgValuesSupported ()Ljava/util/List;
-	public final fun getEndSessionEndpoint ()Ljava/lang/String;
-	public final fun getGrantTypesSupported ()Ljava/util/List;
-	public final fun getIssuer ()Ljava/lang/String;
-	public final fun getJwksUri ()Ljava/lang/String;
-	public final fun getMtlsEndpointAliases ()Lkz/versola/sdk/core/MtlsEndpointAliases;
-	public final fun getResponseTypesSupported ()Ljava/util/List;
-	public final fun getRevocationEndpoint ()Ljava/lang/String;
-	public final fun getScopesSupported ()Ljava/util/List;
-	public final fun getSupportsDpop ()Z
-	public final fun getTokenEndpoint ()Ljava/lang/String;
-	public final fun getUserinfoEndpoint ()Ljava/lang/String;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final synthetic class kz/versola/sdk/core/ProviderMetadata$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
-	public static final field INSTANCE Lkz/versola/sdk/core/ProviderMetadata$$serializer;
-	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
-	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
-	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lkz/versola/sdk/core/ProviderMetadata;
-	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
-	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
-	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lkz/versola/sdk/core/ProviderMetadata;)V
-	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
-}
-
-public final class kz/versola/sdk/core/ProviderMetadata$Companion {
-	public final fun serializer ()Lkotlinx/serialization/KSerializer;
-}
-
-public abstract interface class kz/versola/sdk/core/ProviderMetadataCache {
-	public abstract fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun load (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun save (Lkz/versola/sdk/core/ProviderMetadata;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-}
-
-public final class kz/versola/sdk/core/RedirectUri {
-	public static final field Companion Lkz/versola/sdk/core/RedirectUri$Companion;
-	public final fun getKind ()Lkz/versola/sdk/core/RedirectUriKind;
-	public final fun getValue ()Ljava/lang/String;
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/RedirectUri$Companion {
-}
-
-public final class kz/versola/sdk/core/RedirectUriKind : java/lang/Enum {
-	public static final field AppLink Lkz/versola/sdk/core/RedirectUriKind;
-	public static final field CustomScheme Lkz/versola/sdk/core/RedirectUriKind;
-	public static final field Loopback Lkz/versola/sdk/core/RedirectUriKind;
-	public static fun getEntries ()Lkotlin/enums/EnumEntries;
-	public static fun valueOf (Ljava/lang/String;)Lkz/versola/sdk/core/RedirectUriKind;
-	public static fun values ()[Lkz/versola/sdk/core/RedirectUriKind;
-}
-
-public final class kz/versola/sdk/core/RetryPolicy {
-	public static final field Companion Lkz/versola/sdk/core/RetryPolicy$Companion;
-	public fun <init> ()V
-	public synthetic fun <init> (IIJDJJILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public synthetic fun <init> (IIJDJJLkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun getBackoffMultiplier ()D
-	public final fun getInitialBackoff-UwyO8pc ()J
-	public final fun getMaxAttemptsPerOrigin ()I
-	public final fun getMaxBackoff-UwyO8pc ()J
-	public final fun getMaxTotalAttempts ()I
-	public final fun getTotalBudget-UwyO8pc ()J
-}
-
-public final class kz/versola/sdk/core/RetryPolicy$Companion {
-	public final fun getConservative ()Lkz/versola/sdk/core/RetryPolicy;
-	public final fun getDefault ()Lkz/versola/sdk/core/RetryPolicy;
-	public final fun getPatient ()Lkz/versola/sdk/core/RetryPolicy;
-}
-
-public final class kz/versola/sdk/core/SessionCoordinator : kz/versola/sdk/core/AccessTokenSource {
-	public fun <init> (Lkz/versola/sdk/core/AuthorizationFlow;Lkz/versola/sdk/core/TokenClient;Lkz/versola/sdk/core/CredentialStore;Lkz/versola/sdk/core/RetryPolicy;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function1;Lkz/versola/sdk/core/VersolaLogger;)V
-	public synthetic fun <init> (Lkz/versola/sdk/core/AuthorizationFlow;Lkz/versola/sdk/core/TokenClient;Lkz/versola/sdk/core/CredentialStore;Lkz/versola/sdk/core/RetryPolicy;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function1;Lkz/versola/sdk/core/VersolaLogger;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public fun accessToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public final fun currentAccessToken ()Lkz/versola/sdk/core/TokenResponse;
-	public final fun getSessionState ()Lkotlinx/coroutines/flow/Flow;
-	public final fun login (Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun login$default (Lkz/versola/sdk/core/SessionCoordinator;Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
-	public final fun logout (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public final fun refresh (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun renewAccessToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun stepUpRequired ()V
-}
-
-public abstract interface class kz/versola/sdk/core/SessionState {
-}
-
-public final class kz/versola/sdk/core/SessionState$Authenticated : kz/versola/sdk/core/SessionState {
-	public static final field INSTANCE Lkz/versola/sdk/core/SessionState$Authenticated;
-	public fun equals (Ljava/lang/Object;)Z
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/SessionState$Authorizing : kz/versola/sdk/core/SessionState {
-	public static final field INSTANCE Lkz/versola/sdk/core/SessionState$Authorizing;
-	public fun equals (Ljava/lang/Object;)Z
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/SessionState$Locked : kz/versola/sdk/core/SessionState {
-	public static final field INSTANCE Lkz/versola/sdk/core/SessionState$Locked;
-	public fun equals (Ljava/lang/Object;)Z
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/SessionState$LoggingOut : kz/versola/sdk/core/SessionState {
-	public static final field INSTANCE Lkz/versola/sdk/core/SessionState$LoggingOut;
-	public fun equals (Ljava/lang/Object;)Z
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/SessionState$Refreshing : kz/versola/sdk/core/SessionState {
-	public static final field INSTANCE Lkz/versola/sdk/core/SessionState$Refreshing;
-	public fun equals (Ljava/lang/Object;)Z
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/SessionState$StepUpRequired : kz/versola/sdk/core/SessionState {
-	public static final field INSTANCE Lkz/versola/sdk/core/SessionState$StepUpRequired;
-	public fun equals (Ljava/lang/Object;)Z
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/SessionState$Unauthenticated : kz/versola/sdk/core/SessionState {
-	public static final field INSTANCE Lkz/versola/sdk/core/SessionState$Unauthenticated;
-	public fun equals (Ljava/lang/Object;)Z
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public abstract class kz/versola/sdk/core/TokenBinding {
-}
-
-public final class kz/versola/sdk/core/TokenBinding$Bearer : kz/versola/sdk/core/TokenBinding {
-	public static final field INSTANCE Lkz/versola/sdk/core/TokenBinding$Bearer;
-	public fun equals (Ljava/lang/Object;)Z
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/TokenBinding$Dpop : kz/versola/sdk/core/TokenBinding {
-	public fun <init> ()V
-	public fun <init> (Z)V
-	public synthetic fun <init> (ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun component1 ()Z
-	public final fun copy (Z)Lkz/versola/sdk/core/TokenBinding$Dpop;
-	public static synthetic fun copy$default (Lkz/versola/sdk/core/TokenBinding$Dpop;ZILjava/lang/Object;)Lkz/versola/sdk/core/TokenBinding$Dpop;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getRequireHardware ()Z
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public abstract interface class kz/versola/sdk/core/TokenClient {
-	public abstract fun exchange (Lkz/versola/sdk/core/AuthorizationGrant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun refresh ([BLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public abstract fun revoke ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
-}
-
-public final class kz/versola/sdk/core/TokenResponse {
-	public final fun getAccessToken ()Ljava/lang/String;
-	public final fun getExpiresInSeconds ()J
-	public final fun getIdToken ()Ljava/lang/String;
-	public final fun getScopes ()Ljava/util/Set;
-	public final fun getTokenType ()Ljava/lang/String;
-	public final fun isDpopBound ()Z
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/UnlockPolicy : java/lang/Enum {
-	public static final field Companion Lkz/versola/sdk/core/UnlockPolicy$Companion;
-	public static final field None Lkz/versola/sdk/core/UnlockPolicy;
-	public static final field OnAppUnlock Lkz/versola/sdk/core/UnlockPolicy;
-	public static final field UNLOCK_WINDOW_SECONDS I
-	public static fun getEntries ()Lkotlin/enums/EnumEntries;
-	public static fun valueOf (Ljava/lang/String;)Lkz/versola/sdk/core/UnlockPolicy;
-	public static fun values ()[Lkz/versola/sdk/core/UnlockPolicy;
-}
-
-public final class kz/versola/sdk/core/UnlockPolicy$Companion {
-}
-
-public final class kz/versola/sdk/core/VersolaConfiguration {
-	public static final field Companion Lkz/versola/sdk/core/VersolaConfiguration$Companion;
-	public final fun getClientId ()Ljava/lang/String;
-	public final fun getIssuer ()Ljava/lang/String;
-	public final fun getPostLogoutRedirectUri ()Lkz/versola/sdk/core/RedirectUri;
-	public final fun getRedirectUri ()Lkz/versola/sdk/core/RedirectUri;
-	public final fun getRedirectUriWarning ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaConfiguration$Companion {
-	public final fun create (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lkz/versola/sdk/core/VersolaConfiguration;
-	public static synthetic fun create$default (Lkz/versola/sdk/core/VersolaConfiguration$Companion;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/VersolaConfiguration;
-}
-
-public abstract class kz/versola/sdk/core/VersolaError : java/lang/Exception {
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
-}
-
-public final class kz/versola/sdk/core/VersolaError$Configuration : kz/versola/sdk/core/VersolaError {
-	public fun <init> (Lkz/versola/sdk/core/VersolaError$Configuration$Detail;Ljava/lang/Throwable;)V
-	public synthetic fun <init> (Lkz/versola/sdk/core/VersolaError$Configuration$Detail;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun getDetail ()Lkz/versola/sdk/core/VersolaError$Configuration$Detail;
-}
-
-public abstract interface class kz/versola/sdk/core/VersolaError$Configuration$Detail {
-}
-
-public final class kz/versola/sdk/core/VersolaError$Configuration$Detail$AuthorizationRejected : kz/versola/sdk/core/VersolaError$Configuration$Detail {
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun component2 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$AuthorizationRejected;
-	public static synthetic fun copy$default (Lkz/versola/sdk/core/VersolaError$Configuration$Detail$AuthorizationRejected;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$AuthorizationRejected;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getCode ()Ljava/lang/String;
-	public final fun getDescription ()Ljava/lang/String;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaError$Configuration$Detail$DiscoveryFieldMissing : kz/versola/sdk/core/VersolaError$Configuration$Detail {
-	public fun <init> (Ljava/lang/String;)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$DiscoveryFieldMissing;
-	public static synthetic fun copy$default (Lkz/versola/sdk/core/VersolaError$Configuration$Detail$DiscoveryFieldMissing;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$DiscoveryFieldMissing;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getField ()Ljava/lang/String;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaError$Configuration$Detail$DiscoveryIssuerMismatch : kz/versola/sdk/core/VersolaError$Configuration$Detail {
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun component2 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$DiscoveryIssuerMismatch;
-	public static synthetic fun copy$default (Lkz/versola/sdk/core/VersolaError$Configuration$Detail$DiscoveryIssuerMismatch;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$DiscoveryIssuerMismatch;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getAdvertised ()Ljava/lang/String;
-	public final fun getConfigured ()Ljava/lang/String;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaError$Configuration$Detail$DiscoveryMalformed : kz/versola/sdk/core/VersolaError$Configuration$Detail {
-	public fun <init> (Ljava/lang/String;)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$DiscoveryMalformed;
-	public static synthetic fun copy$default (Lkz/versola/sdk/core/VersolaError$Configuration$Detail$DiscoveryMalformed;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$DiscoveryMalformed;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getDetail ()Ljava/lang/String;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaError$Configuration$Detail$EdgeClientUnknown : kz/versola/sdk/core/VersolaError$Configuration$Detail {
-	public fun <init> (Ljava/lang/String;)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$EdgeClientUnknown;
-	public static synthetic fun copy$default (Lkz/versola/sdk/core/VersolaError$Configuration$Detail$EdgeClientUnknown;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$EdgeClientUnknown;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getClientId ()Ljava/lang/String;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaError$Configuration$Detail$HardwareBindingUnavailable : kz/versola/sdk/core/VersolaError$Configuration$Detail {
-	public fun <init> (Ljava/lang/String;)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$HardwareBindingUnavailable;
-	public static synthetic fun copy$default (Lkz/versola/sdk/core/VersolaError$Configuration$Detail$HardwareBindingUnavailable;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$HardwareBindingUnavailable;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getDetail ()Ljava/lang/String;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaError$Configuration$Detail$InvalidConfiguration : kz/versola/sdk/core/VersolaError$Configuration$Detail {
-	public fun <init> (Ljava/lang/String;)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$InvalidConfiguration;
-	public static synthetic fun copy$default (Lkz/versola/sdk/core/VersolaError$Configuration$Detail$InvalidConfiguration;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$InvalidConfiguration;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getDetail ()Ljava/lang/String;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaError$Configuration$Detail$IssuerMismatch : kz/versola/sdk/core/VersolaError$Configuration$Detail {
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun component2 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$IssuerMismatch;
-	public static synthetic fun copy$default (Lkz/versola/sdk/core/VersolaError$Configuration$Detail$IssuerMismatch;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$IssuerMismatch;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getExpected ()Ljava/lang/String;
-	public final fun getReceived ()Ljava/lang/String;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaError$Configuration$Detail$MalformedAuthorizationResponse : kz/versola/sdk/core/VersolaError$Configuration$Detail {
-	public static final field INSTANCE Lkz/versola/sdk/core/VersolaError$Configuration$Detail$MalformedAuthorizationResponse;
-	public fun equals (Ljava/lang/Object;)Z
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaError$Configuration$Detail$NoBrowserAvailable : kz/versola/sdk/core/VersolaError$Configuration$Detail {
-	public static final field INSTANCE Lkz/versola/sdk/core/VersolaError$Configuration$Detail$NoBrowserAvailable;
-	public fun equals (Ljava/lang/Object;)Z
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaError$Configuration$Detail$StateMismatch : kz/versola/sdk/core/VersolaError$Configuration$Detail {
-	public static final field INSTANCE Lkz/versola/sdk/core/VersolaError$Configuration$Detail$StateMismatch;
-	public fun equals (Ljava/lang/Object;)Z
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaError$Configuration$Detail$TokenRequestRejected : kz/versola/sdk/core/VersolaError$Configuration$Detail {
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun component2 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$TokenRequestRejected;
-	public static synthetic fun copy$default (Lkz/versola/sdk/core/VersolaError$Configuration$Detail$TokenRequestRejected;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$TokenRequestRejected;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getCode ()Ljava/lang/String;
-	public final fun getDescription ()Ljava/lang/String;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaError$Configuration$Detail$TokenResponseMalformed : kz/versola/sdk/core/VersolaError$Configuration$Detail {
-	public fun <init> (Ljava/lang/String;)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$TokenResponseMalformed;
-	public static synthetic fun copy$default (Lkz/versola/sdk/core/VersolaError$Configuration$Detail$TokenResponseMalformed;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/VersolaError$Configuration$Detail$TokenResponseMalformed;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getDetail ()Ljava/lang/String;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaError$Reauthenticate : kz/versola/sdk/core/VersolaError {
-	public fun <init> (Lkz/versola/sdk/core/VersolaError$Reauthenticate$Reason;)V
-	public final fun getReason ()Lkz/versola/sdk/core/VersolaError$Reauthenticate$Reason;
-}
-
-public abstract interface class kz/versola/sdk/core/VersolaError$Reauthenticate$Reason {
-}
-
-public final class kz/versola/sdk/core/VersolaError$Reauthenticate$Reason$AuthorizationDenied : kz/versola/sdk/core/VersolaError$Reauthenticate$Reason {
-	public static final field INSTANCE Lkz/versola/sdk/core/VersolaError$Reauthenticate$Reason$AuthorizationDenied;
-	public fun equals (Ljava/lang/Object;)Z
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaError$Reauthenticate$Reason$CredentialsInvalidated : kz/versola/sdk/core/VersolaError$Reauthenticate$Reason {
-	public static final field INSTANCE Lkz/versola/sdk/core/VersolaError$Reauthenticate$Reason$CredentialsInvalidated;
-	public fun equals (Ljava/lang/Object;)Z
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaError$Reauthenticate$Reason$GrantRejected : kz/versola/sdk/core/VersolaError$Reauthenticate$Reason {
-	public static final field INSTANCE Lkz/versola/sdk/core/VersolaError$Reauthenticate$Reason$GrantRejected;
-	public fun equals (Ljava/lang/Object;)Z
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaError$Reauthenticate$Reason$InteractionRequired : kz/versola/sdk/core/VersolaError$Reauthenticate$Reason {
-	public fun <init> (Ljava/lang/String;)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;)Lkz/versola/sdk/core/VersolaError$Reauthenticate$Reason$InteractionRequired;
-	public static synthetic fun copy$default (Lkz/versola/sdk/core/VersolaError$Reauthenticate$Reason$InteractionRequired;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/VersolaError$Reauthenticate$Reason$InteractionRequired;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getCode ()Ljava/lang/String;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaError$Reauthenticate$Reason$SessionRejected : kz/versola/sdk/core/VersolaError$Reauthenticate$Reason {
-	public static final field INSTANCE Lkz/versola/sdk/core/VersolaError$Reauthenticate$Reason$SessionRejected;
-	public fun equals (Ljava/lang/Object;)Z
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaError$Recoverable : kz/versola/sdk/core/VersolaError {
-	public fun <init> (Lkz/versola/sdk/core/VersolaError$Recoverable$Cause;Ljava/lang/Throwable;)V
-	public synthetic fun <init> (Lkz/versola/sdk/core/VersolaError$Recoverable$Cause;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun getReason ()Lkz/versola/sdk/core/VersolaError$Recoverable$Cause;
-}
-
-public abstract interface class kz/versola/sdk/core/VersolaError$Recoverable$Cause {
-}
-
-public final class kz/versola/sdk/core/VersolaError$Recoverable$Cause$Network : kz/versola/sdk/core/VersolaError$Recoverable$Cause {
-	public fun <init> (Ljava/lang/String;IJ)V
-	public synthetic fun <init> (Ljava/lang/String;IJILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun component2 ()I
-	public final fun component3 ()J
-	public final fun copy (Ljava/lang/String;IJ)Lkz/versola/sdk/core/VersolaError$Recoverable$Cause$Network;
-	public static synthetic fun copy$default (Lkz/versola/sdk/core/VersolaError$Recoverable$Cause$Network;Ljava/lang/String;IJILjava/lang/Object;)Lkz/versola/sdk/core/VersolaError$Recoverable$Cause$Network;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getAttempts ()I
-	public final fun getDetail ()Ljava/lang/String;
-	public final fun getElapsedMillis ()J
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaError$Recoverable$Cause$NonceLoop : kz/versola/sdk/core/VersolaError$Recoverable$Cause {
-	public fun <init> (Ljava/lang/String;)V
-	public final fun component1 ()Ljava/lang/String;
-	public final fun copy (Ljava/lang/String;)Lkz/versola/sdk/core/VersolaError$Recoverable$Cause$NonceLoop;
-	public static synthetic fun copy$default (Lkz/versola/sdk/core/VersolaError$Recoverable$Cause$NonceLoop;Ljava/lang/String;ILjava/lang/Object;)Lkz/versola/sdk/core/VersolaError$Recoverable$Cause$NonceLoop;
-	public fun equals (Ljava/lang/Object;)Z
-	public final fun getOrigin ()Ljava/lang/String;
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaError$Recoverable$Cause$PendingRequestExpired : kz/versola/sdk/core/VersolaError$Recoverable$Cause {
-	public static final field INSTANCE Lkz/versola/sdk/core/VersolaError$Recoverable$Cause$PendingRequestExpired;
-	public fun equals (Ljava/lang/Object;)Z
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaError$Recoverable$Cause$SystemCancelled : kz/versola/sdk/core/VersolaError$Recoverable$Cause {
-	public static final field INSTANCE Lkz/versola/sdk/core/VersolaError$Recoverable$Cause$SystemCancelled;
-	public fun equals (Ljava/lang/Object;)Z
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaError$Recoverable$Cause$UnlockRequired : kz/versola/sdk/core/VersolaError$Recoverable$Cause {
-	public static final field INSTANCE Lkz/versola/sdk/core/VersolaError$Recoverable$Cause$UnlockRequired;
-	public fun equals (Ljava/lang/Object;)Z
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaError$Recoverable$Cause$UserCancelled : kz/versola/sdk/core/VersolaError$Recoverable$Cause {
-	public static final field INSTANCE Lkz/versola/sdk/core/VersolaError$Recoverable$Cause$UserCancelled;
-	public fun equals (Ljava/lang/Object;)Z
-	public fun hashCode ()I
-	public fun toString ()Ljava/lang/String;
-}
-
-public final class kz/versola/sdk/core/VersolaError$StepUp : kz/versola/sdk/core/VersolaError {
-	public fun <init> (Ljava/util/List;Ljava/lang/Long;)V
-	public final fun getAcrValues ()Ljava/util/List;
-	public final fun getMaxAge ()Ljava/lang/Long;
-}
-
-public abstract interface class kz/versola/sdk/core/VersolaLogger {
-	public abstract fun info (Ljava/lang/String;)V
-	public abstract fun warn (Ljava/lang/String;)V
 }
 

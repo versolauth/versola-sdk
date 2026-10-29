@@ -23,7 +23,7 @@ trap for the next reader. Security rules are in `security.md`, test conventions 
   cleanly and checks nothing. Do not "modernise" those properties or the plugin lines; the
   architecture review (F9) asks for a CI guard that fails when `apiCheck` ran zero tasks.
 - Dependency versions are literals in the module files today, pinned and shared by value
-  (`okhttp:5.4.0` in `:core` and `:okhttp`, `kotlinx-coroutines-test:1.11.0` everywhere). OkHttp
+  (`okhttp:5.4.0` in `:oauth-core` and `:okhttp`, `kotlinx-coroutines-test:1.11.0` everywhere). OkHttp
   stays at 5.4.0 because 5.5.0's AAR declares `minCompileSdk=37`; the comment in
   `android/okhttp/build.gradle.kts` says when to revisit. A new dependency needs approval.
 
@@ -41,16 +41,19 @@ for API 36. If you cannot start an emulator, say the device tier was not run (`t
 
 ## Modules and direction
 
-- Direction: `:core` has no internal dependents upward of it; `:dpop`, `:storage` and `:browser`
-  depend on `:core`; `:okhttp` depends on `:core` and `:dpop`; `:sdk` sits on top of all of them
-  (`android/settings.gradle.kts`). `:storage` and `:browser` never depend on each other; the facade
-  is the one place that sees both. A new edge in this graph needs a reason in the PR.
-- `:core` and `:okhttp` contain no `android.*` import. That property is what makes the protocol
-  core movable to plain Kotlin/JVM (architecture review section 4), and `.claude/hooks/check-core-purity.sh`
-  fails on `import android.` under them. Planned by issue #46: `:oauth-core` as a plain
-  `kotlin("jvm")` module (package `versola.oauth`, same rule) holds the protocol engine, `:oauth`
-  is the facade, and the Versola-specific half stays in `:core`. A Versola behaviour that cannot be
-  a seam of `oauth-core` lives in `:core`, never in `oauth-core`.
+- Direction: `:oauth-core` (plain `kotlin("jvm")`, package `versola.oauth.core`) is the protocol
+  engine and has no internal dependency; `:core` (package `versola.sdk.core`, the edge back channel
+  and the errors only edge produces), `:dpop`, `:storage` and `:browser` depend on `:oauth-core`;
+  `:okhttp` on `:oauth-core` and `:dpop`; `:sdk` sits on top of all of them
+  (`android/settings.gradle.kts`, ADR 0001). `:storage` and `:browser` never depend on each other;
+  the facade is the one place that sees both. A new edge in this graph needs a reason in the PR.
+- `:oauth-core`, `:core` and `:okhttp` contain no `android.*` import, and
+  `.claude/hooks/check-core-purity.sh` fails on one. `:oauth-core` knows nothing about Versola:
+  no edge, tenant, security profile or Versola endpoint. A facade reaches it through its seams
+  (`AuthorizationStarter`, `TokenClient`, `BrowserAuthorizationSession`, the stores,
+  `DpopProofSource`, `PendingAuthorizationRequest.extension`, the `Extension` case of each error
+  detail). A Versola behaviour that cannot be a seam lives in `:core`, never in `:oauth-core`;
+  the generic `:oauth` facade is planned by issue #46 (B3).
 - Versola-specific code (`BackChannel`, `EdgeNativeTokenClient`, native endpoints, mTLS aliases)
   depends on generic code, never the reverse. Behaviour the core shows that a generic provider
   would reject is a bug (README, "Portability").
@@ -114,7 +117,7 @@ for API 36. If you cannot start an emulator, say the device tier was not run (`t
 - JUnit 4 with `kotlinx-coroutines-test` (virtual time) and MockWebServer (`mockwebserver3:5.4.0`)
   for HTTP. No sleeps, no real network.
 - Robolectric is for framework interactions (Custom Tabs launch, `KeyGenParameterSpec` per API
-  level) in `:browser`, `:storage` and `:sdk`; `:core`, `:dpop` and `:okhttp` stay plain JVM tests.
+  level) in `:browser`, `:storage` and `:sdk`; `:oauth-core`, `:core`, `:dpop` and `:okhttp` stay plain JVM tests.
   Do not add Robolectric to a module that does not have it, or `isIncludeAndroidResources` with it.
 - The Keystore has no JVM implementation: what the hardware does is proved on an emulator
   (`src/androidTest`, `connectedDebugAndroidTest`), API 28 and 34 in the instrumented job and API

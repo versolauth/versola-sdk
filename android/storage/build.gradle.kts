@@ -8,7 +8,7 @@ plugins {
 }
 
 android {
-    namespace = "kz.versola.sdk.storage"
+    namespace = "versola.sdk.storage"
     compileSdk = 36
 
     defaultConfig {
@@ -37,7 +37,7 @@ kotlin {
 }
 
 dependencies {
-    api(project(":core"))
+    api(project(":oauth-core"))
     // androidx.security:security-crypto was listed here by #4's scaffolding and is dropped
     // in #5: #7 rules EncryptedSharedPreferences out (deprecated at 1.1.0, no further
     // releases, main-thread violations and keyset corruption on some OEMs). The Keystore
@@ -61,4 +61,11 @@ dependencies {
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
+}
+
+apiValidation {
+    // Wiring behind the opt-in marker is not public API: keep it out of the dump so that
+    // apiCheck holds this module to the surface an app can actually use (architecture
+    // review F6).
+    nonPublicMarkers.add("versola.oauth.core.VersolaInternalApi")
 }

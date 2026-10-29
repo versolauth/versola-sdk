@@ -25,7 +25,7 @@ vulnerability in every app that embeds the SDK, not a bug.
 
 ```bash
 cd android && ./gradlew assemble test lint apiCheck   # Android: every module; what android.yml runs
-cd android && ./gradlew :core:testDebugUnitTest        # one module
+cd android && ./gradlew :oauth-core:test                 # one module (:core and the Android ones: :<module>:testDebugUnitTest)
 cd android && ./gradlew apiDump                        # after a public API change; commit the .api files
 cd android && ./gradlew :storage:connectedDebugAndroidTest   # device tier; needs a booted emulator
 swift package resolve                                  # iOS: from the repo root (Package.swift lives here)

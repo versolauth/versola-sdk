@@ -11,7 +11,7 @@
     -->
     <application>
         <activity
-            android:name="kz.versola.sdk.browser.VersolaRedirectActivity"
+            android:name="versola.sdk.browser.VersolaRedirectActivity"
             android:exported="true"
             android:launchMode="singleTask"
             android:theme="@android:style/Theme.NoDisplay" />

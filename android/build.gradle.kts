@@ -4,6 +4,9 @@ plugins {
     id("com.android.library") version "9.4.1" apply false
     // Applied explicitly (opting out of AGP 9's built-in Kotlin) - see gradle.properties.
     id("org.jetbrains.kotlin.android") version "2.4.20" apply false
+    // The protocol core (:oauth-core) is a plain Kotlin/JVM module: no android.* import, so it
+    // compiles and tests without AGP and stays shareable (ADR 0001).
+    id("org.jetbrains.kotlin.jvm") version "2.4.20" apply false
     // Version tracks the Kotlin plugin above: the serialization compiler plugin ships with
     // the compiler and is not independently versioned.
     id("org.jetbrains.kotlin.plugin.serialization") version "2.4.20" apply false

@@ -8,7 +8,7 @@ plugins {
 }
 
 android {
-    namespace = "kz.versola.sdk.browser"
+    namespace = "versola.sdk.browser"
     compileSdk = 36
 
     defaultConfig {
@@ -33,7 +33,7 @@ kotlin {
 }
 
 dependencies {
-    api(project(":core"))
+    api(project(":oauth-core"))
     implementation("androidx.browser:browser:1.10.0")
 
     testImplementation("junit:junit:4.13.2")
@@ -43,4 +43,11 @@ dependencies {
     // an emulator, which CI does not have.
     testImplementation("org.robolectric:robolectric:4.17")
     testImplementation("androidx.test:core:1.7.0")
+}
+
+apiValidation {
+    // Wiring behind the opt-in marker is not public API: keep it out of the dump so that
+    // apiCheck holds this module to the surface an app can actually use (architecture
+    // review F6).
+    nonPublicMarkers.add("versola.oauth.core.VersolaInternalApi")
 }

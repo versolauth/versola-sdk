@@ -1,4 +1,4 @@
-public final class kz/versola/sdk/dpop/ClockSkew {
+public final class versola/sdk/dpop/ClockSkew {
 	public fun <init> ()V
 	public fun <init> (Lkotlin/jvm/functions/Function0;)V
 	public synthetic fun <init> (Lkotlin/jvm/functions/Function0;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
@@ -8,49 +8,49 @@ public final class kz/versola/sdk/dpop/ClockSkew {
 	public final fun nowSeconds ()J
 }
 
-public abstract interface class kz/versola/sdk/dpop/DpopKey : kz/versola/sdk/core/DpopKeyBinding {
+public abstract interface class versola/sdk/dpop/DpopKey : versola/oauth/core/DpopKeyBinding {
 	public abstract fun attestation (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun publicJwk (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun sign ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
-public final class kz/versola/sdk/dpop/DpopNonceCache {
+public final class versola/sdk/dpop/DpopNonceCache {
 	public fun <init> ()V
 	public final fun clear ()V
 	public final fun nonceFor (Ljava/lang/String;)Ljava/lang/String;
 	public final fun store (Ljava/lang/String;Ljava/lang/String;)V
 }
 
-public final class kz/versola/sdk/dpop/DpopNonceRetry {
-	public fun <init> (Lkz/versola/sdk/dpop/DpopNonceCache;)V
+public final class versola/sdk/dpop/DpopNonceRetry {
+	public fun <init> (Lversola/sdk/dpop/DpopNonceCache;)V
 	public final fun accept (Ljava/lang/String;Ljava/lang/String;)V
 }
 
-public final class kz/versola/sdk/dpop/DpopProofFactory : kz/versola/sdk/core/DpopProofSource {
-	public fun <init> (Lkz/versola/sdk/dpop/DpopKey;Lkz/versola/sdk/dpop/DpopNonceCache;Lkz/versola/sdk/dpop/ClockSkew;Lkotlin/jvm/functions/Function0;)V
-	public synthetic fun <init> (Lkz/versola/sdk/dpop/DpopKey;Lkz/versola/sdk/dpop/DpopNonceCache;Lkz/versola/sdk/dpop/ClockSkew;Lkotlin/jvm/functions/Function0;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public final fun getClockSkew ()Lkz/versola/sdk/dpop/ClockSkew;
-	public final fun getNonces ()Lkz/versola/sdk/dpop/DpopNonceCache;
+public final class versola/sdk/dpop/DpopProofFactory : versola/oauth/core/DpopProofSource {
+	public fun <init> (Lversola/sdk/dpop/DpopKey;Lversola/sdk/dpop/DpopNonceCache;Lversola/sdk/dpop/ClockSkew;Lkotlin/jvm/functions/Function0;)V
+	public synthetic fun <init> (Lversola/sdk/dpop/DpopKey;Lversola/sdk/dpop/DpopNonceCache;Lversola/sdk/dpop/ClockSkew;Lkotlin/jvm/functions/Function0;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getClockSkew ()Lversola/sdk/dpop/ClockSkew;
+	public final fun getNonces ()Lversola/sdk/dpop/DpopNonceCache;
 	public fun observe (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
 	public fun proof (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
-public final class kz/versola/sdk/dpop/KeyAttestation : java/lang/Enum {
-	public static final field Software Lkz/versola/sdk/dpop/KeyAttestation;
-	public static final field StrongBox Lkz/versola/sdk/dpop/KeyAttestation;
-	public static final field TrustedEnvironment Lkz/versola/sdk/dpop/KeyAttestation;
+public final class versola/sdk/dpop/KeyAttestation : java/lang/Enum {
+	public static final field Software Lversola/sdk/dpop/KeyAttestation;
+	public static final field StrongBox Lversola/sdk/dpop/KeyAttestation;
+	public static final field TrustedEnvironment Lversola/sdk/dpop/KeyAttestation;
 	public static fun getEntries ()Lkotlin/enums/EnumEntries;
 	public final fun isHardwareBacked ()Z
-	public static fun valueOf (Ljava/lang/String;)Lkz/versola/sdk/dpop/KeyAttestation;
-	public static fun values ()[Lkz/versola/sdk/dpop/KeyAttestation;
+	public static fun valueOf (Ljava/lang/String;)Lversola/sdk/dpop/KeyAttestation;
+	public static fun values ()[Lversola/sdk/dpop/KeyAttestation;
 }
 
-public final class kz/versola/sdk/dpop/KeystoreDpopKey : kz/versola/sdk/dpop/DpopKey {
-	public static final field Companion Lkz/versola/sdk/dpop/KeystoreDpopKey$Companion;
+public final class versola/sdk/dpop/KeystoreDpopKey : versola/sdk/dpop/DpopKey {
+	public static final field Companion Lversola/sdk/dpop/KeystoreDpopKey$Companion;
 	public static final field DEFAULT_ALIAS Ljava/lang/String;
 	public fun <init> ()V
-	public fun <init> (Ljava/lang/String;ZLkz/versola/sdk/core/VersolaLogger;)V
-	public synthetic fun <init> (Ljava/lang/String;ZLkz/versola/sdk/core/VersolaLogger;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;ZLversola/oauth/core/VersolaLogger;)V
+	public synthetic fun <init> (Ljava/lang/String;ZLversola/oauth/core/VersolaLogger;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun attestation (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun destroy (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun jkt (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -58,8 +58,8 @@ public final class kz/versola/sdk/dpop/KeystoreDpopKey : kz/versola/sdk/dpop/Dpo
 	public fun sign ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
-public final class kz/versola/sdk/dpop/KeystoreDpopKey$Companion {
+public final class versola/sdk/dpop/KeystoreDpopKey$Companion {
 	public final fun destroy (Ljava/lang/String;)V
-	public static synthetic fun destroy$default (Lkz/versola/sdk/dpop/KeystoreDpopKey$Companion;Ljava/lang/String;ILjava/lang/Object;)V
+	public static synthetic fun destroy$default (Lversola/sdk/dpop/KeystoreDpopKey$Companion;Ljava/lang/String;ILjava/lang/Object;)V
 }
 

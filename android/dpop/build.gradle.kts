@@ -8,7 +8,7 @@ plugins {
 }
 
 android {
-    namespace = "kz.versola.sdk.dpop"
+    namespace = "versola.sdk.dpop"
     compileSdk = 36
 
     defaultConfig {
@@ -33,7 +33,7 @@ kotlin {
 }
 
 dependencies {
-    api(project(":core"))
+    api(project(":oauth-core"))
 
     // Claims are built as a JsonObject rather than concatenated, so escaping is the library's
     // problem. Same artifact and pin as :core; the serialization compiler plugin is not
@@ -53,4 +53,11 @@ dependencies {
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
     androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
+}
+
+apiValidation {
+    // Wiring behind the opt-in marker is not public API: keep it out of the dump so that
+    // apiCheck holds this module to the surface an app can actually use (architecture
+    // review F6).
+    nonPublicMarkers.add("versola.oauth.core.VersolaInternalApi")
 }
