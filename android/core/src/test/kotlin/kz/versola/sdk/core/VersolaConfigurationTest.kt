@@ -147,4 +147,11 @@ class VersolaConfigurationTest {
             )
         }
     }
+
+    @Test
+    fun `a cleartext issuer is allowed on loopback only`() {
+        assertEquals("http://localhost:9003", configure(issuer = "http://localhost:9003").issuer)
+        assertEquals("http://10.0.2.2:9003", configure(issuer = "http://10.0.2.2:9003").issuer)
+        assertThrows(VersolaError.Configuration::class.java) { configure(issuer = "http://id.example.com") }
+    }
 }

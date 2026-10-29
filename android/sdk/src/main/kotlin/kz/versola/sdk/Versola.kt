@@ -10,6 +10,7 @@ import kz.versola.sdk.browser.CustomTabsAuthorizationSession
 import kz.versola.sdk.core.AuthorizationFlow
 import kz.versola.sdk.core.AuthorizationGrant
 import kz.versola.sdk.core.BackChannel
+import kz.versola.sdk.core.BrowserAuthorizationSession
 import kz.versola.sdk.core.DiscoveryService
 import kz.versola.sdk.core.EdgeNativeTokenClient
 import kz.versola.sdk.core.FileNativeEndpointsStore
@@ -241,6 +242,13 @@ public class Versola internal constructor(
              * client and works against any provider.
              */
             backChannel: BackChannel = BackChannel.Auth,
+            /**
+             * The browser leg. Custom Tabs by default; the conformance harness substitutes a
+             * session that drives auth's login conversation over HTTP. The interface takes
+             * URIs and nothing else, so nothing a WebView could be smuggled through exists
+             * here either (#1 §4).
+             */
+            browser: BrowserAuthorizationSession? = null,
         ): Versola {
             val configuration = VersolaConfiguration.create(issuer, clientId, redirectUri, postLogoutRedirectUri)
             configuration.redirectUriWarning?.let(logger::warn)
@@ -319,7 +327,7 @@ public class Versola internal constructor(
                     file = File(directory, "pending-authorization"),
                     keyProvider = HardwareKeyProvider(),
                 ),
-                browser = CustomTabsAuthorizationSession(applicationContext, logger),
+                browser = browser ?: CustomTabsAuthorizationSession(applicationContext, logger),
                 tokenBinding = tokenBinding,
                 dpopKey = dpopKey,
                 hasStoredGrant = credentialStore::hasGrant,

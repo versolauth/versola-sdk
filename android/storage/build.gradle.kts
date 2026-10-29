@@ -13,6 +13,10 @@ android {
 
     defaultConfig {
         minSdk = 26
+        // The instrumented tests under src/androidTest run against a real Android Keystore
+        // on an emulator (#30, #37): the tier negotiation, the authentication window and the
+        // exception mapping have no JVM equivalent, and Robolectric emulates none of them.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         // No targetSdk on a library module: AGP requires libraries with a
         // targetSdk value to match consumers' compileSdk, which only tightens
         // things pointlessly here. Target 36 (#1 SS4) is the app's decision.
@@ -51,4 +55,10 @@ dependencies {
     // framework class: Robolectric is enough to assert what the storage key is asked for,
     // per API level, without the emulator CI does not have. Same version as :browser.
     testImplementation("org.robolectric:robolectric:4.17")
+
+    // Instrumented only. Same coroutines-test pin as the unit tests; the runner and the
+    // AndroidX JUnit extension are what `connectedDebugAndroidTest` needs to find and run them.
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
 }

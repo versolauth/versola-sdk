@@ -48,3 +48,66 @@ jobs:
       # Kotlin is opted out of here (Kotlin/binary-compatibility-validator#312).
       - name: API compatibility
         run: ./gradlew apiCheck
+
+  # The Keystore half of #30 and #37: `src/androidTest` in :storage and :dpop against a real
+  # Android Keystore on an emulator. Scoped to those two modules so the rest of the build does
+  # not wait on an emulator boot. An emulator proves the software tier and the fall-through
+  # from StrongBox; the StrongBox and TEE rows of #37 need a physical device and are a Firebase
+  # Test Lab job once a project exists for it (#15, "Device tier").
+  instrumented:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        # The floor and a current release: below API 30 the storage key's window is set with
+        # the deprecated setter, which is the branch #30 asks to see behave the same.
+        api-level: [28, 34]
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@v4
+
+      # The emulator needs hardware acceleration; GitHub's Linux runners expose /dev/kvm but
+      # not to the runner user by default.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK platform
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36" "build-tools;36.0.0" > /dev/null
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Instrumented tests on API ${{ matrix.api-level }}
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api-level }}
+          arch: x86_64
+          target: default
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          working-directory: android
+          script: ./gradlew :storage:connectedDebugAndroidTest :dpop:connectedDebugAndroidTest
+
+      - name: Upload instrumented test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: instrumented-reports-api-${{ matrix.api-level }}
+          path: |
+            android/storage/build/reports/androidTests
+            android/dpop/build/reports/androidTests
+          if-no-files-found: ignore

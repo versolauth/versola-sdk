@@ -1,0 +1,150 @@
+name: conformance
+
+# The harness of #15 (see conformance/README.md): the scenario catalogue against a real staged
+# auth + central + edge, driven from an emulator. The stack half below is a copy of what
+# versolauth/versola's own ci-cd.yml does to run `sbt e2e/test`, so the two cannot drift; the
+# driver half runs :conformance-android (scenarios 01 and 21). Nightly and on demand rather than
+# per pull request: a full stage plus an emulator boot is twenty minutes the unit and
+# instrumented jobs in android.yml do not need to wait on.
+
+on:
+  workflow_dispatch:
+    inputs:
+      versola_ref:
+        description: "versolauth/versola ref to stage (branch, tag or SHA)"
+        required: false
+        default: "main"
+  schedule:
+    - cron: "17 3 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  scenarios:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    # On demand only until a VERSOLA_CHECKOUT_TOKEN secret exists for the private server
+    # checkout; the nightly trigger then takes over by dropping this line.
+    if: github.event_name == 'workflow_dispatch'
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_DB: auth
+          POSTGRES_USER: dev
+          POSTGRES_PASSWORD: 1234
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U dev -d auth"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: sdk
+
+      - uses: actions/checkout@v4
+        with:
+          repository: versolauth/versola
+          ref: ${{ inputs.versola_ref || 'main' }}
+          path: versola
+          # A private repository: a token with read access to it, stored as a repo secret.
+          token: ${{ secrets.VERSOLA_CHECKOUT_TOKEN }}
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # ---- the stack, exactly as versola/.github/workflows/ci-cd.yml stages it ----
+
+      - name: Set up JDK 25 for the server
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Set up Scala CLI
+        uses: VirtusLab/scala-cli-setup@v1
+
+      - name: Generate dev configs
+        working-directory: versola
+        run: echo "local" | scala-cli run scripts/gen-env.scala
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Build login forms
+        working-directory: versola/central-ui
+        run: npm ci && npm run build:forms
+
+      - name: Stage services
+        working-directory: versola
+        run: sbt "central-postgres-impl/stage" "auth-postgres-impl/stage" "edge-postgres-impl/stage"
+
+      - name: Start central, auth, the internal TLS terminator and edge
+        working-directory: versola
+        run: |
+          PORT=9001 DPORT=9002 RUN_MIGRATIONS=true HTTP_CLIENT_POOL_SIZE=10 \
+            nohup central/implementations/postgres/target/universal/stage/bin/central-postgres-impl \
+            -Denv.path=central/dev/env.conf > central.log 2>&1 &
+          for i in $(seq 1 60); do curl -fs http://localhost:9002/readiness && break; sleep 2; done
+          PORT=9003 DPORT=9004 APORT=9007 MPORT=9008 RUN_MIGRATIONS=true HTTP_CLIENT_POOL_SIZE=10 \
+            nohup auth/implementations/postgres/target/universal/stage/bin/auth-postgres-impl \
+            -Denv.path=auth/dev/env.conf > auth.log 2>&1 &
+          for i in $(seq 1 60); do curl -fs http://localhost:9004/readiness && break; sleep 2; done
+          sudo nginx -c "$(pwd)/edge/dev/internal-tls/nginx.conf"
+          PORT=9005 DPORT=9006 HTTP_CLIENT_POOL_SIZE=10 \
+            nohup edge/implementations/postgres/target/universal/stage/bin/edge-postgres-impl \
+            -Denv.path=edge/dev/env.conf > edge.log 2>&1 &
+          for i in $(seq 1 60); do curl -fs http://localhost:9006/readiness && break; sleep 2; done
+
+      # ---- the driver ----
+
+      - name: Set up JDK 17 for the SDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Install Android SDK platform
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36" "build-tools;36.0.0" > /dev/null
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Run the scenario catalogue
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          target: google_apis
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          working-directory: sdk/android
+          # The issuer auth announces is http://localhost:9003, and the SDK holds the
+          # document to it, so the emulator's localhost is made the host's rather than the
+          # URLs being rewritten (conformance/README.md, "Running the Android driver").
+          script: |
+            adb reverse tcp:9001 tcp:9001 && adb reverse tcp:9003 tcp:9003 && adb reverse tcp:9005 tcp:9005
+            adb forward tcp:18080 tcp:18080
+            ./gradlew :conformance-android:connectedDebugAndroidTest
+
+      - name: Upload transcripts and server logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: conformance-run
+          path: |
+            sdk/android/conformance-android/build/reports/androidTests
+            sdk/android/conformance-android/build/outputs/androidTest-results
+            versola/central.log
+            versola/auth.log
+            versola/edge.log
+          if-no-files-found: ignore

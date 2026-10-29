@@ -114,7 +114,12 @@ public class VersolaConfiguration internal constructor(
             } catch (e: URISyntaxException) {
                 throw invalid("issuer is not a valid URI: $issuer", e)
             }
-            if (parsedIssuer.scheme?.lowercase() != "https") {
+            val scheme = parsedIssuer.scheme?.lowercase()
+            // RFC 8414 §2 makes the issuer an https URL. The one exception is a staged stack
+            // on the developer's own machine or behind `adb reverse`, where the issuer is
+            // whatever `auth` was configured with and TLS buys nothing: cleartext to a
+            // loopback address never leaves the host. Nothing else is let through.
+            if (scheme != "https" && !(scheme == "http" && isLoopback(parsedIssuer.host))) {
                 throw invalid("issuer must be https: $issuer")
             }
             if (parsedIssuer.host.isNullOrEmpty()) {
@@ -145,5 +150,9 @@ public class VersolaConfiguration internal constructor(
             VersolaError.Configuration.Detail.InvalidConfiguration(detail),
             cause,
         )
+
+        /** The loopback names RFC 8252 §7.3 allows for a redirect, plus the emulator's alias for its host. */
+        private fun isLoopback(host: String?): Boolean =
+            host == "localhost" || host == "127.0.0.1" || host == "[::1]" || host == "10.0.2.2"
     }
 }
