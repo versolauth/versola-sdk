@@ -39,7 +39,8 @@ yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36"
 
 ```text
 spec/            normative: state machine, errors, retry policy, conformance scenarios
-android/         Gradle multi-project (core, dpop, storage, browser, okhttp, sdk)
+android/         Gradle multi-project: oauth-core (protocol engine, plain Kotlin/JVM), core (the
+                 edge back channel), dpop, storage, browser, okhttp, sdk (the Versola facade)
 ios/Sources/     Swift targets; the manifest is Package.swift at the repo root
 flutter/         plugin + Pigeon bridge (placeholder)
 conformance/     harness driving every SDK against a staged Versola stack

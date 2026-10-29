@@ -8,7 +8,7 @@ plugins {
 }
 
 android {
-    namespace = "kz.versola.sdk"
+    namespace = "versola.sdk"
     compileSdk = 36
 
     defaultConfig {
@@ -33,6 +33,7 @@ kotlin {
 }
 
 dependencies {
+    api(project(":oauth-core"))
     api(project(":core"))
     api(project(":browser"))
     api(project(":dpop"))

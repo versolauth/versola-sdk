@@ -8,7 +8,7 @@ plugins {
 }
 
 android {
-    namespace = "kz.versola.sdk.browser"
+    namespace = "versola.sdk.browser"
     compileSdk = 36
 
     defaultConfig {
@@ -33,7 +33,7 @@ kotlin {
 }
 
 dependencies {
-    api(project(":core"))
+    api(project(":oauth-core"))
     implementation("androidx.browser:browser:1.10.0")
 
     testImplementation("junit:junit:4.13.2")

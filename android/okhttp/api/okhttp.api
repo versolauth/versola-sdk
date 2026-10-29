@@ -1,10 +1,10 @@
-public final class kz/versola/sdk/okhttp/VersolaHttpException : java/io/IOException {
-	public fun <init> (Lkz/versola/sdk/core/VersolaError;)V
-	public final fun getError ()Lkz/versola/sdk/core/VersolaError;
+public final class versola/sdk/okhttp/VersolaHttpException : java/io/IOException {
+	public fun <init> (Lversola/oauth/core/VersolaError;)V
+	public final fun getError ()Lversola/oauth/core/VersolaError;
 }
 
-public final class kz/versola/sdk/okhttp/VersolaInterceptor : okhttp3/Interceptor {
-	public fun <init> (Lkz/versola/sdk/core/AccessTokenSource;Lokhttp3/HttpUrl;Lkz/versola/sdk/core/DpopProofSource;)V
+public final class versola/sdk/okhttp/VersolaInterceptor : okhttp3/Interceptor {
+	public fun <init> (Lversola/oauth/core/AccessTokenSource;Lokhttp3/HttpUrl;Lversola/oauth/core/DpopProofSource;)V
 	public fun intercept (Lokhttp3/Interceptor$Chain;)Lokhttp3/Response;
 }
 

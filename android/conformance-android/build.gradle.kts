@@ -13,7 +13,7 @@ plugins {
 }
 
 android {
-    namespace = "kz.versola.sdk.conformance"
+    namespace = "versola.sdk.conformance"
     compileSdk = 36
 
     defaultConfig {

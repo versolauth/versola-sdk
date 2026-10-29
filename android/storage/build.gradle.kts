@@ -8,7 +8,7 @@ plugins {
 }
 
 android {
-    namespace = "kz.versola.sdk.storage"
+    namespace = "versola.sdk.storage"
     compileSdk = 36
 
     defaultConfig {
@@ -37,7 +37,7 @@ kotlin {
 }
 
 dependencies {
-    api(project(":core"))
+    api(project(":oauth-core"))
     // androidx.security:security-crypto was listed here by #4's scaffolding and is dropped
     // in #5: #7 rules EncryptedSharedPreferences out (deprecated at 1.1.0, no further
     // releases, main-thread violations and keyset corruption on some OEMs). The Keystore

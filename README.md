@@ -59,7 +59,9 @@ document every other issue assumes; read it before opening a pull request, and
 ```text
 spec/            state machine, errors, retry policy, conformance scenarios,
                  the generic facade's API (oauth-sdk-api.md) and provider matrix (providers.md)
-android/         Gradle multi-project
+android/         Gradle multi-project: oauth-core (the protocol engine, plain JVM, package
+                 versola.oauth.core), core (the edge back channel, versola.sdk.core), dpop,
+                 storage, browser, okhttp, sdk (the Versola facade)
 ios/Sources/     Swift targets
 Package.swift    at the repo root; SPM cannot resolve a manifest from a subdirectory
 flutter/         plugin + Pigeon bridge

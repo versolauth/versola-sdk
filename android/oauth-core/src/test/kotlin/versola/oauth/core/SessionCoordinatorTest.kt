@@ -1,0 +1,1153 @@
+package versola.oauth.core
+
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.coroutines.yield
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+private const val ISSUER = "https://id.versola.kz"
+
+/** One slot, exactly like the real store: a second save replaces rather than accumulates. */
+private class RecordingPendingStore : PendingAuthorizationStore {
+    var stored: PendingAuthorizationRequest? = null
+    var clears = 0
+
+    override suspend fun save(request: PendingAuthorizationRequest) {
+        stored = request
+    }
+
+    override suspend fun load(): PendingAuthorizationRequest? = stored
+
+    override suspend fun clear() {
+        clears++
+        stored = null
+    }
+}
+
+/**
+ * Answers with a redirect carrying the `state` the store was just given — or, for the
+ * end-session URI `logout()` opens, whatever [logoutOutcome] says, echoing the `state` the
+ * URI carried the way auth's signed-out page does.
+ */
+private class FixedRedirectBrowser(private val store: RecordingPendingStore) : BrowserAuthorizationSession {
+    val launched = mutableListOf<String>()
+    var logoutOutcome: suspend (String) -> BrowserOutcome = { uri ->
+        BrowserOutcome.Redirect("https://app.example.com/signed-out?state=${stateOf(uri)}")
+    }
+
+    var loginOutcome: (suspend (String) -> BrowserOutcome)? = null
+
+    override suspend fun authorize(uri: String): BrowserOutcome {
+        launched += uri
+        if (uri.startsWith("$ISSUER/logout")) return logoutOutcome(uri)
+        loginOutcome?.let { return it(uri) }
+        val pending = checkNotNull(store.stored) { "authorize() must persist before opening the browser" }
+        return BrowserOutcome.Redirect(
+            "https://app.example.com/oauth?code=the-code&state=${pending.state}&iss=$ISSUER",
+        )
+    }
+
+    private fun stateOf(uri: String): String =
+        Regex("[?&]state=([^&]+)").find(uri)!!.groupValues[1]
+
+    override suspend fun awaitPendingRedirect(): BrowserOutcome =
+        throw UnsupportedOperationException("not exercised by these tests")
+}
+
+private class StaticDiscoveryClient(private val metadata: ProviderMetadata) : DiscoveryClient {
+    override suspend fun fetch(issuer: String): ProviderMetadata = metadata
+}
+
+private class NoopMetadataCache : ProviderMetadataCache {
+    override suspend fun load(): ProviderMetadata? = null
+    override suspend fun save(metadata: ProviderMetadata) = Unit
+    override suspend fun clear() = Unit
+}
+
+/**
+ * An in-memory [CredentialStore] that mimics [versola.sdk.storage.DataStoreCredentialStore]'s
+ * two load-bearing properties: [useRefreshToken] hands out a fresh copy on every call and
+ * zeroes it when the block ends, and nothing here caches an unwrapped value between calls.
+ *
+ * [unwrapFailure] stands in for a wrap/unwrap failure the real Keystore-backed store would
+ * raise — an unlock window elapsed, or an enrolment change invalidated the key.
+ */
+private class FakeCredentialStore : CredentialStore {
+    var refreshToken: ByteArray? = null
+    var rawIdToken: String? = null
+    var pendingRotationSlot: String? = null
+    var unwrapFailure: (() -> VersolaError)? = null
+
+    /** Injected into [save], simulating a key that locks or invalidates after the server
+     *  already answered — the request succeeded, but persisting its response did not. */
+    var saveFailure: (() -> VersolaError)? = null
+
+    /**
+     * Injected into [savePendingRotation] only when it is asked to *clear* the slot (a null
+     * key), never on the step-1 write before the request — this simulates the key locking or
+     * invalidating between [save] landing and step 3's clear.
+     */
+    var savePendingRotationClearFailure: (() -> VersolaError)? = null
+
+    /** Suspends [pendingRotation] until completed, so a caller can be cancelled mid-lookup. */
+    var pendingRotationDelay: CompletableDeferred<Unit>? = null
+
+    val events = mutableListOf<String>()
+    var clears = 0
+    var unwraps = 0
+
+    override suspend fun save(refreshToken: ByteArray, rawIdToken: String?) {
+        events += "save"
+        saveFailure?.let { throw it() }
+        this.refreshToken = refreshToken.copyOf()
+        refreshToken.fill(0)
+        if (rawIdToken != null) this.rawIdToken = rawIdToken
+    }
+
+    override suspend fun <T> useRefreshToken(block: suspend (ByteArray) -> T): T? {
+        val current = refreshToken ?: return null
+        unwrapFailure?.let { throw it() }
+        unwraps++
+        val plaintext = current.copyOf()
+        return try {
+            block(plaintext)
+        } finally {
+            plaintext.fill(0)
+        }
+    }
+
+    /** Suspends [hasGrant] until completed, so a restore can be cancelled mid-probe. */
+    var hasGrantGate: CompletableDeferred<Unit>? = null
+
+    override suspend fun hasGrant(): Boolean {
+        hasGrantGate?.await()
+        return refreshToken != null
+    }
+
+    override suspend fun rawIdToken(): String? = rawIdToken
+
+    override suspend fun savePendingRotation(idempotencyKey: String?) {
+        events += "savePendingRotation($idempotencyKey)"
+        if (idempotencyKey == null) savePendingRotationClearFailure?.let { throw it() }
+        pendingRotationSlot = idempotencyKey
+    }
+
+    override suspend fun pendingRotation(): String? {
+        pendingRotationDelay?.await()
+        return pendingRotationSlot
+    }
+
+    override suspend fun clear() {
+        clears++
+        refreshToken = null
+        rawIdToken = null
+        pendingRotationSlot = null
+    }
+}
+
+/** Scriptable [TokenClient]: each queued action runs once per call, in order, then the last repeats. */
+private class FakeTokenClient : TokenClient {
+    val exchangeCalls = mutableListOf<AuthorizationGrant>()
+    val refreshCalls = mutableListOf<Pair<ByteArray, String>>()
+    val revokeCalls = mutableListOf<ByteArray>()
+    var exchangeResult: suspend () -> TokenResponse = { issued() }
+    var refreshActions: MutableList<suspend () -> TokenResponse> = mutableListOf()
+    var revokeFailure: (() -> VersolaError)? = null
+
+    override suspend fun revoke(refreshToken: ByteArray) {
+        revokeCalls += refreshToken.copyOf()
+        refreshToken.fill(0)
+        revokeFailure?.let { throw it() }
+    }
+
+    override suspend fun exchange(grant: AuthorizationGrant): TokenResponse {
+        exchangeCalls += grant
+        return exchangeResult()
+    }
+
+    override suspend fun refresh(refreshToken: ByteArray, idempotencyKey: String): TokenResponse {
+        refreshCalls += refreshToken.copyOf() to idempotencyKey
+        val action = if (refreshActions.size > 1) refreshActions.removeAt(0) else refreshActions.first()
+        return action()
+    }
+}
+
+private fun stored(): ByteArray = "grant".toByteArray(Charsets.UTF_8)
+
+private fun issued(
+    accessToken: String = "access-1",
+    refreshToken: String? = "rotated-refresh",
+    idToken: String? = null,
+    expiresIn: Long = 3600,
+) = TokenResponse.from(
+    TokenResponsePayload(
+        accessToken = accessToken,
+        tokenType = "Bearer",
+        expiresIn = expiresIn,
+        refreshToken = refreshToken,
+        idToken = idToken,
+    ),
+)
+
+class SessionCoordinatorTest {
+
+    private val metadata = ProviderMetadata(
+        issuer = ISSUER,
+        authorizationEndpoint = "$ISSUER/authorize",
+        tokenEndpoint = "$ISSUER/token",
+        revocationEndpoint = "$ISSUER/revoke",
+        endSessionEndpoint = "$ISSUER/logout",
+        authorizationResponseIssParameterSupported = true,
+    )
+
+    private val configuration = VersolaConfiguration.create(
+        issuer = ISSUER,
+        clientId = "mobile-app",
+        redirectUri = "https://app.example.com/oauth",
+    )
+
+    private fun authFlow(
+        pendingStore: RecordingPendingStore,
+        credentialStore: FakeCredentialStore,
+        browser: BrowserAuthorizationSession = FixedRedirectBrowser(pendingStore),
+    ): AuthorizationFlow = AuthorizationFlow(
+        configuration = configuration,
+        discovery = DiscoveryService(ISSUER, StaticDiscoveryClient(metadata), NoopMetadataCache()),
+        pendingStore = pendingStore,
+        browser = browser,
+        // Bearer throughout: rotation is the binding that makes single-flight, the rotation
+        // slot and the idempotency key load-bearing rather than inert, so every test here
+        // runs the mode that can actually lose a user's session.
+        tokenBinding = TokenBinding.Bearer,
+        hasStoredGrant = credentialStore::hasGrant,
+    )
+
+    /** Advanced by hand, so a lifetime can elapse without a test sleeping through it. */
+    private var elapsed = 0L
+
+    /** What the facade tears down with the grant; counted so the logout rule is assertable. */
+    private var teardowns = 0
+    private var teardownFailure: (() -> Exception)? = null
+
+    private fun coordinator(
+        pendingStore: RecordingPendingStore = RecordingPendingStore(),
+        tokenClient: FakeTokenClient = FakeTokenClient(),
+        credentialStore: FakeCredentialStore = FakeCredentialStore(),
+        retryPolicy: RetryPolicy = RetryPolicy.Conservative,
+        browser: BrowserAuthorizationSession = FixedRedirectBrowser(pendingStore),
+    ) = Triple(
+        SessionCoordinator(
+            authFlow(pendingStore, credentialStore, browser),
+            tokenClient,
+            credentialStore,
+            retryPolicy,
+            elapsedMillis = { elapsed },
+            onCredentialsWiped = {
+                teardowns++
+                teardownFailure?.let { throw it() }
+            },
+        ),
+        tokenClient,
+        credentialStore,
+    )
+
+    // ---- login() ----------------------------------------------------------------------
+
+    @Test
+    fun `login exchanges, persists before completing, and reaches Authenticated`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val (coordinator, tokenClient, credentialStore) = coordinator(pendingStore)
+        tokenClient.exchangeResult = { issued(accessToken = "at", refreshToken = "rt") }
+
+        val response = coordinator.login(setOf("openid"))
+
+        assertEquals("at", response.accessToken)
+        assertEquals("rt", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        // The pending request survives the exchange and is wiped only once completeLogin()
+        // runs after persistence — never before.
+        assertNull(pendingStore.stored)
+        assertEquals(1, pendingStore.clears)
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+        assertNotNull(coordinator.currentAccessToken())
+    }
+
+    @Test
+    fun `a failed exchange abandons the login rather than leaving a slot nothing can resume`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val (coordinator, tokenClient, _) = coordinator(pendingStore)
+        tokenClient.exchangeResult = {
+            throw VersolaError.Configuration(
+                VersolaError.Configuration.Detail.TokenRequestRejected("invalid_client", null),
+            )
+        }
+
+        failure { coordinator.login(setOf("openid")) }
+
+        // The redirect was consumed and the code spent: a slot kept here would make the next
+        // cold start report Authorizing and resumePendingAuthorization() wait for a redirect
+        // that can never come, holding the authorize lock against every later login().
+        assertNull(pendingStore.stored)
+        assertEquals(1, pendingStore.clears)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a failed step-up exchange settles back on Authenticated, not on a login screen`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val (coordinator, tokenClient, credentialStore) = coordinator(pendingStore)
+        credentialStore.refreshToken = stored()
+        tokenClient.exchangeResult = {
+            throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.Network("dropped"))
+        }
+
+        failure { coordinator.login(setOf("openid"), acrValues = listOf("mfa")) }
+
+        assertNull(pendingStore.stored)
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+        assertNotNull(credentialStore.refreshToken)
+    }
+
+    @Test
+    fun `login refuses a response with no refresh token rather than starting an unrecoverable session`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        tokenClient.exchangeResult = { issued(refreshToken = null) }
+
+        val error = failure { coordinator.login(setOf("openid")) } as VersolaError.Configuration
+        assertTrue(error.detail is VersolaError.Configuration.Detail.TokenResponseMalformed)
+        assertNull(credentialStore.refreshToken)
+    }
+
+    @Test
+    fun `a dropped response does not make login replay a single-use authorization code`() = runTest {
+        val (coordinator, tokenClient, _) = coordinator(retryPolicy = RetryPolicy.Patient)
+        tokenClient.exchangeResult = {
+            throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.Network("response dropped"))
+        }
+
+        failure { coordinator.login(setOf("openid")) }
+
+        // Even under the most patient budget the SDK offers. The token endpoint has no
+        // idempotency for `authorization_code`, so a second attempt is a replay of a spent
+        // code, which the server may answer by revoking what it already issued from it.
+        assertEquals(1, tokenClient.exchangeCalls.size)
+    }
+
+    // ---- refresh(): single-flight -------------------------------------------------------
+
+    @Test
+    fun `fifty concurrent refreshes produce exactly one token request`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        // The winner has to genuinely be in flight when the rest arrive: a scripted action
+        // that returns without ever suspending would let the winner finish and clear
+        // `pendingRefresh` before caller two is even started, and all fifty would then run
+        // their own request rather than coalescing onto one.
+        tokenClient.refreshActions = mutableListOf({
+            yield()
+            issued(accessToken = "the-one-response")
+        })
+
+        val callers = List(50) { async(start = CoroutineStart.UNDISPATCHED) { coordinator.refresh() } }
+        val results = callers.map { it.await() }
+
+        // Forty-nine of these would each be a replay of a token the previous one rotated,
+        // and `detectReplay` revokes the family rather than the request.
+        assertEquals(1, tokenClient.refreshCalls.size)
+        assertEquals(50, results.size)
+        assertTrue(results.all { it.accessToken == "the-one-response" })
+        assertEquals(1, credentialStore.events.count { it == "save" })
+    }
+
+    @Test
+    fun `two coordinators built on the same store still coalesce onto a single request`() = runTest {
+        // A `SessionCoordinator`'s own `Mutex` only ever sees its own callers. Two instances
+        // wrongly built on top of the same `CredentialStore` — the only way that store's
+        // "one refresh in flight" invariant can be observed from outside — must still
+        // coalesce onto one request between them, or a bearer-bound token gets rotated twice
+        // and `detectReplay` revokes the family.
+        val credentialStore = FakeCredentialStore().apply {
+            refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        }
+        val tokenClient = FakeTokenClient()
+        val neverAnswers = CompletableDeferred<Unit>()
+        tokenClient.refreshActions = mutableListOf({ neverAnswers.await(); issued() })
+        val coordinatorA = SessionCoordinator(authFlow(RecordingPendingStore(), credentialStore), tokenClient, credentialStore)
+        val coordinatorB = SessionCoordinator(authFlow(RecordingPendingStore(), credentialStore), tokenClient, credentialStore)
+
+        val callers = listOf(
+            async(start = CoroutineStart.UNDISPATCHED) { coordinatorA.refresh() },
+            async(start = CoroutineStart.UNDISPATCHED) { coordinatorB.refresh() },
+        )
+        neverAnswers.complete(Unit)
+        callers.forEach { it.await() }
+
+        assertEquals(1, tokenClient.refreshCalls.size)
+    }
+
+    @Test
+    fun `a stale-cache read that a concurrent refresh has already outrun does not force a second rotation`() {
+        // accessToken()'s staleness verdict is taken outside the lock that hands out a
+        // refresh flight. Between that read and this caller reaching the lock, a flight
+        // started by somebody else can resolve and retire itself -- its successor would then
+        // find no flight to join and win one of its own, rotating a grant that was refreshed
+        // moments earlier. Reproducing the gap needs real thread parallelism, since a
+        // coroutine test dispatcher has no suspension point between the two steps; the
+        // injected `elapsedMillis` clock is the seam used to park caller A exactly there.
+        val credentialStore = FakeCredentialStore().apply {
+            refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        }
+        val tokenClient = FakeTokenClient()
+        tokenClient.refreshActions = mutableListOf(
+            { issued(accessToken = "first") },
+            { issued(accessToken = "second") },
+            // Must stay unconsumed: a third call here is exactly the redundant rotation
+            // this test exists to rule out.
+            { issued(accessToken = "third") },
+        )
+
+        var clock = 0L
+        val aParked = CountDownLatch(1)
+        val resumeA = CountDownLatch(1)
+        val armedOnce = AtomicBoolean(true)
+        val coordinator = SessionCoordinator(
+            authFlow(RecordingPendingStore(), credentialStore),
+            tokenClient,
+            credentialStore,
+            elapsedMillis = {
+                // kotlinx.coroutines' debug agent suffixes the thread name with the running
+                // coroutine (" @coroutine#N"), so this matches on a prefix rather than equality.
+                if (Thread.currentThread().name.startsWith("caller-A") && armedOnce.compareAndSet(true, false)) {
+                    aParked.countDown()
+                    resumeA.await(10, TimeUnit.SECONDS)
+                }
+                clock
+            },
+        )
+
+        // Primes the cache with "first", then advances the clock past its refresh skew so
+        // caller A's next read judges it stale.
+        runBlocking { coordinator.refresh() }
+        clock = 3_600_000L
+
+        var aResult: AccessToken? = null
+        val callerA = Thread({ aResult = runBlocking { coordinator.accessToken() } }, "caller-A")
+        callerA.start()
+        assertTrue(aParked.await(10, TimeUnit.SECONDS))
+
+        // Runs to completion, on this thread, while caller A sits parked between reading the
+        // stale "first" entry and reaching the flight lock -- exactly the gap the fix closes.
+        val second = runBlocking { coordinator.refresh() }
+        resumeA.countDown()
+        callerA.join(10_000)
+
+        assertEquals("second", second.accessToken)
+        assertEquals("second", aResult?.value)
+        assertEquals(2, tokenClient.refreshCalls.size)
+    }
+
+    @Test
+    fun `cancelling the caller that won the flight does not fail the callers waiting on it`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        val neverAnswers = CompletableDeferred<Unit>()
+        tokenClient.refreshActions = mutableListOf(
+            { neverAnswers.await(); issued() },
+            { issued(accessToken = "after-the-takeover") },
+        )
+
+        val abandoned = async(start = CoroutineStart.UNDISPATCHED) { coordinator.refresh() }
+        val waiting = async(start = CoroutineStart.UNDISPATCHED) { coordinator.refresh() }
+        abandoned.cancel()
+
+        // The second caller's own job was never cancelled, so it takes the flight over
+        // instead of inheriting a `CancellationException` from a coroutine it has nothing to
+        // do with.
+        assertEquals("after-the-takeover", waiting.await().accessToken)
+        // And it replays with the key the abandoned attempt left in the rotation slot, which
+        // is what makes the takeover a retry rather than a second spend.
+        assertEquals(2, tokenClient.refreshCalls.size)
+        assertEquals(tokenClient.refreshCalls[0].second, tokenClient.refreshCalls[1].second)
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `an abandoned refresh with nobody waiting leaves no session stuck in Refreshing`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        val neverAnswers = CompletableDeferred<Unit>()
+        tokenClient.refreshActions = mutableListOf({ neverAnswers.await(); issued() })
+
+        val abandoned = async(start = CoroutineStart.UNDISPATCHED) { coordinator.refresh() }
+        abandoned.cancelAndJoin()
+
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `cancelling a refresh that finds no grant does not resurrect a session that never existed`() = runTest {
+        // No refresh token seeded: this call can only ever discover `noGrantStored`. A
+        // cancellation that lands before that discovery must not publish `Authenticated` —
+        // there is nothing authenticated to revert to, and the state entered from was
+        // `Unauthenticated`, not `Authenticated`.
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        val gate = CompletableDeferred<Unit>()
+        credentialStore.pendingRotationDelay = gate
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+
+        val abandoned = async(start = CoroutineStart.UNDISPATCHED) { coordinator.refresh() }
+        assertEquals(SessionState.Refreshing, coordinator.sessionState.first())
+        abandoned.cancelAndJoin()
+
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+        assertEquals(0, tokenClient.refreshCalls.size)
+    }
+
+    @Test
+    fun `a caller that arrives after the winner finishes still gets its result`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        tokenClient.refreshActions = mutableListOf({ issued(accessToken = "shared") })
+
+        val response = coordinator.refresh()
+
+        assertEquals("shared", response.accessToken)
+        assertEquals(1, tokenClient.refreshCalls.size)
+    }
+
+    // ---- refresh(): rotation slot ordering and idempotency -------------------------------
+
+    @Test
+    fun `the rotation slot is written before the request and cleared only after persistence`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        tokenClient.refreshActions = mutableListOf({ issued(refreshToken = "rotated") })
+
+        coordinator.refresh()
+
+        // savePendingRotation(key) before the request, save() persists the new value, then
+        // savePendingRotation(null) clears the slot — never the other order.
+        val order = credentialStore.events
+        val keySave = order.indexOfFirst { it.startsWith("savePendingRotation") && it != "savePendingRotation(null)" }
+        val persist = order.indexOf("save")
+        val clear = order.indexOf("savePendingRotation(null)")
+        assertTrue("$order", keySave in 0 until persist && persist < clear)
+        assertEquals("rotated", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        assertNull(credentialStore.pendingRotationSlot)
+    }
+
+    @Test
+    fun `the idempotency key is derived from the token being spent and reused across retries`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = "seed-bytes".toByteArray(Charsets.UTF_8)
+        tokenClient.refreshActions = mutableListOf(
+            { throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.Network("dropped")) },
+            { issued() },
+        )
+
+        coordinator.refresh()
+
+        val keys = tokenClient.refreshCalls.map { it.second }.toSet()
+        assertEquals("every attempt of one operation must carry the same key", 1, keys.size)
+    }
+
+    @Test
+    fun `a pending rotation left by process death is replayed with its own key, not a new one`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        credentialStore.pendingRotationSlot = "key-from-before-the-crash"
+        tokenClient.refreshActions = mutableListOf({ issued() })
+
+        coordinator.refresh()
+
+        assertEquals("key-from-before-the-crash", tokenClient.refreshCalls.single().second)
+        // No extra unwrap to derive a fresh key when one was already on disk: one unwrap for
+        // the request itself and nothing else.
+        assertEquals(1, credentialStore.unwraps)
+    }
+
+    // ---- refresh(): outcomes --------------------------------------------------------------
+
+    @Test
+    fun `invalid_grant wipes the store, drops the cached access token, and settles Unauthenticated`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        tokenClient.refreshActions = mutableListOf({
+            throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.GrantRejected)
+        })
+
+        failure { coordinator.refresh() }
+
+        assertNull(credentialStore.refreshToken)
+        assertNull(credentialStore.pendingRotationSlot)
+        assertEquals(1, credentialStore.clears)
+        assertNull(coordinator.currentAccessToken())
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+        // Never retried: a second call would be a second replay of an already-revoked family.
+        assertEquals(1, tokenClient.refreshCalls.size)
+    }
+
+    @Test
+    fun `an invalidated storage key wipes and settles Unauthenticated exactly like invalid_grant`() = runTest {
+        val (coordinator, _, credentialStore) = coordinator()
+        credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        credentialStore.unwrapFailure = {
+            VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.CredentialsInvalidated)
+        }
+
+        failure { coordinator.refresh() }
+
+        assertNull(credentialStore.refreshToken)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `an elapsed unlock window enters Locked without touching the stored grant`() = runTest {
+        val (coordinator, _, credentialStore) = coordinator()
+        credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        credentialStore.unwrapFailure = { VersolaError.Recoverable(VersolaError.Recoverable.Cause.UnlockRequired) }
+
+        failure { coordinator.refresh() }
+
+        assertEquals("seed", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        assertEquals(0, credentialStore.clears)
+        assertEquals(SessionState.Locked, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `an exhausted retry budget reverts to Authenticated without touching the stored grant`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator(retryPolicy = RetryPolicy.Conservative)
+        credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        tokenClient.refreshActions = mutableListOf({
+            throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.Network("down"))
+        })
+
+        failure { coordinator.refresh() }
+
+        assertEquals("seed", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        assertEquals(0, credentialStore.clears)
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a key that locks while persisting the refreshed response enters Locked rather than leaving Refreshing stuck`() = runTest {
+        // The server already rotated the token by the time this throws — persistence itself
+        // is what fails, not the request — so this must map onto the same catch the request's
+        // own `UnlockRequired` does, or the flow is left in `Refreshing` with no exception any
+        // caller can attribute to a known cause.
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        credentialStore.saveFailure = { VersolaError.Recoverable(VersolaError.Recoverable.Cause.UnlockRequired) }
+        tokenClient.refreshActions = mutableListOf({ issued(refreshToken = "rotated") })
+
+        failure { coordinator.refresh() }
+
+        assertEquals(SessionState.Locked, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a key invalidated while clearing the rotation slot after persistence still wipes and signs out`() = runTest {
+        // The response is already durably stored when step 3 throws: the grant is gone in
+        // substance regardless, so this must wipe and settle `Unauthenticated` exactly as a
+        // failure during the request itself does — not leave the session in `Refreshing`
+        // with a rotation slot pointing at a key from a generation that no longer exists.
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        credentialStore.savePendingRotationClearFailure = {
+            VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.CredentialsInvalidated)
+        }
+        tokenClient.refreshActions = mutableListOf({ issued(refreshToken = "rotated") })
+
+        failure { coordinator.refresh() }
+
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+        assertEquals(1, credentialStore.clears)
+        assertNull(coordinator.currentAccessToken())
+    }
+
+    @Test
+    fun `a BoundRenewal response with no refresh_token leaves the stored token untouched`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = "unchanged".toByteArray(Charsets.UTF_8)
+        tokenClient.refreshActions = mutableListOf({ issued(accessToken = "fresh-access", refreshToken = null) })
+
+        val response = coordinator.refresh()
+
+        assertEquals("fresh-access", response.accessToken)
+        assertEquals("unchanged", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        assertEquals("save() must not run when there is nothing new to persist", 0, credentialStore.events.count { it == "save" })
+        assertNull(credentialStore.pendingRotationSlot)
+        assertNotNull(coordinator.currentAccessToken())
+    }
+
+    @Test
+    fun `a replay revoking the family signs the session out and leaves login usable again`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = "replayed".toByteArray(Charsets.UTF_8)
+        // What `detectReplay` answers once a bearer refresh token is spent twice: the whole
+        // family is revoked, so the grant this client holds is gone rather than rejected.
+        tokenClient.refreshActions = mutableListOf({
+            throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.GrantRejected)
+        })
+
+        val error = failure { coordinator.refresh() }
+
+        assertTrue(error is VersolaError.Reauthenticate)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+
+        // Not a stuck session: signing back in on the same coordinator goes through, which
+        // is the whole difference between `Reauthenticate` and a session that can only be
+        // fixed by reinstalling the app.
+        tokenClient.exchangeResult = { issued(accessToken = "after-sign-in", refreshToken = "new-family") }
+        val response = coordinator.login(setOf("openid"))
+
+        assertEquals("after-sign-in", response.accessToken)
+        assertEquals("new-family", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `refreshing with no grant stored settles Unauthenticated instead of calling the token endpoint`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        // No refreshToken seeded.
+
+        failure { coordinator.refresh() }
+
+        assertEquals(0, tokenClient.refreshCalls.size)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    // ---- cold start ------------------------------------------------------------------------
+
+    @Test
+    fun `a cold start with a stored grant restores Authenticated, not signed out`() = runTest {
+        val credentialStore = FakeCredentialStore().apply {
+            refreshToken = "from-a-previous-run".toByteArray(Charsets.UTF_8)
+        }
+        val (coordinator, _, _) = coordinator(credentialStore = credentialStore)
+
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a login killed between persisting the token and clearing the slot restores Authenticated`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        pendingStore.stored = PendingAuthorizationRequest(
+            state = "already-answered",
+            nonce = "already-answered-nonce",
+            codeVerifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+            scopes = listOf("openid"),
+            redirectUri = "https://app.example.com/oauth",
+            acrValues = emptyList(),
+            maxAge = null,
+            createdAtEpochMillis = System.currentTimeMillis(),
+        )
+        val credentialStore = FakeCredentialStore().apply {
+            refreshToken = "persisted-just-before-the-kill".toByteArray(Charsets.UTF_8)
+        }
+        val (coordinator, _, _) = coordinator(pendingStore, credentialStore = credentialStore)
+
+        // The code behind that pending request was already redeemed — the stored grant is
+        // the proof — so resuming it could only fail as `invalid_grant`. It is residue, and
+        // it is cleared rather than believed.
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+        assertNull(pendingStore.stored)
+    }
+
+    @Test
+    fun `a coordinator refuses a flow that cannot restore a stored session`() {
+        val pendingStore = RecordingPendingStore()
+        val unwired = AuthorizationFlow(
+            configuration = configuration,
+            discovery = DiscoveryService(ISSUER, StaticDiscoveryClient(metadata), NoopMetadataCache()),
+            pendingStore = pendingStore,
+            browser = FixedRedirectBrowser(pendingStore),
+            tokenBinding = TokenBinding.Bearer,
+        )
+
+        val error = try {
+            SessionCoordinator(unwired, FakeTokenClient(), FakeCredentialStore())
+            throw AssertionError("expected a Configuration error")
+        } catch (e: VersolaError.Configuration) {
+            e
+        }
+
+        assertTrue(error.detail is VersolaError.Configuration.Detail.InvalidConfiguration)
+    }
+
+    // ---- accessToken() and the refresh skew --------------------------------------------
+
+    @Test
+    fun `a token outside its refresh skew is served from the cache, with no token request`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = stored()
+        tokenClient.refreshActions = mutableListOf({ issued(accessToken = "cached", expiresIn = 3600) })
+        coordinator.refresh()
+
+        // 3600 s less the 30 s cap leaves 3570 s of use; a second short of that is inside it.
+        elapsed += 3_569_000
+        val token = coordinator.accessToken()
+
+        assertEquals("cached", token.value)
+        assertEquals(1, tokenClient.refreshCalls.size)
+    }
+
+    @Test
+    fun `a token within its refresh skew is refreshed before it is handed out`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = stored()
+        tokenClient.refreshActions = mutableListOf(
+            { issued(accessToken = "first", expiresIn = 3600) },
+            { issued(accessToken = "second", expiresIn = 3600) },
+        )
+        coordinator.refresh()
+
+        elapsed += 3_570_000
+        val token = coordinator.accessToken()
+
+        assertEquals("second", token.value)
+        assertEquals(2, tokenClient.refreshCalls.size)
+    }
+
+    @Test
+    fun `a short lifetime gets a tenth of itself, not a cap that would expire it on arrival`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = stored()
+        tokenClient.refreshActions = mutableListOf({ issued(expiresIn = 20) })
+        coordinator.refresh()
+
+        // A flat 30 s skew against a 20 s token refreshes here, and before every call after.
+        elapsed += 17_999
+        coordinator.accessToken()
+        assertEquals(1, tokenClient.refreshCalls.size)
+
+        elapsed += 1
+        coordinator.accessToken()
+        assertEquals(2, tokenClient.refreshCalls.size)
+    }
+
+    @Test
+    fun `a response without expires_in is unknown rather than expired`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = stored()
+        tokenClient.refreshActions = mutableListOf({ issued(accessToken = "undated", expiresIn = 0) })
+        coordinator.refresh()
+
+        elapsed += 365L * 24 * 60 * 60 * 1000
+        val token = coordinator.accessToken()
+
+        assertEquals("undated", token.value)
+        assertEquals(1, tokenClient.refreshCalls.size)
+    }
+
+    @Test
+    fun `accessToken on a cold cache refreshes rather than answering with nothing`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = stored()
+        tokenClient.refreshActions = mutableListOf({ issued(accessToken = "restored") })
+
+        assertEquals("restored", coordinator.accessToken().value)
+        assertEquals(1, tokenClient.refreshCalls.size)
+    }
+
+    @Test
+    fun `the skew is a tenth of the lifetime until the thirty-second cap takes over`() {
+        assertEquals(18_000, RefreshSkew.usableForMillis(issued(expiresIn = 20)))
+        // 300 s is the crossover: a tenth of it is exactly the cap.
+        assertEquals(270_000, RefreshSkew.usableForMillis(issued(expiresIn = 300)))
+        assertEquals(570_000, RefreshSkew.usableForMillis(issued(expiresIn = 600)))
+        assertEquals(3_570_000, RefreshSkew.usableForMillis(issued(expiresIn = 3600)))
+    }
+
+    @Test
+    fun `a lifetime past what milliseconds can express does not wrap into an expired token`() {
+        assertEquals(Long.MAX_VALUE, RefreshSkew.usableForMillis(issued(expiresIn = Long.MAX_VALUE)))
+        assertEquals(Long.MAX_VALUE, RefreshSkew.usableForMillis(issued(expiresIn = -1)))
+    }
+
+    @Test
+    fun `login asks for offline_access, which the refresh token depends on`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val (coordinator, tokenClient, _) = coordinator(pendingStore)
+
+        coordinator.login(setOf("openid", "profile"))
+
+        assertEquals(setOf("openid", "profile", "offline_access"), tokenClient.exchangeCalls.single().scopes)
+    }
+
+    // ---- review findings H1 / H2 / M4 ---------------------------------------------------
+
+    @Test
+    fun `a winner cancelled during the lazy restore does not wedge every later refresh`() = runTest {
+        val credentialStore = FakeCredentialStore().apply { refreshToken = stored() }
+        val gate = CompletableDeferred<Unit>()
+        credentialStore.hasGrantGate = gate
+        val tokenClient = FakeTokenClient().apply { refreshActions = mutableListOf({ issued(accessToken = "after") }) }
+        val coordinator = SessionCoordinator(
+            authFlow(RecordingPendingStore(), credentialStore), tokenClient, credentialStore,
+            elapsedMillis = { elapsed },
+        )
+
+        // The first refresh of a process performs the restore; a lifecycleScope torn down on
+        // rotation is a routine way to cancel it exactly there.
+        val first = async(start = CoroutineStart.UNDISPATCHED) { coordinator.refresh() }
+        first.cancelAndJoin()
+        gate.complete(Unit)
+
+        val second = withTimeoutOrNull(5_000) { coordinator.refresh() }
+
+        assertNotNull("the abandoned flight was never retired", second)
+        assertEquals("after", second!!.accessToken)
+        assertEquals(1, tokenClient.refreshCalls.size)
+    }
+
+    @Test
+    fun `a refresh in flight during logout cannot re-persist the grant after the wipe`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val browser = FixedRedirectBrowser(pendingStore)
+        val credentialStore = FakeCredentialStore().apply { refreshToken = stored() }
+        val responseGate = CompletableDeferred<Unit>()
+        val tokenClient = FakeTokenClient().apply {
+            refreshActions = mutableListOf({ responseGate.await(); issued(accessToken = "late") })
+        }
+        val coordinator = SessionCoordinator(
+            authFlow(pendingStore, credentialStore, browser), tokenClient, credentialStore,
+            elapsedMillis = { elapsed },
+            onCredentialsWiped = { teardowns++ },
+        )
+        val refreshing = async(start = CoroutineStart.UNDISPATCHED) { runCatching { coordinator.refresh() } }
+        // logout() lets the flight finish before it revokes, so the server's answer is in
+        // before the wipe — and whatever it answered is wiped with everything else.
+        val loggingOut = async(start = CoroutineStart.UNDISPATCHED) { coordinator.logout() }
+        responseGate.complete(Unit)
+        loggingOut.await()
+        refreshing.await()
+
+        assertNull("grant re-persisted after logout", credentialStore.refreshToken)
+        assertNull(coordinator.currentAccessToken())
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+        // The late answer was persisted (the flight finished first) and then wiped — never
+        // the other way round.
+        assertEquals(1, credentialStore.clears)
+        assertTrue(credentialStore.events.contains("save"))
+        assertTrue(refreshing.await().isSuccess)
+    }
+
+    @Test
+    fun `stepUpRequired publishes StepUpRequired over the live grant, and a cancelled step-up settles on Authenticated`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val browser = FixedRedirectBrowser(pendingStore)
+        val (coordinator, _, credentialStore) = coordinator(pendingStore, browser = browser)
+        credentialStore.refreshToken = stored()
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+
+        coordinator.stepUpRequired()
+        assertEquals(SessionState.StepUpRequired, coordinator.sessionState.first())
+
+        browser.loginOutcome = { BrowserOutcome.UserCancelled }
+        failure { coordinator.login(setOf("openid"), acrValues = listOf("mfa")) }
+
+        // The grant is intact; UI bound to the state must not show a login screen over it.
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+        assertNotNull(credentialStore.refreshToken)
+        assertNull(pendingStore.stored)
+    }
+
+    // ---- logout() ----------------------------------------------------------------------
+
+    @Test
+    fun `logout revokes, ends the server session, wipes, and settles Unauthenticated`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val browser = FixedRedirectBrowser(pendingStore)
+        val (coordinator, tokenClient, credentialStore) = coordinator(pendingStore, browser = browser)
+        credentialStore.refreshToken = stored()
+        credentialStore.rawIdToken = "the.id.token"
+        // `MutableStateFlow` conflates, so the transition into `LoggingOut` is observed from
+        // inside the browser leg — the one moment it is guaranteed to be the current state —
+        // rather than from a collector racing the transitions out of it.
+        var stateWhileBrowserOpen: SessionState? = null
+        var revokedBeforeBrowser = false
+        val defaultOutcome = browser.logoutOutcome
+        browser.logoutOutcome = { uri ->
+            stateWhileBrowserOpen = coordinator.sessionState.first()
+            revokedBeforeBrowser = tokenClient.revokeCalls.size == 1
+            defaultOutcome(uri)
+        }
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+
+        val acknowledged = coordinator.logout()
+
+        assertTrue(acknowledged)
+        // Scenario 18, in order: the refresh token is revoked before the browser opens, so a
+        // dismissed signed-out page still leaves a dead grant behind at the server.
+        assertTrue(revokedBeforeBrowser)
+        assertEquals("grant", tokenClient.revokeCalls.single().toString(Charsets.UTF_8))
+        val logoutUri = browser.launched.single()
+        assertTrue(logoutUri.startsWith("$ISSUER/logout?"))
+        assertTrue(logoutUri.contains("id_token_hint=the.id.token"))
+        assertTrue(logoutUri.contains("&state="))
+        assertEquals(SessionState.LoggingOut, stateWhileBrowserOpen)
+        // Everything credential-shaped is gone, including what lives outside this module.
+        assertNull(credentialStore.refreshToken)
+        assertNull(credentialStore.rawIdToken)
+        assertNull(credentialStore.pendingRotationSlot)
+        assertEquals(1, credentialStore.clears)
+        assertEquals(1, pendingStore.clears)
+        assertEquals(1, teardowns)
+        assertNull(coordinator.currentAccessToken())
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `logout wipes locally even when revocation fails`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = stored()
+        tokenClient.revokeFailure = {
+            VersolaError.Recoverable(VersolaError.Recoverable.Cause.Network("revocation endpoint returned HTTP 503"))
+        }
+
+        coordinator.logout()
+
+        assertNull(credentialStore.refreshToken)
+        assertEquals(1, teardowns)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `logout wipes locally even when the browser is dismissed mid-flow`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val browser = FixedRedirectBrowser(pendingStore).apply {
+            logoutOutcome = { BrowserOutcome.UserCancelled }
+        }
+        val (coordinator, _, credentialStore) = coordinator(pendingStore, browser = browser)
+        credentialStore.refreshToken = stored()
+
+        val acknowledged = coordinator.logout()
+
+        // Scenario 18's last assertion: dismissing the browser mid-logout still leaves the
+        // app Unauthenticated locally. Only the server-side teardown is best effort, and the
+        // return value is how that is reported.
+        assertFalse(acknowledged)
+        assertNull(credentialStore.refreshToken)
+        assertEquals(1, teardowns)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `logout wipes locally even when the browser cannot be opened at all`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val browser = FixedRedirectBrowser(pendingStore).apply {
+            logoutOutcome = {
+                throw VersolaError.Configuration(VersolaError.Configuration.Detail.NoBrowserAvailable)
+            }
+        }
+        val (coordinator, _, credentialStore) = coordinator(pendingStore, browser = browser)
+        credentialStore.refreshToken = stored()
+
+        assertFalse(coordinator.logout())
+
+        assertNull(credentialStore.refreshToken)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a redirect carrying another state does not count as the server acknowledging`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val browser = FixedRedirectBrowser(pendingStore).apply {
+            logoutOutcome = { BrowserOutcome.Redirect("https://app.example.com/signed-out?state=stale") }
+        }
+        val (coordinator, _, credentialStore) = coordinator(pendingStore, browser = browser)
+        credentialStore.refreshToken = stored()
+
+        assertFalse(coordinator.logout())
+        assertNull(credentialStore.refreshToken)
+    }
+
+    @Test
+    fun `logout without a readable id token still ends the session, without the hint`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val browser = FixedRedirectBrowser(pendingStore)
+        val (coordinator, _, credentialStore) = coordinator(pendingStore, browser = browser)
+        credentialStore.refreshToken = stored()
+        credentialStore.rawIdToken = null
+
+        coordinator.logout()
+
+        assertFalse(browser.launched.single().contains("id_token_hint"))
+        assertNull(credentialStore.refreshToken)
+    }
+
+    @Test
+    fun `a failing teardown does not stop the sign-out`() = runTest {
+        val (coordinator, _, credentialStore) = coordinator()
+        credentialStore.refreshToken = stored()
+        teardownFailure = { IllegalStateException("Keystore refused to delete the key") }
+
+        coordinator.logout()
+
+        assertNull(credentialStore.refreshToken)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `logout cancelled mid-flight still wipes`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val browserOpened = CompletableDeferred<Unit>()
+        val browser = FixedRedirectBrowser(pendingStore).apply {
+            // The browser leg is where a logout spends its time, and where the caller's
+            // scope is most likely to go away: a screen torn down while the Custom Tab is up.
+            logoutOutcome = { browserOpened.complete(Unit); awaitCancellation() }
+        }
+        val (coordinator, tokenClient, credentialStore) = coordinator(pendingStore, browser = browser)
+        credentialStore.refreshToken = stored()
+
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { coordinator.logout() }
+        browserOpened.await()
+        job.cancelAndJoin()
+
+        assertEquals(1, tokenClient.revokeCalls.size)
+        assertNull(credentialStore.refreshToken)
+        assertEquals(1, teardowns)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `invalid_grant on refresh tears the DPoP key down like a logout`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = stored()
+        tokenClient.refreshActions = mutableListOf({
+            throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.GrantRejected)
+        })
+
+        failure { coordinator.refresh() }
+
+        // `Refreshing → Unauthenticated` in spec/state-machine.md: "the DPoP key follows the
+        // logout rule". Same wipe, same hook, no separate path to drift.
+        assertNull(credentialStore.refreshToken)
+        assertEquals(1, teardowns)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    private suspend fun failure(block: suspend () -> Unit): VersolaError = try {
+        block()
+        throw AssertionError("expected a VersolaError")
+    } catch (e: VersolaError) {
+        e
+    }
+}

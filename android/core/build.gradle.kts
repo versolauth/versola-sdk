@@ -1,6 +1,6 @@
-// Protocol core: state machine, error taxonomy, discovery, token/authorization requests.
-// No Versola-specific URLs or routing — see #4's licence decision on why this must stay
-// generic enough to work against any OIDC provider.
+// What is Versola-specific in the protocol layer: the edge back channel (`BackChannel.Edge`),
+// its native endpoints and the errors only edge produces. Everything RFC-shaped lives in
+// :oauth-core (ADR 0001); this module depends on it, never the reverse.
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
@@ -9,7 +9,7 @@ plugins {
 }
 
 android {
-    namespace = "kz.versola.sdk.core"
+    namespace = "versola.sdk.core"
     compileSdk = 36
 
     defaultConfig {
@@ -27,25 +27,21 @@ android {
 
 kotlin {
     explicitApi()
+    compilerOptions {
+        // The edge half reaches the protocol core's wiring (the request executor, the form
+        // body, the grant's code) through the opt-in marker rather than through `internal`,
+        // which stops at the module boundary.
+        optIn.add("versola.oauth.core.VersolaInternalApi")
+    }
 }
 
 dependencies {
-    // api, not implementation: SessionState is exposed as a Flow (spec/state-machine.md,
-    // "Observability"), so the coroutines types are part of this module's ABI.
+    // Everything RFC-shaped, and the types on this module's ABI (VersolaError, TokenClient,
+    // the configuration), come from the protocol core.
+    api(project(":oauth-core"))
+    // The Android dispatcher the facade's callers run on; the core itself needs only -core.
     api("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
-
-    // Discovery needs an HTTP client and a JSON parser (#5).
-    //
-    // OkHttp rather than HttpURLConnection: the :okhttp module already pins it, and one
-    // HTTP stack across the SDK means one place where timeouts, TLS and proxy behaviour
-    // are decided. Same 5.4.0 pin and the same reason for it as :okhttp.
-    //
-    // kotlinx-serialization rather than the framework's org.json: org.json is stubbed in
-    // plain JVM unit tests and throws "not mocked", which would force Robolectric onto
-    // every discovery test. Reflection-free, so it also survives R8 without keep rules.
-    // api, not implementation: HttpDiscoveryClient takes an OkHttpClient, so the type is on
-    // this module's ABI and a consumer configuring their own client needs to see it.
-    api("com.squareup.okhttp3:okhttp:5.4.0")
+    // `/native/start`'s answer is parsed with the same reflection-free serializer as discovery.
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
 
     testImplementation("junit:junit:4.13.2")

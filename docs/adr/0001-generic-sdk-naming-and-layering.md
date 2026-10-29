@@ -73,9 +73,9 @@ under its own name as a type alias) without putting edge vocabulary in the core.
 |---|---|---|
 | `AccessToken`, `AccessTokenSource`, `AuthorizationGrant`, `AuthorizationRequest`, `AuthorizationResponseValidator`, `BrowserAuthorizationSession`, `BrowserOutcome`, `CodeVerifier`, `Pkce`, `PendingAuthorizationRequest`, `PendingAuthorizationCodec`, `PendingAuthorizationStore`, `CredentialStore`, `CredentialKeyProvider`, `DiscoveryClient`, `DiscoveryService`, `HttpDiscoveryClient`, `ProviderMetadata`, `ProviderMetadataCache`, `FileProviderMetadataCache`, `RedirectUri`, `RedirectUriKind`, `RetryPolicy`, `SessionCoordinator`, `SessionState`, `TokenBinding`, `TokenClient`, `HttpTokenClient`, `TokenResponse`, `UnlockPolicy`, `DpopProofSource`, `DpopKeyBinding`, `VersolaLogger` | `oauth-core` | moved as-is, package renamed; most become `internal` or `@VersolaInternalApi` (architecture review F6) |
 | `MtlsEndpointAliases` | `oauth-core` | RFC 8705 metadata, generic; only its consumer in the edge flow is Versola-specific |
-| `VersolaConfiguration` | `oauth-core` as `ClientConfiguration` (issuer, client id, redirect URIs, validation) | both facades' configuration types wrap it |
-| `VersolaError` | `oauth-core` as `OAuthError`; `VersolaError` becomes a type alias in `core` | `EdgeClientUnknown` moves to `core` as an `Extension` |
-| `AuthorizationFlow` | `oauth-core`, internal, with the starter seam | the edge branch of `login()` moves behind the seam |
+| `VersolaConfiguration` | `oauth-core`, under its current name until B3 (issuer, client id, redirect URIs, validation) | both facades' configuration types wrap it; the rename to `ClientConfiguration` lands with the generic facade for the same reason as `VersolaError` |
+| `VersolaError` | `oauth-core`, under its current name until B3 | `EdgeClientUnknown` moves to `core` as an `Extension`. The rename to `OAuthError` waits for the generic facade: a Kotlin type alias cannot name nested classes (`VersolaError.Configuration` through an alias does not compile), so the Versola facade's code will reference the renamed type directly, which is B3's change to make, not B2's |
+| `AuthorizationFlow` | `oauth-core`, with the `AuthorizationStarter` seam (done in B2) | the edge branch moved to `core`'s `EdgeAuthorizationStarter`; the pending request carries an opaque `extension` map and an `issRequired` flag instead of edge fields |
 | `BackChannel`, `EdgeNativeTokenClient`, `NativeAuthorizationStarter`, `HttpNativeAuthorizationStarter`, `NativeStart`, `NativeStartRequest`, `NativeEndpoints`, `NativeEndpointsStore`, `FileNativeEndpointsStore` | `core` | Versola-specific by definition |
 | `Idempotency-Key` on refresh (inside `HttpTokenClient` today) | `oauth-core` seam, enabled by the Versola facade | an unknown header is harmless to other providers, but the generic facade sends only what a standard defines |
 
@@ -86,7 +86,9 @@ depend on them when the Versola iOS facade is built. Flutter has one plugin per 
 ## Consequences
 
 - B2 is a mechanical move with the Versola facade's tests kept green and `apiDump` regenerated;
-  the public API of `Versola` does not change in B2 except the package rename.
+  the public API of `Versola` does not change in B2 except the package rename, the
+  `@VersolaInternalApi` marker on the wiring the edge module reaches, and `EdgeClientUnknown`
+  becoming a top-level class of `versola.sdk.core` (an `Extension` of the shared detail type).
 - A Versola choice that cannot be a seam is not forced into the core; it stays in `core` and the
   ADR's seam table gains no row. If B2 finds that most of the coordinator must fork, this ADR is
   revisited rather than bent.

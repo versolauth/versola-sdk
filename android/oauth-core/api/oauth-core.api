@@ -1,0 +1,801 @@
+public final class versola/oauth/core/AccessToken {
+	public fun <init> (Ljava/lang/String;Z)V
+	public final fun getValue ()Ljava/lang/String;
+	public final fun isDpopBound ()Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class versola/oauth/core/AccessTokenSource {
+	public abstract fun accessToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun renewAccessToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun stepUpRequired ()V
+}
+
+public final class versola/oauth/core/AccessTokenSource$DefaultImpls {
+	public static fun stepUpRequired (Lversola/oauth/core/AccessTokenSource;)V
+}
+
+public final class versola/oauth/core/AuthorizationFlow {
+	public fun <init> (Lversola/oauth/core/VersolaConfiguration;Lversola/oauth/core/DiscoveryService;Lversola/oauth/core/PendingAuthorizationStore;Lversola/oauth/core/BrowserAuthorizationSession;Lversola/oauth/core/DpopKeyBinding;Lversola/oauth/core/TokenBinding;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function1;Lversola/oauth/core/AuthorizationStarter;)V
+	public synthetic fun <init> (Lversola/oauth/core/VersolaConfiguration;Lversola/oauth/core/DiscoveryService;Lversola/oauth/core/PendingAuthorizationStore;Lversola/oauth/core/BrowserAuthorizationSession;Lversola/oauth/core/DpopKeyBinding;Lversola/oauth/core/TokenBinding;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function1;Lversola/oauth/core/AuthorizationStarter;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun authorize (Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun authorize$default (Lversola/oauth/core/AuthorizationFlow;Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun endSession (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun getConfiguration ()Lversola/oauth/core/VersolaConfiguration;
+	public final fun getSessionState ()Lkotlinx/coroutines/flow/Flow;
+	public final fun metadata (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun resumePendingAuthorization (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class versola/oauth/core/AuthorizationGrant {
+	public fun <init> (Ljava/lang/String;Lversola/oauth/core/CodeVerifier;Ljava/lang/String;Ljava/lang/String;Ljava/util/Set;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;)V
+	public synthetic fun <init> (Ljava/lang/String;Lversola/oauth/core/CodeVerifier;Ljava/lang/String;Ljava/lang/String;Ljava/util/Set;Ljava/lang/String;Ljava/lang/String;Ljava/util/Map;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getCode ()Ljava/lang/String;
+	public final fun getExtension ()Ljava/util/Map;
+	public final fun getIss ()Ljava/lang/String;
+	public final fun getNonce ()Ljava/lang/String;
+	public final fun getRedirectUri ()Ljava/lang/String;
+	public final fun getScopes ()Ljava/util/Set;
+	public final fun getState ()Ljava/lang/String;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/AuthorizationRequest {
+	public static final field Companion Lversola/oauth/core/AuthorizationRequest$Companion;
+	public final fun getAcrValues ()Ljava/util/List;
+	public final fun getMaxAge ()Ljava/lang/Long;
+	public final fun getNonce ()Ljava/lang/String;
+	public final fun getScopes ()Ljava/util/Set;
+	public final fun getState ()Ljava/lang/String;
+	public final fun toUri (Ljava/lang/String;)Ljava/lang/String;
+}
+
+public final class versola/oauth/core/AuthorizationRequest$Companion {
+	public final fun create (Lversola/oauth/core/VersolaConfiguration;Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Ljava/lang/String;Ljava/security/SecureRandom;)Lversola/oauth/core/AuthorizationRequest;
+	public static synthetic fun create$default (Lversola/oauth/core/AuthorizationRequest$Companion;Lversola/oauth/core/VersolaConfiguration;Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Ljava/lang/String;Ljava/security/SecureRandom;ILjava/lang/Object;)Lversola/oauth/core/AuthorizationRequest;
+}
+
+public final class versola/oauth/core/AuthorizationResponseValidator {
+	public static final field INSTANCE Lversola/oauth/core/AuthorizationResponseValidator;
+	public final fun validate (Ljava/lang/String;Lversola/oauth/core/PendingAuthorizationRequest;Ljava/lang/String;Z)Lversola/oauth/core/AuthorizationGrant;
+}
+
+public abstract interface class versola/oauth/core/AuthorizationStarter {
+	public abstract fun start (Lversola/oauth/core/AuthorizationRequest;Lversola/oauth/core/ProviderMetadata;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public abstract interface class versola/oauth/core/BrowserAuthorizationSession {
+	public abstract fun authorize (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun awaitPendingRedirect (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public abstract interface class versola/oauth/core/BrowserOutcome {
+}
+
+public final class versola/oauth/core/BrowserOutcome$Redirect : versola/oauth/core/BrowserOutcome {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lversola/oauth/core/BrowserOutcome$Redirect;
+	public static synthetic fun copy$default (Lversola/oauth/core/BrowserOutcome$Redirect;Ljava/lang/String;ILjava/lang/Object;)Lversola/oauth/core/BrowserOutcome$Redirect;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getUri ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/BrowserOutcome$UserCancelled : versola/oauth/core/BrowserOutcome {
+	public static final field INSTANCE Lversola/oauth/core/BrowserOutcome$UserCancelled;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/CodeVerifier {
+	public static final field Companion Lversola/oauth/core/CodeVerifier$Companion;
+	public fun <init> (Ljava/lang/String;)V
+	public final fun challengeS256 ()Ljava/lang/String;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/CodeVerifier$Companion {
+}
+
+public abstract interface class versola/oauth/core/CredentialKeyProvider {
+	public abstract fun unwrap ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun wrap ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public abstract interface class versola/oauth/core/CredentialStore {
+	public abstract fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun hasGrant (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun pendingRotation (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun rawIdToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun save ([BLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun save$default (Lversola/oauth/core/CredentialStore;[BLjava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public abstract fun savePendingRotation (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun useRefreshToken (Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class versola/oauth/core/CredentialStore$DefaultImpls {
+	public static synthetic fun save$default (Lversola/oauth/core/CredentialStore;[BLjava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public abstract interface class versola/oauth/core/DiscoveryClient {
+	public abstract fun fetch (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class versola/oauth/core/DiscoveryKt {
+	public static final fun getDiscoveryJson ()Lkotlinx/serialization/json/Json;
+}
+
+public final class versola/oauth/core/DiscoveryService {
+	public fun <init> (Ljava/lang/String;Lversola/oauth/core/DiscoveryClient;Lversola/oauth/core/ProviderMetadataCache;)V
+	public final fun metadata (ZLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun metadata$default (Lversola/oauth/core/DiscoveryService;ZLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public abstract interface class versola/oauth/core/DpopKeyBinding {
+	public abstract fun jkt (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public abstract interface class versola/oauth/core/DpopProofSource {
+	public abstract fun observe (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)V
+	public abstract fun proof (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun proof$default (Lversola/oauth/core/DpopProofSource;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class versola/oauth/core/DpopProofSource$DefaultImpls {
+	public static synthetic fun proof$default (Lversola/oauth/core/DpopProofSource;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class versola/oauth/core/FileProviderMetadataCache : versola/oauth/core/ProviderMetadataCache {
+	public fun <init> (Ljava/io/File;)V
+	public fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun load (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun save (Lversola/oauth/core/ProviderMetadata;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class versola/oauth/core/FormBody {
+	public fun <init> ()V
+	public final fun add (Ljava/lang/String;Ljava/lang/String;)Lversola/oauth/core/FormBody;
+	public final fun addBytes (Ljava/lang/String;[B)Lversola/oauth/core/FormBody;
+	public final fun clear ()V
+	public final fun toByteArray ()[B
+}
+
+public final class versola/oauth/core/HttpDiscoveryClient : versola/oauth/core/DiscoveryClient {
+	public fun <init> (Lokhttp3/OkHttpClient;)V
+	public fun fetch (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class versola/oauth/core/HttpTokenClient : versola/oauth/core/TokenClient {
+	public fun <init> (Lversola/oauth/core/VersolaConfiguration;Lversola/oauth/core/DiscoveryService;Lokhttp3/OkHttpClient;Lversola/oauth/core/DpopProofSource;Lversola/oauth/core/TokenBinding;)V
+	public synthetic fun <init> (Lversola/oauth/core/VersolaConfiguration;Lversola/oauth/core/DiscoveryService;Lokhttp3/OkHttpClient;Lversola/oauth/core/DpopProofSource;Lversola/oauth/core/TokenBinding;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun exchange (Lversola/oauth/core/AuthorizationGrant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun refresh ([BLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun revoke ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class versola/oauth/core/MtlsEndpointAliases {
+	public static final field Companion Lversola/oauth/core/MtlsEndpointAliases$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lversola/oauth/core/MtlsEndpointAliases;
+	public static synthetic fun copy$default (Lversola/oauth/core/MtlsEndpointAliases;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lversola/oauth/core/MtlsEndpointAliases;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getRevocationEndpoint ()Ljava/lang/String;
+	public final fun getTokenEndpoint ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class versola/oauth/core/MtlsEndpointAliases$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lversola/oauth/core/MtlsEndpointAliases$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lversola/oauth/core/MtlsEndpointAliases;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lversola/oauth/core/MtlsEndpointAliases;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class versola/oauth/core/MtlsEndpointAliases$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class versola/oauth/core/PendingAuthorizationCodec {
+	public static final field INSTANCE Lversola/oauth/core/PendingAuthorizationCodec;
+	public final fun decode ([B)Lversola/oauth/core/PendingAuthorizationRequest;
+	public final fun encode (Lversola/oauth/core/PendingAuthorizationRequest;)[B
+}
+
+public final class versola/oauth/core/PendingAuthorizationRequest {
+	public static final field Companion Lversola/oauth/core/PendingAuthorizationRequest$Companion;
+	public static final field MAX_AGE_MILLIS J
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/util/List;Ljava/lang/Long;JLjava/util/Map;Z)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/util/List;Ljava/lang/Long;JLjava/util/Map;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getAcrValues ()Ljava/util/List;
+	public final fun getCreatedAtEpochMillis ()J
+	public final fun getExtension ()Ljava/util/Map;
+	public final fun getIssRequired ()Z
+	public final fun getMaxAge ()Ljava/lang/Long;
+	public final fun getNonce ()Ljava/lang/String;
+	public final fun getRedirectUri ()Ljava/lang/String;
+	public final fun getScopes ()Ljava/util/List;
+	public final fun getState ()Ljava/lang/String;
+	public final fun isExpired (J)Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class versola/oauth/core/PendingAuthorizationRequest$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lversola/oauth/core/PendingAuthorizationRequest$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lversola/oauth/core/PendingAuthorizationRequest;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lversola/oauth/core/PendingAuthorizationRequest;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class versola/oauth/core/PendingAuthorizationRequest$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public abstract interface class versola/oauth/core/PendingAuthorizationStore {
+	public abstract fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun load (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun save (Lversola/oauth/core/PendingAuthorizationRequest;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class versola/oauth/core/ProviderMetadata {
+	public static final field Companion Lversola/oauth/core/ProviderMetadata$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;ZLversola/oauth/core/MtlsEndpointAliases;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;ZLversola/oauth/core/MtlsEndpointAliases;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component10 ()Ljava/util/List;
+	public final fun component11 ()Ljava/util/List;
+	public final fun component12 ()Ljava/util/List;
+	public final fun component13 ()Z
+	public final fun component14 ()Lversola/oauth/core/MtlsEndpointAliases;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun component3 ()Ljava/lang/String;
+	public final fun component4 ()Ljava/lang/String;
+	public final fun component5 ()Ljava/lang/String;
+	public final fun component6 ()Ljava/lang/String;
+	public final fun component7 ()Ljava/lang/String;
+	public final fun component8 ()Ljava/util/List;
+	public final fun component9 ()Ljava/util/List;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;ZLversola/oauth/core/MtlsEndpointAliases;)Lversola/oauth/core/ProviderMetadata;
+	public static synthetic fun copy$default (Lversola/oauth/core/ProviderMetadata;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;Ljava/util/List;ZLversola/oauth/core/MtlsEndpointAliases;ILjava/lang/Object;)Lversola/oauth/core/ProviderMetadata;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAuthorizationEndpoint ()Ljava/lang/String;
+	public final fun getAuthorizationResponseIssParameterSupported ()Z
+	public final fun getCodeChallengeMethodsSupported ()Ljava/util/List;
+	public final fun getDpopSigningAlgValuesSupported ()Ljava/util/List;
+	public final fun getEndSessionEndpoint ()Ljava/lang/String;
+	public final fun getGrantTypesSupported ()Ljava/util/List;
+	public final fun getIssuer ()Ljava/lang/String;
+	public final fun getJwksUri ()Ljava/lang/String;
+	public final fun getMtlsEndpointAliases ()Lversola/oauth/core/MtlsEndpointAliases;
+	public final fun getResponseTypesSupported ()Ljava/util/List;
+	public final fun getRevocationEndpoint ()Ljava/lang/String;
+	public final fun getScopesSupported ()Ljava/util/List;
+	public final fun getSupportsDpop ()Z
+	public final fun getTokenEndpoint ()Ljava/lang/String;
+	public final fun getUserinfoEndpoint ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final synthetic class versola/oauth/core/ProviderMetadata$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lversola/oauth/core/ProviderMetadata$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lversola/oauth/core/ProviderMetadata;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lversola/oauth/core/ProviderMetadata;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class versola/oauth/core/ProviderMetadata$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public abstract interface class versola/oauth/core/ProviderMetadataCache {
+	public abstract fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun load (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun save (Lversola/oauth/core/ProviderMetadata;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class versola/oauth/core/RedirectUri {
+	public static final field Companion Lversola/oauth/core/RedirectUri$Companion;
+	public final fun getKind ()Lversola/oauth/core/RedirectUriKind;
+	public final fun getValue ()Ljava/lang/String;
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/RedirectUri$Companion {
+}
+
+public final class versola/oauth/core/RedirectUriKind : java/lang/Enum {
+	public static final field AppLink Lversola/oauth/core/RedirectUriKind;
+	public static final field CustomScheme Lversola/oauth/core/RedirectUriKind;
+	public static final field Loopback Lversola/oauth/core/RedirectUriKind;
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lversola/oauth/core/RedirectUriKind;
+	public static fun values ()[Lversola/oauth/core/RedirectUriKind;
+}
+
+public final class versola/oauth/core/RetryPolicy {
+	public static final field Companion Lversola/oauth/core/RetryPolicy$Companion;
+	public fun <init> ()V
+	public synthetic fun <init> (IIJDJJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (IIJDJJLkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getBackoffMultiplier ()D
+	public final fun getInitialBackoff-UwyO8pc ()J
+	public final fun getMaxAttemptsPerOrigin ()I
+	public final fun getMaxBackoff-UwyO8pc ()J
+	public final fun getMaxTotalAttempts ()I
+	public final fun getTotalBudget-UwyO8pc ()J
+}
+
+public final class versola/oauth/core/RetryPolicy$Companion {
+	public final fun getConservative ()Lversola/oauth/core/RetryPolicy;
+	public final fun getDefault ()Lversola/oauth/core/RetryPolicy;
+	public final fun getPatient ()Lversola/oauth/core/RetryPolicy;
+}
+
+public final class versola/oauth/core/SessionCoordinator : versola/oauth/core/AccessTokenSource {
+	public fun <init> (Lversola/oauth/core/AuthorizationFlow;Lversola/oauth/core/TokenClient;Lversola/oauth/core/CredentialStore;Lversola/oauth/core/RetryPolicy;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function1;Lversola/oauth/core/VersolaLogger;)V
+	public synthetic fun <init> (Lversola/oauth/core/AuthorizationFlow;Lversola/oauth/core/TokenClient;Lversola/oauth/core/CredentialStore;Lversola/oauth/core/RetryPolicy;Lkotlin/jvm/functions/Function0;Lkotlin/jvm/functions/Function1;Lversola/oauth/core/VersolaLogger;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun accessToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun currentAccessToken ()Lversola/oauth/core/TokenResponse;
+	public final fun getSessionState ()Lkotlinx/coroutines/flow/Flow;
+	public final fun login (Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun login$default (Lversola/oauth/core/SessionCoordinator;Ljava/util/Set;Ljava/util/List;Ljava/lang/Long;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun logout (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public final fun refresh (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun renewAccessToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun stepUpRequired ()V
+}
+
+public abstract interface class versola/oauth/core/SessionState {
+}
+
+public final class versola/oauth/core/SessionState$Authenticated : versola/oauth/core/SessionState {
+	public static final field INSTANCE Lversola/oauth/core/SessionState$Authenticated;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/SessionState$Authorizing : versola/oauth/core/SessionState {
+	public static final field INSTANCE Lversola/oauth/core/SessionState$Authorizing;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/SessionState$Locked : versola/oauth/core/SessionState {
+	public static final field INSTANCE Lversola/oauth/core/SessionState$Locked;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/SessionState$LoggingOut : versola/oauth/core/SessionState {
+	public static final field INSTANCE Lversola/oauth/core/SessionState$LoggingOut;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/SessionState$Refreshing : versola/oauth/core/SessionState {
+	public static final field INSTANCE Lversola/oauth/core/SessionState$Refreshing;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/SessionState$StepUpRequired : versola/oauth/core/SessionState {
+	public static final field INSTANCE Lversola/oauth/core/SessionState$StepUpRequired;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/SessionState$Unauthenticated : versola/oauth/core/SessionState {
+	public static final field INSTANCE Lversola/oauth/core/SessionState$Unauthenticated;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/StartedAuthorization {
+	public fun <init> (Lversola/oauth/core/PendingAuthorizationRequest;Ljava/lang/String;)V
+	public final fun getBrowserUri ()Ljava/lang/String;
+	public final fun getPending ()Lversola/oauth/core/PendingAuthorizationRequest;
+}
+
+public abstract class versola/oauth/core/TokenBinding {
+}
+
+public final class versola/oauth/core/TokenBinding$Bearer : versola/oauth/core/TokenBinding {
+	public static final field INSTANCE Lversola/oauth/core/TokenBinding$Bearer;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/TokenBinding$Dpop : versola/oauth/core/TokenBinding {
+	public fun <init> ()V
+	public fun <init> (Z)V
+	public synthetic fun <init> (ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Z
+	public final fun copy (Z)Lversola/oauth/core/TokenBinding$Dpop;
+	public static synthetic fun copy$default (Lversola/oauth/core/TokenBinding$Dpop;ZILjava/lang/Object;)Lversola/oauth/core/TokenBinding$Dpop;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getRequireHardware ()Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract interface class versola/oauth/core/TokenClient {
+	public abstract fun exchange (Lversola/oauth/core/AuthorizationGrant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun refresh ([BLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun revoke ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class versola/oauth/core/TokenClientKt {
+	public static final fun acceptIssued (Lversola/oauth/core/TokenBinding;Lversola/oauth/core/TokenResponse;)V
+	public static final fun originOf (Ljava/lang/String;)Ljava/lang/String;
+	public static final fun wwwAuthenticateError (Ljava/util/List;)Ljava/lang/String;
+}
+
+public final class versola/oauth/core/TokenErrorPayload {
+	public static final field Companion Lversola/oauth/core/TokenErrorPayload$Companion;
+	public fun <init> ()V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getError ()Ljava/lang/String;
+	public final fun getErrorDescription ()Ljava/lang/String;
+}
+
+public final synthetic class versola/oauth/core/TokenErrorPayload$$serializer : kotlinx/serialization/internal/GeneratedSerializer {
+	public static final field INSTANCE Lversola/oauth/core/TokenErrorPayload$$serializer;
+	public final fun childSerializers ()[Lkotlinx/serialization/KSerializer;
+	public synthetic fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Ljava/lang/Object;
+	public final fun deserialize (Lkotlinx/serialization/encoding/Decoder;)Lversola/oauth/core/TokenErrorPayload;
+	public final fun getDescriptor ()Lkotlinx/serialization/descriptors/SerialDescriptor;
+	public synthetic fun serialize (Lkotlinx/serialization/encoding/Encoder;Ljava/lang/Object;)V
+	public final fun serialize (Lkotlinx/serialization/encoding/Encoder;Lversola/oauth/core/TokenErrorPayload;)V
+	public fun typeParametersSerializers ()[Lkotlinx/serialization/KSerializer;
+}
+
+public final class versola/oauth/core/TokenErrorPayload$Companion {
+	public final fun serializer ()Lkotlinx/serialization/KSerializer;
+}
+
+public final class versola/oauth/core/TokenRequestExecutor {
+	public fun <init> (Lokhttp3/OkHttpClient;Lversola/oauth/core/DpopProofSource;)V
+	public final fun execute (Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun execute$default (Lversola/oauth/core/TokenRequestExecutor;Ljava/lang/String;[BLjava/lang/String;Ljava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun revoke (Ljava/lang/String;[BLjava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun revoke$default (Lversola/oauth/core/TokenRequestExecutor;Ljava/lang/String;[BLjava/lang/String;Lkotlin/jvm/functions/Function1;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+}
+
+public final class versola/oauth/core/TokenResponse {
+	public final fun getAccessToken ()Ljava/lang/String;
+	public final fun getExpiresInSeconds ()J
+	public final fun getIdToken ()Ljava/lang/String;
+	public final fun getScopes ()Ljava/util/Set;
+	public final fun getTokenType ()Ljava/lang/String;
+	public final fun isDpopBound ()Z
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/UnlockPolicy : java/lang/Enum {
+	public static final field Companion Lversola/oauth/core/UnlockPolicy$Companion;
+	public static final field None Lversola/oauth/core/UnlockPolicy;
+	public static final field OnAppUnlock Lversola/oauth/core/UnlockPolicy;
+	public static final field UNLOCK_WINDOW_SECONDS I
+	public static fun getEntries ()Lkotlin/enums/EnumEntries;
+	public static fun valueOf (Ljava/lang/String;)Lversola/oauth/core/UnlockPolicy;
+	public static fun values ()[Lversola/oauth/core/UnlockPolicy;
+}
+
+public final class versola/oauth/core/UnlockPolicy$Companion {
+}
+
+public final class versola/oauth/core/VersolaConfiguration {
+	public static final field Companion Lversola/oauth/core/VersolaConfiguration$Companion;
+	public final fun getClientId ()Ljava/lang/String;
+	public final fun getIssuer ()Ljava/lang/String;
+	public final fun getPostLogoutRedirectUri ()Lversola/oauth/core/RedirectUri;
+	public final fun getRedirectUri ()Lversola/oauth/core/RedirectUri;
+	public final fun getRedirectUriWarning ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/VersolaConfiguration$Companion {
+	public final fun create (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;)Lversola/oauth/core/VersolaConfiguration;
+	public static synthetic fun create$default (Lversola/oauth/core/VersolaConfiguration$Companion;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lversola/oauth/core/VersolaConfiguration;
+}
+
+public abstract class versola/oauth/core/VersolaError : java/lang/Exception {
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/Throwable;Lkotlin/jvm/internal/DefaultConstructorMarker;)V
+}
+
+public final class versola/oauth/core/VersolaError$Configuration : versola/oauth/core/VersolaError {
+	public fun <init> (Lversola/oauth/core/VersolaError$Configuration$Detail;Ljava/lang/Throwable;)V
+	public synthetic fun <init> (Lversola/oauth/core/VersolaError$Configuration$Detail;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getDetail ()Lversola/oauth/core/VersolaError$Configuration$Detail;
+}
+
+public abstract interface class versola/oauth/core/VersolaError$Configuration$Detail {
+}
+
+public final class versola/oauth/core/VersolaError$Configuration$Detail$AuthorizationRejected : versola/oauth/core/VersolaError$Configuration$Detail {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lversola/oauth/core/VersolaError$Configuration$Detail$AuthorizationRejected;
+	public static synthetic fun copy$default (Lversola/oauth/core/VersolaError$Configuration$Detail$AuthorizationRejected;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lversola/oauth/core/VersolaError$Configuration$Detail$AuthorizationRejected;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCode ()Ljava/lang/String;
+	public final fun getDescription ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/VersolaError$Configuration$Detail$DiscoveryFieldMissing : versola/oauth/core/VersolaError$Configuration$Detail {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lversola/oauth/core/VersolaError$Configuration$Detail$DiscoveryFieldMissing;
+	public static synthetic fun copy$default (Lversola/oauth/core/VersolaError$Configuration$Detail$DiscoveryFieldMissing;Ljava/lang/String;ILjava/lang/Object;)Lversola/oauth/core/VersolaError$Configuration$Detail$DiscoveryFieldMissing;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getField ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/VersolaError$Configuration$Detail$DiscoveryIssuerMismatch : versola/oauth/core/VersolaError$Configuration$Detail {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lversola/oauth/core/VersolaError$Configuration$Detail$DiscoveryIssuerMismatch;
+	public static synthetic fun copy$default (Lversola/oauth/core/VersolaError$Configuration$Detail$DiscoveryIssuerMismatch;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lversola/oauth/core/VersolaError$Configuration$Detail$DiscoveryIssuerMismatch;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAdvertised ()Ljava/lang/String;
+	public final fun getConfigured ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/VersolaError$Configuration$Detail$DiscoveryMalformed : versola/oauth/core/VersolaError$Configuration$Detail {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lversola/oauth/core/VersolaError$Configuration$Detail$DiscoveryMalformed;
+	public static synthetic fun copy$default (Lversola/oauth/core/VersolaError$Configuration$Detail$DiscoveryMalformed;Ljava/lang/String;ILjava/lang/Object;)Lversola/oauth/core/VersolaError$Configuration$Detail$DiscoveryMalformed;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDetail ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public abstract class versola/oauth/core/VersolaError$Configuration$Detail$Extension : versola/oauth/core/VersolaError$Configuration$Detail {
+	public fun <init> ()V
+}
+
+public final class versola/oauth/core/VersolaError$Configuration$Detail$HardwareBindingUnavailable : versola/oauth/core/VersolaError$Configuration$Detail {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lversola/oauth/core/VersolaError$Configuration$Detail$HardwareBindingUnavailable;
+	public static synthetic fun copy$default (Lversola/oauth/core/VersolaError$Configuration$Detail$HardwareBindingUnavailable;Ljava/lang/String;ILjava/lang/Object;)Lversola/oauth/core/VersolaError$Configuration$Detail$HardwareBindingUnavailable;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDetail ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/VersolaError$Configuration$Detail$InvalidConfiguration : versola/oauth/core/VersolaError$Configuration$Detail {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lversola/oauth/core/VersolaError$Configuration$Detail$InvalidConfiguration;
+	public static synthetic fun copy$default (Lversola/oauth/core/VersolaError$Configuration$Detail$InvalidConfiguration;Ljava/lang/String;ILjava/lang/Object;)Lversola/oauth/core/VersolaError$Configuration$Detail$InvalidConfiguration;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDetail ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/VersolaError$Configuration$Detail$IssuerMismatch : versola/oauth/core/VersolaError$Configuration$Detail {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lversola/oauth/core/VersolaError$Configuration$Detail$IssuerMismatch;
+	public static synthetic fun copy$default (Lversola/oauth/core/VersolaError$Configuration$Detail$IssuerMismatch;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lversola/oauth/core/VersolaError$Configuration$Detail$IssuerMismatch;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getExpected ()Ljava/lang/String;
+	public final fun getReceived ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/VersolaError$Configuration$Detail$MalformedAuthorizationResponse : versola/oauth/core/VersolaError$Configuration$Detail {
+	public static final field INSTANCE Lversola/oauth/core/VersolaError$Configuration$Detail$MalformedAuthorizationResponse;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/VersolaError$Configuration$Detail$NoBrowserAvailable : versola/oauth/core/VersolaError$Configuration$Detail {
+	public static final field INSTANCE Lversola/oauth/core/VersolaError$Configuration$Detail$NoBrowserAvailable;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/VersolaError$Configuration$Detail$StateMismatch : versola/oauth/core/VersolaError$Configuration$Detail {
+	public static final field INSTANCE Lversola/oauth/core/VersolaError$Configuration$Detail$StateMismatch;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/VersolaError$Configuration$Detail$TokenRequestRejected : versola/oauth/core/VersolaError$Configuration$Detail {
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;Ljava/lang/String;)Lversola/oauth/core/VersolaError$Configuration$Detail$TokenRequestRejected;
+	public static synthetic fun copy$default (Lversola/oauth/core/VersolaError$Configuration$Detail$TokenRequestRejected;Ljava/lang/String;Ljava/lang/String;ILjava/lang/Object;)Lversola/oauth/core/VersolaError$Configuration$Detail$TokenRequestRejected;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCode ()Ljava/lang/String;
+	public final fun getDescription ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/VersolaError$Configuration$Detail$TokenResponseMalformed : versola/oauth/core/VersolaError$Configuration$Detail {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lversola/oauth/core/VersolaError$Configuration$Detail$TokenResponseMalformed;
+	public static synthetic fun copy$default (Lversola/oauth/core/VersolaError$Configuration$Detail$TokenResponseMalformed;Ljava/lang/String;ILjava/lang/Object;)Lversola/oauth/core/VersolaError$Configuration$Detail$TokenResponseMalformed;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getDetail ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/VersolaError$Reauthenticate : versola/oauth/core/VersolaError {
+	public fun <init> (Lversola/oauth/core/VersolaError$Reauthenticate$Reason;)V
+	public final fun getReason ()Lversola/oauth/core/VersolaError$Reauthenticate$Reason;
+}
+
+public abstract interface class versola/oauth/core/VersolaError$Reauthenticate$Reason {
+}
+
+public final class versola/oauth/core/VersolaError$Reauthenticate$Reason$AuthorizationDenied : versola/oauth/core/VersolaError$Reauthenticate$Reason {
+	public static final field INSTANCE Lversola/oauth/core/VersolaError$Reauthenticate$Reason$AuthorizationDenied;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/VersolaError$Reauthenticate$Reason$CredentialsInvalidated : versola/oauth/core/VersolaError$Reauthenticate$Reason {
+	public static final field INSTANCE Lversola/oauth/core/VersolaError$Reauthenticate$Reason$CredentialsInvalidated;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/VersolaError$Reauthenticate$Reason$GrantRejected : versola/oauth/core/VersolaError$Reauthenticate$Reason {
+	public static final field INSTANCE Lversola/oauth/core/VersolaError$Reauthenticate$Reason$GrantRejected;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/VersolaError$Reauthenticate$Reason$InteractionRequired : versola/oauth/core/VersolaError$Reauthenticate$Reason {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lversola/oauth/core/VersolaError$Reauthenticate$Reason$InteractionRequired;
+	public static synthetic fun copy$default (Lversola/oauth/core/VersolaError$Reauthenticate$Reason$InteractionRequired;Ljava/lang/String;ILjava/lang/Object;)Lversola/oauth/core/VersolaError$Reauthenticate$Reason$InteractionRequired;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getCode ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/VersolaError$Reauthenticate$Reason$SessionRejected : versola/oauth/core/VersolaError$Reauthenticate$Reason {
+	public static final field INSTANCE Lversola/oauth/core/VersolaError$Reauthenticate$Reason$SessionRejected;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/VersolaError$Recoverable : versola/oauth/core/VersolaError {
+	public fun <init> (Lversola/oauth/core/VersolaError$Recoverable$Cause;Ljava/lang/Throwable;)V
+	public synthetic fun <init> (Lversola/oauth/core/VersolaError$Recoverable$Cause;Ljava/lang/Throwable;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun getReason ()Lversola/oauth/core/VersolaError$Recoverable$Cause;
+}
+
+public abstract interface class versola/oauth/core/VersolaError$Recoverable$Cause {
+}
+
+public final class versola/oauth/core/VersolaError$Recoverable$Cause$Network : versola/oauth/core/VersolaError$Recoverable$Cause {
+	public fun <init> (Ljava/lang/String;IJ)V
+	public synthetic fun <init> (Ljava/lang/String;IJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun component2 ()I
+	public final fun component3 ()J
+	public final fun copy (Ljava/lang/String;IJ)Lversola/oauth/core/VersolaError$Recoverable$Cause$Network;
+	public static synthetic fun copy$default (Lversola/oauth/core/VersolaError$Recoverable$Cause$Network;Ljava/lang/String;IJILjava/lang/Object;)Lversola/oauth/core/VersolaError$Recoverable$Cause$Network;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttempts ()I
+	public final fun getDetail ()Ljava/lang/String;
+	public final fun getElapsedMillis ()J
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/VersolaError$Recoverable$Cause$NonceLoop : versola/oauth/core/VersolaError$Recoverable$Cause {
+	public fun <init> (Ljava/lang/String;)V
+	public final fun component1 ()Ljava/lang/String;
+	public final fun copy (Ljava/lang/String;)Lversola/oauth/core/VersolaError$Recoverable$Cause$NonceLoop;
+	public static synthetic fun copy$default (Lversola/oauth/core/VersolaError$Recoverable$Cause$NonceLoop;Ljava/lang/String;ILjava/lang/Object;)Lversola/oauth/core/VersolaError$Recoverable$Cause$NonceLoop;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getOrigin ()Ljava/lang/String;
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/VersolaError$Recoverable$Cause$PendingRequestExpired : versola/oauth/core/VersolaError$Recoverable$Cause {
+	public static final field INSTANCE Lversola/oauth/core/VersolaError$Recoverable$Cause$PendingRequestExpired;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/VersolaError$Recoverable$Cause$SystemCancelled : versola/oauth/core/VersolaError$Recoverable$Cause {
+	public static final field INSTANCE Lversola/oauth/core/VersolaError$Recoverable$Cause$SystemCancelled;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/VersolaError$Recoverable$Cause$UnlockRequired : versola/oauth/core/VersolaError$Recoverable$Cause {
+	public static final field INSTANCE Lversola/oauth/core/VersolaError$Recoverable$Cause$UnlockRequired;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/VersolaError$Recoverable$Cause$UserCancelled : versola/oauth/core/VersolaError$Recoverable$Cause {
+	public static final field INSTANCE Lversola/oauth/core/VersolaError$Recoverable$Cause$UserCancelled;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
+public final class versola/oauth/core/VersolaError$StepUp : versola/oauth/core/VersolaError {
+	public fun <init> (Ljava/util/List;Ljava/lang/Long;)V
+	public final fun getAcrValues ()Ljava/util/List;
+	public final fun getMaxAge ()Ljava/lang/Long;
+}
+
+public abstract interface annotation class versola/oauth/core/VersolaInternalApi : java/lang/annotation/Annotation {
+}
+
+public abstract interface class versola/oauth/core/VersolaLogger {
+	public abstract fun info (Ljava/lang/String;)V
+	public abstract fun warn (Ljava/lang/String;)V
+}
+

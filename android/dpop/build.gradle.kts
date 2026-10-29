@@ -8,7 +8,7 @@ plugins {
 }
 
 android {
-    namespace = "kz.versola.sdk.dpop"
+    namespace = "versola.sdk.dpop"
     compileSdk = 36
 
     defaultConfig {
@@ -33,7 +33,7 @@ kotlin {
 }
 
 dependencies {
-    api(project(":core"))
+    api(project(":oauth-core"))
 
     // Claims are built as a JsonObject rather than concatenated, so escaping is the library's
     // problem. Same artifact and pin as :core; the serialization compiler plugin is not
