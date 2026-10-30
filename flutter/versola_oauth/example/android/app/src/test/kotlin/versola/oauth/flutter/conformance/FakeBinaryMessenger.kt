@@ -3,6 +3,7 @@ package versola.oauth.flutter.conformance
 import io.flutter.plugin.common.BinaryMessenger
 import java.nio.ByteBuffer
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * The engine's end of the platform channels, with the Dart isolate left out. The plugin registers
@@ -16,6 +17,13 @@ import java.util.concurrent.ConcurrentHashMap
 class FakeBinaryMessenger : BinaryMessenger {
     private val handlers = ConcurrentHashMap<String, BinaryMessenger.BinaryMessageHandler>()
     private val listeners = ConcurrentHashMap<String, (ByteBuffer) -> Unit>()
+    private val sent = ConcurrentHashMap<String, AtomicInteger>()
+
+    /**
+     * How many messages the native side has sent on [channel], whether or not anyone listens and
+     * after a listener went away: what a test reads to see the native side, not Dart's.
+     */
+    fun sentOn(channel: String): Int = sent[channel]?.get() ?: 0
 
     /** Dart to native: [message] is handed to the handler of [channel]; [reply] gets the handler's answer. */
     fun deliver(channel: String, message: ByteBuffer, reply: (ByteBuffer?) -> Unit) {
@@ -36,6 +44,7 @@ class FakeBinaryMessenger : BinaryMessenger {
 
     override fun send(channel: String, message: ByteBuffer?) {
         val buffer = message ?: return
+        sent.computeIfAbsent(channel) { AtomicInteger() }.incrementAndGet()
         buffer.rewind()
         listeners[channel]?.invoke(buffer)
     }

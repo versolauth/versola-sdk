@@ -1,7 +1,9 @@
 package versola.oauth.flutter.conformance
 
 import io.flutter.embedding.engine.plugins.FlutterPlugin
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -97,12 +99,24 @@ abstract class BridgeConformance : ProviderConformance() {
                 entry.responseJson?.get("id_token")?.toString()?.trim('"'),
                 entry.form["code"],
                 entry.form["code_verifier"],
+                entry.form["state"],
             )
         }.filter { it.length > 8 }
         val accessTokens = transcript.entries.mapNotNull { it.responseJson?.get("access_token")?.toString()?.trim('"') }.filter { it.length > 8 }
         darts.flatMap { it.received }.forEach { value ->
             (secrets + accessTokens).forEach { secret -> assertFalse("a credential crossed the bridge: $value", value.contains(secret)) }
         }
+    }
+
+    /**
+     * How many state collections the plugin has running (its scope's live children). On Android the
+     * engine's event channel drops what a cancelled subscription's sink is sent, so the messenger
+     * cannot tell a cancelled collection from a live one; this can. It reads the plugin's private
+     * `scope`, so a rename there fails the test loudly here rather than passing it.
+     */
+    protected fun nativeStateCollections(): Int {
+        val scope = VersolaOAuthPlugin::class.java.getDeclaredField("scope").apply { isAccessible = true }.get(plugin) as CoroutineScope
+        return checkNotNull(scope.coroutineContext[Job]) { "the plugin's scope has no Job" }.children.count()
     }
 
     /** A native client and its handle, once the plugin has created it through the host API. */

@@ -43,7 +43,7 @@ class BridgeConformance: ProviderConformance {
         if provider != nil {
             OAuthHostApiSetup.setUp(binaryMessenger: messenger, api: nil)
             // Nothing credential-shaped crossed the bridge (flutter.md, "What crosses the bridge"):
-            // no refresh token, no raw ID token, no authorization code, no PKCE verifier in any
+            // no refresh token, no raw ID token, no authorization code, no PKCE verifier, no `state` in any
             // reply or event, and the access token only in the reply of accessToken().
             var secrets: [String] = []
             for entry in network.transcript {
@@ -52,6 +52,7 @@ class BridgeConformance: ProviderConformance {
                 }
                 if let code = entry.field("code") { secrets.append(code) }
                 if let verifier = entry.field("code_verifier") { secrets.append(verifier) }
+                if let state = entry.field("state") { secrets.append(state) }
             }
             for value in darts.flatMap(\.received) {
                 for secret in secrets where secret.count > 8 { XCTAssertFalse(value.contains(secret), "a credential crossed the bridge: \(value)") }

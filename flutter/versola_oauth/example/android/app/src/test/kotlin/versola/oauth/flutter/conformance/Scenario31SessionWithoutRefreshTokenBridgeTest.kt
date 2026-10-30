@@ -61,7 +61,7 @@ class Scenario31SessionWithoutRefreshTokenBridgeTest : BridgeConformance() {
     }
 
     @Test
-    fun `the authenticated client observing the expiry first surfaces SessionExpired without a refresh attempt`() {
+    fun `bridge - the session ending observed through userInfo() first surfaces SessionExpired without a refresh attempt`() {
         val bridge = bridge(clientId = Provider.NO_REFRESH_CLIENT_ID, scopes = provider.noRefreshScopes)
         bridge.dart.login().assertOk()
         val tokenPath = bridge.observe("discovery") { metadata() }.tokenEndpoint.substringAfter(proxy.origin)

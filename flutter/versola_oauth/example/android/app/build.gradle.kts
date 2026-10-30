@@ -29,10 +29,10 @@ android {
         versionName = flutter.versionName
     }
 
-    // The bridge conformance tests (src/test, README "Bridge conformance"): Robolectric unit tests
-    // that drive the plugin's host API against a real OpenID Provider. They share the Android
-    // conformance driver's support classes by source (below), so the test options are the ones of
-    // android/conformance-oauth/build.gradle.kts.
+    // The bridge conformance tests (src/test; conformance/README.md, "Through the Flutter bridge"):
+    // Robolectric unit tests that drive the plugin's host API against a real OpenID Provider. They
+    // share the Android conformance driver's support classes by source (below), so the test options
+    // are the ones of android/conformance-oauth/build.gradle.kts.
     testOptions {
         // No isIncludeAndroidResources: it would package the app's merged assets into the unit-test
         // run, and with the Flutter Gradle plugin that is an undeclared dependency on
@@ -92,6 +92,9 @@ dependencies {
     // The generic facade itself, for the driver's wiring (the opt-in create); the composite
     // build in settings.gradle.kts substitutes the repository's :oauth for these coordinates.
     testImplementation("kz.versola:oauth-android:0.1.0")
+    // The six pins below are a second copy of android/conformance-oauth/build.gradle.kts, whose
+    // support classes are compiled into this module too: keep them equal, in the same change.
+    // Dependabot watches /android only, so a bump there does not reach this file by itself.
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
     testImplementation("com.squareup.okhttp3:okhttp:5.4.0")

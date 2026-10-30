@@ -16,7 +16,7 @@ import XCTest
 /// set is not refused there: the facade demands origins of the authenticated session, not of the
 /// configuration.
 final class Scenario32ProtectedOriginsBridgeTest: BridgeConformance {
-    func test32OnlyTheConfiguredOriginWithAnyPathAndQueryCarriesAuthorization() async throws {
+    func test32BridgeTheTokenThatCrossesIsAcceptedAtTheConfiguredOriginAndTheSdkSendsNothingThereItself() async throws {
         let bridge = try await bridge()
         try ok(await bridge.dart.login())
         let accessToken = try token(await bridge.dart.accessToken())
@@ -36,7 +36,7 @@ final class Scenario32ProtectedOriginsBridgeTest: BridgeConformance {
         XCTAssertEqual(network.matching("POST", tokenPath).count, 1)
     }
 
-    func test32AnEmptyOriginSetAndANonHttpsOriginAreRefusedWithInvalidConfiguration() async throws {
+    func test32BridgeANonHttpsOriginAndAnOriginWithAPathAreRefusedAnEmptySetIsAcceptedBecauseFlutterHasNoAuthenticatedClient() async throws {
         // A non-https origin (not loopback) and an origin carrying a path are refused by create itself.
         let plain = try await dart().create(message(protectedOrigins: ["http://api.example.com"]))
         assertError(try failure(plain), .configuration, "invalidConfiguration")

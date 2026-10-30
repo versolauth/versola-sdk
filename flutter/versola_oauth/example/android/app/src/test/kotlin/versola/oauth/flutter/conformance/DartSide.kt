@@ -127,7 +127,7 @@ class DartSide(private val messenger: FakeBinaryMessenger) {
 /** One Dart subscription to the state stream. */
 class StateSubscription(
     private val messenger: FakeBinaryMessenger,
-    private val channel: String,
+    val channel: String,
     private val onEvent: (Any?) -> Unit,
 ) {
     /** The states in the order they arrived. */

@@ -20,10 +20,12 @@ import versola.oauth.flutter.SessionStateMessage
 class Scenario24GenericHappyPathBridgeTest : BridgeConformance() {
 
     @Test
-    fun `sign-in, authenticated call, userinfo and sign-out against the staged provider`() {
+    fun `bridge - sign-in, the app's own authenticated call, userinfo and sign-out against the staged provider`() {
         val bridge = bridge()
         val dart = bridge.dart
         val subscription = dart.sessionStates()
+        val sentAtSubscribe = messenger.sentOn(subscription.channel)
+        assertEquals("one state collection while a Dart subscription is open", 1, nativeStateCollections())
         // Discovery first (the one request of it; the login reuses the cached document), for the
         // paths the assertions below are keyed on.
         val metadata = bridge.observe("discovery") { metadata() }
@@ -39,6 +41,8 @@ class Scenario24GenericHappyPathBridgeTest : BridgeConformance() {
         dart.login().assertOk()
 
         assertEquals(SessionStateMessage.AUTHENTICATED, dart.sessionState())
+        // The native side sent the login's states on the event channel while the subscription was open.
+        assertTrue("states sent during login", messenger.sentOn(subscription.channel) > sentAtSubscribe)
         assertEquals(SessionStateMessage.AUTHORIZING, stateAtJwksFetch)
         val claims = checkNotNull(dart.claims()) { "claims after login" }
         assertTrue(claims.subject.isNotBlank())
@@ -122,11 +126,15 @@ class Scenario24GenericHappyPathBridgeTest : BridgeConformance() {
         Waiting.until("the stream delivers the signed-out state") { subscription.states.lastOrNull() == SessionStateMessage.UNAUTHENTICATED && SessionStateMessage.AUTHENTICATED in subscription.states }
         assertEquals(SessionStateMessage.UNAUTHENTICATED, subscription.states.first())
         assertTrue(subscription.states.indexOf(SessionStateMessage.AUTHENTICATED) > 0)
-        // Cancelling the Dart subscription ends the native collection: a later state change is not delivered.
+        // Cancelling the Dart subscription ends the native collection (flutter.md). Two observations,
+        // because each alone can be fooled: the plugin has no collection left running, and the native
+        // side sends nothing more on the channel across the next login's state changes. The test's own
+        // listener is gone either way, so what is counted is the native side's sends, not Dart's receipts.
         subscription.cancel()
-        val delivered = subscription.states.size
+        assertEquals("state collections after cancel", 0, nativeStateCollections())
+        val sentAtCancel = messenger.sentOn(subscription.channel)
         dart.login().assertOk()
         assertEquals(SessionStateMessage.AUTHENTICATED, dart.sessionState())
-        assertEquals(delivered, subscription.states.size)
+        assertEquals("messages sent on the channel after cancel", sentAtCancel, messenger.sentOn(subscription.channel))
     }
 }

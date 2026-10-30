@@ -12,10 +12,11 @@ import XCTest
 /// and the half that asserted the session's origin matching has no bridge equivalent
 /// (`spec/oauth-sdk-api.md` section 10).
 final class Scenario24GenericHappyPathBridgeTest: BridgeConformance {
-    func testSignInAuthenticatedCallUserInfoAndSignOutAgainstTheStagedProvider() async throws {
+    func testBridgeSignInTheAppsOwnAuthenticatedCallUserInfoAndSignOutAgainstTheStagedProvider() async throws {
         let bridge = try await bridge()
         let dart = bridge.dart
         let subscription = try await dart.sessionStates()
+        let sentAtSubscribe = messenger.sentOn(subscription.channel)
         // Discovery first (the one request of it; the login reuses the cached document), for
         // the paths the assertions below are keyed on.
         let metadata = try await bridge.native.metadata()
@@ -33,6 +34,8 @@ final class Scenario24GenericHappyPathBridgeTest: BridgeConformance {
 
         let state = try await dart.sessionState()
         XCTAssertEqual(state, .authenticated)
+        // The native side sent the login's states on the event channel while the subscription was open.
+        XCTAssertGreaterThan(messenger.sentOn(subscription.channel), sentAtSubscribe, "states sent during login")
         XCTAssertEqual(stateAtJwksFetch.withLock { $0 }, .authorizing)
         let maybeClaims = try await dart.claims()
         let claims = try XCTUnwrap(maybeClaims)
@@ -117,12 +120,14 @@ final class Scenario24GenericHappyPathBridgeTest: BridgeConformance {
         try await until("the stream delivers the signed-out state") { subscription.states.last == .unauthenticated && subscription.states.contains(.authenticated) }
         XCTAssertEqual(subscription.states.first, .unauthenticated)
         XCTAssertGreaterThan(try XCTUnwrap(subscription.states.firstIndex(of: .authenticated)), 0)
-        // Cancelling the Dart subscription ends the native consumption: a later state change is not delivered.
+        // Cancelling the Dart subscription ends the native consumption (flutter.md). The test's own
+        // listener is gone either way, so what is counted is the native side's sends on the channel,
+        // not Dart's receipts: nothing more is sent across the next login's state changes.
         try await subscription.cancel()
-        let delivered = subscription.states.count
+        let sentAtCancel = messenger.sentOn(subscription.channel)
         try ok(await dart.login())
         let last = try await dart.sessionState()
         XCTAssertEqual(last, .authenticated)
-        XCTAssertEqual(subscription.states.count, delivered)
+        XCTAssertEqual(messenger.sentOn(subscription.channel), sentAtCancel, "messages sent on the channel after cancel")
     }
 }

@@ -21,7 +21,7 @@ import versola.oauth.flutter.ErrorCategoryMessage
 class Scenario32ProtectedOriginsBridgeTest : BridgeConformance() {
 
     @Test
-    fun `only the configured origin, with any path and query, carries Authorization`() {
+    fun `bridge - the token that crosses is accepted at the configured origin and the SDK sends nothing there itself`() {
         val bridge = bridge()
         bridge.dart.login().assertOk()
         val token = bridge.dart.accessToken().token()
@@ -43,7 +43,7 @@ class Scenario32ProtectedOriginsBridgeTest : BridgeConformance() {
     }
 
     @Test
-    fun `an empty origin set and a non-https origin are refused with InvalidConfiguration`() {
+    fun `bridge - a non-https origin and an origin with a path are refused, an empty set is accepted because Flutter has no authenticated client`() {
         // A non-https origin (not loopback) and an origin carrying a path are refused by create itself.
         val plain = dart().create(message(protectedOrigins = setOf("http://api.example.com"))).failure()
         assertError(plain, ErrorCategoryMessage.CONFIGURATION, "invalidConfiguration")

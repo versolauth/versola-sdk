@@ -1,3 +1,8 @@
+// A file added to or removed from this directory is also added to or removed from the RunnerTests
+// target of the Flutter example (flutter/versola_oauth/example/ios/Runner.xcodeproj), which lists the
+// driver's support files by name; the Scenario* files stay out of it. Android's example picks the
+// directory up by itself. conformance/README.md, "Through the Flutter bridge".
+
 import Foundation
 import OAuthCore
 import os

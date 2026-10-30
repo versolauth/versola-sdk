@@ -48,7 +48,6 @@ object Waiting {
 
     /** Waits until [condition] holds, draining the main looper meanwhile. */
     fun until(what: String, timeout: Duration = 30.seconds, condition: () -> Boolean) {
-        val done = CompletableFuture<Unit>()
         val deadline = System.nanoTime() + timeout.inWholeNanoseconds
         while (!condition()) {
             if (onMainThread) shadowOf(Looper.getMainLooper()).idle()
@@ -56,7 +55,6 @@ object Waiting {
             if (System.nanoTime() > deadline) throw AssertionError("timed out after $timeout waiting until $what")
             LockSupport.parkNanos(500_000)
         }
-        done.complete(Unit)
     }
 
     /**

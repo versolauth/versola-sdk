@@ -56,7 +56,7 @@ final class Scenario31SessionWithoutRefreshTokenBridgeTest: BridgeConformance {
         XCTAssertFalse(network.transcript.contains { $0.url.hasPrefix(metadata.authorizationEndpoint) })
     }
 
-    func test31TheAuthenticatedSessionObservingTheExpiryFirstSurfacesSessionExpiredWithoutARefreshAttempt() async throws {
+    func test31BridgeTheSessionEndingObservedThroughUserInfoFirstSurfacesSessionExpiredWithoutARefreshAttempt() async throws {
         let bridge = try await bridge(clientId: Provider.noRefreshClientId, scopes: provider.noRefreshScopes)
         try ok(await bridge.dart.login())
         let tokenPath = path(try await bridge.native.metadata().tokenEndpoint)

@@ -10,8 +10,11 @@ import UIKit
 ///
 /// `send` is the other direction, native to Dart: an event channel's success envelopes arrive
 /// there and go to whoever `listen`ed on that channel name.
+// `@unchecked Sendable` because the protocol is an Objective-C one on an `NSObject` subclass, so the
+// compiler cannot see that every stored property below is only touched under `lock`.
 final class FakeMessenger: NSObject, FlutterBinaryMessenger, @unchecked Sendable {
     private let lock = NSLock()
+    private var sent: [String: Int] = [:]
     private var handlers: [String: FlutterBinaryMessageHandler] = [:]
     private var listeners: [String: @Sendable (Data) -> Void] = [:]
 
@@ -28,12 +31,18 @@ final class FakeMessenger: NSObject, FlutterBinaryMessenger, @unchecked Sendable
         lock.withLock { listeners[channel] = listener }
     }
 
+    /// How many messages the native side has sent on `channel`, whether or not anyone listens and
+    /// after a listener went away: what a test reads to see the native side, not Dart's.
+    func sentOn(_ channel: String) -> Int { lock.withLock { sent[channel] ?? 0 } }
+
     func stopListening(_ channel: String) {
         lock.withLock { _ = listeners.removeValue(forKey: channel) }
     }
 
     func send(onChannel channel: String, message: Data?) {
-        guard let message, let listener = lock.withLock({ listeners[channel] }) else { return }
+        guard let message else { return }
+        lock.withLock { sent[channel, default: 0] += 1 }
+        guard let listener = lock.withLock({ listeners[channel] }) else { return }
         listener(message)
     }
 

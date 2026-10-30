@@ -31,18 +31,24 @@ struct BridgeFailure: Error, CustomStringConvertible {
 ///
 /// One instance per client handle. Everything that came back, replies and events alike, is kept
 /// in `received` so a test can assert that nothing credential-shaped crossed the bridge.
-final class DartSide: @unchecked Sendable {
+final class DartSide: Sendable {
+    private struct State: Sendable {
+        /// The handle `create` answered with: native chooses it, Dart derives nothing. Empty until a `create` succeeded.
+        var handle = ""
+        var log: [String] = []
+    }
+
     private let messenger: FakeMessenger
-    /// The handle `create` answered with: native chooses it, Dart derives nothing. Empty until a `create` succeeded.
-    private(set) var handle = ""
-    private let log = OSAllocatedUnfairLock(initialState: [String]())
+    private let state = OSAllocatedUnfairLock(initialState: State())
 
     init(_ messenger: FakeMessenger) {
         self.messenger = messenger
     }
 
+    var handle: String { state.withLock { $0.handle } }
+
     /// `description` of every decoded reply and event except the access token's own reply.
-    var received: [String] { log.withLock { $0 } }
+    var received: [String] { state.withLock { $0.log } }
 
     private func call(_ method: String, _ arguments: [Any?]) async throws -> Any? {
         let channel = "dev.flutter.pigeon.versola_oauth.OAuthHostApi.\(method)"
@@ -61,13 +67,13 @@ final class DartSide: @unchecked Sendable {
     }
 
     private func remember<T>(_ method: String, _ value: T) -> T {
-        if method != "accessToken" { log.withLock { $0.append(String(describing: value)) } }
+        if method != "accessToken" { state.withLock { $0.log.append(String(describing: value)) } }
         return value
     }
 
     func create(_ configuration: ConfigurationMessage) async throws -> CreateResult {
         let result = remember("create", try await call("create", [configuration]) as! CreateResult)
-        if let ok = result as? CreateOk { handle = ok.handle }
+        if let ok = result as? CreateOk { state.withLock { $0.handle = ok.handle } }
         return result
     }
 
@@ -110,8 +116,8 @@ final class DartSide: @unchecked Sendable {
     /// `listen` method call on the event channel the plugin registered for this handle) and
     /// collects what the plugin sends until `cancel()`.
     func sessionStates() async throws -> StateSubscription {
-        try await StateSubscription(messenger, channel: "dev.flutter.pigeon.versola_oauth.SessionStateEvents.sessionStates.\(handle)") { [log] event in
-            log.withLock { $0.append(String(describing: event)) }
+        try await StateSubscription(messenger, channel: "dev.flutter.pigeon.versola_oauth.SessionStateEvents.sessionStates.\(handle)") { [state] event in
+            state.withLock { $0.log.append(String(describing: event)) }
         }
     }
 
@@ -122,9 +128,9 @@ final class DartSide: @unchecked Sendable {
 }
 
 /// One Dart subscription to the state stream.
-final class StateSubscription: @unchecked Sendable {
+final class StateSubscription: Sendable {
     private let messenger: FakeMessenger
-    private let channel: String
+    let channel: String
     private let seen = OSAllocatedUnfairLock(initialState: [SessionStateMessage]())
 
     /// The states in the order they arrived.
