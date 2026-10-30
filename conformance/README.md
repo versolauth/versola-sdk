@@ -321,8 +321,9 @@ What each test asserts, and runs:
   kept and the sign-in completes.
 - **Process death with the browser open** (scenario 12): on Android the process is killed with
   the tab open (`run-as ... kill -9`), the sign-in is finished in the tab, and the redirect
-  cold-starts the app, which observes `Authorizing` and never `Unauthenticated`. On iOS the app is
-  terminated with the sheet open and a redirect is opened against it by the system.
+  cold-starts the app, which observes `Authorizing` and never `Unauthenticated`, and the sign-in
+  completes on its own (`provider keycloak`, Custom Tabs leg). On iOS the app is terminated with
+  the sheet open and a redirect is opened against it by the system.
 - **A redirect that is not the request's** (scenario 15): a redirect with a made-up `state` is
   refused as `Configuration(StateMismatch)` before any token request, on a live login (Android,
   fired at the exported redirect activity, and a genuine sign-in afterwards still works) and
@@ -330,13 +331,15 @@ What each test asserts, and runs:
 
 What it does not prove, and why (each is also a row in the PR's "Gaps left"):
 
-- **Scenario 12's last assertion, on both platforms.** The cold-started app restores
-  `Authorizing` and the redirect reaches it, but nothing there exchanges the code: on Android
-  `OAuthClient` never awaits the redirect (`VersolaAuthTabActivity`'s KDoc says so; the test that
-  would prove the fix is written and `@Ignore`d, and its failing run is in the PR); on iOS
-  `OAuthClient.resumePendingAuthorization()` discards the grant `flow.resumePendingAuthorization()`
-  returns. The iOS half could not be run with a genuine redirect: the `state` is the SDK's secret
-  and the sheet dies with the app, so the test proves delivery and refusal, not completion.
+- **Scenario 12's last assertion, on iOS, through the real browser leg.** The cold-started app
+  restores `Authorizing` and the redirect reaches it, and a redirect with a made-up `state` is
+  refused, but the test cannot deliver a genuine redirect: the `state` is the SDK's secret and the
+  sheet dies with the app, so the UI test proves delivery and refusal, not completion. Completion
+  is proven one tier down, against the same Keycloak, by `Scenario12ProcessDeathBrowserTest` in
+  `ios/Tests/OAuthConformanceTests`: a second client over the first one's stores, the redirect
+  produced by the HTTP login conversation, the restored `code_verifier` and `nonce` accepted by the
+  provider and by the ID-token check. That test replaces the system browser and the process death
+  with a second client; the pieces it does not run are the ones this tier does.
 - **Auth Tab.** The emulator's Chrome (133, the Play Store image) answers that it has no Auth Tab
   support even with its `cct-auth-tab` flag enabled, so the SDK falls back to Custom Tabs, which is
   what ran. The Auth Tab rows exist and skip by assumption when the log says so.
