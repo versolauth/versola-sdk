@@ -168,4 +168,35 @@ final class WireMappingTests: XCTestCase {
             "retry-after": "7", "www-authenticate": "Bearer realm=\"a\", DPoP algs=\"ES256\"",
         ])
     }
+
+    func testARequestReadsNoCacheAndHandlesNoCookies() throws {
+        let sent = try request().toURLRequest()
+
+        XCTAssertEqual(sent.cachePolicy, .reloadIgnoringLocalAndRemoteCacheData)
+        XCTAssertFalse(sent.httpShouldHandleCookies)
+    }
+
+    func testTheSdkSessionKeepsNothingAndTheConfigurationUsesIt() throws {
+        let configuration = NetworkSession.shared.configuration
+        XCTAssertNil(configuration.urlCache)
+        XCTAssertNil(configuration.httpCookieStorage)
+        XCTAssertNil(configuration.urlCredentialStorage)
+        XCTAssertFalse(configuration.httpShouldSetCookies)
+        XCTAssertEqual(configuration.requestCachePolicy, .reloadIgnoringLocalAndRemoteCacheData)
+
+        let message = ConfigurationMessage(
+            issuer: "https://id.example.com", clientId: "app", redirectUri: "https://app.example.com/oauth", scopes: ["openid"],
+            tokenBinding: .bearer, pushedAuthorization: .whenAdvertised, protectedOrigins: [], unlockPolicy: .none, clockSkewToleranceSeconds: 60
+        )
+        XCTAssertTrue(try message.toConfiguration().urlSession === NetworkSession.shared)
+    }
+
+    func testANonAsciiOrControlCharacterInAHeaderValueIsRefusedAsOnAndroidWithoutQuotingIt() {
+        for value in ["Bearer s3cr3t\u{e9}", "Bearer s3cr3t\u{7f}", "Bearer s3cr3t\u{1F600}"] {
+            let detail = refused(request(headers: [("Authorization", value)]))
+            XCTAssertFalse((detail ?? "").contains("s3cr3t"))
+        }
+        // Visible ASCII, space and tab are fine.
+        XCTAssertNoThrow(try request(headers: [("X-Ok", "a b\tc ~!")]).toURLRequest())
+    }
 }

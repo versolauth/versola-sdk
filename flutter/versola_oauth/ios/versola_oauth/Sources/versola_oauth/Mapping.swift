@@ -52,9 +52,28 @@ extension ConfigurationMessage {
                 )
             } ?? .default,
             unlockPolicy: unlockPolicy == .none ? .none : .onAppUnlock,
-            clockSkewTolerance: TimeInterval(clockSkewToleranceSeconds)
+            clockSkewTolerance: TimeInterval(clockSkewToleranceSeconds),
+            urlSession: NetworkSession.shared
         )
     }
+}
+
+/// The session the SDK's own requests (discovery, token, UserInfo and the app's, through
+/// `httpClient()`) go through. The SDK's default is `URLSession.shared`, whose disk cache would
+/// keep responses to requests that carried a credential and whose cookie jar is shared with the
+/// rest of the app; Android's client and `dart:io` have neither. This one keeps nothing: no cache,
+/// no cookies, no credential storage, and no cached answer is ever used in place of a request.
+enum NetworkSession {
+    static let shared: URLSession = {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        configuration.httpCookieStorage = nil
+        configuration.httpShouldSetCookies = false
+        configuration.httpCookieAcceptPolicy = .never
+        configuration.urlCredentialStorage = nil
+        return URLSession(configuration: configuration)
+    }()
 }
 
 extension LoginOptionsMessage {
@@ -189,12 +208,23 @@ extension HttpRequestMessage {
         if payload != nil, method == "GET" || method == "HEAD" { throw invalid() }
         var request = URLRequest(url: parsed)
         request.httpMethod = method
+        // Nothing is read from or kept in a cache or a cookie jar: Android's OkHttp client and
+        // `dart:io` have neither, and a cached GET would be answered with no request and no DPoP
+        // proof. (What `URLSession` stores is the session's own configuration: see `NetworkSession`.)
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.httpShouldHandleCookies = false
         for header in headers {
-            guard Self.isToken(header.name), !header.value.unicodeScalars.contains(where: { $0 == "\r" || $0 == "\n" || $0 == "\0" }) else { throw invalid() }
+            guard Self.isToken(header.name), Self.isFieldValue(header.value) else { throw invalid() }
             request.addValue(header.value, forHTTPHeaderField: header.name)
         }
         request.httpBody = payload
         return request
+    }
+
+    /// Visible ASCII, space and tab, as OkHttp accepts on Android: a non-ASCII or control character
+    /// (CR, LF, NUL, DEL included) is refused on both platforms rather than sent in whatever encoding.
+    private static func isFieldValue(_ value: String) -> Bool {
+        value.unicodeScalars.allSatisfy { $0 == "\t" || (0x20...0x7E).contains($0.value) }
     }
 
     /// RFC 9110 section 5.6.2 `token`.

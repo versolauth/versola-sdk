@@ -1,4 +1,5 @@
 import Foundation
+import Network
 import OAuthCore
 import XCTest
 import os
@@ -285,5 +286,98 @@ final class Scenario32ProtectedOriginsBridgeTest: BridgeConformance {
         let failure = try XCTUnwrap(result as? HttpTransportFailure, "expected a transport failure, got \(result)")
         XCTAssertTrue(failure.exception.hasPrefix("URLError("), failure.exception)
         XCTAssertFalse("\(result)".contains("s3cr3t-path"))
+    }
+
+    // MARK: no cache and no cookie jar
+
+    /// A real HTTP server on loopback, because the URL loading system's cache and cookie handling live in
+    /// its HTTP layer: a `URLProtocol` stand-in is never asked to use either, so it cannot show their absence.
+    /// Every answer is cacheable (`public, max-age`) and sets a cookie; each request's headers are recorded.
+    final class LoopbackServer: Sendable {
+        private let listener: NWListener
+        private let seen = OSAllocatedUnfairLock(initialState: [[String: String]]())
+        let port: UInt16
+
+        init() throws {
+            listener = try NWListener(using: .tcp, on: .any)
+            let ready = DispatchSemaphore(value: 0)
+            listener.stateUpdateHandler = { if case .ready = $0 { ready.signal() } }
+            listener.newConnectionHandler = { [seen] connection in
+                connection.start(queue: .global())
+                connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { data, _, _, _ in
+                    let text = String(decoding: data ?? Data(), as: UTF8.self)
+                    var headers: [String: String] = [:]
+                    for line in text.components(separatedBy: "\r\n").dropFirst() {
+                        guard let colon = line.firstIndex(of: ":") else { continue }
+                        headers[String(line[..<colon])] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+                    }
+                    seen.withLock { $0.append(headers) }
+                    let body = "v"
+                    let reply = "HTTP/1.1 200 OK\r\nCache-Control: public, max-age=3600\r\nSet-Cookie: srv=1; Path=/\r\nContent-Type: text/plain\r\nContent-Length: \(body.utf8.count)\r\nConnection: close\r\n\r\n\(body)"
+                    connection.send(content: Data(reply.utf8), completion: .contentProcessed { _ in connection.cancel() })
+                }
+            }
+            listener.start(queue: .global())
+            guard ready.wait(timeout: .now() + 10) == .success, let bound = listener.port?.rawValue else { throw BridgeFailure("the loopback server did not start") }
+            port = bound
+        }
+
+        deinit { listener.cancel() }
+        var origin: String { "http://localhost:\(port)" }
+        var requests: [[String: String]] { seen.withLock { $0 } }
+    }
+
+    /// The driver's virtual network for everything but the loopback server, which is left to the real HTTP layer.
+    final class VirtualExceptLoopback: URLProtocol {
+        nonisolated(unsafe) static var realPort: Int?
+        override class func canInit(with request: URLRequest) -> Bool { request.url?.port != realPort }
+        override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+        override func stopLoading() {}
+        override func startLoading() { VirtualProtocols.load(self, record: true) }
+    }
+
+    func test32BridgeAnAnswerTheSessionCouldCacheIsNotServedInPlaceOfARequestAndNoCookieIsSent() async throws {
+        let server = try LoopbackServer()
+        VirtualExceptLoopback.realPort = Int(server.port)
+        // The SDK's session as `URLSession.shared` is configured by default: a cache that serves a fresh
+        // answer and a cookie jar that sends what it holds.
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [VirtualExceptLoopback.self]
+        configuration.urlCache = URLCache(memoryCapacity: 4_000_000, diskCapacity: 0)
+        configuration.requestCachePolicy = .useProtocolCachePolicy
+        configuration.httpShouldSetCookies = true
+        configuration.httpCookieAcceptPolicy = .always
+        let session = URLSession(configuration: configuration)
+        let jar = try XCTUnwrap(configuration.httpCookieStorage, "an ephemeral session has its own cookie jar")
+        jar.setCookie(try XCTUnwrap(HTTPCookie(properties: [.domain: "localhost", .path: "/", .name: "sid", .value: "from-the-jar"])))
+
+        // Control: the same session, asked directly, serves the second GET from its cache and sends the cookie.
+        // Without this the assertions below could pass because nothing here can cache or send a cookie at all.
+        let direct = URL(string: server.origin + "/direct")!
+        _ = try await session.data(from: direct)
+        _ = try await session.data(from: direct)
+        XCTAssertEqual(server.requests.count, 1, "the control session must serve its second GET from the cache")
+        XCTAssertEqual(server.requests.first?["Cookie"]?.contains("sid=from-the-jar"), true, "the control session must send its cookie: \(server.requests)")
+
+        // The SDK on that session, asked for the same kind of request through the bridge: every one is sent, none with a cookie.
+        let config = try OAuthConfiguration(
+            issuer: proxyIssuer, clientId: Provider.clientId, redirectUri: Provider.redirectUri, postLogoutRedirectUri: Provider.postLogoutRedirectUri,
+            scopes: provider.scopes, protectedOrigins: [server.origin], logger: logger, urlSession: session
+        )
+        _ = try await client(config)
+        let dart = dart()
+        let created = try await dart.create(message(protectedOrigins: [server.origin]))
+        XCTAssertNil(created as? CreateFailure)
+        try ok(await dart.login())
+        let before = server.requests.count
+
+        for _ in 0..<2 { _ = try response(await dart.httpRequest(server.origin + "/cacheable")) }
+
+        let sent = Array(server.requests.dropFirst(before))
+        XCTAssertEqual(sent.count, 2, "a GET the session could have answered from its cache is sent every time, so it carries its token and proof")
+        for request in sent {
+            XCTAssertNil(request["Cookie"], "no cookie from the jar: \(request)")
+            XCTAssertEqual(request["Authorization"]?.hasPrefix("Bearer "), true)
+        }
     }
 }

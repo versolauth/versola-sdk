@@ -194,7 +194,19 @@ public class VersolaInterceptor(
      */
     private suspend fun sign(request: Request, token: AccessToken): Request {
         val builder = request.newBuilder()
-        val bound = token.isDpopBound && dpop != null
+        // Fail closed: a key-bound token with no proof source would otherwise go out as a bare
+        // `Bearer` the resource server cannot accept, and look like a server fault. UserInfo and
+        // the iOS session refuse the same configuration the same way; nothing is sent.
+        if (token.isDpopBound && dpop == null) {
+            throw VersolaHttpException(
+                VersolaError.Configuration(
+                    VersolaError.Configuration.Detail.InvalidConfiguration(
+                        "a DPoP-bound access token needs a DPoP proof source to call a protected origin",
+                    ),
+                ),
+            )
+        }
+        val bound = token.isDpopBound
         // `header` replaces every value of the name, so an `Authorization` the app put on a
         // request to a protected origin is never sent beside ours.
         builder.header("Authorization", "${if (bound) "DPoP" else "Bearer"} ${token.value}")

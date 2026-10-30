@@ -73,6 +73,10 @@ A request to an origin outside `protectedOrigins` goes out untouched; a 3xx is r
 a 403, 429 or 5xx comes back as the response; a step-up challenge throws `StepUpError`, which you
 answer with `client.stepUp(e)` and then repeat the request.
 
+`httpClient(origins: {...})` **replaces** the configuration's `protectedOrigins` for that client rather
+than narrowing them, as the native clients' `origins` parameter does: name only origins you mean to
+send the token to.
+
 Add your own interceptors by wrapping the client, with ours innermost: the DPoP proof depends on the
 final method and URL, so authentication must run after every rewrite of yours.
 
@@ -91,7 +95,12 @@ class RequestId extends http.BaseClient {
   }
 }
 
-final api = RetryClient(RequestId(client.httpClient()));
+// The SDK never repeats your request on a status (it cannot know the call was idempotent), so a
+// retry is your decision: only methods that are safe to repeat, never a POST.
+final api = RetryClient(
+  RequestId(client.httpClient()),
+  when: (r) => r.statusCode == 503 && const {'GET', 'HEAD'}.contains(r.request?.method),
+);
 ```
 
 For `dio`, a small adapter makes this client its transport; it is in the dartdoc of

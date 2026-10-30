@@ -403,7 +403,19 @@ class VersolaInterceptorTest {
     }
 
     @Test
-    fun `no proof is attached when the session is not key-bound even on a DPoP-typed token`() {
+    fun `a DPoP-bound token with no proof source fails closed with InvalidConfiguration and nothing is sent`() {
+        server.enqueue(ok())
+
+        val error = failure(on = client(dpop = null))
+
+        assertTrue(error.toString(), error is VersolaError.Configuration && error.detail is VersolaError.Configuration.Detail.InvalidConfiguration)
+        assertEquals("not even as a Bearer", 0, server.requestCount)
+        assertEquals(0, tokens.renewals)
+    }
+
+    @Test
+    fun `a bearer token needs no proof source and is sent as Bearer without one`() {
+        tokens = FakeTokenSource(AccessToken("token-0", isDpopBound = false))
         server.enqueue(ok())
 
         client(dpop = null).newCall(get()).execute().close()

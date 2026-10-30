@@ -224,6 +224,12 @@ final class OAuthClient {
   /// requests are not aborted: `package:http` offers no cancellation the bridge could carry, and
   /// none is invented here.
   ///
+  /// [origins] **replaces** the configuration's `protectedOrigins` for this client; it does not
+  /// narrow them, so an origin named here that the configuration does not list still gets the
+  /// token. That is what `OAuthClient.authenticatedClient(origins)` (Android) and
+  /// `authenticatedSession(origins:)` (iOS) do, and the app names both sets in its own code. Name
+  /// only origins you mean to send the token to.
+  ///
   /// [origins] is validated natively on the first request, which fails before anything is sent
   /// with [ConfigurationError] (`invalidConfiguration`) when the set (or, with none given, the
   /// configured `protectedOrigins`) is empty, has a non-`https` origin (`http` is allowed on a
@@ -243,7 +249,13 @@ final class OAuthClient {
   ///   }
   /// }
   ///
-  /// final client = RetryClient(LoggingClient(oauth.httpClient())); // package:http/retry.dart
+  /// // package:http/retry.dart. The SDK never repeats the app's request on a status (it cannot
+  /// // know the call was idempotent, spec/retry-policy.md), so a retry here is the app's own
+  /// // decision: only methods that are safe to repeat, and never a POST.
+  /// final client = RetryClient(
+  ///   LoggingClient(oauth.httpClient()),
+  ///   when: (r) => r.statusCode == 503 && const {'GET', 'HEAD'}.contains(r.request?.method),
+  /// );
   /// try {
   ///   final response = await client.get(Uri.https('api.example.com', '/items'));
   /// } on StepUpError catch (challenge) {

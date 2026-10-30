@@ -226,17 +226,23 @@ supplied under those names, so an app's own `Authorization` is never sent beside
 bearer token a `DPoP` header the app supplied is dropped. On any other origin the app's headers go
 out untouched.
 
+A key-bound (DPoP) access token with no proof source configured fails closed with
+`Configuration(InvalidConfiguration)` and nothing is sent, never as a bare `Bearer`.
+
 Flutter's `httpClient()` is the same behaviour reached through the bridge: Dart describes the
 request (method, URL, header pairs, bytes) and receives the response (status, reason phrase where
 the platform has one, header pairs, bytes); nothing credential-shaped crosses. What the bridge
 shapes, and what is therefore Flutter's deviation from the native clients:
 
+- `origins`, where given, replaces `protectedOrigins` for that client (it does not narrow them), as
+  it does for the native clients.
 - The body is buffered in memory in both directions and in both runtimes; there is no streaming and
   no limit beyond the process's memory.
 - `origins` is validated natively when the first request is sent, because `httpClient()` returns
   synchronously: an empty set (and, with none given, an empty `protectedOrigins`) or a non-`https`
   origin fails that request with `Configuration(InvalidConfiguration)` before anything is sent.
-- A request that is not a valid HTTP request (a relative URL, an invalid header, a body on `GET`) is
+- A request that is not a valid HTTP request (a relative URL, a header name that is not a token or a
+  value that is not visible ASCII, space or tab, a body on `GET`) is
   `Configuration(InvalidConfiguration)` with a fixed text that does not quote the header.
 - A call that produced no HTTP response (no route, DNS, TLS, the native client's own timeout) is not
   an SDK error and has no place in the taxonomy; Dart raises `package:http`'s `ClientException`

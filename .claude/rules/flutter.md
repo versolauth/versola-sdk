@@ -107,6 +107,12 @@ cd example && flutter build ios --no-codesign   # and on iOS
   `pigeon` and anything else); `pubspec.lock` is gitignored (`.gitignore`), so the constraints are
   what makes a build repeatable. A new dependency needs approval, with licence and
   maintenance noted (`security.md`).
+  The exact-minor pin is for build tooling (`pigeon`, whose version is part of the generated
+  contract). A package whose types appear in the public API and which integrators share (`http`)
+  gets a range across the major, with the tested version as its floor: a one-minor pin in a library
+  fails the integrator's own resolve, since such a package is in nearly every app's graph. Verify
+  such a range against the floor and the newest release in range (`flutter pub upgrade <pkg>` in a
+  scratch copy) when it is set and when Dependabot bumps it.
 - Dependabot watches `pub` under `/flutter/versola_oauth` (with `pigeon` ignored: a bump comes with
   the regeneration) and the example's Gradle build; minors arrive grouped, majors separately
   (`ci-release.md`).
