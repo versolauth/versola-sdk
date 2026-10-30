@@ -65,8 +65,11 @@ struct KeychainItem: Sendable {
     let account: String
     let accessibility: KeychainAccessibility
     let accessGroup: String?
+    /// Told when a status that is *probably* a lock is mapped to `unlockRequired` (see `failure`).
+    let logger: (any OAuthLogger)?
 
-    init(service: String, account: String, accessibility: KeychainAccessibility, accessGroup: String? = nil) {
+    init(service: String, account: String, accessibility: KeychainAccessibility, accessGroup: String? = nil, logger: (any OAuthLogger)? = nil) {
+        self.logger = logger
         self.service = service
         self.account = account
         self.accessibility = accessibility
@@ -82,6 +85,17 @@ struct KeychainItem: Sendable {
     static func error(for status: OSStatus) -> OAuthError {
         if KeychainFailure.isUnavailableForNow(status) { return .recoverable(.unlockRequired) }
         return .configuration(.invalidConfiguration(detail: "keychain error \(status)"))
+    }
+
+    /// `error(for:)`, with a warning when the status is `errSecNotAvailable` or `errSecAuthFailed`:
+    /// those read as "out of reach for now", but a persistent one is an access control the process
+    /// is refused rather than a lock, and `unlockRequired` would then hide a permanent fault. The
+    /// warning carries the account and the number, nothing from the item.
+    func failure(_ status: OSStatus) -> OAuthError {
+        if status == errSecNotAvailable || status == errSecAuthFailed {
+            logger?.warn("keychain status \(status) on item \(account) is treated as unlockRequired; if it persists after the device is unlocked it is an access refusal, not a lock")
+        }
+        return Self.error(for: status)
     }
 
     private var query: [String: Any] {
@@ -107,7 +121,7 @@ struct KeychainItem: Sendable {
         switch status {
         case errSecSuccess: return result as? Data
         case errSecItemNotFound: return nil
-        default: throw Self.error(for: status)
+        default: throw failure(status)
         }
     }
 
@@ -122,7 +136,7 @@ struct KeychainItem: Sendable {
         switch status {
         case errSecSuccess: return true
         case errSecItemNotFound: return false
-        default: throw Self.error(for: status)
+        default: throw failure(status)
         }
     }
 
@@ -141,25 +155,61 @@ struct KeychainItem: Sendable {
                 status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
             }
         }
-        if status != errSecSuccess { throw Self.error(for: status) }
+        if status != errSecSuccess { throw failure(status) }
     }
 
-    /// Every item of a client's service, whatever its account: the one query `FirstLaunchGuard`
-    /// needs, which deletes the DPoP key and the pending request along with the credentials.
-    static func deleteAll(service: String) throws {
-        let query: [String: Any] = [
+    /// The query that deletes every item of a client's service, whatever its account, inside one
+    /// access group. Without `kSecAttrAccessGroup`, `SecItemDelete` reaches every group the process
+    /// is entitled to, which is how a delete meant for this app's items would take a sibling's.
+    static func deleteQuery(service: String, accessGroup: String) -> [String: Any] {
+        [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
+            kSecAttrAccessGroup as String: accessGroup,
             kSecAttrSynchronizable as String: false,
             kSecUseDataProtectionKeychain as String: true,
         ]
-        let status = SecItemDelete(query as CFDictionary)
+    }
+
+    static func deleteAll(service: String, accessGroup: String) throws {
+        let status = SecItemDelete(deleteQuery(service: service, accessGroup: accessGroup) as CFDictionary)
         if status != errSecSuccess && status != errSecItemNotFound { throw error(for: status) }
+    }
+
+    /// What `FirstLaunchGuard` runs: every item of the client's service in this process's own
+    /// default access group, which is where the stores write when no group is configured (the
+    /// generic facade configures none). Never the other groups the process may be entitled to.
+    /// If the default group cannot be learned nothing is deleted: an unscoped delete is the
+    /// failure this exists to avoid, and a leftover session is the lesser one.
+    static func deleteAllInOwnGroup(service: String) throws {
+        guard let group = try defaultAccessGroup() else { return }
+        try deleteAll(service: service, accessGroup: group)
+    }
+
+    /// The access group an item written without one lands in, read back from a throwaway item
+    /// (the only way Security reports it). Nil when the item carries no group attribute.
+    static func defaultAccessGroup() throws -> String? {
+        let probe: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "versola.oauth.probe",
+            kSecAttrAccount as String: UUID().uuidString,
+            kSecAttrSynchronizable as String: false,
+            kSecUseDataProtectionKeychain as String: true,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            kSecReturnAttributes as String: true,
+        ]
+        var result: CFTypeRef?
+        let added = SecItemAdd(probe as CFDictionary, &result)
+        if added != errSecSuccess { throw error(for: added) }
+        var removal = probe
+        removal[kSecReturnAttributes as String] = nil
+        SecItemDelete(removal as CFDictionary)
+        return (result as? [String: Any])?[kSecAttrAccessGroup as String] as? String
     }
 
     func delete() throws {
         let status = SecItemDelete(query as CFDictionary)
-        if status != errSecSuccess && status != errSecItemNotFound { throw Self.error(for: status) }
+        if status != errSecSuccess && status != errSecItemNotFound { throw failure(status) }
     }
 }
 
@@ -191,13 +241,13 @@ package actor KeychainCredentialStore: CredentialStore {
     private let rotationItem: KeychainItem
     private let firstLaunch: FirstLaunchGuard?
 
-    package init(storageKey: String, unlockPolicy: UnlockPolicy, accessGroup: String? = nil, firstLaunch: FirstLaunchGuard? = nil) {
+    package init(storageKey: String, unlockPolicy: UnlockPolicy, accessGroup: String? = nil, firstLaunch: FirstLaunchGuard? = nil, logger: (any OAuthLogger)? = nil) {
         self.firstLaunch = firstLaunch
         let service = KeychainItem.service(forStorageKey: storageKey)
         let accessibility = KeychainAccessibility(unlockPolicy)
-        refreshItem = KeychainItem(service: service, account: "refresh-token", accessibility: accessibility, accessGroup: accessGroup)
-        idTokenItem = KeychainItem(service: service, account: "id-token", accessibility: accessibility, accessGroup: accessGroup)
-        rotationItem = KeychainItem(service: service, account: "pending-rotation", accessibility: accessibility, accessGroup: accessGroup)
+        refreshItem = KeychainItem(service: service, account: "refresh-token", accessibility: accessibility, accessGroup: accessGroup, logger: logger)
+        idTokenItem = KeychainItem(service: service, account: "id-token", accessibility: accessibility, accessGroup: accessGroup, logger: logger)
+        rotationItem = KeychainItem(service: service, account: "pending-rotation", accessibility: accessibility, accessGroup: accessGroup, logger: logger)
     }
 
     /// Attributes only: a cold start must not turn into an unlock prompt under `onAppUnlock`.
@@ -270,11 +320,11 @@ package actor KeychainPendingAuthorizationStore: PendingAuthorizationStore {
     private let item: KeychainItem
     private let firstLaunch: FirstLaunchGuard?
 
-    package init(storageKey: String, unlockPolicy: UnlockPolicy, accessGroup: String? = nil, firstLaunch: FirstLaunchGuard? = nil) {
+    package init(storageKey: String, unlockPolicy: UnlockPolicy, accessGroup: String? = nil, firstLaunch: FirstLaunchGuard? = nil, logger: (any OAuthLogger)? = nil) {
         self.firstLaunch = firstLaunch
         item = KeychainItem(
             service: KeychainItem.service(forStorageKey: storageKey), account: "pending-authorization",
-            accessibility: KeychainAccessibility(unlockPolicy), accessGroup: accessGroup
+            accessibility: KeychainAccessibility(unlockPolicy), accessGroup: accessGroup, logger: logger
         )
     }
 

@@ -101,6 +101,30 @@ final class KeychainTests: XCTestCase {
         }
     }
 
+    func testTheFirstLaunchDeleteNamesTheAccessGroupItIsScopedTo() {
+        // Without it SecItemDelete reaches every group the process is entitled to.
+        let query = KeychainItem.deleteQuery(service: "versola.oauth.abc", accessGroup: "TEAM.com.example.app")
+        XCTAssertEqual(query[kSecAttrAccessGroup as String] as? String, "TEAM.com.example.app")
+        XCTAssertEqual(query[kSecAttrService as String] as? String, "versola.oauth.abc")
+        XCTAssertNil(query[kSecAttrAccount as String], "every account of the service")
+        XCTAssertEqual(query[kSecAttrSynchronizable as String] as? Bool, false)
+        XCTAssertEqual(query[kSecUseDataProtectionKeychain as String] as? Bool, true)
+    }
+
+    func testAStatusThatMayBeARefusalNotALockIsLoggedWithItsNumberWhenMappedToUnlockRequired() {
+        let logger = RecordingLogger()
+        let item = KeychainItem(service: "versola.oauth.abc", account: "refresh-token", accessibility: .afterFirstUnlock, logger: logger)
+
+        XCTAssertEqual(item.failure(errSecAuthFailed), .recoverable(.unlockRequired))
+        XCTAssertEqual(item.failure(errSecNotAvailable), .recoverable(.unlockRequired))
+        XCTAssertEqual(item.failure(errSecInteractionNotAllowed), .recoverable(.unlockRequired), "a plain lock is not worth a line")
+        XCTAssertEqual(item.failure(errSecParam), .configuration(.invalidConfiguration(detail: "keychain error \(errSecParam)")))
+
+        XCTAssertEqual(logger.warnings.count, 2)
+        XCTAssertTrue(logger.warnings[0].contains("\(errSecAuthFailed)") && logger.warnings[0].contains("refresh-token"), logger.warnings[0])
+        XCTAssertTrue(logger.warnings[1].contains("\(errSecNotAvailable)"))
+    }
+
     func testAStatusIsReadOffCryptoKitAndSecurityErrors() {
         XCTAssertEqual(KeychainFailure.status(of: CryptoKitError.underlyingCoreCryptoError(error: -25308)), -25308)
         XCTAssertEqual(KeychainFailure.status(of: NSError(domain: NSOSStatusErrorDomain, code: -25293)), -25293)
@@ -212,7 +236,7 @@ final class KeychainTests: XCTestCase {
         XCTAssertEqual(updated?.state, "state-2")
 
         // What a reinstall must not inherit: one query takes every account of the service.
-        try KeychainItem.deleteAll(service: KeychainItem.service(forStorageKey: storageKey))
+        try KeychainItem.deleteAllInOwnGroup(service: KeychainItem.service(forStorageKey: storageKey))
         let goneGrant = try await credentials.hasGrant()
         let gonePending = try await pending.load()
         let goneId = try await credentials.rawIdToken()

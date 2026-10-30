@@ -36,11 +36,11 @@ package struct KeychainDpopKeyStore: DpopKeyStore {
     private let item: KeychainItem
     private let firstLaunch: FirstLaunchGuard?
 
-    package init(storageKey: String, accessGroup: String? = nil, firstLaunch: FirstLaunchGuard? = nil) {
+    package init(storageKey: String, accessGroup: String? = nil, firstLaunch: FirstLaunchGuard? = nil, logger: (any OAuthLogger)? = nil) {
         self.firstLaunch = firstLaunch
         item = KeychainItem(
             service: KeychainItem.service(forStorageKey: storageKey), account: "dpop-key",
-            accessibility: .afterFirstUnlock, accessGroup: accessGroup
+            accessibility: .afterFirstUnlock, accessGroup: accessGroup, logger: logger
         )
     }
 
@@ -112,7 +112,7 @@ package actor SecureEnclaveDpopKey: DpopSigningKey {
     ///   - logger: receives the one warning a software-tier key deserves.
     package init(storageKey: String, accessGroup: String? = nil, requireHardware: Bool = false, logger: (any OAuthLogger)? = nil, firstLaunch: FirstLaunchGuard? = nil) {
         self.init(
-            store: KeychainDpopKeyStore(storageKey: storageKey, accessGroup: accessGroup, firstLaunch: firstLaunch), requireHardware: requireHardware,
+            store: KeychainDpopKeyStore(storageKey: storageKey, accessGroup: accessGroup, firstLaunch: firstLaunch, logger: logger), requireHardware: requireHardware,
             logger: logger, secureEnclaveAvailable: SecureEnclave.isAvailable
         )
     }

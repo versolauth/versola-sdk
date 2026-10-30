@@ -30,8 +30,8 @@ final class FirstLaunchGuardTests: XCTestCase {
         }
     }
 
-    private func guardFor(_ deletions: Deletions) -> FirstLaunchGuard {
-        FirstLaunchGuard(directory: directory, deleteAll: { try deletions.run() })
+    private func guardFor(_ deletions: Deletions, inert: Bool = false) -> FirstLaunchGuard {
+        FirstLaunchGuard(directory: directory, inert: inert, deleteAll: { try deletions.run() })
     }
 
     private var markerExists: Bool { FileManager.default.fileExists(atPath: directory.appendingPathComponent("installed").path) }
@@ -105,6 +105,26 @@ final class FirstLaunchGuardTests: XCTestCase {
             try await group.waitForAll()
         }
         XCTAssertEqual(deletions.count, 1)
+    }
+
+    func testTheGuardIsInertInAnAppExtensionAndDeletesNothingNorWritesAMarker() throws {
+        // An extension has a container of its own, empty on its first run, and the Keychain items
+        // in the app's shared access group are the host app's live session.
+        let deletions = Deletions()
+        let subject = guardFor(deletions, inert: true)
+
+        try subject.ensure()
+        try subject.ensure()
+
+        XCTAssertEqual(deletions.count, 0)
+        XCTAssertFalse(markerExists)
+    }
+
+    func testAnExtensionProcessIsRecognisedByItsBundleOrItsInfoPlistAndAnAppOrAClipIsNot() {
+        XCTAssertTrue(HostProcess.isAppExtension(bundlePath: "/var/containers/Bundle/Application/X/App.app/PlugIns/Share.appex", info: nil))
+        XCTAssertTrue(HostProcess.isAppExtension(bundlePath: "/somewhere/Repackaged", info: ["NSExtension": ["NSExtensionPointIdentifier": "com.apple.share-services"]]))
+        XCTAssertFalse(HostProcess.isAppExtension(bundlePath: "/var/containers/Bundle/Application/X/App.app", info: ["CFBundleIdentifier": "com.example.app"]))
+        XCTAssertFalse(HostProcess.isAppExtension(bundlePath: "/var/containers/Bundle/Application/X/Clip.app", info: ["NSAppClip": ["NSAppClipRequestEphemeralUserNotification": false]]), "an App Clip is an app")
     }
 
     func testTheKeychainStoresGoThroughTheGuardBeforeAnyRead() async throws {
