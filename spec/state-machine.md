@@ -145,12 +145,19 @@ waits for can no longer be spent. The request is discarded and the SDK restores
 `Authenticated`. Asked without the storage key (`hasGrant`), so a cold start does not become an
 unlock prompt under `OnAppUnlock`.
 
-A store that cannot be read yet (the device was never unlocked since boot; iOS answers
-`errSecInteractionNotAllowed`) has not said there is nothing in it. The restore then publishes
-`Locked`, never `Unauthenticated`, fails the operation that asked with
-`Recoverable(UnlockRequired)`, and is **not** remembered: the next call, once the app has asked
-the user to unlock, reads again. The grant is read before the pending request for this reason
-too: an unreadable pending slot must not decide what a returning user sees. With a grant the restore also **clears the pending slot on every cold start**, unread (it is residue, above); a slot that cannot be cleared yet fails the restore the same way and is retried.
+A store that cannot be read yet (iOS: the device was never unlocked since boot, and the Keychain
+answers `errSecInteractionNotAllowed`; Android: the storage key is locked, or the Keystore failed
+transiently) has not said there is nothing in it. With no grant to decide the state the restore
+then publishes `Locked`, never `Unauthenticated`, fails the operation that asked with the
+`Recoverable` storage error (`UnlockRequired` on iOS), does not discard the slot, and is **not**
+remembered: the next call, once the app has asked the user to unlock, reads again. The grant is
+read before the pending request for this reason too: an unreadable pending slot must not decide
+what a returning user sees. When a later read finds the request, the cold-start resume is started
+then, not only at creation (Android). A collector of the state is not handed the error. With a
+grant the restore also **clears the pending slot on every cold start**, unread (it is residue,
+above); a slot that cannot be cleared yet fails the restore the same way and is retried.
+(Android deviation: it reads the slot and clears it when there is one, and an unreadable slot,
+being residue, is left in place and does not fail the restore.)
 
 The cost is a re-authorization started over a live session — a step-up, an account switch — and
 then killed mid-browser: it resolves in favour of the session that already exists rather than
@@ -481,6 +488,27 @@ endpoints are kept for the same reason: a refresh in a later process signs for t
 `/native/start` of its own to learn them from. Without the file the SDK falls back to
 discovery's `mtls_endpoint_aliases`, then to the plain endpoints — inferences, where the file
 is edge's own answer.
+
+**Record binding (Android).** The key provider wraps each encrypted item with the name of its
+slot in front of the secret (`credentials/refreshToken`, `credentials/rawIdToken`,
+`credentials/pendingRotation`, `pending-authorization`). AES-GCM authenticates the whole
+plaintext, so a valid blob moved from one slot to another does not open there and is read as
+the tampered ciphertext it is (`errors.md`: a sign-out). Items written by 0.1.0 carry no name and
+are read as they are, so an upgrade keeps the user signed in; each credential is rewritten bound
+as soon as it has been read (best effort: a failed rewrite leaves the readable legacy item and is
+retried at the next read), and the pending request, which lives minutes, by the next login. Until
+then a legacy item opens in any slot. The
+format is one-way: an SDK that predates the binding reads a bound item as a garbled token, so
+rolling an app back to it signs the user out. The binding does not stop a stale copy of the
+same slot being put back; that needs a counter nothing here keeps.
+
+**One process.** Everything above, and everything the coordinator coordinates (the
+single-flight refresh, the authorize lock, the redirect hand-off), is per process. The SDK
+assumes it runs in the app's main process. An app that gives components their own
+`android:process` and uses the SDK there gets a second coordinator over the same files: two
+refreshes can race on one rotating refresh token (the loser's replay is `invalid_grant` and may
+revoke the token family), and DataStore does not support two processes over one file. This is
+not detected or coordinated; keep SDK calls in one process.
 
 ## Observability
 

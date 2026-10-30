@@ -122,6 +122,34 @@ class HardwareKeyProviderInstrumentedTest {
     }
 
     @Test
+    fun aGrantWrittenBeforeRecordBindingStillOpensThroughTheRealKey() = runTest {
+        // What 0.1.0 wrote: the provider's blob over the bare secret, no slot name inside.
+        val provider = HardwareKeyProvider(alias)
+        val file = File(context.noBackupFilesDir, "versola-test-legacy-${System.nanoTime()}")
+        val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        try {
+            file.writeBytes(
+                CredentialBlob(
+                    refreshToken = provider.wrap("legacy-refresh-token".toByteArray()),
+                    rawIdToken = provider.wrap("legacy.id.token".toByteArray()),
+                ).encode(),
+            )
+            val store = DataStoreCredentialStore(file, HardwareKeyProvider(alias), scope)
+
+            assertEquals("legacy-refresh-token", store.useRefreshToken { String(it) })
+            assertEquals("legacy.id.token", store.rawIdToken())
+
+            // The next save writes the bound form, and it reads back through the same key.
+            store.save("rotated-refresh-token".toByteArray(), null)
+            assertEquals("rotated-refresh-token", store.useRefreshToken { String(it) })
+            assertEquals("legacy.id.token", store.rawIdToken())
+        } finally {
+            scope.cancel()
+            file.delete()
+        }
+    }
+
+    @Test
     fun onAppUnlockNeedsASecureLockScreenToGenerateAtAll() = runTest {
         // Without a lock screen the Keystore refuses a user-authentication-gated key outright,
         // which is the right failure: a policy that cannot be enforced must not degrade to

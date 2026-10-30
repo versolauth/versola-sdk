@@ -9,6 +9,7 @@ import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.KeyStore
 import java.security.PrivateKey
+import java.security.ProviderException
 import java.security.Signature
 import java.security.interfaces.ECPublicKey
 import java.security.spec.ECGenParameterSpec
@@ -118,12 +119,7 @@ public class KeystoreDpopKey(
         // asking for it on a device without the chip throws rather than degrading, and a
         // compile-time decision would either exclude API 26–27 or never use StrongBox at all.
         val pair = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            try {
-                generate(strongBox = true)
-            } catch (e: StrongBoxUnavailableException) {
-                logger?.info("StrongBox unavailable, falling back to the TEE: ${e.message}")
-                generate(strongBox = false)
-            }
+            withStrongBoxFallback(logger, isAbsent = { it is StrongBoxUnavailableException }) { strongBox -> generate(strongBox) }
         } else {
             generate(strongBox = false)
         }
@@ -203,3 +199,38 @@ public class KeystoreDpopKey(
         }
     }
 }
+
+/**
+ * Runs [generate] with StrongBox, and with the TEE when that attempt fails with a
+ * `ProviderException`.
+ *
+ * Not only `StrongBoxUnavailableException`, which is a `ProviderException` and which the
+ * Keystore raises for the one error code "hardware type unavailable": every other error of a
+ * StrongBox that is present and misbehaving (a communication failure, an operation it does
+ * not implement) is thrown by `generateKeyPair` as a plain `ProviderException`, and caught
+ * only by the narrower type it used to break `login()` on those devices for good. A failed
+ * generation deletes the entry it started, so the TEE attempt under the same alias is clean.
+ *
+ * A fault that is not [isAbsent] may be transient (a busy secure element), and the key is
+ * generated once and kept, so falling through on it would pin the TEE tier for the key's whole
+ * life: StrongBox is tried a second time first. Absence is final and falls through at once.
+ * Anything that is not a `ProviderException` is not read as "no StrongBox" and propagates, as
+ * does a failure of the TEE attempt itself.
+ */
+internal fun <T> withStrongBoxFallback(
+    logger: VersolaLogger?,
+    isAbsent: (ProviderException) -> Boolean,
+    generate: (strongBox: Boolean) -> T,
+): T =
+    try {
+        try {
+            generate(true)
+        } catch (e: ProviderException) {
+            if (isAbsent(e)) throw e
+            logger?.info("StrongBox key generation failed (${e.javaClass.simpleName}), retrying once: ${e.message}")
+            generate(true)
+        }
+    } catch (e: ProviderException) {
+        logger?.info("StrongBox unavailable (${e.javaClass.simpleName}), falling back to the TEE: ${e.message}")
+        generate(false)
+    }

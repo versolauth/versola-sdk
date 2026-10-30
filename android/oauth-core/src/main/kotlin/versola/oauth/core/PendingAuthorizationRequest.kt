@@ -119,7 +119,12 @@ public object PendingAuthorizationCodec {
 public interface PendingAuthorizationStore {
     public suspend fun save(request: PendingAuthorizationRequest)
 
-    /** Returns null when nothing is pending, and when what was stored cannot be read back. */
+    /**
+     * Returns null when nothing is pending, and when what was stored can never be read back
+     * (a key that is gone for good, bytes that are not a request): that slot is discarded.
+     * A failure that says nothing about the slot (a locked key, a keystore fault) throws
+     * [VersolaError.Recoverable] and leaves it, and a cancellation propagates as itself.
+     */
     public suspend fun load(): PendingAuthorizationRequest?
 
     public suspend fun clear()

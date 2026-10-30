@@ -43,6 +43,7 @@ public class CustomTabsAuthorizationSession(
     override suspend fun authorize(uri: String, options: BrowserSessionOptions): BrowserOutcome {
         // Anything buffered belongs to a session that no longer exists.
         RedirectDispatcher.drain()
+        RedirectDispatcher.expect(options.redirectUri)
 
         // Armed before the browser starts, not after: `startActivity` is asynchronous, so
         // arming afterwards can miss the host activity stopping — and a detector that never

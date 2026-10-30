@@ -1,10 +1,21 @@
 package versola.sdk.storage
 
 import java.io.File
+import java.io.IOException
+import java.security.InvalidKeyException
+import java.security.ProviderException
+import java.security.UnrecoverableKeyException
+import javax.crypto.AEADBadTagException
+import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.runTest
 import versola.oauth.core.VersolaError
 import org.junit.After
@@ -214,16 +225,128 @@ class DataStoreCredentialStoreTest {
     }
 
     @Test
-    fun `a grant that will not unwrap is a sign-out`() = runTest {
+    fun `a ciphertext that fails authentication is a sign-out`() = runTest {
         store.save(refreshToken.toByteArray())
-        keyProvider.unwrapFailure = IllegalStateException("key no longer decrypts this")
+        keyProvider.unwrapFailure = AEADBadTagException("Tag mismatch")
+
+        assertSignedOut { store.useRefreshToken { String(it) } }
+    }
+
+    @Test
+    fun `a key that cannot be recovered is a sign-out`() = runTest {
+        store.save(refreshToken.toByteArray())
+        keyProvider.unwrapFailure = UnrecoverableKeyException("key entry is unreadable")
+
+        assertSignedOut { store.useRefreshToken { String(it) } }
+    }
+
+    @Test
+    fun `a permanent failure wrapped by the provider is still a sign-out`() = runTest {
+        // Some providers wrap what the Keystore threw; the verdict is in the cause.
+        store.save(refreshToken.toByteArray())
+        keyProvider.unwrapFailure = IOException("unwrap failed", AEADBadTagException("Tag mismatch"))
+
+        assertSignedOut { store.useRefreshToken { String(it) } }
+    }
+
+    @Test
+    fun `every reader maps a permanent failure the same way`() = runTest {
+        store.save(refreshToken.toByteArray(), idToken)
+        store.savePendingRotation("idem-key-1")
+        keyProvider.unwrapFailure = AEADBadTagException("Tag mismatch")
+
+        assertSignedOut { store.rawIdToken() }
+        assertSignedOut { store.pendingRotation() }
+    }
+
+    @Test
+    fun `a failure that is no verdict on the key is recoverable and leaves the grant in place`() = runTest {
+        // One OEM Keystore hiccup must not end the session: the grant is intact and the next
+        // attempt will most likely open it.
+        store.save(refreshToken.toByteArray(), idToken)
+        val failures = listOf(
+            IllegalStateException("Keystore operation failed"),
+            ProviderException("Failed to communicate with the keystore service"),
+            IOException("the keystore daemon is not ready"),
+            InvalidKeyException("Keystore operation failed"),
+        )
+
+        for (failure in failures) {
+            keyProvider.unwrapFailure = failure
+            try {
+                store.useRefreshToken { String(it) }
+                fail("${failure.message}: an unreadable grant must not read as no grant")
+            } catch (e: VersolaError.Recoverable) {
+                assertTrue("${failure.message}: $e", e.reason is VersolaError.Recoverable.Cause.Network)
+                assertSame(failure, e.cause)
+            }
+            assertTrue(store.hasGrant())
+        }
+
+        keyProvider.unwrapFailure = null
+        assertEquals("the grant opens again once the key answers", refreshToken, store.useRefreshToken { String(it) })
+        assertEquals(idToken, store.rawIdToken())
+    }
+
+    @Test
+    fun `the cause names the failure class and nothing the failure said`() = runTest {
+        // The message of a Keystore exception is the provider's to write; the error detail
+        // that reaches an app's log carries the class alone.
+        store.save(refreshToken.toByteArray())
+        keyProvider.unwrapFailure = ProviderException("blob=$refreshToken")
 
         try {
             store.useRefreshToken { String(it) }
-            fail("an unreadable grant must not read as no grant")
-        } catch (e: VersolaError.Reauthenticate) {
-            assertSame(VersolaError.Reauthenticate.Reason.CredentialsInvalidated, e.reason)
+            fail("expected Recoverable")
+        } catch (e: VersolaError.Recoverable) {
+            assertFalse(e.toString().contains(refreshToken))
+            assertEquals("storage key unavailable: ProviderException", (e.reason as VersolaError.Recoverable.Cause.Network).detail)
         }
+    }
+
+    @Test
+    fun `a cancelled caller is a cancellation, not a sign-out`() = runTest {
+        // The caller's scope was cancelled while the key was being used: nothing about the
+        // grant changed, and reporting it as invalidated makes the coordinator wipe it.
+        store.save(refreshToken.toByteArray())
+        keyProvider.unwrapFailure = CancellationException("the caller's scope ended")
+
+        try {
+            store.useRefreshToken { String(it) }
+            fail("cancellation must propagate")
+        } catch (e: CancellationException) {
+            assertEquals("the caller's scope ended", e.message)
+        }
+        assertTrue(store.hasGrant())
+    }
+
+    @Test
+    fun `cancelling a caller suspended in the unwrap leaves the grant readable`() = runTest {
+        store.save(refreshToken.toByteArray())
+        val entered = CompletableDeferred<Unit>()
+        keyProvider.onUnwrap = {
+            entered.complete(Unit)
+            awaitCancellation()
+        }
+
+        var thrown: Throwable? = null
+        val caller = async(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                store.useRefreshToken { String(it) }
+            } catch (e: Throwable) {
+                thrown = e
+                throw e
+            }
+        }
+        withContext(Dispatchers.Default) { entered.await() }
+        caller.cancel()
+        caller.join()
+
+        // What the coordinator sees: a cancellation passes through and leaves the grant alone;
+        // a sign-out would wipe it and destroy the DPoP key.
+        assertTrue("the unwrap's cancellation reached the caller as itself: $thrown", thrown is CancellationException)
+        keyProvider.onUnwrap = null
+        assertEquals(refreshToken, store.useRefreshToken { String(it) })
     }
 
     @Test
@@ -279,5 +402,132 @@ class DataStoreCredentialStoreTest {
         assertSame(first, second)
         first.save("token".toByteArray(), null)
         assertTrue(second.hasGrant())
+    }
+
+    private suspend fun assertSignedOut(read: suspend () -> Unit) {
+        try {
+            read()
+            fail("an unreadable grant must not read as no grant")
+        } catch (e: VersolaError.Reauthenticate) {
+            assertSame(VersolaError.Reauthenticate.Reason.CredentialsInvalidated, e.reason)
+        }
+    }
+
+    // What 0.1.0 wrote has no record binding: the wrapped plaintext is the bare secret. A user
+    // who upgrades must stay signed in, and the next save writes the bound form.
+
+    private suspend fun writeLegacyFile(refresh: String?, id: String?, rotation: String?) {
+        file.parentFile.mkdirs()
+        file.writeBytes(
+            CredentialBlob(
+                refreshToken = refresh?.let { keyProvider.wrap(it.toByteArray()) },
+                rawIdToken = id?.let { keyProvider.wrap(it.toByteArray()) },
+                pendingRotation = rotation?.let { keyProvider.wrap(it.toByteArray()) },
+            ).encode(),
+        )
+    }
+
+    @Test
+    fun `a grant written by 0 1 0 without record binding is still read`() = runTest {
+        writeLegacyFile(refreshToken, idToken, "idem-key-1")
+
+        assertTrue(store.hasGrant())
+        assertEquals(refreshToken, store.useRefreshToken { String(it) })
+        assertEquals(idToken, store.rawIdToken())
+        assertEquals("idem-key-1", store.pendingRotation())
+    }
+
+    @Test
+    fun `the next save rewrites a legacy grant bound to its slots, and it reads back`() = runTest {
+        writeLegacyFile("old-refresh-token", idToken, null)
+
+        store.save("rotated-refresh-token".toByteArray(), idToken)
+
+        // What the key provider was handed is now sealed with the slot's name.
+        val onDisk = CredentialBlob.decode(file.readBytes())
+        val refreshPlaintext = keyProvider.unwrap(onDisk.refreshToken!!)
+        assertTrue(String(refreshPlaintext, Charsets.ISO_8859_1).contains("credentials/refreshToken"))
+        assertEquals("rotated-refresh-token", store.useRefreshToken { String(it) })
+        assertEquals(idToken, store.rawIdToken())
+    }
+
+    @Test
+    fun `a legacy ID token survives a refresh that rotates only the refresh token`() = runTest {
+        writeLegacyFile("old-refresh-token", idToken, null)
+
+        store.save("rotated-refresh-token".toByteArray(), null)
+
+        assertEquals("rotated-refresh-token", store.useRefreshToken { String(it) })
+        assertEquals("the legacy ID token is kept as it was", idToken, store.rawIdToken())
+    }
+
+    @Test
+    fun `a blob moved to another slot does not open there`() = runTest {
+        // A valid wrapped ID token placed in the refresh token's field: without the binding it
+        // would be sent to the token endpoint as a refresh token.
+        store.save(refreshToken.toByteArray(), idToken)
+        val onDisk = CredentialBlob.decode(file.readBytes())
+        val moved = File(folder.newFolder(), "credentials")
+        moved.writeBytes(CredentialBlob(refreshToken = onDisk.rawIdToken, rawIdToken = onDisk.refreshToken).encode())
+        val swapped = DataStoreCredentialStore(moved, keyProvider, scope)
+
+        assertSignedOut { swapped.useRefreshToken { String(it) } }
+        assertSignedOut { swapped.rawIdToken() }
+    }
+
+    @Test
+    fun `a sealed record that is cut short is read as tampered, not as a token`() = runTest {
+        file.parentFile.mkdirs()
+        file.writeBytes(CredentialBlob(refreshToken = keyProvider.wrap(byteArrayOf(0, 'V'.code.toByte(), 'B'.code.toByte(), 2, 40))).encode())
+
+        assertSignedOut { store.useRefreshToken { String(it) } }
+    }
+
+    private suspend fun slotNameOnDisk(field: (CredentialBlob) -> ByteArray?): String? {
+        val wrapped = field(CredentialBlob.decode(file.readBytes())) ?: return null
+        return String(keyProvider.unwrap(wrapped), Charsets.ISO_8859_1)
+    }
+
+    @Test
+    fun `a legacy record is rewritten bound as soon as it has been read`() = runTest {
+        writeLegacyFile(refreshToken, idToken, "idem-key-1")
+
+        assertEquals(idToken, store.rawIdToken())
+        assertTrue("the ID token, which no refresh rotates, is bound now", slotNameOnDisk { it.rawIdToken }!!.contains("credentials/rawIdToken"))
+
+        assertEquals(refreshToken, store.useRefreshToken { String(it) })
+        assertEquals("idem-key-1", store.pendingRotation())
+        assertTrue(slotNameOnDisk { it.refreshToken }!!.contains("credentials/refreshToken"))
+        assertTrue(slotNameOnDisk { it.pendingRotation }!!.contains("credentials/pendingRotation"))
+
+        // And it reads back from the bound form.
+        assertEquals(refreshToken, store.useRefreshToken { String(it) })
+        assertEquals(idToken, store.rawIdToken())
+    }
+
+    @Test
+    fun `a failed rewrite never fails the read, and the legacy record still reads`() = runTest {
+        writeLegacyFile(refreshToken, idToken, null)
+        keyProvider.wrapFailure = ProviderException("keystore busy")
+
+        assertEquals(idToken, store.rawIdToken())
+
+        keyProvider.wrapFailure = null
+        assertFalse("not rewritten", slotNameOnDisk { it.rawIdToken }!!.contains("credentials/"))
+        assertEquals(idToken, store.rawIdToken())
+        assertTrue("rewritten once the key answers", slotNameOnDisk { it.rawIdToken }!!.contains("credentials/rawIdToken"))
+    }
+
+    @Test
+    fun `a save that lands during the read is not overwritten by the rewrite`() = runTest {
+        writeLegacyFile(refreshToken, null, null)
+        keyProvider.onUnwrap = {
+            keyProvider.onUnwrap = null
+            store.save("rotated-while-reading".toByteArray(), null)
+        }
+
+        store.useRefreshToken { String(it) }
+
+        assertEquals("rotated-while-reading", store.useRefreshToken { String(it) })
     }
 }
