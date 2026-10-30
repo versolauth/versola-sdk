@@ -119,6 +119,8 @@ package struct HTTPTokenClient: TokenClient {
                 response = try await httpClient.send(request)
             } catch let error as OAuthError {
                 throw error
+            } catch is CancellationError {
+                throw CancellationError()
             } catch {
                 throw OAuthError.recoverable(.network(detail: "revocation request failed", attempts: 1, elapsedMillis: 0))
             }
@@ -210,6 +212,9 @@ package struct HTTPTokenClient: TokenClient {
             response = try await httpClient.send(HTTPRequest(method: .post, url: url, headers: headers, body: body))
         } catch let error as OAuthError {
             throw error
+        } catch is CancellationError {
+            // The caller left: not a transport failure, and not one the budget may repeat.
+            throw CancellationError()
         } catch {
             throw OAuthError.recoverable(.network(detail: "token request failed", attempts: 1, elapsedMillis: 0))
         }
