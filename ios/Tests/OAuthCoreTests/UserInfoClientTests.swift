@@ -369,6 +369,28 @@ final class UserInfoClientTests: XCTestCase {
         XCTAssertEqual(remembered, "server-nonce-1")
     }
 
+    /// A repeated request carries a proof of its own: a `jti` is single-use, and replaying the proof
+    /// of the request that failed is what a resource server would refuse.
+    func testARepeatedDpopBoundUserInfoRequestCarriesAFreshProof() async throws {
+        let stub = JoseStubHTTP()
+        await stub.enqueue("/userinfo", status: 503)
+        await stub.enqueue("/userinfo", headers: json, text: #"{"sub":"user-1"}"#)
+        let dpop = DpopProofFactory(key: SoftwareDpopKey())
+        let budget = operationBudget()
+
+        _ = try await OperationBudget.$current.withValue(budget) {
+            try await self.client(stub, dpop: dpop).fetch(tokens: JoseTokenSource([self.bound]), expectedSubject: "user-1")
+        }
+
+        let requests = await stub.requests
+        XCTAssertEqual(requests.count, 2)
+        let first = JoseTestTokens.decode(try XCTUnwrap(requests[0].headers["DPoP"]))
+        let second = JoseTestTokens.decode(try XCTUnwrap(requests[1].headers["DPoP"]))
+        XCTAssertNotNil(first.claims["jti"] as? String)
+        XCTAssertNotEqual(first.claims["jti"] as? String, second.claims["jti"] as? String, "two attempts, two proofs")
+        XCTAssertEqual(second.claims["ath"] as? String, first.claims["ath"] as? String, "both bound to the same token")
+    }
+
     func testSecondUseDpopNonceChallengeIsNonceLoopAndEndsTheExchange() async {
         let stub = JoseStubHTTP()
         await stub.enqueue("/userinfo", status: 401, headers: challenge)

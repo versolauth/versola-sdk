@@ -354,14 +354,75 @@ final class RetryBudgetServerErrorTests: XCTestCase {
         XCTAssertEqual(value, 7)
     }
 
-    func testARequestMadeOnceIsRefusedByAnActiveCooldownBeforeItIsSent() async {
+    /// `login()` refuses at its start (where it costs the user nothing); the exchange is sent.
+    func testARequestMadeOnceIsNotRefusedByAnActiveCooldown() async throws {
         let world = World()
         let cooldown = RetryCooldown(clock: world.clock)
         await cooldown.record(origin: origin, status: 429, retryAfterMillis: 10_000)
         let s = script([])
-        let error = await failure { try await self.budget(world, cooldown: cooldown).executeOnce(origin: self.origin, s.call) }
+        let value = try await budget(world, cooldown: cooldown).executeOnce(origin: origin, s.call)
+        XCTAssertEqual(value, 7)
         let calls = await s.calls.value
-        XCTAssertEqual(calls, 0, "a code that was never sent is not spent")
-        guard case .recoverable(.server(429, 10_000, 0, _))? = error else { return XCTFail("\(String(describing: error))") }
+        XCTAssertEqual(calls, 1)
+    }
+
+    // MARK: When the cooldown starts
+
+    /// Only when an operation ENDS because of a Retry-After: one that fits and is then answered
+    /// starts nothing.
+    func testARetryAfterThatFitsAndThenSucceedsStartsNoCooldown() async throws {
+        let world = World()
+        let cooldown = RetryCooldown(clock: world.clock)
+        let s = script([server(429, retryAfter: 2000)])
+        let value = try await budget(world, cooldown: cooldown).execute(origin: origin, s.call)
+        XCTAssertEqual(value, 7)
+        XCTAssertEqual(world.delays, [2.0])
+
+        let next = script([])
+        let again = try await budget(world, cooldown: cooldown).execute(origin: origin, next.call)
+        XCTAssertEqual(again, 7)
+        let sent = await next.calls.value
+        XCTAssertEqual(sent, 1, "nothing was refused: the server was answered, and had said only how long to wait")
+    }
+
+    /// A call made while another is waiting out a Retry-After that fits is not refused by it.
+    func testACallDuringAWaitThatFitsIsNotRefused() async throws {
+        let world = World()
+        let cooldown = RetryCooldown(clock: world.clock)
+        let gate = Gate()
+        let waiting = RetryPolicy.default.newBudget(
+            clock: world.clock, random: FixedRandom(fraction: 0), cooldown: cooldown,
+            sleep: { _ in await gate.wait() }
+        )
+        let firstScript = script([server(503, retryAfter: 2000)])
+        let origin = self.origin
+        let first = Task { try await waiting.execute(origin: origin, firstScript.call) }
+        // The first call has failed and is sleeping; a second one, in another operation, arrives.
+        try await Task.sleep(nanoseconds: 50_000_000)
+        let second = script([])
+        let value = try await budget(world, cooldown: cooldown).execute(origin: origin, second.call)
+        XCTAssertEqual(value, 7)
+        let sent = await second.calls.value
+        XCTAssertEqual(sent, 1, "the wait of another call is its own, not a cooldown")
+        await gate.open()
+        let finished = try await first.value
+        XCTAssertEqual(finished, 7)
+    }
+
+    func testTheJitterOnARetryAfterNeverPushesItPastTheRoomLeftAndIsNeverNegative() async throws {
+        // 19.95 s of 20 s: a tenth would be 1.995 s (capped at 1 s), but only 0.05 s of room is left.
+        let tight = World()
+        _ = try await budget(tight, fraction: 0.999999).execute(origin: origin, script([server(503, retryAfter: 19_950)]).call)
+        XCTAssertEqual(tight.delays.count, 1)
+        XCTAssertGreaterThanOrEqual(tight.delays[0], 19.95)
+        XCTAssertLessThanOrEqual(tight.delays[0], 20.0)
+
+        // Exactly the room: no jitter at all (the ceiling is zero, not negative), and the wait that
+        // consumed the budget leaves nothing for another attempt.
+        let exact = World()
+        let s = script([server(503, retryAfter: 20_000)])
+        let error = await failure { try await self.budget(exact, fraction: 0.999999).execute(origin: self.origin, s.call) }
+        XCTAssertEqual(exact.delays, [20.0])
+        guard case .recoverable(.server(503, 20_000, 0, _))? = error else { return XCTFail("\(String(describing: error))") }
     }
 }

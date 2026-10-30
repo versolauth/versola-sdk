@@ -99,7 +99,12 @@ package actor RetryBudget {
     private let random: RandomSource
     private let cooldown: RetryCooldown?
     private let sleep: @Sendable (TimeInterval) async throws -> Void
-    private let startedAt: Date
+    private let startedAt: TimeInterval
+    /// Time the operation spent where the SDK's retrying does not run (the user in the browser),
+    /// left out of what the wall-clock budget counts: see `beginPause`.
+    private var pausedFor: TimeInterval = 0
+    private var pauseDepth = 0
+    private var pauseStartedAt: TimeInterval = 0
     private var failuresPerOrigin: [String: Int] = [:]
     private var totalFailures = 0
     private var callsStarted = 0
@@ -111,7 +116,7 @@ package actor RetryBudget {
         self.random = random
         self.cooldown = cooldown
         self.sleep = sleep
-        self.startedAt = clock.now()
+        self.startedAt = clock.uptime()
     }
 
     /// Runs `call` against `origin`, repeating it while the failure, the allowances and the
@@ -163,11 +168,12 @@ package actor RetryBudget {
         }
     }
 
-    /// Runs `call` once and never repeats it, but under the cooldown, and remembering a
-    /// `Retry-After` it is answered with: the authorization code exchange, which a repeat would
-    /// replay (`spec/retry-policy.md`, "Never retried").
+    /// Runs `call` once and never repeats it, remembering a `Retry-After` it is answered with: the
+    /// authorization code exchange, which a repeat would replay (`spec/retry-policy.md`, "Never
+    /// retried"). It is **not** refused by a cooldown: `login()` checks that before the browser
+    /// opens, where a refusal costs the user nothing, and a request that has got this far is sent
+    /// and answered by the server.
     package func executeOnce<T: Sendable>(origin: String, _ call: @Sendable () async throws -> T) async throws -> T {
-        try await cooldown?.check(origin)
         callsStarted += 1
         do {
             return try await call()
@@ -229,5 +235,22 @@ package actor RetryBudget {
         }
     }
 
-    private func elapsed() -> TimeInterval { clock.now().timeIntervalSince(startedAt) }
+    /// The user's time in the browser is not the SDK's retrying (`spec/retry-policy.md`, "Order of
+    /// work"): it is left out of the wall-clock budget, so one budget serves the whole `login()`
+    /// and the allowances are shared across the browser. Pauses may overlap; the time counts once.
+    package func beginPause() {
+        if pauseDepth == 0 { pauseStartedAt = clock.uptime() }
+        pauseDepth += 1
+    }
+
+    package func endPause() {
+        pauseDepth -= 1
+        if pauseDepth == 0 { pausedFor += clock.uptime() - pauseStartedAt }
+    }
+
+    private func elapsed() -> TimeInterval {
+        let now = clock.uptime()
+        let pausedNow = pauseDepth > 0 ? now - pauseStartedAt : 0
+        return max(0, now - startedAt - pausedFor - pausedNow)
+    }
 }

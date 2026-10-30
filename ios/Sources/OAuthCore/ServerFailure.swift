@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 /// What an HTTP answer that is not a success means to the retry policy (`spec/retry-policy.md`,
 /// "Classification"), and the one place that says so: every request the SDK originates reads its
@@ -67,33 +68,44 @@ package enum ServerFailure {
 /// connection lost or reset, and a 500, 502 or 504 may each follow a processed request, and are
 /// surfaced after the one request.
 package enum RefreshReplay {
-    package static func provablyNotProcessed(_ error: OAuthError) -> Bool {
+    /// - Parameter neverConnected: what `ConnectionFlag` recorded for the request that failed.
+    package static func provablyNotProcessed(_ error: OAuthError, neverConnected: Bool) -> Bool {
         switch error {
-        case .recoverable(.network(let detail, _, _)): return NetworkFailure.neverConnected(detail)
+        case .recoverable(.network): return neverConnected
         case .recoverable(.server(let status, _, _, _)): return status == 408 || status == 429 || status == 503
         default: return false
         }
     }
 }
 
-/// What a `network` failure's detail says about how far the request got. The detail is written by
-/// the facade's HTTP client (`URLSessionHTTPClient`) in one shape, `... (URLError <code>)`, and read
-/// back here; a detail of any other shape (a stub's, an unknown error) says nothing and counts as
-/// possibly processed, the conservative reading.
+/// How far a request that failed to get an answer got, recorded as a typed fact where the platform
+/// error is in hand (the facade's HTTP client, which sees the `URLError`) and read where the
+/// decision is made (`RefreshReplay`), rather than recovered from the failure's text: the public
+/// `detail` stays prose. Set per attempt by whoever runs the request: a request that nobody
+/// flagged is read as possibly processed, the conservative reading, which is also what a stub's
+/// failure says.
+package final class ConnectionFlag: Sendable {
+    @TaskLocal package static var current: ConnectionFlag?
+
+    private let state = OSAllocatedUnfairLock(initialState: false)
+
+    package init() {}
+
+    /// Whether the failure happened before a connection existed: nothing of the request was sent.
+    package var neverConnected: Bool { state.withLock { $0 } }
+    package func markNeverConnected() { state.withLock { $0 = true } }
+    package func reset() { state.withLock { $0 = false } }
+}
+
 package enum NetworkFailure {
     /// `NSURLError` codes raised before any byte of the request left the device: cannotFindHost,
     /// cannotConnectToHost, dnsLookupFailed, notConnectedToInternet, and the secure-connection
     /// failures (secureConnectionFailed and the server and client certificate errors).
-    static let neverConnectedCodes: Set<Int> = [-1003, -1004, -1006, -1009, -1200, -1201, -1202, -1203, -1204, -1205, -1206]
+    package static func isNeverConnected(urlErrorCode code: Int) -> Bool {
+        [-1003, -1004, -1006, -1009, -1200, -1201, -1202, -1203, -1204, -1205, -1206].contains(code)
+    }
 
     package static func suffix(forURLErrorCode code: Int) -> String { " (URLError \(code))" }
-
-    package static func neverConnected(_ detail: String) -> Bool {
-        guard let open = detail.range(of: "(URLError ", options: .backwards),
-              let close = detail[open.upperBound...].firstIndex(of: ")"),
-              let code = Int(detail[open.upperBound..<close]) else { return false }
-        return neverConnectedCodes.contains(code)
-    }
 }
 
 /// `Retry-After` (RFC 9110 section 10.2.3), read on 429 and 503 only.
@@ -119,8 +131,11 @@ package enum RetryAfter {
         if text.isEmpty { return nil }
         // delta-seconds is ASCII digits and nothing else: no sign, no fraction, no exponent.
         if text.utf8.allSatisfy({ $0 >= 0x30 && $0 <= 0x39 }) {
-            // More digits than an Int64 holds is still a valid, enormous, delta-seconds.
-            guard text.utf8.count <= 15, let seconds = Int64(text) else { return ceilingMillis }
+            // Leading zeros are not magnitude: "0000000030" is thirty seconds, so they go before the
+            // length is judged. More digits than an Int64 holds is still a valid, enormous, delta-seconds.
+            let digits = text.drop(while: { $0 == "0" })
+            if digits.isEmpty { return 0 }
+            guard digits.utf8.count <= 15, let seconds = Int64(digits) else { return ceilingMillis }
             return min(seconds * 1000, ceilingMillis)
         }
         guard let date = HTTPDate.parseAny(text) else { return nil }
@@ -211,10 +226,25 @@ package enum OperationBudget {
         return try await budget.execute(origin: origin, call)
     }
 
-    /// Runs `call` once, with no retry, but subject to the cooldown and starting it: the code
-    /// exchange, which a repeat would replay.
+    /// Runs `call` once, with no retry, and starts a cooldown from a `Retry-After` it is answered
+    /// with: the code exchange, which a repeat would replay.
     package static func runOnce<T: Sendable>(origin: String, _ call: @Sendable () async throws -> T) async throws -> T {
         guard let budget = current else { return try await call() }
         return try await budget.executeOnce(origin: origin, call)
+    }
+
+    /// Runs `body` with its duration left out of the current operation's budget, if there is one:
+    /// the browser leg, where the user, not the SDK, is the one taking the time.
+    package static func paused<T: Sendable>(_ body: @Sendable () async throws -> T) async throws -> T {
+        guard let budget = current else { return try await body() }
+        await budget.beginPause()
+        do {
+            let result = try await body()
+            await budget.endPause()
+            return result
+        } catch {
+            await budget.endPause()
+            throw error
+        }
     }
 }

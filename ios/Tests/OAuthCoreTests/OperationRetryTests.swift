@@ -86,12 +86,20 @@ final class OperationRetryTests: XCTestCase {
     }
 
     func testAStatusDiscoveryHasNoUseForIsServerAndNeverRepeated() async {
-        for status in [100, 302, 304] {
-            let http = http([answer(status)])
+        let http = http([answer(100)])
+        let error = await failure { try await self.within(self.operationBudget()) { try await self.discover(http) } }
+        let count = await http.requests.count
+        XCTAssertEqual(count, 1)
+        XCTAssertEqual(error, .recoverable(.server(status: 100, retryAfterMillis: nil, attempts: 1, elapsedMillis: 0)))
+    }
+
+    func testARedirectFromDiscoveryIsConfigurationAndNeverRepeated() async {
+        for status in [301, 302, 307] {
+            let http = http([answer(status, ["Location": "https://elsewhere.example.com/"])])
             let error = await failure { try await self.within(self.operationBudget()) { try await self.discover(http) } }
             let count = await http.requests.count
             XCTAssertEqual(count, 1, "HTTP \(status)")
-            XCTAssertEqual(error, .recoverable(.server(status: status, retryAfterMillis: nil, attempts: 1, elapsedMillis: 0)))
+            guard case .configuration(.discoveryMalformed)? = error else { XCTFail("HTTP \(status): \(String(describing: error))"); continue }
         }
     }
 
@@ -256,15 +264,17 @@ final class OperationRetryTests: XCTestCase {
         XCTAssertEqual(second, .recoverable(.server(status: 429, retryAfterMillis: 20_000, attempts: 0, elapsedMillis: 0)))
     }
 
-    func testACodeExchangeToACoolingDownOriginIsRefusedWithoutBeingSent() async throws {
+    /// The exchange is not refused by a cooldown: `login()` checks that before the browser opens (a
+    /// refusal there costs the user nothing), and a code that has got this far is sent and answered.
+    func testACodeExchangeIsSentWhileTheOriginIsCoolingDown() async throws {
         let cooldown = RetryCooldown(clock: world.clock)
         await cooldown.record(origin: DpopOrigin.of(URL(string: "https://id.example.com/token")!), status: 503, retryAfterMillis: 10_000)
         let http = http([answer(200, [:], #"{"access_token":"at","token_type":"Bearer","expires_in":300}"#)])
         let client = try tokenClient(http)
-        let error = await failure { try await self.within(self.operationBudget(cooldown: cooldown)) { try await client.exchange(self.grant()) } }
+        let issued = try await within(operationBudget(cooldown: cooldown)) { try await client.exchange(self.grant()) }
+        XCTAssertEqual(issued.accessToken, "at")
         let count = await http.requests.count
-        XCTAssertEqual(count, 0)
-        guard case .recoverable(.server(503, 10_000, 0, _))? = error else { return XCTFail("\(String(describing: error))") }
+        XCTAssertEqual(count, 1)
     }
 
     // MARK: One budget for the whole operation

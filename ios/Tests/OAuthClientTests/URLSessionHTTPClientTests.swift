@@ -60,9 +60,9 @@ final class URLSessionHTTPClientTests: XCTestCase {
         }
     }
 
-    /// What the core reads back to decide whether a refresh without an `Idempotency-Key` may be
-    /// sent again (`RefreshReplay`): the real `URLError` codes, through the text this client writes.
-    func testTheDetailTellsWhetherTheRequestEverConnected() {
+    /// Whether the request ever connected is a typed fact recorded where the `URLError` is in hand
+    /// (`ConnectionFlag`, read by `RefreshReplay`), not something read back out of the text.
+    func testTheClientRecordsWhetherTheRequestEverConnected() {
         let never: [URLError.Code] = [
             .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed, .notConnectedToInternet,
             .secureConnectionFailed, .serverCertificateHasBadDate, .serverCertificateUntrusted,
@@ -70,12 +70,21 @@ final class URLSessionHTTPClientTests: XCTestCase {
             .clientCertificateRequired,
         ]
         let maybe: [URLError.Code] = [.timedOut, .networkConnectionLost, .badServerResponse, .cannotParseResponse, .resourceUnavailable, .unknown]
-        func detail(_ code: URLError.Code) -> String {
-            guard case .recoverable(.network(let detail, _, _)) = URLSessionHTTPClient.networkError(URLError(code, userInfo: [NSURLErrorFailingURLStringErrorKey: "https://auth.example.com/cb?code=abc"]), elapsed: .zero) else { return "" }
-            return detail
+        func recorded(_ code: URLError.Code) -> Bool {
+            let flag = ConnectionFlag()
+            ConnectionFlag.$current.withValue(flag) {
+                _ = URLSessionHTTPClient.networkError(URLError(code, userInfo: [NSURLErrorFailingURLStringErrorKey: "https://auth.example.com/cb?code=abc"]), elapsed: .zero)
+            }
+            return flag.neverConnected
         }
-        for code in never { XCTAssertTrue(NetworkFailure.neverConnected(detail(code)), "\(code.rawValue)") }
-        for code in maybe { XCTAssertFalse(NetworkFailure.neverConnected(detail(code)), "\(code.rawValue)") }
+        for code in never { XCTAssertTrue(recorded(code), "\(code.rawValue)") }
+        for code in maybe { XCTAssertFalse(recorded(code), "\(code.rawValue)") }
+        // Outside a refresh nothing is listening, and nothing fails.
+        _ = URLSessionHTTPClient.networkError(URLError(.cannotFindHost), elapsed: .zero)
+        // A failure that is not a URLError says nothing.
+        let flag = ConnectionFlag()
+        ConnectionFlag.$current.withValue(flag) { _ = URLSessionHTTPClient.networkError(nil, detail: "x", elapsed: .zero) }
+        XCTAssertFalse(flag.neverConnected)
     }
 
     func testURLsInAnErrorTextAreStripped() {

@@ -88,9 +88,7 @@ package actor SessionCoordinator: AccessTokenSource {
         return try await newOperation(body)
     }
 
-    /// An operation with a budget of its own whatever is running: the part of a `login()` after
-    /// the browser, whose wall-clock the user spent and the SDK's budget must not.
-    package nonisolated func newOperation<T: Sendable>(_ body: @Sendable () async throws -> T) async rethrows -> T {
+    private nonisolated func newOperation<T: Sendable>(_ body: @Sendable () async throws -> T) async rethrows -> T {
         let budget = retryPolicy.newBudget(clock: clock, cooldown: cooldown)
         return try await OperationBudget.$current.withValue(budget) { try await body() }
     }
@@ -171,6 +169,10 @@ package actor SessionCoordinator: AccessTokenSource {
             warnedOfflineAccess = true
             logger?.warn("the provider advertises offline_access and the configured scopes omit it; a refresh token may not be issued")
         }
+        // A cooldown on the token endpoint's origin refuses the login here, before the browser
+        // opens, where it costs the user nothing: the code exchange itself is not refused by it
+        // (it is sent, once, and the server answers), and by then the user has already signed in.
+        if let url = URL(string: try await flow.metadata().tokenEndpoint) { try await cooldown.check(DpopOrigin.of(url)) }
         let grant = try await flow.authorize(scopes: requested, acrValues: acrValues, maxAge: maxAge, parameters: parameters, ephemeralBrowser: ephemeralBrowser)
         return try await finishLogin(grant, maxAge: maxAge)
     }
@@ -196,19 +198,15 @@ package actor SessionCoordinator: AccessTokenSource {
         let validator = self.idTokenValidator
         let exchange = Task { [self] () throws -> (TokenResponse, IdTokenClaims?) in
             do {
-                // Its own budget, not the one the login began with: the user's time in the browser
-                // is not the SDK's to be charged for. The exchange itself is made once (a repeat
-                // would replay a spent code); what can be repeated is the key set the validation
-                // reads, under this budget.
-                let (issued, validated): (TokenResponse, IdTokenClaims?) = try await self.newOperation {
-                    let issued = try await tokenClient.exchange(grant)
-                    // Validated before anything is persisted (`spec/oauth-sdk-api.md` section 11).
-                    var validated: IdTokenClaims?
-                    if let validator {
-                        guard let idToken = issued.idToken else { throw OAuthError.configuration(.idTokenRejected(.malformed)) }
-                        validated = try await validator.validate(idToken: idToken, expectedNonce: grant.nonce, accessToken: issued.accessToken, maxAge: maxAge, previous: nil, serverTime: issued.serverDate)
-                    }
-                    return (issued, validated)
+                // The budget of the login this belongs to, the user's time in the browser left out of
+                // it (`OperationBudget.paused`): the exchange is made once (a repeat would replay a
+                // spent code); what can be repeated is the key set the validation reads.
+                let issued = try await tokenClient.exchange(grant)
+                // Validated before anything is persisted (`spec/oauth-sdk-api.md` section 11).
+                var validated: IdTokenClaims?
+                if let validator {
+                    guard let idToken = issued.idToken else { throw OAuthError.configuration(.idTokenRejected(.malformed)) }
+                    validated = try await validator.validate(idToken: idToken, expectedNonce: grant.nonce, accessToken: issued.accessToken, maxAge: maxAge, previous: nil, serverTime: issued.serverDate)
                 }
                 warnIfNoExpiry(issued)
                 if refreshTokens == .required, issued.refreshToken == nil {
@@ -300,11 +298,22 @@ package actor SessionCoordinator: AccessTokenSource {
             let budget = OperationBudget.current ?? retryPolicy.newBudget(clock: clock, cooldown: cooldown)
             let tokenClient = self.tokenClient
             let store = self.credentialStore
-            let mayRepeat: (@Sendable (OAuthError) -> Bool)? = repeatsAmbiguousRefresh ? nil : RefreshReplay.provablyNotProcessed
+            // Whether the request that failed ever connected, recorded where the platform error is in
+            // hand and read here (`ConnectionFlag`); one per call, reset for each attempt.
+            let connection = ConnectionFlag()
+            let mayRepeat: (@Sendable (OAuthError) -> Bool)?
+            if repeatsAmbiguousRefresh {
+                mayRepeat = nil
+            } else {
+                mayRepeat = { RefreshReplay.provablyNotProcessed($0, neverConnected: connection.neverConnected) }
+            }
             let issued = try await budget.execute(origin: origin, mayRepeat: mayRepeat) {
+                connection.reset()
                 // A fresh read per attempt: the token is read for the duration of one request.
                 guard let token = try await store.refreshToken() else { throw Self.noGrantStored() }
-                return try await tokenClient.refresh(refreshToken: token, idempotencyKey: idempotencyKey)
+                return try await ConnectionFlag.$current.withValue(connection) {
+                    try await tokenClient.refresh(refreshToken: token, idempotencyKey: idempotencyKey)
+                }
             }
             // An ID token on a refresh is validated with the login rules minus the nonce, and
             // against the claims it replaces (OpenID Connect Core 12.2), before persistence.

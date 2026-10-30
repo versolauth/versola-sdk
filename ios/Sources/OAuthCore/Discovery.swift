@@ -54,8 +54,13 @@ package struct HTTPDiscoveryClient: DiscoveryClient {
             throw OAuthError.configuration(.invalidConfiguration(
                 detail: "no discovery document at \(location) (HTTP \(response.statusCode))"
             ))
-        // What is left (a 1xx, an unfollowed 3xx) is an answer this client cannot use and a
-        // repeat cannot change: reported with its status, never repeated.
+        // A redirect is not followed (`errors.md`): a deployment fault, not a busy provider.
+        case 300..<400:
+            throw OAuthError.configuration(.discoveryMalformed(
+                detail: "discovery answered HTTP \(response.statusCode); redirects are not followed"
+            ))
+        // What is left (a 1xx) is an answer this client cannot use and a repeat cannot change:
+        // reported with its status, never repeated.
         default:
             throw ServerFailure.unexpected(response.statusCode)
         }

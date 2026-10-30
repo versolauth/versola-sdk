@@ -143,9 +143,17 @@ final class DiscoveryTests: XCTestCase {
     }
 
     func testAStatusDiscoveryHasNoUseForIsServerWithItsStatus() async {
-        for status in [100, 302, 304] {
+        let http = RecordingHTTP.json(100, "")
+        await assertThrows(.recoverable(.server(status: 100, retryAfterMillis: nil, attempts: 1, elapsedMillis: 0))) {
+            try await self.service(http).metadata()
+        }
+    }
+
+    /// A redirect is not followed and is a deployment fault (`errors.md`), never a busy provider.
+    func testARedirectFromDiscoveryIsConfigurationNotServer() async {
+        for status in [301, 302, 304, 307, 308] {
             let http = RecordingHTTP.json(status, "")
-            await assertThrows(.recoverable(.server(status: status, retryAfterMillis: nil, attempts: 1, elapsedMillis: 0))) {
+            await assertThrows(.configuration(.discoveryMalformed(detail: "discovery answered HTTP \(status); redirects are not followed"))) {
                 try await self.service(http).metadata()
             }
         }

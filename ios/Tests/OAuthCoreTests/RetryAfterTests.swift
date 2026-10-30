@@ -21,6 +21,15 @@ final class RetryAfterTests: XCTestCase {
         XCTAssertEqual(parse("007"), 7000)
     }
 
+    func testLeadingZerosAreNotMagnitude() {
+        XCTAssertEqual(parse("0000000030"), 30_000)
+        XCTAssertEqual(parse("0000000000000000000000030"), 30_000, "more than fifteen characters, thirty seconds")
+        XCTAssertEqual(parse("0000000000000000000000000"), 0)
+        XCTAssertEqual(parse("00"), 0)
+        XCTAssertEqual(parse("000086400"), 86_400_000)
+        XCTAssertEqual(parse("0000000000099999999999999999"), 86_400_000)
+    }
+
     func testAValueAboveADaySaturatesAtADayWithoutOverflowing() {
         XCTAssertEqual(parse("86400"), 86_400_000)
         XCTAssertEqual(parse("86401"), 86_400_000)

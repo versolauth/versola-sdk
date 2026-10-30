@@ -22,8 +22,9 @@ public enum OAuthError: Error, Sendable, Equatable {
         case pendingRequestExpired
         /// Nothing answered: connect failure, DNS, TLS, a reset, a timeout. Surfaced once the
         /// retry budget is spent, or at once on an operation that is not repeated.
-        /// `attempts` and `elapsedMillis` describe the call that failed and the operation it
-        /// belonged to; a ceiling that was reached reads as `attempts` at the policy's maximum.
+        /// `attempts` is the number of failed requests of the call that surfaced this error (a
+        /// ceiling that was reached reads as the policy's maximum); `elapsedMillis` is the time the
+        /// operation it belonged to spent, the user's time in the browser not counted.
         case network(detail: String, attempts: Int, elapsedMillis: Int64)
         /// An HTTP answer kept the operation from finishing: 408, 429 or a 5xx from a request
         /// the SDK originates (`spec/retry-policy.md`, "What the app sees").
@@ -31,8 +32,9 @@ public enum OAuthError: Error, Sendable, Equatable {
         /// `status` is the last status seen. `retryAfterMillis` is the parsed `Retry-After` of
         /// that answer (429 and 503 only), saturated at one day, nil when there was none or it
         /// was malformed; an app must not repeat the call before it has passed. `attempts` is the
-        /// number of requests the failed call made, `elapsedMillis` the time the operation spent.
-        /// A call refused by the cooldown (nothing was sent) has `attempts` 0.
+        /// number of failed requests of the call that surfaced this error, `elapsedMillis` the time
+        /// the operation spent (the user's time in the browser not counted). A call refused by the
+        /// cooldown (nothing was sent) has `attempts` 0.
         case server(status: Int, retryAfterMillis: Int64?, attempts: Int, elapsedMillis: Int64)
         case unlockRequired
         case nonceLoop(origin: String)
