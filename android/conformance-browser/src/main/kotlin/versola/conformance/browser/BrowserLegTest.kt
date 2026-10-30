@@ -7,7 +7,6 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
-import org.junit.Ignore
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.junit.runners.Parameterized
@@ -132,14 +131,11 @@ class BrowserLegTest(private val leg: String) {
     }
 
     /**
-     * Scenario 12's last assertion ("the restored code_verifier produces a successful exchange"),
-     * written and run: it fails today, because `OAuthClient` restores `Authorizing` and the
-     * redirect reaches the new process, but nothing there awaits it (`VersolaAuthTabActivity`'s
-     * KDoc says `OAuthClient` does not wire `awaitPendingRedirect()` yet; `spec/oauth-sdk-api.md`
-     * section 4 says a cold-started process completes on its own). Ignored until that lands, not
-     * deleted: it is the test that proves the fix. The PR carries the failing run.
+     * Scenario 12's last assertion ("the restored code_verifier produces a successful exchange"):
+     * the redirect cold-starts the app, `OAuthClient.create()` restores `Authorizing` and awaits
+     * the buffered redirect, and the sign-in completes with nothing called by the app
+     * (`spec/oauth-sdk-api.md` section 4).
      */
-    @Ignore("OAuthClient does not complete a login in a cold-started process yet (spec/oauth-sdk-api.md section 4)")
     @Test
     fun aRedirectDeliveredToAColdStartedProcessCompletesTheSignIn() {
         startLogin()
