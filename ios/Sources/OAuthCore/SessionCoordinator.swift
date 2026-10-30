@@ -400,13 +400,14 @@ package actor SessionCoordinator: AccessTokenSource {
         }
     }
 
+    /// Removes the previous grant a token-less login replaces. Not `wipe()`'s teardown: the key
+    /// and the nonce caches are not the old grant's. The exchange that just succeeded was signed
+    /// with the installation's one DPoP key, so the new access token is bound to it, and
+    /// destroying it here would leave a token no proof can match.
     private func clearStoredGrant() async {
         epoch += 1
         cachedAccessToken = nil
         try? await credentialStore.clear()
-        do { try await onCredentialsWiped() } catch {
-            logger?.warn("login: teardown of the previous grant's key or nonce caches failed")
-        }
     }
 
     private func warnIfNoExpiry(_ response: TokenResponse) {

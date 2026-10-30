@@ -222,6 +222,10 @@ there is nothing to spend: the SDK wipes the ID token and claims, publishes `Una
 and the operation fails with `Reauthenticate(SessionExpired)`. No token request is made and the
 browser is not opened. Scenario 31.
 
+A login that issues no refresh token over a stored grant removes that grant, but keeps the DPoP
+key: the login's own exchange was signed with it, so the new access token is bound to it, and the
+key is destroyed only by the teardown of a logout or of a rejected grant.
+
 ### `Refreshing → Unauthenticated`
 
 Only on `invalid_grant`. Network failures, `use_dpop_nonce`, 429 and 5xx leave the state at
