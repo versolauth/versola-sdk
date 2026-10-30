@@ -37,6 +37,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
       - name: Scan for verified secrets
         uses: trufflesecurity/trufflehog@31ce31ee1abbcc7dc8eee5764c17121c3044c8b2 # v3.99.7
@@ -51,6 +52,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/dependency-review-action@a1d282b36b6f3519aa1f3fc636f609c47dddb294 # v5.0.0
         with:
           fail-on-severity: high
@@ -76,6 +79,8 @@ jobs:
         include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"language":"java-kotlin","runner":"ubuntu-latest"}]' || '[{"language":"java-kotlin","runner":"ubuntu-latest"},{"language":"swift","runner":"macos-latest"}]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       # Match ios.yml: resolve the package before CodeQL instruments xcodebuild.
       # Resolving the graph inside the traced build can stall before compilation starts.
       - name: Resolve Swift packages before tracing

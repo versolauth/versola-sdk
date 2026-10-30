@@ -40,18 +40,21 @@ paths: [".github/**", "conformance/**", "tools/**"]
 - Least privilege: top-level `permissions: contents: read` (as `conformance.yml` has), widened per
   job only where a job needs it (`attestations`, `id-token` for provenance, `packages`). A new
   workflow without a `permissions:` block gets the repository default, which is wider than needed.
-- Pin every new action to a full commit SHA with the version in a comment
-  (`uses: owner/repo@<sha> # v4.2.1`). The existing workflows still use tags (`actions/checkout@v4`,
-  `gradle/actions/setup-gradle@v4`, `reactivecircus/android-emulator-runner@v2`) because they
-  predate this rule; pin the ones you touch, and do not replace a pin with a floating tag.
-  Third-party actions that receive secrets or a write token get the most scrutiny.
+- Pin every action to a full commit SHA with the version in a comment
+  (`uses: owner/repo@<sha> # v4.2.1`); every workflow does. Resolve the SHA from the real tag
+  (`gh api repos/<owner>/<repo>/git/ref/tags/<tag>`, dereferencing an annotated tag), never from
+  memory, and do not replace a pin with a floating tag. Dependabot's `github-actions` entry bumps
+  the pin and the comment together. Third-party actions that receive secrets or a write token get
+  the most scrutiny. `spec.yml`'s `workflows` job (actionlint) runs on every pull request, so a
+  workflow GitHub would reject fails there first.
 - Never interpolate untrusted `${{ ... }}` (PR titles and bodies, branch names, issue text,
   `inputs.*` from `workflow_dispatch`) straight into a `run:` body. Pass it through `env:` and
   validate it, as the server repository does for `test_tag`. `inputs.versola_ref` is checked out
   through `with: ref:`, not through a shell; keep it that way.
 - Secrets are named by reference (`secrets.VERSOLA_CHECKOUT_TOKEN`, `MAVEN_SIGNING_KEY`) and never
-  echoed. A step that checks out another repository with a token does not persist it
-  (`persist-credentials: false` unless a later step needs to push).
+  echoed. Every checkout sets `persist-credentials: false` unless a later step pushes
+  (`prepare-release.yml` is the only one), and above all the one that clones another repository
+  with a token.
 - Comments explain why, at length, in the existing style: the simulator-name drift in `ios.yml`,
   why `android.builtInKotlin=false` in `gradle.properties`, why `conformance.yml` is on demand.
   A non-obvious step without its reason is a trap for the next person.

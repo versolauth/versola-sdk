@@ -13,11 +13,17 @@ on:
       - "Package.swift"
       - ".github/workflows/ios.yml"
 
+# Least privilege (ci-release.md): nothing here writes to the repository.
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # The acceptance criterion in #4 this exists to verify: SPM cannot resolve
       # Package.swift from a subdirectory, which is why it sits at the repo root with
