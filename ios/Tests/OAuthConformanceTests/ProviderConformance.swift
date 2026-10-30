@@ -61,7 +61,8 @@ class ProviderConformance: XCTestCase {
         scopes: Set<String>? = nil,
         protectedOrigins: Set<String> = [ResourceServer.origin],
         pushedAuthorization: PushedAuthorization = .whenAdvertised,
-        tokenBinding: TokenBinding = .bearer
+        tokenBinding: TokenBinding = .bearer,
+        retryPolicy: RetryPolicy = .default
     ) throws -> OAuthConfiguration {
         try OAuthConfiguration(
             issuer: endpoints == nil ? proxyIssuer : nil,
@@ -73,6 +74,7 @@ class ProviderConformance: XCTestCase {
             tokenBinding: tokenBinding,
             pushedAuthorization: pushedAuthorization,
             protectedOrigins: protectedOrigins,
+            retryPolicy: retryPolicy,
             logger: logger,
             urlSession: VirtualNetwork.session(record: true)
         )
