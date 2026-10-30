@@ -48,6 +48,15 @@ internal object CacheLifetime {
      * expiry further away than [MAX_MILLIS] cannot have been set by this class: the clock moved back
      * since, or the record is not ours, and either is an expired record.
      */
-    fun isFresh(expiresAtEpochMillis: Long, nowEpochMillis: Long): Boolean =
-        nowEpochMillis < expiresAtEpochMillis && expiresAtEpochMillis - nowEpochMillis <= MAX_MILLIS
+    fun isFresh(expiresAtEpochMillis: Long, nowEpochMillis: Long): Boolean = isUsable(expiresAtEpochMillis, nowEpochMillis, 0)
+
+    /**
+     * [isFresh], or expired by no more than [staleForMillis]: what a reader that may use a stale
+     * copy (a refresh's ID token, [StaleKeysAllowed]) asks.
+     */
+    fun isUsable(expiresAtEpochMillis: Long, nowEpochMillis: Long, staleForMillis: Long): Boolean =
+        nowEpochMillis < expiresAtEpochMillis + staleForMillis && expiresAtEpochMillis - nowEpochMillis <= MAX_MILLIS
+
+    /** How long past its lifetime a key set may still verify the ID token of a refresh (`spec/retry-policy.md`). */
+    const val STALE_KEYS_MILLIS: Long = 7L * 24 * 60 * 60 * 1000
 }

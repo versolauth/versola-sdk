@@ -669,14 +669,20 @@ public class SessionCoordinator(
                     // fetched a `Recoverable` one; either way the grant — the rotated token just
                     // stored — stays, and nothing else from this response is kept: not the access
                     // token, which the same ID token vouches for, nor the ID token, nor its claims.
-                    val refreshedClaims = checkNotNull(validator).validate(
-                        checkNotNull(rawIdToken),
-                        expectedNonce = null,
-                        accessToken = issued.accessToken,
-                        maxAge = null,
-                        previous = restoreClaims(),
-                        serverTime = issued.serverDate,
-                    )
+                    // A key set that cannot be fetched may be judged against the one held past its
+                    // lifetime, for this check alone (`spec/retry-policy.md`, "A stale key set for a
+                    // refresh"): without that every `accessToken()` of a key-set outage spends a
+                    // rotation, receives an access token and throws it away.
+                    val refreshedClaims = withContext(StaleKeysAllowed()) {
+                        checkNotNull(validator).validate(
+                            checkNotNull(rawIdToken),
+                            expectedNonce = null,
+                            accessToken = issued.accessToken,
+                            maxAge = null,
+                            previous = restoreClaims(),
+                            serverTime = issued.serverDate,
+                        )
+                    }
                     withContext(NonCancellable) {
                         refreshFlight.mutex.withLock {
                             if (epoch.get() != startedIn) throw WipedMeanwhile()

@@ -133,8 +133,11 @@ public class JsonWebKeySet internal constructor(public val keys: List<JsonWebKey
  */
 @VersolaInternalApi
 public interface JwksCache {
-    /** The document, or null when none is kept or the one kept has expired. */
-    public suspend fun load(): String?
+    /**
+     * The document, or null when none is kept or the one kept has expired by more than
+     * [staleForMillis] (zero: not at all).
+     */
+    public suspend fun load(staleForMillis: Long = 0): String?
 
     /** Keeps [json] for [lifetimeMillis]. */
     public suspend fun save(json: String, lifetimeMillis: Long)
@@ -159,11 +162,11 @@ public class FileJwksCache(
     private val clock: () -> Long = System::currentTimeMillis,
 ) : JwksCache {
 
-    override suspend fun load(): String? = withContext(Dispatchers.IO) {
+    override suspend fun load(staleForMillis: Long): String? = withContext(Dispatchers.IO) {
         try {
             if (!file.exists()) return@withContext null
             val stored = discoveryJson.decodeFromString(ExpiringDocument.serializer(), file.readText())
-            stored.document.takeIf { CacheLifetime.isFresh(stored.expiresAt, clock()) }
+            stored.document.takeIf { CacheLifetime.isUsable(stored.expiresAt, clock(), staleForMillis) }
         } catch (e: IOException) {
             // Unreadable is a miss, never a failure: the document is one request away.
             null
@@ -199,7 +202,8 @@ public class MemoryJwksCache(
     private var document: String? = null
     private var expiresAt = 0L
 
-    override suspend fun load(): String? = document?.takeIf { CacheLifetime.isFresh(expiresAt, clock()) }
+    override suspend fun load(staleForMillis: Long): String? =
+        document?.takeIf { CacheLifetime.isUsable(expiresAt, clock(), staleForMillis) }
 
     override suspend fun save(json: String, lifetimeMillis: Long) {
         document = json
@@ -239,18 +243,33 @@ public class JwksClient(
     private var inMemory: JsonWebKeySet? = null
     private var inMemoryExpiresAt = 0L
 
-    /** A key set and whether this very call fetched it, which tells the caller a refetch would be a repeat. */
-    internal class Loaded(val keys: JsonWebKeySet, val fetched: Boolean)
+    /** After a failed fetch a reader that may use a stale set is not sent to the provider again before this. */
+    private var retryNotBefore = 0L
+    private var lastFailure: VersolaError.Recoverable? = null
+
+    /**
+     * A key set and whether this very call fetched it, which tells the caller a refetch would be a
+     * repeat. [stale] marks a set past its lifetime served because the fetch failed, with that
+     * failure as [cause]: it proves an outage and nothing else.
+     */
+    internal class Loaded(
+        val keys: JsonWebKeySet,
+        val fetched: Boolean,
+        val stale: Boolean = false,
+        val cause: VersolaError.Recoverable? = null,
+    )
 
     /**
      * @param forceRefresh skip memory and the cache and fetch. Without it, the key set is
      *   memory, then cache, then the network, and memory and cache are skipped once what they
      *   hold has outlived its lifetime ([CacheLifetime]): an expired set is not served when the
      *   refetch fails, because a key the provider withdrew is exactly what it would still vouch for.
+     * @param allowStale the one reader that may be served a set past its lifetime, up to a week, when
+     *   the fetch fails as a [VersolaError.Recoverable]: the ID token of a refresh ([StaleKeysAllowed]).
      * @throws VersolaError.Recoverable(Network) when the provider cannot be reached.
      * @throws VersolaError.Configuration(DiscoveryMalformed) when the answer is not a JWK Set.
      */
-    internal suspend fun keys(uri: String, forceRefresh: Boolean): Loaded = mutex.withLock {
+    internal suspend fun keys(uri: String, forceRefresh: Boolean, allowStale: Boolean = false): Loaded = mutex.withLock {
         if (!forceRefresh) {
             inMemory?.takeIf { CacheLifetime.isFresh(inMemoryExpiresAt, clock()) }
                 ?.let { return@withLock Loaded(it, fetched = false) }
@@ -265,13 +284,27 @@ public class JwksClient(
                 if (parsed != null) {
                     inMemory = parsed
                     // The disk copy's own remaining lifetime is not visible here, so memory trusts
-                    // it for the longest a copy can be good for; the cache decides at the next load.
+                    // it for the shortest a copy can be good for; the cache decides at the next load.
                     inMemoryExpiresAt = clock() + CacheLifetime.MIN_MILLIS
                     return@withLock Loaded(parsed, fetched = false)
                 }
             }
         }
-        val fetched = fetch(uri)
+        // A reader that may use a stale set is not made to wait out a fetch that failed a moment ago.
+        if (allowStale && clock() < retryNotBefore) {
+            staleSet()?.let { return@withLock Loaded(it, fetched = false, stale = true, cause = lastFailure) }
+        }
+        val fetched = try {
+            fetch(uri)
+        } catch (e: VersolaError.Recoverable) {
+            // Only an outage is forgiven, and only to the reader that said it can be: anything that
+            // is served but wrong (below, or a redirect) is a `Configuration` and never masked.
+            retryNotBefore = clock() + STALE_RETRY_MILLIS
+            lastFailure = e
+            if (!allowStale) throw e
+            val stale = staleSet() ?: throw e
+            return@withLock Loaded(stale, fetched = false, stale = true, cause = e)
+        }
         val parsed = try {
             JsonWebKeySet.parse(fetched.body)
         } catch (e: IllegalArgumentException) {
@@ -284,7 +317,20 @@ public class JwksClient(
         cache.save(fetched.body, fetched.lifetimeMillis)
         inMemory = parsed
         inMemoryExpiresAt = clock() + fetched.lifetimeMillis
+        retryNotBefore = 0
         Loaded(parsed, fetched = true)
+    }
+
+    /** The key set held past its lifetime, by memory or disk, if it expired no more than a week ago. */
+    private suspend fun staleSet(): JsonWebKeySet? {
+        val now = clock()
+        inMemory?.takeIf { CacheLifetime.isUsable(inMemoryExpiresAt, now, CacheLifetime.STALE_KEYS_MILLIS) }?.let { return it }
+        val stored = cache.load(CacheLifetime.STALE_KEYS_MILLIS) ?: return null
+        return try {
+            JsonWebKeySet.parse(stored)
+        } catch (e: IllegalArgumentException) {
+            null
+        }
     }
 
     private class Fetched(val body: String, val lifetimeMillis: Long)
@@ -313,3 +359,6 @@ public class JwksClient(
         }
     } }
 }
+
+/** A reader that may use a stale key set is not sent to the provider again for this long after a failed fetch. */
+private const val STALE_RETRY_MILLIS = 60_000L

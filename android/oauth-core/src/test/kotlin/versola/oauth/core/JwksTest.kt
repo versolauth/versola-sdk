@@ -381,6 +381,113 @@ class JwksTest {
         assertTrue(error is VersolaError.Recoverable)
     }
 
+    // ---- a stale key set, for the ID token of a refresh only ----------------------------------------
+
+    private val week = 7 * 24 * hour
+
+    /** A client that fetched [document] at a clock the test then moves; the next fetch answers 503. */
+    private suspend fun heldThenOutage(clock: (Long) -> Unit, cache: JwksCache = MemoryJwksCache { now }): JwksClient {
+        serve(document)
+        val client = JwksClient(OkHttpClient(), cache) { now }
+        client.keys(uri, forceRefresh = false)
+        clock(24 * hour) // its lifetime is over
+        server.enqueue(MockResponse.Builder().code(503).build())
+        return client
+    }
+
+    private var now = 1_000_000_000_000L
+
+    @Test
+    fun `a reader that may use a stale set is served the one held past its lifetime when the fetch fails`() = runTest {
+        val client = heldThenOutage({ now += it })
+
+        val loaded = client.keys(uri, forceRefresh = false, allowStale = true)
+
+        assertTrue(loaded.stale)
+        assertEquals(4, loaded.keys.keys.size)
+        assertTrue(loaded.cause is VersolaError.Recoverable)
+    }
+
+    @Test
+    fun `any other reader gets the failure, not a stale set`() = runTest {
+        val client = heldThenOutage({ now += it })
+
+        assertTrue(failure { client.keys(uri, forceRefresh = false) } is VersolaError.Recoverable)
+    }
+
+    @Test
+    fun `a set that expired more than a week ago is not used even by that reader`() = runTest {
+        val client = heldThenOutage({ now += it + week })
+
+        assertTrue(failure { client.keys(uri, forceRefresh = false, allowStale = true) } is VersolaError.Recoverable)
+    }
+
+    @Test
+    fun `an answer that is not a key set is never masked by the stale copy`() = runTest {
+        serve(document)
+        val client = JwksClient(OkHttpClient(), MemoryJwksCache { now }) { now }
+        client.keys(uri, forceRefresh = false)
+        now += 24 * hour
+        serve("<html>not keys</html>")
+
+        val error = failure { client.keys(uri, forceRefresh = false, allowStale = true) }
+
+        assertTrue(error is VersolaError.Configuration)
+    }
+
+    @Test
+    fun `after a failed fetch the stale reader is not sent to the provider again for a minute`() = runTest {
+        val client = heldThenOutage({ now += it })
+        client.keys(uri, forceRefresh = false, allowStale = true)
+        val requests = server.requestCount
+
+        now += minute - 1
+        assertTrue(client.keys(uri, forceRefresh = false, allowStale = true).stale)
+        assertEquals("no request within the minute", requests, server.requestCount)
+
+        now += 1
+        server.enqueue(MockResponse.Builder().code(503).build())
+        assertTrue(client.keys(uri, forceRefresh = false, allowStale = true).stale)
+        assertEquals("one more after it", requests + 1, server.requestCount)
+    }
+
+    @Test
+    fun `the disk copy is the stale set of a new process`() = runTest {
+        val file = File(folder.newFolder(), "jwks.json")
+        serve(document)
+        JwksClient(OkHttpClient(), FileJwksCache(file) { now }) { now }.keys(uri, forceRefresh = false)
+        now += 24 * hour
+        server.enqueue(MockResponse.Builder().code(503).build())
+
+        val loaded = JwksClient(OkHttpClient(), FileJwksCache(file) { now }) { now }.keys(uri, forceRefresh = false, allowStale = true)
+
+        assertTrue(loaded.stale)
+    }
+
+    private fun token(kid: String) = Jose.jws("RS256", Jose.rsa.private, """{"sub":"s"}""", kid = kid)
+
+    @Test
+    fun `an ID token whose kid the stale set lacks is Recoverable, not a signature rejection`() = runTest {
+        val client = heldThenOutage({ now += it })
+        val verifier = JwsVerifier({ uri }, { emptyList() }, client)
+
+        val error = failure { kotlinx.coroutines.withContext(StaleKeysAllowed()) { verifier.verify(token("rotated-in-since")) } }
+
+        assertTrue(error.toString(), error is VersolaError.Recoverable)
+    }
+
+    @Test
+    fun `an ID token the stale set verifies is accepted under the refresh rule and Recoverable without it`() = runTest {
+        val client = heldThenOutage({ now += it })
+        val verifier = JwsVerifier({ uri }, { emptyList() }, client)
+
+        kotlinx.coroutines.withContext(StaleKeysAllowed()) { verifier.verify(token("rsa")) }
+
+        server.enqueue(MockResponse.Builder().code(503).build())
+        now += 2 * minute
+        assertTrue(failure { verifier.verify(token("rsa")) } is VersolaError.Recoverable)
+    }
+
     // ---- scenario 34, unit tier: the key set is repeated under the operation's budget -------
 
     @Test

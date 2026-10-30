@@ -537,6 +537,28 @@ class SessionCoordinatorTest {
     }
 
     @Test
+    fun `only the ID token of a refresh may be judged against a stale key set, never a login's`() = runTest {
+        val seen = mutableListOf<Boolean>()
+        val validator = object : IdTokenValidator {
+            override suspend fun validate(idToken: String, expectedNonce: String?, accessToken: String?, maxAge: Long?, previous: IdTokenClaims?, serverTime: java.time.Instant?): IdTokenClaims {
+                seen += kotlinx.coroutines.currentCoroutineContext()[StaleKeysAllowed] != null
+                return IdTokenClaims(
+                    subject = "alice", issuer = "https://id.example.com", audience = listOf("mobile-app"),
+                    issuedAt = java.time.Instant.EPOCH, expiresAt = java.time.Instant.EPOCH.plusSeconds(3600),
+                )
+            }
+        }
+        val (coordinator, tokenClient, _) = generic(validator = validator)
+        tokenClient.exchangeResult = { issued(accessToken = "at", refreshToken = "rt", idToken = "login-id") }
+        coordinator.login(setOf("openid"))
+        tokenClient.refreshActions = mutableListOf({ issued(accessToken = "at-2", refreshToken = "rt-2", idToken = "refresh-id") })
+
+        coordinator.refresh()
+
+        assertEquals(listOf(false, true), seen)
+    }
+
+    @Test
     fun `a refresh persists the rotated token before the ID token is validated`() = runTest {
         val credentialStore = FakeCredentialStore()
         var storedWhenValidating: String? = null
