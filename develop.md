@@ -121,6 +121,16 @@ Robolectric unit tests under `example/android/app/src/test` and XCTest in `examp
 Both are skipped without a provider in the environment, so `flutter build` and a plain
 `xcodebuild test` of the example stay unit runs.
 
+### Publishing (a local look only)
+
+Releasing is the maintainer's (`docs/releasing.md`). What a developer can run, from `android/`,
+publishes nowhere: it writes the Maven bundle that would be uploaded to a local directory.
+
+```bash
+./gradlew centralBundle -PreleaseVersion=0.1.0 -PallowUnsignedBundle   # android/build/central-bundle/versola-0.1.0.zip
+tools/check-release-version.sh v0.1.0                                    # from the repository root; reads files only
+```
+
 ### Spec and Markdown
 
 ```bash

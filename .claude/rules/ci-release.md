@@ -15,7 +15,8 @@ paths: [".github/**", "conformance/**", "tools/**"]
 | `conformance.yml` `scenarios` | on demand (nightly once the checkout token exists) | scenarios against a staged `auth` + `central` + `edge` from `versolauth/versola`, driven from an emulator | everything the driver does not yet run (`conformance/README.md`, order of work) |
 | `conformance.yml` `providers` | PRs touching the generic facade, the modules under it or the drivers, nightly, on demand | scenarios 24 to 32 of the generic facade against Keycloak and Ory Hydra in Docker (`android/conformance-oauth`), one matrix row each | the device tier, the iOS driver (local only: the macOS runners have no Docker daemon) and what `conformance/README.md` ("Providers") lists as not proven |
 | `security.yml` | every PR, push to `main`, weekly and on demand | TruffleHog on PR/push, Trivy, Semgrep (gate); dependency review on PRs and CodeQL while public | Gradle transitive coverage from Trivy; a skipped scanner |
-| `release.yml` | `release: published`, but every job is `if: false` | nothing today: it is dormant | |
+| `release.yml` | `release: published`, but every job is `if: false` | nothing today: it is dormant. Wired for the maintainer's first release: tag/pubspec/plugin-pin/changelog agreement, `test lint apiCheck`, the signed Central bundle uploaded as `USER_MANAGED`, a clean-checkout build of the tag | that the Portal accepts the bundle: it has never run (`docs/releasing.md`) |
+| `publish-pubdev.yml` | push of a `vX.Y.Z` tag, `if: false` | nothing today: dormant. The `flutter pub publish` job pub.dev's tag-based OIDC login needs; the first publish is by hand | whether pub.dev's OIDC login works for a Flutter package (unverified) |
 
 - A green check is exactly what is in its row. "CI is green" does not mean the scenario catalogue
   passed; say which workflow ran.
@@ -101,10 +102,14 @@ documented where they live (OkHttp 5.4.0 pinned below 5.5.0, `android/okhttp/bui
   run `./gradlew publish`, `pod trunk push`, `flutter pub publish` or `npm publish`, push to
   Maven Central, or flip a `release.yml` job from `if: false`, even if asked to "prepare" one; prepare
   the change and stop. The guard hook asks on `git tag` and denies `gh release`.
-- `release.yml` is dormant until the matching credentials exist as repository secrets
-  (`MAVEN_SIGNING_KEY`, `SONATYPE_*`, `COCOAPODS_TRUNK_TOKEN`, pub.dev, `NPM_TOKEN`). Today
-  `./gradlew publish` would fail if enabled: there is no `maven-publish` or signing configuration
-  and no version (architecture review F9). Wiring that is a release-engineering milestone (B7 in
-  issue #46), not a side change.
+- `release.yml` and `publish-pubdev.yml` are dormant until the matching credentials exist as
+  repository secrets (`MAVEN_SIGNING_KEY`, `MAVEN_SIGNING_PASSWORD`, `SONATYPE_USERNAME`,
+  `SONATYPE_PASSWORD`, `COCOAPODS_TRUNK_TOKEN`, `NPM_TOKEN`; pub.dev authenticates by OIDC). The
+  build side exists: every published Android module applies `android/gradle/publishing.gradle.kts`,
+  and `./gradlew centralBundle` writes a signed or (with `-PallowUnsignedBundle`) unsigned zip to
+  `android/build/central-bundle/` without contacting any server. Running it is allowed; running
+  `./gradlew publish`, uploading the zip, or any `flutter pub publish`, including `--dry-run`, is
+  the maintainer's. Credentials, the tag, the namespace verification and flipping a job from
+  `if: false` are theirs too: `docs/releasing.md` is the runbook (B7 in issue #46).
 - Maven coordinates keep the reverse-DNS groupId `kz.versola` (Central verifies namespaces by DNS
   ownership) while code packages are `versola.*`; do not change either without a decision.

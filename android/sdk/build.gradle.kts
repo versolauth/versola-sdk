@@ -65,3 +65,9 @@ apiValidation {
     // review F6).
     nonPublicMarkers.add("versola.oauth.core.VersolaInternalApi")
 }
+
+// Published (gradle/publishing.gradle.kts): the coordinates are kz.versola:versola-android.
+extra["publishing.artifactId"] = "versola-android"
+extra["publishing.name"] = "Versola SDK for Android"
+extra["publishing.description"] = "The Versola facade: sign-in, refresh and calls through edge for apps using the Versola server."
+apply(from = rootProject.file("gradle/publishing.gradle.kts"))

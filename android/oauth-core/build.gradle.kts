@@ -57,3 +57,9 @@ apiValidation {
     // review F6).
     nonPublicMarkers.add("versola.oauth.core.VersolaInternalApi")
 }
+
+// Published (gradle/publishing.gradle.kts): the coordinates are kz.versola:oauth-core.
+extra["publishing.artifactId"] = "oauth-core"
+extra["publishing.name"] = "Versola OAuth core"
+extra["publishing.description"] = "The protocol engine of the Versola OAuth SDKs: discovery, PKCE, authorization, token client, ID-token validation, session coordination. Plain JVM, no Android dependency."
+apply(from = rootProject.file("gradle/publishing.gradle.kts"))

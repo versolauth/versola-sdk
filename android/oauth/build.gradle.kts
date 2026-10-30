@@ -74,3 +74,9 @@ apiValidation {
     // review F6).
     nonPublicMarkers.add("versola.oauth.core.VersolaInternalApi")
 }
+
+// Published (gradle/publishing.gradle.kts): the coordinates are kz.versola:oauth-android.
+extra["publishing.artifactId"] = "oauth-android"
+extra["publishing.name"] = "Versola OAuth for Android"
+extra["publishing.description"] = "OAuth 2.0 / OpenID Connect client for Android that works with any conforming provider: authorization code with PKCE, ID-token validation, single-flight refresh, secure storage."
+apply(from = rootProject.file("gradle/publishing.gradle.kts"))

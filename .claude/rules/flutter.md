@@ -101,6 +101,9 @@ cd example && flutter build ios --no-codesign   # and on iOS
   maintenance noted (`security.md`).
 - Dependabot watches `pub` under `/flutter/*`; minors arrive grouped, majors separately
   (`ci-release.md`).
-- Publishing to pub.dev from the monorepo subdirectory is dormant: the `pub-dev` job in
-  `release.yml` is `if: false` until credentials exist. Do not run `flutter pub publish`, do not
-  remove the dormancy, and do not add a `publish_to` that would enable it by accident.
+- Publishing to pub.dev is dormant: `publish-pubdev.yml` is `if: false` and the first release is a
+  manual `flutter pub publish` by the maintainer (`docs/releasing.md`). Do not run `flutter pub
+  publish`, with or without `--dry-run`, do not remove the dormancy, and do not add a `publish_to`
+  that would enable it by accident. The published plugin cannot use the path dependency its iOS
+  `Package.swift` has inside a checkout: `tools/flutter-prepare-publish.sh` rewrites it to the release
+  tag in the publishing job's working copy, and the rewrite is never committed.
