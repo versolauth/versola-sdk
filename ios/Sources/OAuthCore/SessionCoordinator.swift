@@ -31,7 +31,10 @@ package actor SessionCoordinator: AccessTokenSource {
 
     private struct Cached: Sendable {
         let response: TokenResponse
-        let receivedAt: Date
+        /// Seconds on the continuous clock (`Clock.uptime`), not a wall-clock instant: how long
+        /// ago the response arrived must not move when the user or an NTP step moves the date
+        /// (`spec/state-machine.md`, "The refresh skew").
+        let receivedAt: TimeInterval
     }
 
     /// A session the provider issued no refresh token for: the access token in memory and the
@@ -131,7 +134,7 @@ package actor SessionCoordinator: AccessTokenSource {
     }
 
     private func usable(_ cached: Cached) -> Bool {
-        clock.now().timeIntervalSince(cached.receivedAt) < RefreshSkew.usableFor(response: cached.response)
+        clock.uptime() - cached.receivedAt < RefreshSkew.usableFor(response: cached.response)
     }
 
     /// `authenticated → unauthenticated` for a session without a refresh token: nothing to
@@ -219,6 +222,18 @@ package actor SessionCoordinator: AccessTokenSource {
             }
         }
         let (response, validated) = try await exchange.value
+        do {
+            return try await persistLogin(response, validated: validated)
+        } catch {
+            // The token could not be kept (a locked store, say). The request stays stored, as
+            // the persistence order requires, but nothing is redeeming it any more: it is a
+            // leftover a new `login()` supersedes, not a login still in progress.
+            await flow.redemptionFailed()
+            throw error
+        }
+    }
+
+    private func persistLogin(_ response: TokenResponse, validated: IdTokenClaims?) async throws -> TokenResponse {
         if let refreshToken = response.refreshToken {
             try await credentialStore.save(refreshToken: refreshToken, rawIdToken: response.idToken)
             memorySession = nil
@@ -233,7 +248,7 @@ package actor SessionCoordinator: AccessTokenSource {
         claimsRestored = true
         claims = validated
         try await flow.completeLogin()
-        cachedAccessToken = Cached(response: response, receivedAt: clock.now())
+        cachedAccessToken = Cached(response: response, receivedAt: clock.uptime())
         return response
     }
 
@@ -268,6 +283,14 @@ package actor SessionCoordinator: AccessTokenSource {
             // step-up from `stepUpRequired`; a flight's own state is never somewhere to return to.
             let current = await flow.states.current
             let priorState: SessionState = current == .refreshing ? .authenticated : current
+            // Nothing to spend is not a refresh that failed: no `refreshing` is published, and
+            // nothing is torn down (see `settleWithoutGrant`). Asked without the storage key.
+            do {
+                guard try await credentialStore.hasGrant() else { throw await settleWithoutGrant(from: priorState) }
+            } catch let error as OAuthError {
+                if case .recoverable(.unlockRequired) = error { await flow.setState(.locked) }
+                throw error
+            }
             await flow.setState(.refreshing)
             return try await performRefresh(startedIn: startedIn, priorState: priorState)
         }
@@ -288,7 +311,7 @@ package actor SessionCoordinator: AccessTokenSource {
             if let pending = try await credentialStore.pendingRotation() {
                 idempotencyKey = pending
             } else {
-                guard let token = try await credentialStore.refreshToken() else { throw Self.noGrantStored() }
+                guard let token = try await credentialStore.refreshToken() else { throw NoGrantStored() }
                 idempotencyKey = Self.idempotencyKey(for: token)
                 try await credentialStore.savePendingRotation(idempotencyKey)
             }
@@ -310,33 +333,61 @@ package actor SessionCoordinator: AccessTokenSource {
             let issued = try await budget.execute(origin: origin, mayRepeat: mayRepeat) {
                 connection.reset()
                 // A fresh read per attempt: the token is read for the duration of one request.
-                guard let token = try await store.refreshToken() else { throw Self.noGrantStored() }
+                guard let token = try await store.refreshToken() else { throw NoGrantStored() }
                 return try await ConnectionFlag.$current.withValue(connection) {
                     try await tokenClient.refresh(refreshToken: token, idempotencyKey: idempotencyKey)
                 }
             }
-            // An ID token on a refresh is validated with the login rules minus the nonce, and
-            // against the claims it replaces (OpenID Connect Core 12.2), before persistence.
-            var refreshedClaims: IdTokenClaims?
-            if let validator = idTokenValidator, let idToken = issued.idToken {
-                refreshedClaims = try await validator.validate(idToken: idToken, expectedNonce: nil, accessToken: issued.accessToken, maxAge: nil, previous: await restoreClaims(), serverTime: issued.serverDate)
-            }
-            warnIfNoExpiry(issued)
             // The grant was wiped while this request was out (a logout, another caller's
             // invalid_grant): the answer is for a session that has ended.
             if epoch != startedIn { throw WipedMeanwhile() }
-            if let refreshedClaims { claims = refreshedClaims }
-            // Step 2: persisted before returning to any caller. A response omitting the refresh
-            // token or the ID token leaves the stored value alone rather than overwriting or
-            // deleting it, and a new ID token is stored whether or not the refresh token rotated.
-            try await credentialStore.saveRefreshed(refreshToken: issued.refreshToken, rawIdToken: issued.idToken)
-            // Step 3: the slot is cleared only now.
+            // Step 2, before the ID token is judged: the provider rotated the moment it answered,
+            // so the old token is spent and the new one is the only credential there is. Dropping
+            // it because the ID token failed (a key set fetch that blipped, a `kid` the set does
+            // not have yet, a changed `sub`) would turn the next refresh into `invalid_grant` and
+            // a wipe. A response omitting the refresh token leaves the stored value alone rather
+            // than overwriting it with an absence. The ID token stored beside it is the previous
+            // one: it is replaced only by one that passed (below).
+            if let rotated = issued.refreshToken {
+                try await credentialStore.saveRefreshed(refreshToken: rotated, rawIdToken: nil)
+            }
+            // Step 3: the slot named the generation just consumed, so it goes with the rotation,
+            // not after the validation: a process killed in between would replay the old key
+            // against the new token.
             try await credentialStore.savePendingRotation(nil)
-            cachedAccessToken = Cached(response: issued, receivedAt: clock.now())
+            // An ID token on a refresh is validated with the login rules minus the nonce, and
+            // against the claims it replaces (OpenID Connect Core 12.2). A refusal rejects the ID
+            // token alone: the rotation above stays, nothing else from this response is kept (no
+            // access token, no claims), and the error is the validator's, `configuration` for a
+            // token that is wrong and `recoverable` for a key set that could not be fetched.
+            var refreshedClaims: IdTokenClaims?
+            if let validator = idTokenValidator, let idToken = issued.idToken {
+                // With a key set past its lifetime allowed when the provider cannot be reached for a
+                // new one (`JwksStaleness`): the rotation is already kept, and without this a key-set
+                // outage costs every `accessToken()` a rotation and its access token until it ends.
+                let previous = await restoreClaims()
+                refreshedClaims = try await JwksStaleness.$allowed.withValue(true) {
+                    try await validator.validate(idToken: idToken, expectedNonce: nil, accessToken: issued.accessToken, maxAge: nil, previous: previous, serverTime: issued.serverDate)
+                }
+            }
+            warnIfNoExpiry(issued)
+            // The validation awaited; the grant may have been wiped meanwhile.
+            if epoch != startedIn { throw WipedMeanwhile() }
+            if let idToken = issued.idToken {
+                if let refreshedClaims { claims = refreshedClaims }
+                // The ID token that passed, stored beside whatever refresh token is current: a
+                // provider that renews it on every refresh and keeps the refresh token is the
+                // common case. Reads and deletes nothing else (`CredentialStore.saveRefreshed`).
+                try await credentialStore.saveRefreshed(refreshToken: nil, rawIdToken: idToken)
+            }
+            cachedAccessToken = Cached(response: issued, receivedAt: clock.uptime())
             await flow.setState(.authenticated)
             return issued
         } catch is WipedMeanwhile {
             throw OAuthError.reauthenticate(.grantRejected)
+        } catch is NoGrantStored {
+            // The grant left the store between the check and the read: the same case.
+            throw await settleWithoutGrant(from: priorState)
         } catch let error as OAuthError {
             switch error {
             case .recoverable(let cause):
@@ -363,7 +414,27 @@ package actor SessionCoordinator: AccessTokenSource {
         if epoch == startedIn { await flow.setState(state) }
     }
 
-    private static func noGrantStored() -> OAuthError { .reauthenticate(.grantRejected) }
+    private struct NoGrantStored: Error {}
+
+    /// A refresh asked for while no grant is stored: before `resumePendingAuthorization()` has
+    /// finished a sign-in, after the item was removed from under the app, on a session that never
+    /// had one. The provider has said nothing, so this is not `invalid_grant` and is not the
+    /// teardown it earns (`wipe()`): that clears the pending authorization of a sign-in in
+    /// progress and destroys the DPoP key its `dpop_jkt` committed to, so the code exchange that
+    /// follows would sign with a key that matches nothing. The caller is told the grant is not
+    /// there; the state follows the facts (`unauthenticated` for a session that believed it had
+    /// one) except where a sign-in is in progress or none was ever begun, which stay as they are.
+    private func settleWithoutGrant(from prior: SessionState) async -> OAuthError {
+        switch prior {
+        case .authorizing, .unauthenticated:
+            break
+        default:
+            cachedAccessToken = nil
+            claims = nil
+            await flow.setState(.unauthenticated)
+        }
+        return .reauthenticate(.grantRejected)
+    }
 
     // MARK: - Logout
 

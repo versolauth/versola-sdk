@@ -20,12 +20,20 @@ package struct HTTPRequest: Sendable, Equatable {
     package var headers: [String: String]
     /// `application/x-www-form-urlencoded` when set together with the matching header.
     package var body: Data?
+    /// The most the answer may carry. Every document the SDK reads (metadata, a key set, a token
+    /// response, UserInfo) is small JSON from a host the app chose to trust, and a body past this
+    /// is a provider fault or an attack on the device's memory, so the client refuses it.
+    package var maxResponseBytes: Int
 
-    package init(method: Method, url: URL, headers: [String: String] = [:], body: Data? = nil) {
+    /// 1 MiB: far above a real key set or discovery document, far below what would hurt.
+    package static let defaultMaxResponseBytes = 1 << 20
+
+    package init(method: Method, url: URL, headers: [String: String] = [:], body: Data? = nil, maxResponseBytes: Int = HTTPRequest.defaultMaxResponseBytes) {
         self.method = method
         self.url = url
         self.headers = headers
         self.body = body
+        self.maxResponseBytes = maxResponseBytes
     }
 }
 
@@ -122,15 +130,36 @@ package protocol PendingAuthorizationStore: Sendable {
 package protocol ProviderMetadataCache: Sendable {
     func load() async throws -> ProviderMetadata?
     func save(_ metadata: ProviderMetadata) async throws
-    /// When the cached document was saved, for the 24-hour refetch of
-    /// `spec/oauth-sdk-api.md` section 4; nil when unknown, which counts as stale.
+    /// As `save`, with how long the document is to be trusted (`CacheLifetime`); a cache that
+    /// does not keep it answers `lifetime()` with nil and the default day applies.
+    func save(_ metadata: ProviderMetadata, lifetime: TimeInterval?) async throws
+    /// When the cached document was saved, for the refetch of `spec/oauth-sdk-api.md` section 4;
+    /// nil when unknown, which counts as stale.
     func savedAt() async throws -> Date?
+    /// The lifetime it was saved with, nil when none was kept.
+    func lifetime() async throws -> TimeInterval?
 }
 
-/// The provider's key set, cached unencrypted (package keys).
+extension ProviderMetadataCache {
+    package func save(_ metadata: ProviderMetadata, lifetime: TimeInterval?) async throws { try await save(metadata) }
+    package func lifetime() async throws -> TimeInterval? { nil }
+}
+
+/// The provider's key set, cached unencrypted (package keys). Expires like the metadata: a key the
+/// provider has withdrawn is not trusted for as long as a file on disk survives.
 package protocol JwksCache: Sendable {
     func load() async throws -> JsonWebKeySet?
     func save(_ set: JsonWebKeySet) async throws
+    func save(_ set: JsonWebKeySet, lifetime: TimeInterval?) async throws
+    /// When the set was saved; nil when unknown, which counts as stale.
+    func savedAt() async throws -> Date?
+    func lifetime() async throws -> TimeInterval?
+}
+
+extension JwksCache {
+    package func save(_ set: JsonWebKeySet, lifetime: TimeInterval?) async throws { try await save(set) }
+    package func savedAt() async throws -> Date? { nil }
+    package func lifetime() async throws -> TimeInterval? { nil }
 }
 
 /// Mints DPoP proofs (RFC 9449) for a key the facade owns; the core never sees the key.

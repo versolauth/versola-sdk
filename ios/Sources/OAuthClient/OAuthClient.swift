@@ -72,12 +72,13 @@ public final class OAuthClient: Sendable {
     /// (before first unlock), the restore is repeated by the next call that needs it, and the
     /// resume starts then.
     ///
-    /// **Order.** While the state is `authorizing`, the SDK holds no grant, so do not call
-    /// ``accessToken()``, ``refresh()``, ``userInfo()`` or an ``authenticatedSession(origins:)``
-    /// request until ``sessionStates()`` has left `authorizing`: with no grant stored they end the
-    /// session (`reauthenticate`), which erases the pending request and the DPoP key the code
-    /// exchange is bound to, and the sign-in cannot finish. ``login(_:)`` is refused meanwhile,
-    /// and ``logout(_:)`` abandons the pending sign-in.
+    /// **Order.** While the state is `authorizing`, the SDK holds no grant, so ``accessToken()``,
+    /// ``refresh()``, ``userInfo()`` and an ``authenticatedSession(origins:)`` request fail with
+    /// `reauthenticate(.grantRejected)` until ``sessionStates()`` has left `authorizing`. Nothing is
+    /// wiped for it: the pending request and the DPoP key the code exchange is bound to survive,
+    /// and the sign-in can still finish. ``login(_:)`` and ``stepUp(acrValues:maxAge:options:)``
+    /// end the resume if it is only waiting for a redirect that may never come (the user abandoned
+    /// that sheet) and supersede the request; ``logout(_:)`` abandons the pending sign-in.
     ///
     /// - Parameter presentationAnchor: the window the browser sheet is presented from, supplied
     ///   by the app; the SDK never finds a window by itself.
@@ -139,14 +140,14 @@ public final class OAuthClient: Sendable {
     /// The state machine of `spec/state-machine.md`, one stream per observer. The first value
     /// is the restored state: an app killed mid-browser observes `authorizing` on cold start.
     public func sessionStates() async -> AsyncStream<SessionState> {
-        try? await flow.ensureRestored()
+        await restoreForObservers()
         return await flow.states.stream()
     }
 
     /// The current state, restored first.
     public var sessionState: SessionState {
         get async {
-            try? await flow.ensureRestored()
+            await restoreForObservers()
             return await flow.states.current
         }
     }
@@ -165,7 +166,9 @@ public final class OAuthClient: Sendable {
 
     /// Opens the system browser, validates the redirect, exchanges the code, validates the ID
     /// token and persists the grant, in that order; `authenticated` is published only after the
-    /// grant is durably stored. While `authorizing` it is refused: observe the state first.
+    /// grant is durably stored. Refused while an authorization is in flight (the sheet is up, or a code
+    /// is being exchanged); a cold-start resume that only waits for its redirect is ended first and
+    /// the request nobody awaits is superseded.
     public func login(_ options: LoginOptions = .default) async throws {
         try await refuseWhileAuthorizing()
         let coordinator = self.coordinator
@@ -323,9 +326,26 @@ public final class OAuthClient: Sendable {
         return path.isEmpty && (scheme == "https" || scheme == "http") ? "/" : path
     }
 
+    /// What an observer's first look does: read the stored session. A store that needs the device
+    /// unlocked has already published `locked` (`AuthorizationFlow.ensureRestored`); any other
+    /// failure cannot be thrown from a property, so it is logged, and the next look reads again.
+    private func restoreForObservers() async {
+        do {
+            try await flow.ensureRestored()
+        } catch OAuthError.recoverable(.unlockRequired) {
+            // Published as `locked`; not a warning.
+        } catch {
+            configuration.logger.warn("restoring the stored session failed: \(error is OAuthError ? String(describing: error) : String(describing: type(of: error)))")
+        }
+    }
+
     private func refuseWhileAuthorizing() async throws {
         try await flow.ensureRestored()
-        if await flow.states.current == .authorizing {
+        // A resume that only waits for its redirect (a cold start restored the request and the
+        // user abandoned that sheet) is not an authorization to protect: it is ended, as
+        // `logout()` ends it, and the request nobody awaits is superseded by this one.
+        if await flow.isAwaitingRedirect { await backgroundResume.cancelInFlight() }
+        if await flow.authorizationInFlight {
             throw OAuthError.configuration(.invalidConfiguration(detail: "an authorization is already in progress; observe sessionStates() before asking again"))
         }
     }
@@ -607,8 +627,12 @@ private struct EndSessionOverride: DiscoveryClient {
     let delegate: DiscoveryClient
     let endSessionEndpoint: String?
     func fetch(issuer: String) async throws -> ProviderMetadata {
-        var metadata = try await delegate.fetch(issuer: issuer)
-        if let endSessionEndpoint { metadata.endSessionEndpoint = endSessionEndpoint }
-        return metadata
+        try await fetchWithLifetime(issuer: issuer).metadata
+    }
+
+    func fetchWithLifetime(issuer: String) async throws -> FetchedMetadata {
+        var fetched = try await delegate.fetchWithLifetime(issuer: issuer)
+        if let endSessionEndpoint { fetched.metadata.endSessionEndpoint = endSessionEndpoint }
+        return fetched
     }
 }

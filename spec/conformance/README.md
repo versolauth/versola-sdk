@@ -53,6 +53,7 @@ behaviour must be the same. Scenarios 21–23 exist for what only the edge flow 
 | 34 | A transient server error is repeated or surfaced according to the operation | any | 22, 46 |
 | 35 | `Retry-After` on 429 and 503 is honoured, bounded and never fails the request when malformed | any | 22, 46 |
 | 36 | After a `Retry-After`, the SDK sends nothing to that origin until it has passed | any | 22, 46 |
+| 37 | A refresh whose ID token is rejected keeps the rotated refresh token | any | 46 |
 
 ## Facades
 

@@ -111,6 +111,39 @@ One budget serves one application-visible operation across every row it touches 
 `login()` that discovers, fetches the JWKS and pushes a request shares one allowance, and a
 discovery that failed twice leaves less for the push.
 
+### The timeout of one request
+
+`totalBudget` bounds an operation only if no single request can outlast it. Every request the SDK
+originates therefore carries a **deadline for the whole exchange** (the time to the last byte, not
+an idle timeout that every dripped byte restarts), equal to what is left of the operation's
+`totalBudget` at the moment it is sent, and never longer than the HTTP client's own request
+timeout. A nearly spent budget does not set a request up to fail at once: the deadline is floored
+at **5 seconds**, since the one request that cannot be repeated (the code exchange, after the
+user's time in the browser) must get a fair try. That request has the deadline too: if it passes
+after the request left the device the code may already be spent, so the exchange is surfaced as
+`Recoverable(Network)` and the user signs in again (it is never repeated, above). The deadline passing is a `transport` failure
+(`Network`), classified as any other (a timeout after the request left the device is repeated only
+by an operation that tolerates it). A request outside any operation (a flight started from a timer
+the app owns has its own budget; a bare call has none) gets the client's own timeout.
+
+### A stale key set for a refresh
+
+The ID token on a refresh response is judged after the rotated refresh token is stored
+(`state-machine.md`), so a key set that cannot be fetched fails the refresh as `Recoverable` with
+the grant intact. Left there, an outage of the key set while the token endpoint is up would make
+every `accessToken()` spend a rotation, receive an access token and throw it away, for as long as
+the outage lasts. For this check alone, and only when the fetch failed as a `Recoverable` (never
+for an answer that is not a key set), the key set the client holds past its lifetime is used,
+**up to one week after it expired**; a set that lacks the token's `kid` is `Recoverable`, not a
+signature rejection, since it proves an outage and nothing else. Login, UserInfo and every other
+reader of the key set never see a stale one.
+
+The cost, stated: for at most a week a signing key the provider has withdrawn can still verify an
+ID token that arrives on a refresh. What that ID token vouches for on a refresh is bounded (the
+`sub` must not change, `aud`, `iss`, `exp` and the rest still apply, and the access token it
+accompanies came from the token endpoint over TLS), and a provider that rotates keys for
+compromise reasons revokes refresh tokens too. Android and iOS apply the same rule.
+
 ### Order of work
 
 `login()` has one step that cannot be repeated, the code exchange, and a request that can fail after

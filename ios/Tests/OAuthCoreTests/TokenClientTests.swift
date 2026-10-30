@@ -39,6 +39,26 @@ final class TokenClientTests: XCTestCase {
         return fields
     }
 
+    /// A caller that gave up is not a network failure to be retried: the HTTP client reports it
+    /// as `CancellationError`, and it must arrive as one.
+    func testACancelledRequestIsACancellationAtEveryEndpointNotARecoverableNetworkFailure() async throws {
+        let http = RecordingHTTP { _ in throw CancellationError() }
+        let tokens = try client(http)
+
+        func assertCancelled(_ name: String, _ body: () async throws -> Void) async {
+            do {
+                try await body()
+                XCTFail("\(name): no error")
+            } catch is CancellationError {
+            } catch {
+                XCTFail("\(name): \(error) is not a cancellation")
+            }
+        }
+        await assertCancelled("exchange") { _ = try await tokens.exchange(grant()) }
+        await assertCancelled("refresh") { _ = try await tokens.refresh(refreshToken: "rt", idempotencyKey: "k") }
+        await assertCancelled("revoke") { try await tokens.revoke(refreshToken: "rt") }
+    }
+
     func testExchangeSendsThePublicClientFormAndNothingElse() async throws {
         let http = RecordingHTTP.json(200, Self.issued)
         let response = try await client(http).exchange(grant(resources: ["https://api.example.com", "https://files.example.com"]))

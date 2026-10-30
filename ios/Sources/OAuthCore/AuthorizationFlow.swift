@@ -39,6 +39,11 @@ package actor AuthorizationFlow {
     private var expiredOnRestore = false
 
     private var gateHeld = false
+    /// The `state` of the request whose validated grant was handed to the coordinator and has not
+    /// been completed, abandoned or wiped yet: the code exchange, which runs outside the gate.
+    private var redeeming: String?
+    /// True while `resumePendingAuthorization` waits for a redirect, and nothing else.
+    private var awaitingRedirect = false
     private var gateQueue: [(id: UUID, continuation: CheckedContinuation<Void, Error>)] = []
 
     /// `state` values of authorizations whose caller was cancelled while their tab was open: the
@@ -106,7 +111,8 @@ package actor AuthorizationFlow {
     /// A stored grant outranks a pending request, and is read first (`spec/state-machine.md`):
     /// the request beside it is the residue of a login killed between persisting the token and
     /// clearing the slot, its code already redeemed, so resuming it could only fail as
-    /// `invalid_grant`. A pending request older than ten minutes is discarded and remembered, so
+    /// `invalid_grant`. A store that is not readable yet (locked device, `onAppUnlock`) publishes
+    /// `locked` and throws `recoverable(.unlockRequired)`; the restore is retried by the next call. A pending request older than ten minutes is discarded and remembered, so
     /// that `resumePendingAuthorization()` can say it expired rather than that nothing was there.
     package func ensureRestored() async throws {
         if restored { return }
@@ -118,21 +124,34 @@ package actor AuthorizationFlow {
 
     private func restore() async throws {
         defer { restoreTask = nil }
-        let pending = try await pendingStore.load()
         let next: SessionState
-        if try await hasStoredGrant() {
-            if pending != nil { try await pendingStore.clear() }
-            next = .authenticated
-        } else if let pending {
-            if pending.isExpired(at: clock.now()) {
+        do {
+            // The grant first, then the pending request only when there is no grant: a slot
+            // that cannot be read (a Keychain item of a locked device) must neither hide a
+            // returning user's session nor stand between it and `authenticated`.
+            if try await hasStoredGrant() {
+                // The residue of a login killed between persisting the token and clearing the
+                // slot; discarded unread.
                 try await pendingStore.clear()
-                expiredOnRestore = true
-                next = .unauthenticated
+                next = .authenticated
+            } else if let pending = try await pendingStore.load() {
+                if pending.isExpired(at: clock.now()) {
+                    try await pendingStore.clear()
+                    expiredOnRestore = true
+                    next = .unauthenticated
+                } else {
+                    next = .authorizing
+                }
             } else {
-                next = .authorizing
+                next = .unauthenticated
             }
-        } else {
-            next = .unauthenticated
+        } catch let error as OAuthError {
+            // A store that needs the device unlocked has not said there is nothing in it: the
+            // state is `locked`, never a false `unauthenticated`, and the restore is not
+            // remembered, so the next call (once the app has asked the user to unlock) reads
+            // again. Any other failure is the caller's to see; the hub is left as it was.
+            if case .recoverable(.unlockRequired) = error { await states.set(.locked) }
+            throw error
         }
         await states.set(next)
         restored = true
@@ -147,14 +166,22 @@ package actor AuthorizationFlow {
     /// killed between redeeming the code and persisting the token still finds an `authorizing`
     /// session to resume.
     package func completeLogin() async throws {
+        redeeming = nil
         try await pendingStore.clear()
         await states.set(.authenticated)
+    }
+
+    /// The coordinator could not persist what the exchange returned and gives the request up
+    /// without touching it: it is no longer being redeemed, so it no longer blocks a new login.
+    package func redemptionFailed() {
+        redeeming = nil
     }
 
     /// The exchange failed, or the caller walked away from it: the code is spent and the slot
     /// can never complete, so it goes, and the session settles where the authorization was
     /// entered from rather than on a state the grant on disk contradicts.
     package func abandonLogin() async {
+        redeeming = nil
         do {
             try await pendingStore.clear()
         } catch {
@@ -165,6 +192,21 @@ package actor AuthorizationFlow {
         await states.set(await settledState())
     }
 
+    /// Whether an authorization is being carried out by this process right now: the browser is
+    /// up, a validated grant's code exchange has not finished, or the provider's end-session page
+    /// is open. What a new `login()` is refused for. Two things are not in flight: a pending
+    /// request that nobody awaits (a system cancel left it, `resumePendingAuthorization()` has not
+    /// been called), which is superseded; and a resume that only *waits* for a redirect that may
+    /// never come (``isAwaitingRedirect``), which the facade ends first, as `logout()` does.
+    package var authorizationInFlight: Bool { (gateHeld && !awaitingRedirect) || redeeming != nil }
+
+    /// Whether the gate is held by a resume that has nothing but a redirect left to wait for: no
+    /// sheet is open, no code is in hand. After a cold start that redirect may never come (the
+    /// user abandoned the old sheet and came back to the app itself), so a new `login()` or
+    /// `stepUp()` ends the wait and takes the gate rather than being refused for up to ten
+    /// minutes. A resume that has the redirect and is redeeming its code is not this.
+    package var isAwaitingRedirect: Bool { awaitingRedirect }
+
     /// `authenticated -> stepUpRequired`; nothing else moves, the grant is intact.
     package func enterStepUpRequired() async {
         if await states.current == .authenticated { await states.set(.stepUpRequired) }
@@ -174,6 +216,7 @@ package actor AuthorizationFlow {
     /// so a login abandoned mid-browser cannot survive a sign-out and resume into the next
     /// user's session.
     package func completeLogout() async {
+        redeeming = nil
         do {
             try await pendingStore.clear()
         } catch {
@@ -246,6 +289,10 @@ package actor AuthorizationFlow {
                 )
                 uri = try request.toUri(authorizationEndpoint: metadata.authorizationEndpoint)
             }
+            // A request nobody awaits (a system cancel kept it, a resume was never started) is
+            // replaced by this one. Its tab, if it still exists, can redirect later: its `state`
+            // is remembered so that redirect is stepped over instead of failing this call.
+            if let leftover = try? await pendingStore.load() { rememberAbandoned(leftover.state) }
             // Before the state changes and before the browser opens: the order is the point.
             try await pendingStore.save(pending)
             await states.set(.authorizing)
@@ -304,6 +351,10 @@ package actor AuthorizationFlow {
                 }
                 return nil
             }
+            // The login of this process that got its redirect and is redeeming the code: it
+            // completes itself. Waiting for a second redirect here would hold the gate for the
+            // rest of the request's ten minutes.
+            if pending.state == redeeming { return nil }
             let now = clock.now()
             if pending.isExpired(at: now) {
                 await abandonLogin()
@@ -311,6 +362,8 @@ package actor AuthorizationFlow {
             }
             await states.set(.authorizing)
             let remaining = PendingAuthorizationRequest.maxAge - now.timeIntervalSince(pending.createdAt)
+            awaitingRedirect = true
+            defer { awaitingRedirect = false }
             guard let outcome = try await awaitRedirect(pending, within: remaining) else {
                 await abandonLogin()
                 throw OAuthError.recoverable(.pendingRequestExpired)
@@ -345,8 +398,10 @@ package actor AuthorizationFlow {
     /// with `id_token_hint` so the session ends without a confirmation page, and
     /// `post_logout_redirect_uri` so the browser comes back once it has.
     ///
-    /// Returns whether the provider acknowledged: the redirect came back carrying the `state`
-    /// that was sent. False covers everything else (no endpoint advertised, the user dismissed
+    /// Without a `post_logout_redirect_uri` the page is still opened (the provider's session is
+    /// what ends, and the user may be on a shared device) but cannot report back, so the result is
+    /// false by construction. Returns whether the provider acknowledged: the redirect came back
+    /// carrying the `state` that was sent. False covers everything else (no endpoint advertised, the user dismissed
     /// the page, the browser failed, a wrong `state`), and none of it is thrown, because only the
     /// local teardown is unconditional and the caller wipes regardless. Never ephemeral: the
     /// point is to end the session the shared browser holds.
@@ -356,19 +411,29 @@ package actor AuthorizationFlow {
             guard let endpoint = try await discovery.metadata().endSessionEndpoint, !endpoint.isEmpty else {
                 return false
             }
+            try ProviderMetadata.requireSecure("end_session_endpoint", endpoint)
             let postLogoutRedirectUri = configuration.postLogoutRedirectUri
             // `state` goes whether or not a redirect URI does: it costs nothing and is what lets
             // the redirect be told apart from a stale one.
             let expectedState = SecureTokens.generate(random)
             var pairs: [(String, String)] = []
             if let idTokenHint { pairs.append(("id_token_hint", idTokenHint)) }
+            // `client_id` beside the hint (`spec/oauth-sdk-api.md` section 12): the hint of a
+            // session that has not refreshed within one access-token lifetime is expired, and a
+            // provider then has only this to know whose session, and whose post-logout URI, it is.
+            pairs.append(("client_id", configuration.clientId))
             if let postLogoutRedirectUri { pairs.append(("post_logout_redirect_uri", postLogoutRedirectUri.absoluteString)) }
             pairs.append(("state", expectedState))
             guard let uri = try? FormEncoding.withQuery(endpoint, pairs) else { return false }
 
             let outcome: BrowserOutcome
             do {
-                outcome = try await OperationBudget.paused { try await browser.authorize(uri, options: BrowserSessionOptions(redirectURI: postLogoutRedirectUri)) }
+                // A browser session needs a callback to be created at all (`ASWebAuthenticationSession`),
+                // so with no post-logout URI configured the login redirect stands in as the one to
+                // match. The provider is not told of it, so nothing is expected to arrive there: the
+                // page ends the provider's session, the user dismisses it, `sessionEnded` is false.
+                let callback = postLogoutRedirectUri ?? configuration.redirectUri
+                outcome = try await OperationBudget.paused { try await browser.authorize(uri, options: BrowserSessionOptions(redirectURI: callback)) }
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -427,14 +492,17 @@ package actor AuthorizationFlow {
             throw OAuthError.recoverable(.systemCancelled)
         case .redirect(let url):
             do {
-                return try AuthorizationResponseValidator.validate(
+                let grant = try AuthorizationResponseValidator.validate(
                     redirect: url,
                     pending: pending,
                     issuer: configuration.issuer,
                     issParameterSupported: metadata.authorizationResponseIssParameterSupported
                 )
                 // Deliberately still `authorizing` with the request still stored: the machine
-                // reaches `authenticated` only once a refresh token is durably held.
+                // reaches `authenticated` only once a refresh token is durably held. Until the
+                // coordinator says so, this request is being redeemed and is nobody's leftover.
+                redeeming = pending.state
+                return grant
             } catch {
                 // A rejected response is unsafe to continue from, whichever way it was rejected.
                 await abandonLogin()
@@ -482,7 +550,9 @@ package actor AuthorizationFlow {
     /// read `unauthenticated` and open two sheets (`spec/oauth-sdk-api.md` section 5).
     private func exclusivelyOrRefuse<T: Sendable>(_ body: () async throws -> T) async throws -> T {
         try Task.checkCancellation()
-        if gateHeld {
+        // Strict: a resume that waits for its redirect still holds the gate, and two holders
+        // would share one browser and one redirect channel. The facade ends such a wait first.
+        if gateHeld || redeeming != nil {
             throw OAuthError.configuration(.invalidConfiguration(detail: "an authorization is already in progress; observe sessionStates() before asking again"))
         }
         gateHeld = true

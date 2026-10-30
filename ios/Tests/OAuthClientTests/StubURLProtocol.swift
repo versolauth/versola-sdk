@@ -8,6 +8,8 @@ enum StubOutcome: Sendable {
     /// that follows redirects will issue a second request to `location`.
     case redirect(status: Int = 302, location: String)
     case failure(URLError.Code)
+    /// Accepts the request and never answers: a provider that stopped responding.
+    case hang
 }
 
 /// A `URLProtocol` that answers from a closure, on an ephemeral session, so no test touches a
@@ -72,6 +74,8 @@ final class StubURLProtocol: URLProtocol {
             client?.urlProtocolDidFinishLoading(self)
         case .failure(let code):
             client?.urlProtocol(self, didFailWithError: URLError(code))
+        case .hang:
+            break
         }
     }
 
