@@ -424,6 +424,69 @@ class RetryPolicyTest {
         assertEquals(6, sent)
     }
 
+    @Test
+    fun `a Retry-After that fits and is followed by a success starts no cooldown`() = runTest {
+        var now = 0L
+        val cooldown = RetryCooldown { now }
+        val policy = RetryPolicy(totalBudget = 60.seconds)
+        var attempts = 0
+
+        policy.newBudget({ now }, Random(1), cooldown).execute(ORIGIN) {
+            attempts++
+            if (attempts == 1) throw server(429, 2_000)
+            "ok"
+        }
+
+        // The operation did not end because of the Retry-After: a concurrent or later call is sent.
+        assertEquals("ok", policy.newBudget({ now }, Random(1), cooldown).execute(ORIGIN) { "again" }.let { "ok" })
+        var sentAfter = 0
+        policy.newBudget({ now }, Random(1), cooldown).execute(ORIGIN) { sentAfter++ }
+        assertEquals(1, sentAfter)
+    }
+
+    @Test
+    fun `a Retry-After the budget gives up on starts the cooldown at the end of the operation`() = runTest {
+        var now = 0L
+        val cooldown = RetryCooldown { now }
+        val policy = RetryPolicy()
+
+        failure { policy.newBudget({ now }, Random(1), cooldown).execute(ORIGIN) { throw server(503, 30_000) } }
+
+        val refused = failure { policy.newBudget({ now }, Random(1), cooldown).execute(ORIGIN) { "never" } }
+        assertEquals(0, ((refused as VersolaError.Recoverable).reason as VersolaError.Recoverable.Cause.Server).attempts)
+    }
+
+    @Test
+    fun `the jitter never turns a Retry-After that fits into one that does not`() = runTest {
+        // 19.6 s asked, 20 s of budget: the tenth (1 s, capped) would overshoot by 0.6 s, so the
+        // jitter is cut to the 0.4 s that is left and the wait is honoured.
+        var attempts = 0
+        val scheduler = testScheduler
+
+        budget(RetryPolicy(totalBudget = 20.seconds), random = Random(3)).execute(ORIGIN) {
+            attempts++
+            if (attempts == 1) throw server(429, 19_600)
+            "ok"
+        }
+
+        assertEquals(2, attempts)
+        assertTrue("waited ${scheduler.currentTime}ms", scheduler.currentTime in 19_600..20_000)
+    }
+
+    @Test
+    fun `attempts is the failed requests of the call that surfaced the error, whatever the operation did before`() = runTest {
+        val budget = budget(RetryPolicy(maxAttemptsPerOrigin = 5, maxTotalAttempts = 8))
+        var discovery = 0
+        // Discovery fails twice and then works.
+        budget.execute(ORIGIN) { discovery++; if (discovery < 3) throw server(500); "discovered" }
+
+        val failure = failure { budget.execute(ORIGIN) { throw server(503) } }
+
+        // Two earlier failures count against the caps, but the push's own count is what it reports.
+        val reason = (failure as VersolaError.Recoverable).reason as VersolaError.Recoverable.Cause.Server
+        assertEquals(3, reason.attempts)
+    }
+
     // ---- what counts against the budget, and where it applies ---------------------------------
 
     @Test

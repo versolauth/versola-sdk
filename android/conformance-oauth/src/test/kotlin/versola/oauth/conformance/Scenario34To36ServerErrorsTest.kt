@@ -182,8 +182,28 @@ class Scenario34To36ServerErrorsTest : ProviderConformance() {
         assertEquals(1, transcript.matching("POST", token).size)
         assertEquals(SessionState.Unauthenticated, client.state())
 
+        // The Retry-After of 1 s on that exchange holds the origin: login() would be refused before
+        // its browser until it has passed.
+        failsWith<VersolaError.Recoverable> { runBlocking { client.login() } }
+        android.os.SystemClock.sleep(1_300)
+
         client.login()
         assertEquals(2, browser.opened.size)
+        assertEquals(SessionState.Authenticated, client.state())
+    }
+
+    @Test
+    fun `34 a key-set fetch that fails after the code exchange is repeated under the budget and the login succeeds`() = runTest {
+        val client = client()
+        val jwks = client.metadata().jwksUri
+        assumeTrue("the provider advertises no jwks_uri", jwks != null)
+        val jwksPath = jwks!!.substringAfter(proxy.origin)
+        respondWith(503, times = 2, matches = path(jwksPath))
+
+        client.login()
+
+        // Two answers of 503, then the key set: three requests, one login, nothing lost.
+        assertEquals(3, transcript.matching("GET", jwksPath).size)
         assertEquals(SessionState.Authenticated, client.state())
     }
 
@@ -369,6 +389,51 @@ class Scenario34To36ServerErrorsTest : ProviderConformance() {
     }
 
     @Test
+    fun `36 a cold start forgets the cooldown, and one request goes out`() = runTest {
+        val client = client()
+        client.login()
+        respondWith(429, headers = mapOf("Retry-After" to "30"), matches = refreshGrant(client))
+        failsWith<VersolaError.Recoverable> { runBlocking { client.refresh() } }
+        assertEquals(1, refreshRequests(client).size)
+
+        // A new process: new objects over the same storage, nothing remembered.
+        proxy.clearRewrites()
+        OAuthClient.forgetAll()
+        val restarted = client()
+        restarted.refresh()
+
+        assertEquals(2, refreshRequests(restarted).size)
+        assertEquals(SessionState.Authenticated, restarted.state())
+    }
+
+    @Test
+    fun `36 requests through the authenticated client are not blocked while the cooldown runs`() = runTest {
+        val client = client()
+        client.login()
+        respondWith(429, headers = mapOf("Retry-After" to "30"), matches = refreshGrant(client))
+        failsWith<VersolaError.Recoverable> { runBlocking { client.refresh() } }
+
+        val response = client.call(okhttp3.Request.Builder().url(resource.url("/api")).build())
+
+        assertEquals(200, response.code)
+        response.close()
+    }
+
+    @Test
+    fun `36 login during a cooldown is refused before the browser opens`() = runTest {
+        val client = client()
+        client.login()
+        val opened = browser.opened.size
+        respondWith(429, headers = mapOf("Retry-After" to "30"), matches = refreshGrant(client))
+        failsWith<VersolaError.Recoverable> { runBlocking { client.refresh() } }
+
+        val error = failsWith<VersolaError.Recoverable> { runBlocking { client.login() } }
+
+        assertEquals(0, serverCause(error).attempts)
+        assertEquals(opened, browser.opened.size)
+    }
+
+    @Test
     fun `36 the cooldown ends when the Retry-After has passed, and the next refresh goes out`() = runBlocking {
         // A one-second budget makes a two-second Retry-After one that does not fit, so the SDK stops
         // and holds the origin; waiting it out in real time proves the cooldown's end without
@@ -390,7 +455,8 @@ class Scenario34To36ServerErrorsTest : ProviderConformance() {
         assertEquals(sent, refreshRequests(client).size)
 
         proxy.clearRewrites()
-        Thread.sleep(2_300)
+        // Robolectric's SystemClock, the clock the facade's cooldown runs on, advances by sleeping.
+        android.os.SystemClock.sleep(2_300)
         client.refresh()
 
         assertEquals(sent + 1, refreshRequests(client).size)

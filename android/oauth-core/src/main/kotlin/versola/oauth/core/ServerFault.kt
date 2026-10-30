@@ -76,8 +76,9 @@ internal object ServerFault {
         if (value.all { it in '0'..'9' }) {
             // More digits than a day has seconds is already past the ceiling; stopping before
             // the conversion is what keeps a 40-digit value from overflowing it.
-            if (value.length > 9) return ONE_DAY_MILLIS
-            return minOf(value.toLong() * MILLIS_PER_SECOND, ONE_DAY_MILLIS)
+            val digits = value.trimStart('0').ifEmpty { "0" }
+            if (digits.length > 9) return ONE_DAY_MILLIS
+            return minOf(digits.toLong() * MILLIS_PER_SECOND, ONE_DAY_MILLIS)
         }
         val date = headers.getDate("Retry-After")?.time ?: return null
         val now = headers.getDate("Date")?.time ?: wallClockMillis()

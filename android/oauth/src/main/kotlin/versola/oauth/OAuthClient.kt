@@ -420,6 +420,9 @@ public class OAuthClient private constructor(
                 // No Idempotency-Key is sent (above): a refresh is repeated only when it provably
                 // was not processed, so a replay never spends a token the provider already rotated.
                 repeatsRefreshAfterAmbiguousFailure = false,
+                // The cooldown a Retry-After starts must run while the phone sleeps: Retry-After is wall
+                // time and the default clock (System.nanoTime) stops in deep sleep.
+                retryClock = { android.os.SystemClock.elapsedRealtime() },
                 onCredentialsWiped = {
                     proofs?.nonces?.clear()
                     dpopKey?.destroy()

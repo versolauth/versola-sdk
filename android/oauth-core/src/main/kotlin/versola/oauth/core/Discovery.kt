@@ -62,8 +62,15 @@ public class HttpDiscoveryClient(
                                 "no discovery document at $url (HTTP ${response.code})",
                             ),
                         )
-                        // Anything else (an unfollowed redirect, a 1xx) is an answer this client
-                        // cannot use and a repeat cannot change.
+                        // A redirect that was not followed is a deployment fault no retry fixes
+                        // (`spec/errors.md`), as it is at the key set and the token endpoint.
+                        response.code in 300..399 -> throw VersolaError.Configuration(
+                            VersolaError.Configuration.Detail.InvalidConfiguration(
+                                "discovery answered HTTP ${response.code} at $url; redirects are not followed",
+                            ),
+                        )
+                        // Anything else (a 1xx) is an answer this client cannot use and a repeat
+                        // cannot change.
                         else -> throw ServerFault.failure(response.code, response.headers)
                     }
                 }

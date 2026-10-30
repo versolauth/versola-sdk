@@ -112,14 +112,16 @@ public class HttpUserInfoClient(
 
     private suspend fun attempt(url: String, accessToken: AccessToken): Outcome {
         val bound = accessToken.isDpopBound
-        val builder = Request.Builder()
-            .url(url)
-            .header("Accept", "application/json, application/jwt")
-            .header("Authorization", (if (bound) "DPoP " else "Bearer ") + accessToken.value)
-            .get()
-        if (bound) builder.header("DPoP", checkNotNull(dpop).proof("GET", url, accessToken.value))
 
         return retrying(originOf(url)) { withContext(Dispatchers.IO) {
+            // Built inside the repeated block: a DPoP proof is single-use (RFC 9449 section 11.1, a
+            // resource server detects replay by `jti`), so every attempt carries a proof of its own.
+            val builder = Request.Builder()
+                .url(url)
+                .header("Accept", "application/json, application/jwt")
+                .header("Authorization", (if (bound) "DPoP " else "Bearer ") + accessToken.value)
+                .get()
+            if (bound) builder.header("DPoP", checkNotNull(dpop).proof("GET", url, accessToken.value))
             try {
                 httpClient.newCall(builder.build()).execute().use { response ->
                     val payload = response.body.string()
@@ -139,6 +141,13 @@ public class HttpUserInfoClient(
                                 Outcome.Rejected
                             }
                         }
+
+                        // A redirect that was not followed is a deployment fault no retry fixes.
+                        response.code in 300..399 -> throw VersolaError.Configuration(
+                            VersolaError.Configuration.Detail.InvalidConfiguration(
+                                "the userinfo endpoint answered HTTP ${response.code}; redirects are not followed",
+                            ),
+                        )
 
                         else -> throw ServerFault.failure(response.code, response.headers)
                     }

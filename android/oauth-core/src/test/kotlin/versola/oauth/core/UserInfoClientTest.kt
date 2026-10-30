@@ -223,14 +223,32 @@ class UserInfoClientTest {
     }
 
     @Test
-    fun `a redirect is not followed and is a Server failure`() = runTest {
+    fun `a redirect is not followed and is a Configuration fault, never repeated`() = runTest {
         server.enqueue(MockResponse.Builder().code(302).addHeader("Location", server.url("/elsewhere").toString()).build())
         serveJson()
 
-        val error = failure { client().fetch(tokens(bearer), "user-1") }
+        val error = failure { RetryScope(RetryPolicy(), { 0L }, kotlin.random.Random(1)).operation { client().fetch(tokens(bearer), "user-1") } }
 
-        assertTrue((error as VersolaError.Recoverable).reason is VersolaError.Recoverable.Cause.Server)
+        assertTrue(error is VersolaError.Configuration)
         assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun `a repeated DPoP-bound request carries a fresh proof on every attempt`() = runTest {
+        // A proof is single-use (RFC 9449 section 11.1: a resource server detects replay by jti), so a
+        // repeat that re-sent the first attempt's proof would be refused as a replay, turning a
+        // transient failure into a different, non-transient one.
+        server.enqueue(MockResponse.Builder().code(503).build())
+        server.enqueue(MockResponse.Builder().code(503).build())
+        serveJson()
+        val dpop = RecordingDpop()
+
+        RetryScope(RetryPolicy(), { testScheduler.currentTime }, kotlin.random.Random(1))
+            .operation { client(dpop = dpop).fetch(tokens(bound), "user-1") }
+
+        assertEquals(3, dpop.proofs.size)
+        val sent = (1..3).map { server.takeRequest().headers["DPoP"] }
+        assertEquals(listOf("proof-1", "proof-2", "proof-3"), sent)
     }
 
     @Test

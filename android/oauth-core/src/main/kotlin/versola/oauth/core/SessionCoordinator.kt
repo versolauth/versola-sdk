@@ -277,6 +277,10 @@ public class SessionCoordinator(
             warnedOfflineAccess = true
             logger?.warn("the provider advertises offline_access and the configured scopes omit it; a refresh token may not be issued")
         }
+        // A cooldown from an earlier Retry-After refuses here, before the browser opens, where a
+        // refusal costs the user nothing; the code exchange after the browser is never refused (a
+        // code just obtained is not wasted on a request the provider was going to answer anyway).
+        retryScope.refuseIfCoolingDown(tokenOrigin())
         val grant = flow.authorize(requested, acrValues, maxAge, parameters, ephemeralBrowser)
         finishLogin(grant, maxAge)
     }
@@ -298,7 +302,13 @@ public class SessionCoordinator(
         // apply — those answer a challenge raised before the code was redeemed.
         var validated: IdTokenClaims? = null
         val response = try {
-            val issued = tokenClient.exchange(grant)
+            val issued = try {
+                tokenClient.exchange(grant)
+            } catch (e: VersolaError.Recoverable) {
+                // Made once, so it never reaches the budget; a Retry-After on it still quiets the origin.
+                retryScope.endedBy(tokenOrigin(), e)
+                throw e
+            }
             // Validated before anything is persisted (`spec/oauth-sdk-api.md` section 11): a
             // rejected ID token leaves the store exactly as it was.
             validated = idTokenValidator?.let { validator ->
@@ -716,7 +726,7 @@ public class SessionCoordinator(
     private suspend fun revokeQuietly(): Boolean = try {
         // Repeated under the operation's budget (RFC 7009: revoking a revoked token succeeds), with a
         // fresh unwrap per attempt for the reason `performRefresh` gives.
-        retrying(tokenOrigin()) { credentialStore.useRefreshToken { tokenClient.revoke(it) } } != null
+        retrying(revocationOrigin()) { credentialStore.useRefreshToken { tokenClient.revoke(it) } } != null
     } catch (e: CancellationException) {
         throw e
     } catch (e: VersolaError) {
@@ -795,6 +805,13 @@ public class SessionCoordinator(
 
     private suspend fun tokenOrigin(): String =
         with(URI(flow.metadata().tokenEndpoint)) { "$scheme://$authority" }
+
+    /**
+     * The origin a revocation goes to: the revocation endpoint's, which a provider may serve from
+     * another host than the token endpoint, so that a 429 from one never holds the other's origin.
+     */
+    private suspend fun revocationOrigin(): String =
+        flow.metadata().revocationEndpoint?.let { with(URI(it)) { "$scheme://$authority" } } ?: tokenOrigin()
 }
 
 private const val NANOS_PER_MILLI = 1_000_000L

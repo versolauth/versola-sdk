@@ -27,7 +27,8 @@ assertions:
   - The authorization_code exchange makes exactly one request. The login fails with Recoverable, cause Server, the pending request is wiped, and a second login() starts from the browser.
   - A 501 is surfaced after one request, with no delay. A 400 with an OAuth error body is the error of errors.md after one request.
   - The request through the authenticated client is returned to the app as the 503 it is, with its Retry-After header intact, after one request.
-  - A key-set fetch that fails after the code exchange, during ID-token validation, is repeated under the budget like any other operation; the cached key set is used when there is one.
+  - A key-set fetch that fails after the code exchange, during ID-token validation, is repeated under the budget like any other operation, and the login then succeeds; the cached key set is used when there is one.
+  - Every attempt of a repeated DPoP-bound request carries a proof of its own, with a jti that differs from the earlier attempts.
 notes: >
   The operation table of spec/retry-policy.md is the rule; this scenario is its test. Before it,
   only refresh was repeated and the other operations made one request, which is why the counts

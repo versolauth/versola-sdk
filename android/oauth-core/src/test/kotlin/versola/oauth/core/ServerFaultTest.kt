@@ -49,6 +49,13 @@ class ServerFaultTest {
     }
 
     @Test
+    fun `leading zeros are part of the number, not a reason to saturate`() {
+        assertEquals(30_000L, retryAfter("Retry-After" to "0000000030"))
+        assertEquals(0L, retryAfter("Retry-After" to "000000000000"))
+        assertEquals(86_400_000L, retryAfter("Retry-After" to "0000000000999999999999"))
+    }
+
+    @Test
     fun `an HTTP-date is measured against the response's Date, not the device clock`() {
         val wait = retryAfter(
             "Date" to "Fri, 30 Oct 2026 12:00:00 GMT",
