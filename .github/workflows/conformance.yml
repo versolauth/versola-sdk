@@ -186,10 +186,11 @@ jobs:
             sleep 5
           done
           EOF
+          # adb is not on PATH yet (the emulator action adds it), hence the full path.
           cat > "$RUNNER_TEMP/logcat.sh" <<'EOF'
           while :; do
             echo "--- logcat attached $(date -u +%T)" >> "$RUNNER_TEMP/diag/logcat.txt"
-            adb -s emulator-5554 logcat -v threadtime >> "$RUNNER_TEMP/diag/logcat.txt" 2>&1
+            "$ANDROID_HOME/platform-tools/adb" -s emulator-5554 logcat -v threadtime >> "$RUNNER_TEMP/diag/logcat.txt" 2>&1
             sleep 2
           done
           EOF
