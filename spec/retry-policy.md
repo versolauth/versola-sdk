@@ -98,7 +98,7 @@ an operation is excluded only for a reason written in the row.
 | JWKS (`GET`) | yes | Read-only. |
 | Pushed authorization request (`POST /par`) | yes | A second push creates a second `request_uri`; the first expires unused. Nothing is spent. |
 | `authorization_code` exchange | **no** | The code is single-use and the server offers no idempotency for this grant (above). The user signs in again. |
-| Refresh (`POST /token`, `refresh_token`) | yes | Carries `Idempotency-Key` (below), so a repeat after a dropped response resolves to the same rotation. |
+| Refresh (`POST /token`, `refresh_token`) | **with an `Idempotency-Key`: yes. Without one: only when the request provably was not processed** | A facade that sends the key (the Versola facade) repeats freely: a repeat after a dropped response resolves to the same rotation. A facade that sends none (the generic facade) cannot tell a request the provider never saw from one it processed and answered badly, and a repeat of a refresh the provider already rotated is a replay that a rotating provider can answer by revoking the whole family. It repeats a refresh only after a failure in the connect phase (no such host, connection refused, no route, a TLS handshake or certificate failure: nothing was written) or an answer that says the provider did not take it up (408, 429, 503). A timeout after connecting, a reset, a 500, a 502 or a 504 surface after one request, with no delay and the stored token and rotation slot untouched. |
 | Revocation (`POST`, RFC 7009) | yes | Revoking an already revoked token succeeds by definition. |
 | UserInfo (`GET`) | yes | Read-only. |
 | Edge `/native/start` | yes | As a pushed authorization request. |
@@ -182,8 +182,12 @@ the app's scheduler's, not a timer in the SDK).
 ## Idempotency
 
 A retry is only safe on an operation the server can recognise as a repeat. The refresh path
-carries an `Idempotency-Key` derived from the generation being consumed (#8), so a retry after
-a dropped response resolves to the same rotation rather than reading as a replay.
+of a facade that sends one carries an `Idempotency-Key` derived from the generation being consumed
+(#8), so a retry after a dropped response resolves to the same rotation rather than reading as a
+replay. The generic facade sends none (ADR 0001), and its refresh is repeated only when it provably
+was not processed (operations table). Even so, the next `refresh()` the app makes after an
+ambiguous failure sends the same stored token, because the SDK cannot know whether the provider
+rotated it; a provider that did answers `invalid_grant`, which is `Reauthenticate`.
 
 An application request the SDK replays after a refresh is replayed **once**, and only when the
 original failed with 401 before reaching the application — not when it failed mid-response.

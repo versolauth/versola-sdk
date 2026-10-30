@@ -21,6 +21,27 @@ internal object ServerFault {
     fun isRepeatable(status: Int): Boolean =
         status == 408 || status == 429 || status == 500 || status == 502 || status == 503 || status == 504
 
+    /**
+     * Whether the request provably was not processed, so that repeating it cannot replay a spent
+     * single-use token: a failure in the connect phase (no such host, refused, no route, a TLS
+     * handshake or certificate failure: nothing was written), or a status that says the provider
+     * did not take the request up (408, 429, 503). A timeout after connecting, a reset, a 500, 502
+     * or 504 may each have come after the provider acted, so they are not on this list.
+     */
+    fun wasNotProcessed(failure: VersolaError.Recoverable): Boolean = when (val reason = failure.reason) {
+        is VersolaError.Recoverable.Cause.Server -> reason.status == 408 || reason.status == 429 || reason.status == 503
+        is VersolaError.Recoverable.Cause.Network -> when (failure.cause) {
+            is java.net.UnknownHostException,
+            is java.net.ConnectException,
+            is java.net.NoRouteToHostException,
+            is javax.net.ssl.SSLHandshakeException,
+            is javax.net.ssl.SSLPeerUnverifiedException,
+            -> true
+            else -> false
+        }
+        else -> false
+    }
+
     /** A status that is the provider's fault rather than a request it understood and refused. */
     fun isServerFault(status: Int): Boolean = status >= 500 || status == 408 || status == 429
 

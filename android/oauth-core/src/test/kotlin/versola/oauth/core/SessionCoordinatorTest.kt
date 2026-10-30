@@ -281,17 +281,22 @@ class SessionCoordinatorTest {
         validator: IdTokenValidator? = null,
         logger: VersolaLogger? = null,
         browser: BrowserAuthorizationSession = FixedRedirectBrowser(pendingStore),
+        retryPolicy: RetryPolicy = RetryPolicy.Conservative,
+        retryClock: () -> Long = { System.nanoTime() / 1_000_000L },
     ) = Triple(
         SessionCoordinator(
             authFlow(pendingStore, credentialStore, browser),
             tokenClient,
             credentialStore,
-            RetryPolicy.Conservative,
+            retryPolicy,
             elapsedMillis = { elapsed },
             onCredentialsWiped = { teardowns++ },
             logger = logger,
             refreshTokens = RefreshTokenPolicy.Optional,
             idTokenValidator = validator,
+            // As the generic facade wires it: it sends no Idempotency-Key.
+            repeatsRefreshAfterAmbiguousFailure = false,
+            retryClock = retryClock,
         ),
         tokenClient,
         credentialStore,
@@ -1192,6 +1197,82 @@ class SessionCoordinatorTest {
 
         assertEquals(1, tokenClient.exchangeCalls.size)
         assertEquals(503, (error.reason as VersolaError.Recoverable.Cause.Server).status)
+    }
+
+    // ---- a refresh without an Idempotency-Key is repeated only when it was not processed ----------
+
+    private fun ambiguous(cause: Throwable) =
+        VersolaError.Recoverable(VersolaError.Recoverable.Cause.Network("failed: ${cause.message}"), cause)
+
+    @Test
+    fun `the generic facade repeats a refresh only when it provably was not processed`() = runTest {
+        val notProcessed: List<VersolaError.Recoverable> = listOf(
+            serverFailure(503), serverFailure(429), serverFailure(408),
+            ambiguous(java.net.UnknownHostException("id.example.com")),
+            ambiguous(java.net.ConnectException("Connection refused")),
+            ambiguous(javax.net.ssl.SSLHandshakeException("handshake")),
+        )
+        for (failure in notProcessed) {
+            val (coordinator, tokenClient, credentialStore) = generic(retryPolicy = RetryPolicy())
+            credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+            tokenClient.refreshActions = mutableListOf({ throw failure })
+
+            failure { coordinator.refresh() }
+
+            assertEquals("${failure.reason}", 3, tokenClient.refreshCalls.size)
+        }
+    }
+
+    @Test
+    fun `the generic facade surfaces an ambiguous refresh failure after one request, grant and rotation slot intact`() = runTest {
+        // These may each have come after the provider rotated the token: a repeat would replay it,
+        // and a rotating provider can answer by revoking the family.
+        val ambiguousFailures: List<VersolaError.Recoverable> = listOf(
+            serverFailure(500), serverFailure(502), serverFailure(504),
+            ambiguous(java.net.SocketTimeoutException("timeout")),
+            ambiguous(java.net.SocketException("Connection reset")),
+            ambiguous(java.io.IOException("unexpected end of stream")),
+        )
+        for (failure in ambiguousFailures) {
+            val (coordinator, tokenClient, credentialStore) = generic(retryPolicy = RetryPolicy())
+            credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+            tokenClient.refreshActions = mutableListOf({ throw failure })
+
+            val error = failure { coordinator.refresh() } as VersolaError.Recoverable
+
+            assertEquals("${failure.reason}", 1, tokenClient.refreshCalls.size)
+            assertEquals(1, when (val r = error.reason) {
+                is VersolaError.Recoverable.Cause.Server -> r.attempts
+                is VersolaError.Recoverable.Cause.Network -> r.attempts
+                else -> -1
+            })
+            assertEquals("seed", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+            assertEquals(0, credentialStore.clears)
+            assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+        }
+    }
+
+    @Test
+    fun `the facade that sends an Idempotency-Key still repeats an ambiguous refresh failure`() = runTest {
+        // The Versola facade: a repeat resolves to the same rotation, so the old behaviour stands.
+        val (coordinator, tokenClient, credentialStore) = coordinator(retryPolicy = RetryPolicy())
+        credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        tokenClient.refreshActions = mutableListOf({ throw serverFailure(500) })
+
+        failure { coordinator.refresh() }
+
+        assertEquals(3, tokenClient.refreshCalls.size)
+    }
+
+    @Test
+    fun `revocation is still repeated by the generic facade, since revoking a revoked token succeeds`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = generic(retryPolicy = RetryPolicy())
+        credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        tokenClient.revokeFailure = { serverFailure(500) }
+
+        coordinator.logout(endSession = false)
+
+        assertEquals(3, tokenClient.revokeCalls.size)
     }
 
     @Test

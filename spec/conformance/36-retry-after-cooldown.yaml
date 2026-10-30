@@ -23,13 +23,13 @@ steps:
   - actor: app
     action: Call accessToken() in the new process.
   - actor: harness
-    action: Answer the refresh with 500 and no Retry-After until the budget is exhausted, then call accessToken() again at once.
+    action: Answer the refresh with 503 and no Retry-After until the budget is exhausted, then call accessToken() again at once.
 assertions:
   - The first call fails with Recoverable, cause Server, status 429, retryAfter 30 s, after one request.
   - The three calls inside the window fail at once with the same cause and a retryAfter that shrinks by the time passed, and the proxy sees no request from them. logout() still wipes the local session and reports tokenRevoked false.
   - After the thirty seconds the next accessToken() sends a request and succeeds against a forwarding proxy.
   - After a cold start the SDK sends one request (the cooldown is not persisted), and the session is Authenticated throughout.
-  - Exhausting the budget on 500 without Retry-After starts no cooldown, and the immediate second call makes a new set of attempts.
+  - Exhausting the budget on 503 without Retry-After starts no cooldown, and the immediate second call makes a new set of attempts.
   - Requests through the authenticated client to protected origins are never blocked by the cooldown.
 notes: >
   The cooldown protects a server that asked for quiet from an app that retries in a loop. It is

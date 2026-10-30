@@ -176,7 +176,11 @@ internal class RetryBudget(
      * integrator configures), because only the client knows which phase of the request is
      * slow; a budget that cannot see inside [call] would have to guess.
      */
-    suspend fun <T> execute(origin: String, call: suspend () -> T): T {
+    suspend fun <T> execute(
+        origin: String,
+        mayRepeat: (VersolaError.Recoverable) -> Boolean = { true },
+        call: suspend () -> T,
+    ): T {
         while (true) {
             // Nothing is sent to an origin that said when it would be ready until then; this
             // is the one place a request that was never made fails with `attempts` zero.
@@ -206,7 +210,9 @@ internal class RetryBudget(
                 if (retryAfter != null && cause is VersolaError.Recoverable.Cause.Server) {
                     cooldown.start(origin, cause.status, retryAfter)
                 }
-                if (!repeatable) throw exhausted(e)
+                // `mayRepeat` is the caller's say on top of the classification: a refresh sent
+                // without an `Idempotency-Key` is repeated only when it provably was not processed.
+                if (!repeatable || !mayRepeat(e)) throw exhausted(e)
                 // Computed before the caps are consulted, because a delay that would outlast
                 // the wall-clock ceiling ends the operation here rather than sleeping the
                 // budget away and failing afterwards — the caller is waiting either way, and
@@ -366,9 +372,13 @@ internal suspend fun <T> outsideRetryBudget(block: suspend () -> T): T {
  * integrator's own wiring): one request, as before the budget reached every client, because a
  * retry with no operation to bound it is exactly the unbounded loop the policy exists to prevent.
  */
-internal suspend fun <T> retrying(origin: String, call: suspend () -> T): T {
+internal suspend fun <T> retrying(
+    origin: String,
+    mayRepeat: (VersolaError.Recoverable) -> Boolean = { true },
+    call: suspend () -> T,
+): T {
     val budget = coroutineContext[RetryBudgetElement]?.budget ?: return call()
-    return budget.execute(origin, call)
+    return budget.execute(origin, mayRepeat, call)
 }
 
 /**
