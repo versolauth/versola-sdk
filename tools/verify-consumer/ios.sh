@@ -11,9 +11,9 @@
 # Secure Enclave halves, the privacy manifest resource) must compile for iOS. Not `swift build`:
 # that compiles for the macOS host, and the SDK's iOS-only code paths would not be built.
 #
-# Why the package's own scheme and not `-scheme Versola-Package`: that scheme belongs to the SDK's
-# package and its generation crashes on some Xcode versions; a library product of the throwaway
-# package gets its own scheme, named after the product, and builds the dependency graph under it.
+# Why the throwaway package's own scheme and not the SDK package's: a library product of the
+# throwaway package gets its own scheme, named after the product, and builds the dependency graph
+# under it.
 #
 # Needs macOS with Xcode and an iOS simulator runtime (develop.md).
 set -euo pipefail

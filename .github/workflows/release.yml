@@ -62,11 +62,6 @@ jobs:
     # GitHub creates the environment on first use; adding required reviewers to it (Settings,
     # Environments) puts a human between a pushed tag and the upload.
     environment: maven-central
-    # `id-token` and `attestations` only for the provenance step below; everything else read-only.
-    permissions:
-      contents: read
-      id-token: write
-      attestations: write
     defaults:
       run:
         working-directory: android
@@ -82,7 +77,7 @@ jobs:
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platforms;android-37.0" "build-tools;36.0.0" > /dev/null
-      - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
       # The gate before anything is signed: what the release would ship has to pass what every
       # pull request passes (android.yml).
@@ -114,6 +109,19 @@ jobs:
           tools/verify-consumer/check-bundle.sh "$bundle" "$RELEASE_TAG"
         env:
           RELEASE_TAG: ${{ github.ref_name }}
+
+      # The files the provenance job below attests: the AARs and JARs of the bundle, which are the
+      # bytes Central serves. Handed over as an artifact so that the job holding the signing key and
+      # the Portal token does not also hold `id-token` and `attestations` write.
+      - name: Keep the artefacts for the provenance job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-artefacts
+          path: |
+            android/build/central-bundle/repo/**/*.aar
+            android/build/central-bundle/repo/**/*.jar
+          if-no-files-found: error
+          retention-days: 7
 
       # Central Portal Publisher API (https://central.sonatype.com/api/v1/publisher/upload):
       # `Authorization: Bearer base64(user:password)` with a Portal user token, a multipart part
@@ -155,18 +163,32 @@ jobs:
           SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
           SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
 
-      # Build provenance (SLSA, signed through GitHub's Sigstore): the AARs and JARs that went into
-      # the bundle are tied to this workflow run, this tag and this commit. They are the same bytes
-      # Central serves, so a consumer verifies a downloaded artefact with
-      # `gh attestation verify oauth-android-X.Y.Z.aar --repo versolauth/versola-sdk`. After the
-      # upload, so only what was sent is attested; no secret is involved, the OIDC token is the
-      # job's own. An SBOM is not produced: docs/releasing.md says why.
+  # Build provenance (SLSA, signed through GitHub's Sigstore): the AARs and JARs that went into the
+  # bundle are tied to this workflow run, this tag and this commit, so a consumer can check a
+  # downloaded artefact with `gh attestation verify oauth-android-X.Y.Z.aar --repo
+  # versolauth/versola-sdk`. A job of its own, after the upload: it holds no secret, only the OIDC
+  # and attestation permissions, and it does not gate the GitHub release (a failure here leaves a
+  # release on Central and on GitHub without an attestation, which "Re-run failed jobs" makes
+  # afterwards; the artefacts stay for seven days).
+  # An SBOM is not produced: docs/releasing.md says why.
+  provenance:
+    needs: maven-central
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-artefacts
+          path: artefacts
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
-            android/build/central-bundle/repo/**/*.aar
-            android/build/central-bundle/repo/**/*.jar
+            artefacts/**/*.aar
+            artefacts/**/*.jar
 
   # SwiftPM consumers resolve the release tag itself: there is nothing to publish. What this job
   # proves is that the tagged tree resolves and builds from a clean checkout, which is what a
@@ -181,7 +203,7 @@ jobs:
         with:
           persist-credentials: false
       - run: swift package resolve
-      - run: xcodebuild build -scheme Versola-Package -destination "generic/platform=iOS Simulator"
+      - run: xcodebuild build -scheme VersolaOAuth -destination "generic/platform=iOS Simulator"
 
   # The GitHub release for the tag, with notes generated from the merged pull requests. Created
   # only after the Android bundle validated and the Swift package built at the tag, so a failed

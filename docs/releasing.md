@@ -44,6 +44,14 @@ The group `io.versola` is the one place reverse-DNS survives (`docs/adr/0001-gen
 Central verifies a group by DNS ownership of `versola.io`. The samples and the conformance drivers
 publish nothing.
 
+## For the next release's notes
+
+0.1.0 shipped five SwiftPM library products that were empty placeholders (`VersolaCore`,
+`VersolaDPoP`, `VersolaStorage`, `VersolaBrowser`, `VersolaURLSession`). They are removed from
+`Package.swift`; nothing could import anything from them, but a dependency naming one of those
+products fails to resolve. Say so in the notes of the release that first omits them (0.1.1 or 0.2.0):
+the products are gone, `VersolaOAuth` is the only one.
+
 ## What the repository does for you
 
 - `android/gradle/publishing.gradle.kts`, applied by each published module: a `release`
@@ -74,9 +82,9 @@ publish nothing.
   Central job runs in the GitHub environment `maven-central`. `publish-pubdev.yml` is the dormant
   pub.dev counterpart.
 
-- Provenance and the dependency graph. After the upload `release.yml` attests the build provenance
+- Provenance and the dependency graph. After the upload a separate `provenance` job of `release.yml` attests the build provenance
   of every AAR and JAR in the bundle (`actions/attest-build-provenance`, signed through GitHub's
-  Sigstore, no secret involved): they are the files Central serves, so
+  Sigstore, no secret involved, and not a gate of the GitHub release): they are the files Central serves, so
   `gh attestation verify oauth-android-X.Y.Z.aar --repo versolauth/versola-sdk` ties a downloaded
   artefact to the workflow run, tag and commit that built it (the first release that carries this is
   the one after 0.1.0). `security.yml` submits the Gradle dependency graph on `main`, weekly and on

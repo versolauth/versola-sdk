@@ -32,6 +32,12 @@ jobs:
       - name: SPM resolution from a clean checkout
         run: swift package resolve
 
+      # The schemes Xcode generates for the package: a package with one library product gets one,
+      # named after the product (no `<package>-Package` aggregate scheme, which exists from two
+      # products on). Printed so a scheme that goes missing is readable in the log.
+      - name: List the schemes
+        run: xcodebuild -list
+
       # `generic/platform=iOS` (the device) fails here with "Supported platforms for the
       # buildables in the current scheme is empty": a device destination doesn't resolve cleanly
       # against the auto-generated Package scheme without an explicit per-target platform. The
@@ -41,7 +47,7 @@ jobs:
       # which drifts on Xcode upgrades (it replaced "iPhone 16" - no longer present - with
       # "iPhone 17"); expect to bump that one again when it next disappears.
       - name: Build
-        run: xcodebuild build -scheme Versola-Package -destination "generic/platform=iOS Simulator"
+        run: xcodebuild build -scheme VersolaOAuth -destination "generic/platform=iOS Simulator"
 
       - name: Unit tests
-        run: xcodebuild test -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 17"
+        run: xcodebuild test -scheme VersolaOAuth -destination "platform=iOS Simulator,name=iPhone 17"

@@ -89,15 +89,24 @@ first download, and signatures are not checked (`verify-signatures` is off: much
 unsigned). When a dependency or plugin is added or bumped, the build fails on the new artefacts;
 regenerate and commit the file with the change, and read its diff like a lockfile:
 
+Run it with an empty Gradle home. A warm one has the BOMs and parent POMs cached and the run records
+only what it resolves again, which is how the first CI run failed on four such files
+(`--refresh-dependencies` makes a warm home resolve them again, an empty home is the sure way):
+
 ```bash
 cd android
-./gradlew --no-build-cache --rerun-tasks --write-verification-metadata sha256 \
+export GRADLE_USER_HOME="$(mktemp -d)"
+./gradlew --no-build-cache --rerun-tasks --refresh-dependencies --write-verification-metadata sha256 \
   assemble assembleAndroidTest test lint apiCheck centralBundle -PreleaseVersion=9.9.9 -PallowUnsignedBundle
 ANDROID_SERIAL=<emulator-serial> ./gradlew --write-verification-metadata sha256 \
   :storage:connectedDebugAndroidTest :dpop:connectedDebugAndroidTest   # only with an emulator booted; see below
 ```
 
-Write mode only adds entries, so a stale one stays until it is deleted by hand. Two things are not
+Write mode only adds entries, so a stale one stays until it is deleted by hand. A Dependabot Gradle
+pull request is red until this is done on its branch (check it out, run the commands above, commit
+`android/gradle/verification-metadata.xml`, push); Dependabot does not update the file. No workflow
+does it for you: one that pushes to a Dependabot branch would need `pull_request_target`, which this
+repository does not use. Two things are not
 automatic. `aapt2` is resolved per host (`-osx`, `-linux`, `-windows`): a regeneration on one
 machine records one variant, so after an AGP bump add the other two by hand from the `.sha256`
 file Google Maven serves beside each jar
@@ -116,8 +125,8 @@ Run from the repository root. These are the `ios.yml` steps.
 
 ```bash
 swift package resolve
-xcodebuild build -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 17"
-xcodebuild test  -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 17"
+xcodebuild build -scheme VersolaOAuth -destination "platform=iOS Simulator,name=iPhone 17"
+xcodebuild test  -scheme VersolaOAuth -destination "platform=iOS Simulator,name=iPhone 17"
 ```
 
 `swift build` and `swift test` on the Mac host work too (the manifest lists macOS 14.4, so the
@@ -378,7 +387,7 @@ answer it. Without `ISSUER` in the runner's environment every test is skipped.
 Both host apps double as small example apps over the generic facade: launch one with the issuer
 (`adb shell am start -n versola.conformance.browser.app/.HostActivity --es issuer ...`, or the
 `ISSUER` environment variable on iOS) and use the buttons by hand. `ios/BrowserLegHost` is not part
-of `Package.swift`, and `xcodebuild -scheme Versola-Package` does not see it.
+of `Package.swift`, and `xcodebuild -scheme VersolaOAuth` does not see it.
 
 ## Agent setup
 
@@ -392,7 +401,7 @@ written so they keep holding after the planned `versola.*` package move (#46).
 
 1. `cd android && ./gradlew test apiCheck` is green. Run `lint` too if you touched resources or
    the manifest.
-2. `xcodebuild test -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 17"`
+2. `xcodebuild test -scheme VersolaOAuth -destination "platform=iOS Simulator,name=iPhone 17"`
    is green if anything under `ios/` or `Package.swift` changed.
 3. `python3 tools/validate-scenarios.py` passes if anything under `spec/` changed, and
    `npx markdownlint-cli2 "**/*.md"` is clean if any Markdown did.
