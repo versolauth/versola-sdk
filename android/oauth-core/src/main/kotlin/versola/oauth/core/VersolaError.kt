@@ -181,7 +181,16 @@ public sealed class VersolaError(
     ) : VersolaError("configuration: $detail", cause) {
 
         public sealed interface Detail {
-            /** `state` on the redirect did not match the persisted value. No token request is made. */
+            /**
+             * `state` on a redirect handed to [AuthorizationResponseValidator.validate] did not match
+             * the persisted value. No token request is made.
+             *
+             * The flow no longer reports this for a waiting login: a redirect whose `state` is not
+             * the pending request's is not the awaited response and is ignored while the login keeps
+             * waiting (`spec/state-machine.md`, scenario 15), so it cannot end a login it is not an
+             * answer to. The case stays because the validator keeps the check, and because it is part
+             * of the public error type an app may already match on.
+             */
             public data object StateMismatch : Detail
 
             /**

@@ -71,7 +71,13 @@ internal class VersolaAuthTabActivity : ComponentActivity() {
     private fun deliver(resultCode: Int, resultUri: Uri?) {
         when (resultCode) {
             AuthTabIntent.RESULT_OK -> {
-                if (resultUri != null) RedirectDispatcher.deliver(resultUri.toString()) else RedirectDispatcher.deliverUserCancelled()
+                when {
+                    resultUri == null -> RedirectDispatcher.deliverUserCancelled()
+                    // The tab has closed with a redirect that is not this login's response: another
+                    // request's, or none of the awaited one. Nothing more comes from it.
+                    !RedirectDispatcher.answers(resultUri.toString()) -> RedirectDispatcher.deliverUnansweredTabEnded()
+                    else -> RedirectDispatcher.deliver(resultUri.toString())
+                }
             }
             AuthTabIntent.RESULT_CANCELED -> RedirectDispatcher.deliverUserCancelled()
             // The browser could not verify that the redirect's https host belongs to this app

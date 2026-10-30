@@ -67,6 +67,11 @@ public class AuthorizationFlow(
      * What the starter needs at the exchange travels in [PendingAuthorizationRequest.extension].
      */
     private val starter: AuthorizationStarter? = null,
+    /**
+     * Where the one line about an ignored redirect goes (see [belongingTo]); it names neither the
+     * URL nor any value in it.
+     */
+    private val logger: VersolaLogger? = null,
 ) {
 
     /**
@@ -351,8 +356,8 @@ public class AuthorizationFlow(
      * A slot left behind by a cancelled caller is **superseded**, not protected: the app is
      * asking for a new authorization and cannot be made to wait out the old slot's ten
      * minutes, and the tab behind it may never redirect at all. The abandoned tab can still
-     * redirect, so its `state` is remembered and that redirect is discarded rather than
-     * allowed to fail this call as a mismatch.
+     * redirect; what it delivers carries a `state` that is not this request's, so it is
+     * ignored like any other redirect that is not the awaited response ([belongingTo]).
      */
     public suspend fun authorize(
         scopes: Set<String>,
@@ -400,13 +405,13 @@ public class AuthorizationFlow(
             starter.start(request, metadata, clock()).let { it.pending to it.browserUri }
         }
         // A request still in the slot is a leftover nobody awaits (else this call would not be here,
-        // the lock being held for as long as one is awaited): superseded, and its `state` remembered
-        // so that a redirect its tab still delivers is stepped over rather than failing this login.
-        pendingStore.load()?.let { rememberAbandoned(it.state) }
+        // the lock being held for as long as one is awaited): superseded. A redirect its tab still
+        // delivers carries another `state` than this request's and is ignored.
         pendingStore.save(pending)
         state.value = SessionState.Authorizing
 
         val browserOptions = BrowserSessionOptions(ephemeral = ephemeralBrowser, redirectUri = configuration.redirectUri.value)
+            .also { it.expectedState = pending.state }
         val outcome = try {
             belongingTo(pending, outsideRetryBudget { browser.authorize(uri, browserOptions) })
         } catch (e: CancellationException) {
@@ -419,7 +424,6 @@ public class AuthorizationFlow(
             // will ever answer, which expires by itself within ten minutes. That is the safe
             // direction to be wrong in: a stale slot costs one expiry, while wiping a live
             // one loses an authorization the user has already completed.
-            rememberAbandoned(pending.state)
             throw e
         } catch (e: Exception) {
             // Launching or awaiting the browser failed outright (notably
@@ -484,9 +488,9 @@ public class AuthorizationFlow(
         }
         if (preempted) {
             // A newer operation (a login, a sign-out) wants the lock. This request is its leftover:
-            // its tab may yet redirect, so its `state` is remembered, and the slot is left to whoever
-            // took over (a login's `save` replaces it, a sign-out's wipe clears it).
-            rememberAbandoned(pending.state)
+            // its tab may yet redirect, and that redirect is ignored by whoever waits next, its
+            // `state` being another's. The slot is left to whoever took over (a login's `save`
+            // replaces it, a sign-out's wipe clears it).
             return null
         }
         val answered = outcome
@@ -499,29 +503,38 @@ public class AuthorizationFlow(
     }
 
     /**
-     * Consumes redirects until one answers [pending].
+     * Consumes redirects until one answers [pending]: scenario 15.
      *
-     * A tab abandoned by a cancelled caller can redirect after this call has already drained
-     * whatever was buffered. That redirect carries a `state` this process issued itself, so
-     * failing on it would lose a live authorization to a tab the user forgot about. Each
-     * abandoned `state` is discarded exactly once, which is also what bounds this loop;
-     * everything else — an unknown `state` included — still reaches the validator.
+     * A redirect answers it only when its `state` is the request's. The redirect URI is public
+     * (the app's manifest or associated domains name it), so any other app, an old link or a tab
+     * the user forgot about can deliver a URL for it, and a redirect that is not the response to
+     * this request must not be able to end it. Whatever else it carries is not looked at: it is
+     * logged, without the URL, and the wait goes on, for the genuine redirect, the user
+     * dismissing the browser, or (in a resume) the request's expiry. A redirect with no `state`
+     * at all is not the response of a request that sent one either.
+     *
+     * This is where the stored request is read, which is why it holds for a cold start too: a
+     * redirect that started the process was buffered before anything expected it, and is judged
+     * here against the request the resume loaded. The comparison is constant-time.
+     *
+     * A [BrowserOutcome.UserCancelled] is the browser's own answer and passes through.
      */
     private suspend fun belongingTo(
         pending: PendingAuthorizationRequest,
         first: BrowserOutcome,
     ): BrowserOutcome {
         var outcome = first
-        while (isAbandoned(outcome, pending)) {
+        while (!answers(outcome, pending)) {
+            logger?.warn("ignored a redirect that is not the response to the pending authorization request; still waiting for it")
             outcome = outsideRetryBudget { browser.awaitPendingRedirect() }
         }
         return outcome
     }
 
-    private fun isAbandoned(outcome: BrowserOutcome, pending: PendingAuthorizationRequest): Boolean {
-        val redirect = outcome as? BrowserOutcome.Redirect ?: return false
+    private fun answers(outcome: BrowserOutcome, pending: PendingAuthorizationRequest): Boolean {
+        val redirect = outcome as? BrowserOutcome.Redirect ?: return true
         val state = AuthorizationResponseValidator.stateOf(redirect.uri) ?: return false
-        return state != pending.state && forgetAbandoned(state)
+        return SecureTokens.constantTimeEquals(pending.state, state)
     }
 
     private suspend fun complete(
@@ -529,9 +542,6 @@ public class AuthorizationFlow(
         pending: PendingAuthorizationRequest,
         metadata: ProviderMetadata,
     ): AuthorizationGrant {
-        // Being answered is what stops this request being anyone's leftover, whichever way
-        // it ends: a resumed one is no longer abandoned, and a rejected one never will be.
-        forgetAbandoned(pending.state)
         return when (outcome) {
             is BrowserOutcome.UserCancelled -> {
                 pendingStore.clear()
@@ -668,29 +678,7 @@ public class AuthorizationFlow(
         @Volatile
         private var resumeSignal: CompletableDeferred<Unit>? = null
 
-        /**
-         * `state` values of authorizations whose caller was cancelled while their tab was
-         * open — the redirects a later call may have to step over. Process-wide and guarded
-         * by [AUTHORIZE_LOCK], for the same reason the lock itself is: the tabs and the
-         * dispatcher they redirect into are not per instance either.
-         *
-         * Bounded, because an app that cancels repeatedly without ever redirecting would
-         * otherwise grow this without end. Eight is far more open tabs than a user has, and
-         * dropping the oldest only restores the old behaviour for it: a mismatch.
-         */
         /** The absent-probe sentinel; identity is what [restoresStoredGrant] compares. */
         private val NO_STORED_GRANT: suspend () -> Boolean = { false }
-
-        private val ABANDONED_STATES = LinkedHashSet<String>()
-        private const val MAX_ABANDONED_STATES = 8
-
-        private fun rememberAbandoned(state: String) {
-            ABANDONED_STATES += state
-            while (ABANDONED_STATES.size > MAX_ABANDONED_STATES) {
-                ABANDONED_STATES.remove(ABANDONED_STATES.first())
-            }
-        }
-
-        private fun forgetAbandoned(state: String): Boolean = ABANDONED_STATES.remove(state)
     }
 }

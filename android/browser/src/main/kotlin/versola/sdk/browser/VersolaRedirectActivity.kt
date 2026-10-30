@@ -31,7 +31,9 @@ import android.os.Bundle
  *
  * Any app can start this activity with an explicit intent, which skips the intent filter above:
  * an intent for a URI other than the redirect the login in progress waits for is ignored
- * (scheme, host, port and path are compared, not the query).
+ * (scheme, host, port and path are compared), and so is one for that URI whose `state` is not the
+ * one the login's request sent, or that carries none: the redirect URI is public, so it is not the
+ * response (`spec/state-machine.md`, scenario 15). The rest of the query is the flow's to validate.
  */
 public class VersolaRedirectActivity : Activity() {
 

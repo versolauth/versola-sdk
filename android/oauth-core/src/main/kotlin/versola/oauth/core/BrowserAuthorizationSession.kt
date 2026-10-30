@@ -38,6 +38,18 @@ public class BrowserSessionOptions(
      */
     public val redirectUri: String? = null,
 ) {
+    /**
+     * The `state` of the authorization request this leg waits for the response to, or null when
+     * the leg is not one (an end-session request) or the caller did not say. A session that can
+     * tell a redirect for another request apart before it disturbs the app (the redirect
+     * activity, which any app can start) uses it to drop one; the decision stays the flow's,
+     * which compares every redirect it is handed with the persisted request, so a session that
+     * ignores this loses nothing but that early answer. Wiring between the flow and the browser
+     * module, not API: set by [AuthorizationFlow], read by the sessions.
+     */
+    @VersolaInternalApi
+    public var expectedState: String? = null
+
     public companion object {
         public val Default: BrowserSessionOptions = BrowserSessionOptions()
     }

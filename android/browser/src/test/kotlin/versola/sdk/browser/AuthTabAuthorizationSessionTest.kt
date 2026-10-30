@@ -29,6 +29,7 @@ import org.robolectric.android.controller.ActivityController
 import versola.oauth.core.BrowserOutcome
 import versola.oauth.core.BrowserSessionOptions
 import versola.oauth.core.VersolaError
+import versola.oauth.core.VersolaInternalApi
 import versola.oauth.core.VersolaLogger
 
 private const val AUTHORIZE = "https://id.example.com/authorize?response_type=code&state=s"
@@ -233,6 +234,72 @@ class AuthTabAuthorizationSessionTest {
 
         assertEquals("$REDIRECT?code=c&state=s", (RedirectDispatcher.await() as BrowserOutcome.Redirect).uri)
         assertTrue(activity.isFinishing)
+    }
+
+    @OptIn(VersolaInternalApi::class)
+    private fun expectState(state: String) {
+        RedirectDispatcher.expect(REDIRECT, state, logger)
+    }
+
+    @Test
+    fun `RESULT_OK with the awaited state is delivered`() = runTest {
+        expectState("s")
+        val controller = trampoline()
+        val activity = controller.get()
+        val started = shadowOf(activity).nextStartedActivityForResult
+
+        shadowOf(activity).receiveResult(started.intent, AuthTabIntent.RESULT_OK, Intent().setData(Uri.parse("$REDIRECT?code=c&state=s")))
+
+        assertEquals("$REDIRECT?code=c&state=s", (RedirectDispatcher.await() as BrowserOutcome.Redirect).uri)
+    }
+
+    @Test
+    fun `an Auth Tab that closes with a redirect that is not the awaited response ends the login as a dismissal would, logging no value`() = runTest {
+        // Scenario 15. The tab closed itself with it: nothing can follow from that tab and no
+        // dismissal can be observed any more.
+        for (query in listOf("code=SECRETCODE&state=junk", "code=SECRETCODE")) {
+            RedirectDispatcher.drain()
+            logger.warnings.clear()
+            expectState("s")
+            val controller = trampoline()
+            val activity = controller.get()
+            val started = shadowOf(activity).nextStartedActivityForResult
+
+            shadowOf(activity).receiveResult(started.intent, AuthTabIntent.RESULT_OK, Intent().setData(Uri.parse("$REDIRECT?$query")))
+
+            assertEquals(query, BrowserOutcome.UserCancelled, RedirectDispatcher.await())
+            assertTrue(activity.isFinishing)
+            assertEquals(1, logger.warnings.size)
+            assertTrue(logger.warnings.none { "SECRETCODE" in it || "junk" in it || "app.example.com" in it })
+        }
+    }
+
+    @Test
+    fun `an Auth Tab result is delivered as before when nothing says which state is awaited, as on a cold start`() = runTest {
+        val controller = trampoline()
+        val activity = controller.get()
+        val started = shadowOf(activity).nextStartedActivityForResult
+
+        shadowOf(activity).receiveResult(started.intent, AuthTabIntent.RESULT_OK, Intent().setData(Uri.parse("$REDIRECT?code=c&state=whatever")))
+
+        assertTrue(RedirectDispatcher.await() is BrowserOutcome.Redirect)
+    }
+
+    @Test
+    fun `the session tells the dispatcher which state its login awaits`() = runTest {
+        installProvider(authTab = true)
+        val session = AuthTabAuthorizationSession(application, logger)
+        val options = BrowserSessionOptions(redirectUri = REDIRECT)
+        @OptIn(VersolaInternalApi::class) options.expectedState = "s"
+
+        val pending = async { session.authorize(AUTHORIZE, options) }
+        runCurrent()
+
+        assertTrue(RedirectDispatcher.answers("$REDIRECT?state=s"))
+        assertFalse(RedirectDispatcher.answers("$REDIRECT?state=junk"))
+        assertFalse(RedirectDispatcher.answers(REDIRECT))
+        RedirectDispatcher.deliverUserCancelled()
+        pending.await()
     }
 
     @Test
