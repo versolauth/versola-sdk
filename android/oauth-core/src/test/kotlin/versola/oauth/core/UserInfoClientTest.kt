@@ -409,11 +409,17 @@ class UserInfoClientTest {
     }
 
     @Test
-    fun `a 403 on UserInfo is surfaced after one request and not repeated`() = runTest {
-        server.enqueue(MockResponse.Builder().code(403).build())
+    fun `a 400, 403 or 404 on UserInfo is a Configuration fault after one request, never repeated`() = runTest {
+        for (status in listOf(400, 403, 404)) {
+            server.enqueue(MockResponse.Builder().code(status).build())
+            val before = server.requestCount
 
-        failure { RetryScope(RetryPolicy(), { testScheduler.currentTime }, Random(1)).operation { client().fetch(tokens(bearer), "user-1") } }
+            val error = failure { RetryScope(RetryPolicy(), { testScheduler.currentTime }, kotlin.random.Random(1)).operation { client().fetch(tokens(bearer), "user-1") } }
 
-        assertEquals(1, server.requestCount)
+            val rejected = error as VersolaError.Configuration
+            assertTrue("$status", rejected.detail is VersolaError.Configuration.Detail.UserInfoRejected)
+            assertEquals("$status", 1, server.requestCount - before)
+        }
     }
+
 }

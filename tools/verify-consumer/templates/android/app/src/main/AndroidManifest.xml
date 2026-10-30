@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application android:label="verify-consumer">
+        <!--
+          The merge snippet from the KDoc of VersolaRedirectActivity, as an integrator pastes it.
+          Merging it makes the build open the browser module's AAR manifest, so the manifest merger
+          proves the activity is really in the artefact.
+        -->
+        <activity
+            android:name="versola.sdk.browser.VersolaRedirectActivity"
+            android:exported="true"
+            tools:node="merge">
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="https" android:host="app.example.com" android:path="/oauth" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

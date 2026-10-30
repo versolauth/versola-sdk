@@ -15,7 +15,10 @@ trap for the next reader. Security rules are in `security.md`, test conventions 
   module, `jvmTarget` 17 in `:oauth-core`), Kotlin 2.4.21, AGP 9.5.0, `minSdk = 26`,
   `compileSdk = 37`. The versions are declared
   in `android/build.gradle.kts` and each module's `build.gradle.kts`; change one in every module
-  together, and ask first to lower `minSdk` or raise it.
+  together, and ask first to lower `minSdk` or raise it. CI installs `platforms;android-37.0` (the
+  sdkmanager id for API 37 has the minor version; `android-37` does not exist) and
+  `build-tools;36.0.0` (AGP 9.5.0's default) in every workflow that builds Android; API 36 in the
+  workflows means the emulator image and Robolectric, not `compileSdk`.
 - Libraries declare no `targetSdk` (AGP would force consumers to match it); target 36 is the app's
   decision. Do not add one.
 - `android/gradle.properties` sets `android.builtInKotlin=false` and `android.newDsl=false`, and

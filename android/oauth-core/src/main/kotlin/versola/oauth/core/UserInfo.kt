@@ -142,14 +142,17 @@ public class HttpUserInfoClient(
                             }
                         }
 
-                        // A redirect that was not followed is a deployment fault no retry fixes.
-                        response.code in 300..399 -> throw VersolaError.Configuration(
-                            VersolaError.Configuration.Detail.InvalidConfiguration(
-                                "the userinfo endpoint answered HTTP ${response.code}; redirects are not followed",
+                        // A transient condition is the operation's retry budget (`Server`, with the
+                        // `Retry-After` of a 429 or 503); anything else is the provider refusing this
+                        // request (a redirect that was not followed, a 403, a 404), which no retry
+                        // changes: a Configuration fault, as on iOS.
+                        ServerFault.isServerFault(response.code) -> throw ServerFault.failure(response.code, response.headers)
+
+                        else -> throw VersolaError.Configuration(
+                            VersolaError.Configuration.Detail.UserInfoRejected(
+                                "userinfo answered ${response.code}",
                             ),
                         )
-
-                        else -> throw ServerFault.failure(response.code, response.headers)
                     }
                 }
             } catch (e: IOException) {
