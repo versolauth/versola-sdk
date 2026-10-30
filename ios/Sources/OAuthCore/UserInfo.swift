@@ -125,6 +125,8 @@ package struct HTTPUserInfoClient: UserInfoClient {
             response = try await httpClient.send(HTTPRequest(method: .get, url: url, headers: headers))
         } catch is CancellationError {
             throw CancellationError()
+        } catch let error as OAuthError {
+            throw error
         } catch {
             throw OAuthError.recoverable(.network(detail: "userinfo request failed", attempts: 1, elapsedMillis: 0))
         }

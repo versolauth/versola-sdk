@@ -66,7 +66,7 @@ construction, never behind a login screen.
 | `unlockPolicy` | `UnlockPolicy` | `None` | `state-machine.md`'s `Locked` state is reachable only under `OnAppUnlock` |
 | `clockSkewTolerance` | duration | 60 s | tolerance for `exp`, `iat`, `nbf` in ID-token validation; maximum 5 minutes |
 | `logger` | `Logger` | platform default | section 12 |
-| `httpClient` | platform HTTP client | platform default | OkHttp `OkHttpClient` / `URLSession` configuration; redirects are switched off on the SDK's own requests whatever the client does |
+| `httpClient` | platform HTTP client | platform default | OkHttp `OkHttpClient` / `URLSession` configuration; redirects are switched off on the SDK's own requests whatever the client does. Also on the SDK's own requests, whatever the client's settings say: no cached answer is ever served (a forced refetch of a key set or discovery document reaches the provider; iOS `URLCache` is bypassed), a response body over 1 MiB is refused (`Configuration`, no retry) while it streams in, and a request's deadline is bounded by the operation's retry budget (`retry-policy.md`) |
 
 Explicit endpoints are the escape hatch for providers that do not publish discovery or publish it
 at a non-standard path. They are not a way to override a discovered value: a configuration with both

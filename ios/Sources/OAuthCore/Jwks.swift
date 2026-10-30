@@ -93,6 +93,9 @@ package actor JwksClient {
                 response = try await httpClient.send(HTTPRequest(method: .get, url: url, headers: ["Accept": "application/json"]))
             } catch is CancellationError {
                 throw CancellationError()
+            } catch let error as OAuthError {
+                // Typed by the client (a transport failure, a body over the size limit): kept.
+                throw error
             } catch {
                 throw OAuthError.recoverable(.network(detail: "jwks request failed", attempts: 1, elapsedMillis: 0))
             }

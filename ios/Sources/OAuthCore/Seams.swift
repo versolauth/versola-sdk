@@ -20,12 +20,20 @@ package struct HTTPRequest: Sendable, Equatable {
     package var headers: [String: String]
     /// `application/x-www-form-urlencoded` when set together with the matching header.
     package var body: Data?
+    /// The most the answer may carry. Every document the SDK reads (metadata, a key set, a token
+    /// response, UserInfo) is small JSON from a host the app chose to trust, and a body past this
+    /// is a provider fault or an attack on the device's memory, so the client refuses it.
+    package var maxResponseBytes: Int
 
-    package init(method: Method, url: URL, headers: [String: String] = [:], body: Data? = nil) {
+    /// 1 MiB: far above a real key set or discovery document, far below what would hurt.
+    package static let defaultMaxResponseBytes = 1 << 20
+
+    package init(method: Method, url: URL, headers: [String: String] = [:], body: Data? = nil, maxResponseBytes: Int = HTTPRequest.defaultMaxResponseBytes) {
         self.method = method
         self.url = url
         self.headers = headers
         self.body = body
+        self.maxResponseBytes = maxResponseBytes
     }
 }
 

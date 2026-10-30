@@ -111,6 +111,19 @@ One budget serves one application-visible operation across every row it touches 
 `login()` that discovers, fetches the JWKS and pushes a request shares one allowance, and a
 discovery that failed twice leaves less for the push.
 
+### The timeout of one request
+
+`totalBudget` bounds an operation only if no single request can outlast it. Every request the SDK
+originates therefore carries a **deadline for the whole exchange** (the time to the last byte, not
+an idle timeout that every dripped byte restarts), equal to what is left of the operation's
+`totalBudget` at the moment it is sent, and never longer than the HTTP client's own request
+timeout. A nearly spent budget does not set a request up to fail at once: the deadline is floored
+at **5 seconds**, since the one request that cannot be repeated (the code exchange, after the
+user's time in the browser) must get a fair try. The deadline passing is a `transport` failure
+(`Network`), classified as any other (a timeout after the request left the device is repeated only
+by an operation that tolerates it). A request outside any operation (a flight started from a timer
+the app owns has its own budget; a bare call has none) gets the client's own timeout.
+
 ### Order of work
 
 `login()` has one step that cannot be repeated, the code exchange, and a request that can fail after
