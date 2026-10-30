@@ -113,11 +113,11 @@ final class JwksTests: XCTestCase {
         XCTAssertEqual(served.keys.keys, [rsa])
     }
 
-    func testHttp500IsARecoverableNetworkFailure() async {
+    func testHttp500IsARecoverableServerFailure() async {
         let stub = JoseStubHTTP()
         await stub.enqueue("/jwks.json", status: 500)
         let error = await joseThrown { _ = try await JwksClient(httpClient: stub).keys(uri: uri, forceRefresh: false) }
-        XCTAssertEqual(error as? OAuthError, .recoverable(.network(detail: "jwks_uri returned HTTP 500", attempts: 1, elapsedMillis: 0)))
+        XCTAssertEqual(error as? OAuthError, .recoverable(.server(status: 500, retryAfterMillis: nil, attempts: 1, elapsedMillis: 0)))
     }
 
     func testNon200StatusesAreNotKeys() async {
@@ -125,7 +125,13 @@ final class JwksTests: XCTestCase {
             let stub = JoseStubHTTP()
             await stub.enqueue("/jwks.json", status: status, body: JoseTestTokens.jwks(rsa))
             let error = await joseThrown { _ = try await JwksClient(httpClient: stub).keys(uri: uri, forceRefresh: false) }
-            guard case .recoverable(.network)? = error as? OAuthError else { return XCTFail("status \(status): \(String(describing: error))") }
+            // A 503 is the provider being busy (`server`); the rest were never classified and stay
+            // a failure to read the keys (`network`). Neither is a key.
+            switch error as? OAuthError {
+            case .recoverable(.server(let seen, _, _, _))? where status == 503: XCTAssertEqual(seen, 503)
+            case .recoverable(.network)? where status != 503: break
+            default: XCTFail("status \(status): \(String(describing: error))")
+            }
         }
     }
 

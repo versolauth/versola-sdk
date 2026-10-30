@@ -155,7 +155,14 @@ package protocol IdTokenValidator: Sendable {
 /// Time and randomness are injected so tests need no sleeps and no luck (`testing.md`).
 package struct Clock: Sendable {
     package var now: @Sendable () -> Date
-    package init(now: @escaping @Sendable () -> Date) { self.now = now }
+    /// Seconds on a clock that only moves forward (a wall-clock step, an NTP correction or the
+    /// user changing the date cannot move it): what a deadline such as the `Retry-After`
+    /// cooldown is measured on.
+    package var uptime: @Sendable () -> TimeInterval
+    package init(now: @escaping @Sendable () -> Date, uptime: @escaping @Sendable () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+        self.now = now
+        self.uptime = uptime
+    }
     package static let system = Clock(now: { Date() })
 }
 

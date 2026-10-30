@@ -100,9 +100,9 @@ final class DiscoveryTests: XCTestCase {
         }
     }
 
-    func testAServerErrorIsRecoverableNetwork() async {
+    func testAServerErrorIsRecoverableServerWithItsStatus() async {
         let http = RecordingHTTP.json(500, "oops")
-        await assertThrows(.recoverable(.network(detail: "discovery returned HTTP 500", attempts: 1, elapsedMillis: 0))) {
+        await assertThrows(.recoverable(.server(status: 500, retryAfterMillis: nil, attempts: 1, elapsedMillis: 0))) {
             try await self.service(http).metadata()
         }
     }
@@ -154,7 +154,7 @@ final class DiscoveryTests: XCTestCase {
         do {
             _ = try await service.metadata()
             XCTFail("expected a failure")
-        } catch OAuthError.recoverable(.network) {}
+        } catch OAuthError.recoverable(.server(503, _, _, _)) {}
         let metadata = try await service.metadata()
         XCTAssertEqual(metadata.issuer, AuthzKit.issuer)
         let count = await http.requests.count

@@ -86,7 +86,7 @@ package struct HTTPTokenClient: TokenClient {
         // RFC 8707 §2.2: repeated on the code exchange, so the token is issued for the
         // audience the user consented to. Not on refresh: the grant's audience is fixed.
         for resource in grant.resources { form.append(("resource", resource)) }
-        return try await post(form, idempotencyKey: nil)
+        return try await post(form, idempotencyKey: nil, once: true)
     }
 
     package func refresh(refreshToken: String, idempotencyKey: String) async throws -> TokenResponse {
@@ -95,7 +95,7 @@ package struct HTTPTokenClient: TokenClient {
             ("refresh_token", refreshToken),
             ("client_id", configuration.clientId),
         ]
-        return try await post(form, idempotencyKey: sendIdempotencyKey ? idempotencyKey : nil)
+        return try await post(form, idempotencyKey: sendIdempotencyKey ? idempotencyKey : nil, once: false)
     }
 
     /// `POST` to `revocation_endpoint` as a package client: `token`, `token_type_hint` and
@@ -110,28 +110,33 @@ package struct HTTPTokenClient: TokenClient {
             ("client_id", configuration.clientId),
         ])
         let request = HTTPRequest(method: .post, url: url, headers: Self.formHeaders, body: body)
-        let response: HTTPResponse
-        do {
-            response = try await httpClient.send(request)
-        } catch let error as OAuthError {
-            throw error
-        } catch {
-            throw OAuthError.recoverable(.network(detail: "revocation request failed", attempts: 1, elapsedMillis: 0))
+        let httpClient = self.httpClient
+        // Revoking a token that is already revoked succeeds (RFC 7009 section 2.2), so a repeat
+        // is safe, and under the operation's budget it is made (`spec/retry-policy.md`).
+        try await OperationBudget.run(origin: DpopOrigin.of(url)) {
+            let response: HTTPResponse
+            do {
+                response = try await httpClient.send(request)
+            } catch let error as OAuthError {
+                throw error
+            } catch {
+                throw OAuthError.recoverable(.network(detail: "revocation request failed", attempts: 1, elapsedMillis: 0))
+            }
+            if (200..<300).contains(response.statusCode) { return }
+            // The same split `rejected` draws: 5xx, 408 and 429 are the provider having a bad
+            // moment; anything else is a request it understood and refused.
+            if let failure = ServerFailure.error(for: response) { throw failure }
+            let error = TokenErrorPayload.parse(response.body)
+            throw OAuthError.configuration(.tokenRequestRejected(
+                code: error.error.isEmpty ? "(no error code in a HTTP \(response.statusCode) response)" : error.error,
+                description: error.errorDescription
+            ))
         }
-        if (200..<300).contains(response.statusCode) { return }
-        // The same split `rejected` draws: 5xx, 408 and 429 are the provider having a bad
-        // moment; anything else is a request it understood and refused.
-        if Self.isTransient(response.statusCode) {
-            throw OAuthError.recoverable(.network(detail: "revocation endpoint returned HTTP \(response.statusCode)", attempts: 1, elapsedMillis: 0))
-        }
-        let error = TokenErrorPayload.parse(response.body)
-        throw OAuthError.configuration(.tokenRequestRejected(
-            code: error.error.isEmpty ? "(no error code in a HTTP \(response.statusCode) response)" : error.error,
-            description: error.errorDescription
-        ))
     }
 
-    private func post(_ form: [(String, String)], idempotencyKey: String?) async throws -> TokenResponse {
+    /// - Parameter once: the `authorization_code` exchange, which is never repeated: under the
+    ///   operation's cooldown and answering a `Retry-After` with one, but no more than one request.
+    private func post(_ form: [(String, String)], idempotencyKey: String?, once: Bool) async throws -> TokenResponse {
         let metadata = try await metadata()
         // Before the request, not after one succeeds: for an authorization code "useless"
         // means spent, and discovery already said whether the deployment can bind the grant.
@@ -145,7 +150,15 @@ package struct HTTPTokenClient: TokenClient {
         // will honour (#1 §4: bearer where DPoP is not advertised, unless `required`).
         let proofFor: URL?
         if case .dpop = tokenBinding, metadata.supportsDpop { proofFor = url } else { proofFor = nil }
-        let response = try await execute(url: url, body: FormEncoding.body(form), idempotencyKey: idempotencyKey, proofFor: proofFor)
+        let body = FormEncoding.body(form)
+        let response: TokenResponse
+        if once {
+            response = try await OperationBudget.runOnce(origin: DpopOrigin.of(url)) {
+                try await self.execute(url: url, body: body, idempotencyKey: idempotencyKey, proofFor: proofFor)
+            }
+        } else {
+            response = try await execute(url: url, body: body, idempotencyKey: idempotencyKey, proofFor: proofFor)
+        }
         try accept(response)
         return response
     }
@@ -207,7 +220,7 @@ package struct HTTPTokenClient: TokenClient {
         if (200..<300).contains(response.statusCode) {
             return .issued(try Self.issued(response.body, dateHeader: response.header("Date")))
         }
-        return try Self.rejected(status: response.statusCode, body: response.body, nonce: response.header("DPoP-Nonce"), wwwAuthenticate: response.header("WWW-Authenticate"))
+        return try Self.rejected(response)
     }
 
     private static func issued(_ body: Data, dateHeader: String?) throws -> TokenResponse {
@@ -238,7 +251,11 @@ package struct HTTPTokenClient: TokenClient {
         )
     }
 
-    private static func rejected(status: Int, body: Data, nonce: String?, wwwAuthenticate: String?) throws -> Attempt {
+    private static func rejected(_ response: HTTPResponse) throws -> Attempt {
+        let status = response.statusCode
+        let body = response.body
+        let nonce = response.header("DPoP-Nonce")
+        let wwwAuthenticate = response.header("WWW-Authenticate")
         // A redirect that was not followed. The Location is deliberately not reported: the
         // token endpoint is whatever discovery said it was.
         if (300..<400).contains(status) {
@@ -252,10 +269,10 @@ package struct HTTPTokenClient: TokenClient {
             }
         }
         // 5xx is the provider having a bad moment, and its body is as likely to be an HTML
-        // page as JSON. Transport-shaped, retried under the caller's budget, as are 408 and 429.
-        if isTransient(status) {
-            throw OAuthError.recoverable(.network(detail: "token endpoint returned HTTP \(status)", attempts: 1, elapsedMillis: 0))
-        }
+        // page as JSON. A 408, a 429 and a 5xx are `server`, with the `Retry-After` of a 429
+        // or a 503; whether it is repeated is the caller's budget's decision (a refresh is, the
+        // authorization_code exchange is not).
+        if let failure = ServerFailure.error(for: response) { throw failure }
         guard let error = TokenErrorPayload.parseStrict(body) else {
             // A 4xx that is not an OAuth error response is something other than a token
             // endpoint answering at this URL.
@@ -272,8 +289,6 @@ package struct HTTPTokenClient: TokenClient {
             ))
         }
     }
-
-    static func isTransient(_ status: Int) -> Bool { status >= 500 || status == 408 || status == 429 }
 
     static let formHeaders: [String: String] = [
         "Accept": "application/json",

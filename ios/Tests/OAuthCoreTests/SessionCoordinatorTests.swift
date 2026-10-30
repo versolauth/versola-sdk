@@ -573,4 +573,106 @@ final class SessionCoordinatorTests: XCTestCase {
         try await f.coordinator.login(scopes: ["openid"])
         XCTAssertFalse(f.logger.warnings.contains { $0.contains("offline_access") })
     }
+
+    // MARK: - Server errors (spec/retry-policy.md, scenarios 34 to 36)
+
+    private func serverError(_ status: Int, retryAfter: Int64? = nil) -> OAuthError {
+        .recoverable(.server(status: status, retryAfterMillis: retryAfter, attempts: 1, elapsedMillis: 0))
+    }
+
+    /// A refresh is repeated on a transient server answer, under the budget, and the session stays
+    /// where it was.
+    func testARefreshIsRepeatedOnAnAnswerOf503AndSucceeds() async throws {
+        let f = try fixture(answers: [.success(response(refresh: "rt-1", expiresIn: 60)), .failure(serverError(503)), .success(response(refresh: "rt-2"))])
+        try await f.coordinator.login(scopes: ["openid"])
+        f.clock.advance(61)
+
+        _ = try await f.coordinator.accessToken()
+
+        let calls = await f.tokens.calls
+        XCTAssertEqual(calls.count, 3, "the exchange, the failed refresh and its repeat")
+        let state = await f.flow.states.current
+        XCTAssertEqual(state, .authenticated)
+    }
+
+    func testARefreshThatExhaustsTheBudgetOnFiveHundredsSurfacesServerWithTheStatusAndLeavesTheGrant() async throws {
+        let f = try fixture(answers: [.success(response(refresh: "rt-1", expiresIn: 60)), .failure(serverError(500)), .failure(serverError(500))])
+        try await f.coordinator.login(scopes: ["openid"])
+        f.clock.advance(61)
+
+        do {
+            _ = try await f.coordinator.accessToken()
+            XCTFail("no error")
+        } catch let error as OAuthError {
+            guard case .recoverable(.server(500, nil, let attempts, _)) = error else { return XCTFail("\(error)") }
+            XCTAssertEqual(attempts, 2)
+        }
+
+        let stored = await f.store.refresh
+        XCTAssertEqual(stored, "rt-1")
+        let state = await f.flow.states.current
+        XCTAssertEqual(state, .authenticated, "5xx never ends the session (spec/state-machine.md)")
+    }
+
+    func testAFiveHundredAndOneIsNotRepeatedByARefresh() async throws {
+        let f = try fixture(answers: [.success(response(refresh: "rt-1", expiresIn: 60)), .failure(serverError(501)), .success(response(refresh: "rt-2"))])
+        try await f.coordinator.login(scopes: ["openid"])
+        f.clock.advance(61)
+
+        do {
+            _ = try await f.coordinator.accessToken()
+            XCTFail("no error")
+        } catch let error as OAuthError {
+            XCTAssertEqual(error, serverError(501))
+        }
+        let calls = await f.tokens.calls
+        XCTAssertEqual(calls.count, 2, "the exchange and one refresh")
+    }
+
+    /// A `Retry-After` the budget cannot hold ends the refresh at once, and a second call inside
+    /// the window sends nothing at all: the cooldown (scenario 36).
+    func testARetryAfterBeyondTheBudgetIsHandedToTheAppAndQuietsTheNextRefresh() async throws {
+        let f = try fixture(answers: [.success(response(refresh: "rt-1", expiresIn: 60)), .failure(serverError(429, retryAfter: 30_000)), .success(response(refresh: "rt-2"))])
+        try await f.coordinator.login(scopes: ["openid"])
+        f.clock.advance(61)
+
+        do {
+            _ = try await f.coordinator.accessToken()
+            XCTFail("no error")
+        } catch let error as OAuthError {
+            guard case .recoverable(.server(429, 30_000, 1, _)) = error else { return XCTFail("\(error)") }
+        }
+        let afterFirst = await f.tokens.calls.count
+
+        do {
+            _ = try await f.coordinator.accessToken()
+            XCTFail("no error")
+        } catch let error as OAuthError {
+            guard case .recoverable(.server(429, let left?, 0, _)) = error else { return XCTFail("\(error)") }
+            XCTAssertLessThanOrEqual(left, 30_000)
+        }
+        let afterSecond = await f.tokens.calls.count
+        XCTAssertEqual(afterSecond, afterFirst, "nothing was sent while the server asked for quiet")
+        let state = await f.flow.states.current
+        XCTAssertEqual(state, .authenticated)
+    }
+
+    func testAnOperationJoinsTheBudgetOfTheOneThatIsRunningAndANewOperationStartsItsOwn() async throws {
+        let f = try fixture(answers: [])
+        let outer = await f.coordinator.operation { OperationBudget.current }
+        XCTAssertNotNil(outer)
+        let (inner, again): (RetryBudget?, RetryBudget?) = await f.coordinator.operation {
+            let first = OperationBudget.current
+            let second = await f.coordinator.operation { OperationBudget.current }
+            return (first, second)
+        }
+        XCTAssertTrue(inner === again, "an operation started inside another shares its budget")
+        let fresh: Bool = await f.coordinator.operation {
+            let first = OperationBudget.current
+            let own = await f.coordinator.newOperation { OperationBudget.current }
+            return first !== own
+        }
+        XCTAssertTrue(fresh, "the part of a login after the browser has a budget of its own")
+        XCTAssertNil(OperationBudget.current, "and nothing leaks out of the operation")
+    }
 }
