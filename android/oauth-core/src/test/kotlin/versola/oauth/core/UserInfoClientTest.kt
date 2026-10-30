@@ -124,6 +124,14 @@ class UserInfoClientTest {
     }
 
     @Test
+    fun `a userinfo endpoint that is not https is refused at the place of use, sending nothing`() = runTest {
+        val error = failure { client(endpoint = "http://idp.example.com/userinfo").fetch(tokens(bearer), "user-1") }
+
+        assertTrue((error as VersolaError.Configuration).detail is VersolaError.Configuration.Detail.DiscoveryMalformed)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
     fun `a bearer token is not given a proof even when a proof source is wired`() = runTest {
         val dpop = RecordingDpop()
         serveJson()

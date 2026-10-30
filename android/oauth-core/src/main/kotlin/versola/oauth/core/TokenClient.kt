@@ -167,6 +167,8 @@ public class HttpTokenClient(
         try {
             val endpoint = discovery.metadata().revocationEndpoint
             if (endpoint.isNullOrBlank()) return
+            // The refresh token is about to go to it.
+            requireSecureEndpoint("revocation_endpoint", endpoint)
             val body = form.toByteArray()
             form.clear()
             try {

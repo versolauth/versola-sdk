@@ -91,7 +91,8 @@ val oauth = OAuthClient.create(context, configuration)
   24 hours when it says nothing; in a running process too, not only at start) or when a request fails
   in a way a changed endpoint could explain. An expired document whose refetch fails is still served,
   and the next try waits a minute. Every endpoint the document announces
-  must be `https` (cleartext only on `localhost`, `127.0.0.1` or `[::1]`) and may sit on another
+  must be `https` (checked when the document is read for `authorization_endpoint`, `token_endpoint`
+  and `jwks_uri`, where it is used for the rest) (cleartext only on `localhost`, `127.0.0.1` or `[::1]`) and may sit on another
   origin than the issuer; otherwise `Configuration(DiscoveryMalformed)`, and a cached copy that
   fails the same check is discarded.
 - `sessionState` is the source of truth. Every operation below publishes through it, including an

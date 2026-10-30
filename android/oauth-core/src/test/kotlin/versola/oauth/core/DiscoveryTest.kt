@@ -252,11 +252,8 @@ class DiscoveryTest {
     }
 
     @Test
-    fun `an endpoint that is not https is refused wherever it points, naming the member`() = runTest {
-        for (field in listOf(
-            "authorization_endpoint", "token_endpoint", "userinfo_endpoint", "revocation_endpoint",
-            "end_session_endpoint", "jwks_uri", "pushed_authorization_request_endpoint",
-        )) {
+    fun `the three endpoints the SDK cannot start without must be https, naming the member`() = runTest {
+        for (field in listOf("authorization_endpoint", "token_endpoint", "jwks_uri")) {
             for (bad in listOf("http://idp.example.com/x", "ftp://idp.example.com/x", "/relative", "javascript:alert(1)", "https:///nohost")) {
                 server.enqueue(MockResponse.Builder().code(200).body(documentWith(field to bad)).build())
 
@@ -269,13 +266,21 @@ class DiscoveryTest {
     }
 
     @Test
-    fun `an mTLS alias that is not https is refused too`() = runTest {
-        val body = documentWith().dropLast(1) + ""","mtls_endpoint_aliases":{"token_endpoint":"http://idp.example.com/token"}}"""
+    fun `an insecure optional endpoint does not make the document unusable, it is refused where it would be used`() = runTest {
+        // One http:// in an end-session, revocation, PAR, UserInfo or mTLS-alias URL the app never
+        // calls must not break login.
+        val body = documentWith(
+            "userinfo_endpoint" to "http://idp.example.com/userinfo",
+            "revocation_endpoint" to "http://idp.example.com/revoke",
+            "end_session_endpoint" to "http://idp.example.com/logout",
+            "pushed_authorization_request_endpoint" to "http://idp.example.com/par",
+        ).dropLast(1) + ""","mtls_endpoint_aliases":{"token_endpoint":"http://idp.example.com/token"}}"""
         server.enqueue(MockResponse.Builder().code(200).body(body).build())
 
-        val error = failure { client.fetch(issuer) } as VersolaError.Configuration
+        val metadata = client.fetch(issuer)
 
-        assertTrue((error.detail as VersolaError.Configuration.Detail.DiscoveryMalformed).detail.contains("token_endpoint"))
+        assertEquals("http://idp.example.com/revoke", metadata.revocationEndpoint)
+        assertTrue(failure { requireSecureEndpoint("revocation_endpoint", metadata.revocationEndpoint) } is VersolaError.Configuration)
     }
 
     @Test

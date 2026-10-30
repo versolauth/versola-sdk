@@ -59,6 +59,7 @@ class TokenClientTest {
     private fun client(
         dpopAdvertised: Boolean = true,
         revocationAdvertised: Boolean = true,
+        revocationUrl: String? = null,
         binding: TokenBinding = TokenBinding.Dpop(),
         dpop: DpopProofSource? = proofSource,
         discoveryFailure: Throwable? = null,
@@ -67,7 +68,7 @@ class TokenClientTest {
             issuer = issuer,
             authorizationEndpoint = "$issuer/authorize",
             tokenEndpoint = "$issuer/token",
-            revocationEndpoint = if (revocationAdvertised) "$issuer/revoke" else null,
+            revocationEndpoint = revocationUrl ?: if (revocationAdvertised) "$issuer/revoke" else null,
             dpopSigningAlgValuesSupported = if (dpopAdvertised) listOf("ES256") else emptyList(),
         )
         return HttpTokenClient(
@@ -565,6 +566,14 @@ class TokenClientTest {
     }
 
     // ---- revoke() ----------------------------------------------------------------------
+
+    @Test
+    fun `a revocation endpoint that is not https is refused at the place of use, sending nothing`() = runTest {
+        val error = failure { client(revocationUrl = "http://idp.example.com/revoke").revoke(refreshToken.toByteArray(Charsets.UTF_8)) }
+
+        assertTrue((error as VersolaError.Configuration).detail is VersolaError.Configuration.Detail.DiscoveryMalformed)
+        assertEquals(0, server.requestCount)
+    }
 
     @Test
     fun `a revocation carries the token, its hint and the client id, and no proof`() = runTest {

@@ -111,41 +111,44 @@ public data class ProviderMetadata(
                 VersolaError.Configuration.Detail.DiscoveryFieldMissing("token_endpoint"),
             )
         }
-        // Every URL the SDK will send a code, a refresh token, a proof or the user to. Held to the
-        // issuer's own rule (https, or cleartext on a loopback host for a staged stack; not the
-        // emulator's `10.0.2.2` alias, which the issuer alone may use) but not to the issuer's origin: Cognito's OAuth endpoints live on the user-pool domain and Entra's
+        // The three the SDK cannot start without: where the user is sent, where the code is redeemed
+        // and where the ID token's keys come from. The others are checked where they are used
+        // ([requireSecureEndpoint]): one `http://` in an end-session, revocation, PAR, UserInfo or
+        // mTLS-alias URL the app never calls must not make the whole document unusable and break
+        // login. Held to the issuer's own rule (https, or cleartext on a loopback host for a staged
+        // stack; not the emulator's `10.0.2.2` alias, which the issuer alone may use) but not to the
+        // issuer's origin: Cognito's OAuth endpoints live on the user-pool domain and Entra's
         // UserInfo on Microsoft Graph, so a cross-origin endpoint is legitimate (`providers.md`).
         // Without this a document announcing `http://…/token` has refresh tokens POSTed to it in
         // the clear.
-        requireSecure("authorization_endpoint", authorizationEndpoint)
-        requireSecure("token_endpoint", tokenEndpoint)
-        requireSecure("userinfo_endpoint", userinfoEndpoint)
-        requireSecure("revocation_endpoint", revocationEndpoint)
-        requireSecure("end_session_endpoint", endSessionEndpoint)
-        requireSecure("jwks_uri", jwksUri)
-        requireSecure("pushed_authorization_request_endpoint", pushedAuthorizationRequestEndpoint)
-        requireSecure("mtls_endpoint_aliases.token_endpoint", mtlsEndpointAliases?.tokenEndpoint)
-        requireSecure("mtls_endpoint_aliases.revocation_endpoint", mtlsEndpointAliases?.revocationEndpoint)
+        requireSecureEndpoint("authorization_endpoint", authorizationEndpoint)
+        requireSecureEndpoint("token_endpoint", tokenEndpoint)
+        requireSecureEndpoint("jwks_uri", jwksUri)
     }
+}
 
-    /** Absent or blank is "not advertised", which the callers already read as such; anything else must be secure. */
-    private fun requireSecure(member: String, url: String?) {
-        if (url.isNullOrBlank()) return
-        val parsed = try {
-            java.net.URI(url)
-        } catch (e: java.net.URISyntaxException) {
-            null
-        }
-        val scheme = parsed?.scheme?.lowercase()
-        val acceptable = !parsed?.host.isNullOrEmpty() &&
-            (scheme == "https" || (scheme == "http" && parsed?.host in LOOPBACK_ENDPOINT_HOSTS))
-        if (!acceptable) {
-            // The member's name and nothing of its value: the document is the provider's, but the
-            // value could carry a credential in its query, and the name is what a developer needs.
-            throw VersolaError.Configuration(
-                VersolaError.Configuration.Detail.DiscoveryMalformed("$member must be an https URL (http only on loopback)"),
-            )
-        }
+/**
+ * Refuses [url], the value of discovery member [member], unless it is an absolute `https` URL with a
+ * host, or `http` on `localhost`, `127.0.0.1` or `[::1]`: `Configuration(DiscoveryMalformed)`. Absent
+ * or blank is "not advertised", which callers already read as such. Checked where an endpoint is
+ * about to be used, for the optional ones; the member's name goes into the error and nothing of its
+ * value, which could carry a credential in its query.
+ */
+@VersolaInternalApi
+public fun requireSecureEndpoint(member: String, url: String?) {
+    if (url.isNullOrBlank()) return
+    val parsed = try {
+        java.net.URI(url)
+    } catch (e: java.net.URISyntaxException) {
+        null
+    }
+    val scheme = parsed?.scheme?.lowercase()
+    val acceptable = !parsed?.host.isNullOrEmpty() &&
+        (scheme == "https" || (scheme == "http" && parsed?.host in LOOPBACK_ENDPOINT_HOSTS))
+    if (!acceptable) {
+        throw VersolaError.Configuration(
+            VersolaError.Configuration.Detail.DiscoveryMalformed("$member must be an https URL (http only on loopback)"),
+        )
     }
 }
 

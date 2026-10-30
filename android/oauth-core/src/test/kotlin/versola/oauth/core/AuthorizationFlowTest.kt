@@ -840,6 +840,18 @@ class AuthorizationFlowTest {
     }
 
     @Test
+    fun `an end_session_endpoint that is not https is refused at the place of use, opening nothing`() = runTest {
+        val store = RecordingStore()
+        val browser = FakeBrowser({ BrowserOutcome.Redirect("https://x?state=s") }, store)
+        val insecure = metadata.copy(endSessionEndpoint = "http://idp.example.com/logout")
+
+        val error = failure { flow(store, browser, metadata = insecure).endSession("hint") } as VersolaError.Configuration
+
+        assertTrue(error.detail is VersolaError.Configuration.Detail.DiscoveryMalformed)
+        assertNull(browser.launchedUri)
+    }
+
+    @Test
     fun `endSession omits what it does not have rather than sending an empty parameter`() = runTest {
         val store = RecordingStore()
         val browser = FakeBrowser({ uri -> BrowserOutcome.Redirect("https://x?state=${stateOf(uri)}") }, store)

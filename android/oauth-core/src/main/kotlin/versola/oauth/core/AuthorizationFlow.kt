@@ -264,6 +264,8 @@ public class AuthorizationFlow(
         ensureRestored()
         val endpoint = discovery.metadata().endSessionEndpoint
         if (endpoint.isNullOrBlank()) return@withLock false
+        // The user is about to be sent to it, with the ID token as `id_token_hint`.
+        requireSecureEndpoint("end_session_endpoint", endpoint)
         val postLogoutRedirectUri = configuration.postLogoutRedirectUri?.value
         val expectedState = SecureTokens.generate(SecureRandom())
         val uri = endSessionUri(endpoint, idTokenHint, configuration.clientId, postLogoutRedirectUri, expectedState)

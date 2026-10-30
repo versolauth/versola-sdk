@@ -34,7 +34,7 @@ A provider works with the generic facade when it offers all of the following:
 
 - A discovery document at the well-known path of its issuer (OpenID Connect Discovery 1.0, RFC
   8414), or explicit endpoints given through `ProviderEndpoints` (API 3). Discovery's `issuer` must
-  equal the configured one, a single trailing slash ignored. Every endpoint it announces is `https`
+  equal the configured one, a single trailing slash ignored. Every endpoint it announces is `https` (the three the SDK cannot start without checked when the document is read, the others where they are used)
   (cleartext only on `localhost`, `127.0.0.1` or `[::1]`), on the issuer's origin or another.
 - The authorization code flow with PKCE `S256` (RFC 7636, RFC 8252) for a **public client**:
   `token_endpoint_auth_method` `none`, `client_id` in the token request body, no secret anywhere.

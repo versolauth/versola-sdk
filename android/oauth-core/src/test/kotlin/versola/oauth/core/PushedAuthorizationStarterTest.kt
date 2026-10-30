@@ -85,6 +85,16 @@ class PushedAuthorizationStarterTest {
     }
 
     @Test
+    fun `a push endpoint that is not https is refused before anything is pushed`() = runTest {
+        val error = thrown<VersolaError.Configuration> {
+            starter().start(request(), metadata(endpoint = "http://idp.example.com/par"), nowEpochMillis = 0)
+        }
+
+        assertTrue(error.detail is VersolaError.Configuration.Detail.DiscoveryMalformed)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
     fun `an advertised endpoint is pushed to and the browser opens on client_id and request_uri only`() = runTest {
         server.enqueue(pushed())
         val request = request()

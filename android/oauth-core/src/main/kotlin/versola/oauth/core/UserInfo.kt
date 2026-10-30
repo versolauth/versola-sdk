@@ -77,6 +77,8 @@ public class HttpUserInfoClient(
         val url = userinfoEndpoint() ?: throw VersolaError.Configuration(
             VersolaError.Configuration.Detail.ProviderUnsupported("userinfo_endpoint"),
         )
+        // The access token is about to go to it.
+        requireSecureEndpoint("userinfo_endpoint", url)
         var accessToken = tokens.accessToken()
         if (accessToken.isDpopBound && dpop == null) {
             throw VersolaError.Configuration(
