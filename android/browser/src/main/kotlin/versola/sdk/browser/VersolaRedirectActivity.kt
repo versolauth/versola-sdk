@@ -52,7 +52,6 @@ public class VersolaRedirectActivity : Activity() {
         if (uri == null || !RedirectDispatcher.accepts(uri)) {
             // Not a response: see [RedirectDispatcher.accepts]. Nothing is delivered and the app
             // is not brought forward on its account; the login it did not answer carries on.
-            RedirectDispatcher.noteIgnoredIntent()
             finish()
             return
         }

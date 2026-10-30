@@ -187,7 +187,9 @@ class BrowserLegTest(private val leg: String) {
         val log = harness.log()
         assertFalse("a foreign redirect is not a response\n$log", "login: failed" in log)
         assertFalse("no sign-in happened\n$log", "state: Authenticated" in log)
-        if ("CustomTabActivity" !in harness.topActivity()) harness.returnToBrowser()
+        // The redirect activity runs in a task of its own, so ignoring the intent leaves the tab
+        // in front rather than raising the app over it.
+        assertTrue("the tab is still in front: ${harness.topActivity()}", "CustomTabActivity" in harness.topActivity())
         harness.signInAtProvider()
         harness.awaitLog("login: ok")
         assertTrue("signed in after the foreign intent", "state: Authenticated" in harness.log())

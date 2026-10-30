@@ -62,26 +62,6 @@ internal object RedirectDispatcher {
         return sameRedirect(redirect, uri)
     }
 
-    /**
-     * Set when [VersolaRedirectActivity] dropped an intent that was not the awaited redirect.
-     * Starting that activity raises the app's task over the open tab, so the host resumes
-     * without the user having closed anything: [ForegroundReturnDetector] must not read that
-     * resume as a dismissal, or the foreign intent ends the login after all.
-     */
-    @Volatile
-    private var ignoredIntentPending = false
-
-    fun noteIgnoredIntent() {
-        ignoredIntentPending = true
-    }
-
-    /** Whether a resume is the aftermath of an ignored intent; true at most once per intent. */
-    fun consumeIgnoredIntent(): Boolean {
-        val pending = ignoredIntentPending
-        ignoredIntentPending = false
-        return pending
-    }
-
     fun deliver(uri: String) {
         redirectDelivered = true
         outcomes.trySend(Result.success(BrowserOutcome.Redirect(uri)))
@@ -109,7 +89,6 @@ internal object RedirectDispatcher {
      */
     fun drain() {
         redirectDelivered = false
-        ignoredIntentPending = false
         expected = null
         while (outcomes.tryReceive().isSuccess) {
             // discard
@@ -119,7 +98,8 @@ internal object RedirectDispatcher {
 
 /**
  * Whether [actual] is [expected] as a redirect: scheme and host without case, the port with a
- * scheme's default folded away, the path exactly. A private-use scheme with no host compares
+ * scheme's default folded away, the path exactly as written (percent-encoding is not decoded:
+ * `%2F` is not a `/`, as when iOS compares the raw path). A private-use scheme with no host compares
  * on scheme and path alone. A URI that dresses another host up with userinfo
  * (`https://app.example.com@evil.example.org/`) is compared on the host the OS would route to.
  */
@@ -129,7 +109,7 @@ internal fun sameRedirect(expected: String, actual: String): Boolean {
     return a.scheme.equals(b.scheme, ignoreCase = true) &&
         a.host.equals(b.host, ignoreCase = true) &&
         effectivePort(a) == effectivePort(b) &&
-        a.path.orEmpty() == b.path.orEmpty()
+        a.encodedPath.orEmpty() == b.encodedPath.orEmpty()
 }
 
 private fun effectivePort(uri: Uri): Int = when {

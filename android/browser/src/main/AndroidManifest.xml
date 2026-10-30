@@ -6,14 +6,20 @@
       the SDK. The app re-declares this activity with its own filter and the manifest merger
       unions the two. See VersolaRedirectActivity's documentation for the snippet.
 
-      singleTask so a redirect arriving while the activity already exists reuses it rather
-      than stacking a second copy behind the browser.
+      singleInstance, so it always runs alone in a task of its own and never in the app's. Any
+      app can start this exported activity; if it ran in the app's task, an intent that is not
+      the redirect would still raise the app over the open browser tab (measured on an API 36
+      emulator: the tab was left hidden behind the app). In a task of its own, ignoring an
+      intent leaves the tab in front, and a real redirect raises the app by starting its
+      launcher activity from this one. excludeFromRecents keeps the task of an
+      ignored intent out of Recents.
     -->
     <application>
         <activity
             android:name="versola.sdk.browser.VersolaRedirectActivity"
             android:exported="true"
-            android:launchMode="singleTask"
+            android:launchMode="singleInstance"
+            android:excludeFromRecents="true"
             android:theme="@android:style/Theme.NoDisplay" />
 
         <!--

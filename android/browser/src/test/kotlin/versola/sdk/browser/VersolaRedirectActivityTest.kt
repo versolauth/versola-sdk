@@ -101,6 +101,17 @@ class VersolaRedirectActivityTest {
     }
 
     @Test
+    fun `the path is compared as written, an encoded slash is not a slash`() {
+        RedirectDispatcher.expect("https://app.example.com/oauth/cb")
+
+        open("https://app.example.com/oauth%2Fcb?code=c&state=junk")
+        assertFalse(RedirectDispatcher.redirectDelivered)
+
+        open("https://app.example.com/oauth/cb?code=c&state=s")
+        assertTrue(RedirectDispatcher.redirectDelivered)
+    }
+
+    @Test
     fun `an explicit default port is the same redirect`() {
         RedirectDispatcher.expect(REDIRECT)
 
@@ -148,17 +159,15 @@ class VersolaRedirectActivityTest {
         runCurrent()
         host.pause().stop()
 
-        // Another app fires the exported activity at the open login; the system raises the app.
+        // Another app fires the exported activity at the open login. It runs in a task of its
+        // own, so the host is not resumed: nothing here may read as a dismissal.
         open("anything://x?code=c&state=junk")
-        host.start().resume()
         runCurrent()
-        assertFalse("the raise is not a dismissal: the login is still waiting", login.isCompleted)
+        assertFalse("the login is still waiting", login.isCompleted)
 
         // Later the user leaves for the tab and closes it: the detector is still armed, so
         // that return is a cancel.
-        val later = Robolectric.buildActivity(Activity::class.java).setup()
-        later.pause().stop()
-        later.start().resume()
+        host.start().resume()
         runCurrent()
         assertEquals(BrowserOutcome.UserCancelled, login.await())
     }
