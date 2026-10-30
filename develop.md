@@ -77,6 +77,36 @@ out in `android/gradle.properties` because it does not work with
 kotlinx-binary-compatibility-validator; do not remove that without checking the upstream issue
 named there.
 
+#### Dependency verification
+
+`android/gradle/verification-metadata.xml` holds the SHA-256 of every artefact Gradle resolves (jar,
+aar, POM, Gradle module metadata) for the build and for its plugins, and Gradle refuses one that
+differs or is missing ("Dependency verification failed"). `android/gradle/wrapper/gradle-wrapper.properties`
+carries `distributionSha256Sum` for the distribution in the same way (the wrapper jar was compared
+with the checksum on services.gradle.org when it was added). The checksums were recorded from what
+the repositories served at the time, so they detect a changed artefact from then on, not a bad
+first download, and signatures are not checked (`verify-signatures` is off: much of AndroidX is
+unsigned). When a dependency or plugin is added or bumped, the build fails on the new artefacts;
+regenerate and commit the file with the change, and read its diff like a lockfile:
+
+```bash
+cd android
+./gradlew --no-build-cache --rerun-tasks --write-verification-metadata sha256 \
+  assemble assembleAndroidTest test lint apiCheck centralBundle -PreleaseVersion=9.9.9 -PallowUnsignedBundle
+ANDROID_SERIAL=<emulator-serial> ./gradlew --write-verification-metadata sha256 \
+  :storage:connectedDebugAndroidTest :dpop:connectedDebugAndroidTest   # only with an emulator booted; see below
+```
+
+Write mode only adds entries, so a stale one stays until it is deleted by hand. Two things are not
+automatic. `aapt2` is resolved per host (`-osx`, `-linux`, `-windows`): a regeneration on one
+machine records one variant, so after an AGP bump add the other two by hand from the `.sha256`
+file Google Maven serves beside each jar
+(`https://dl.google.com/dl/android/maven2/com/android/tools/build/aapt2/<version>/aapt2-<version>-linux.jar.sha256`),
+because CI runs on Linux. And the Flutter example's build (`flutter/versola_oauth/example/android`,
+which includes this one) is not covered: a composite build is verified by its root, and the example's
+root also pulls in Flutter's own Gradle tooling. Robolectric downloads its `android-all` image at
+test time outside Gradle, so that jar is not covered either.
+
 `connectedDebugAndroidTest` needs the `androidTest` source sets, which arrive with the
 instrumented job (PR #44). Until then it has nothing to run on `main`.
 
