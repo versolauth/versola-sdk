@@ -301,6 +301,9 @@ public class SessionCoordinator(
         // recognise as a repeat. The nonce and clock-skew retries inside [TokenClient] still
         // apply — those answer a challenge raised before the code was redeemed.
         var validated: IdTokenClaims? = null
+        // What the provider issued, once it has: a login that fails after this point discards it
+        // unused, and the refresh token is then a live credential nobody holds (below).
+        var exchanged: TokenResponse? = null
         val response = try {
             val issued = try {
                 tokenClient.exchange(grant)
@@ -309,6 +312,7 @@ public class SessionCoordinator(
                 retryScope.endedBy(tokenOrigin(), e)
                 throw e
             }
+            exchanged = issued
             // Validated before anything is persisted (`spec/oauth-sdk-api.md` section 11): a
             // rejected ID token leaves the store exactly as it was.
             validated = idTokenValidator?.let { validator ->
@@ -343,6 +347,11 @@ public class SessionCoordinator(
             throw e
         } catch (e: Throwable) {
             flow.abandonLogin()
+            // The provider already issued these and the SDK is throwing them away: an ID token that
+            // failed validation, or could not be checked, leaves a refresh token that is valid at the
+            // server for as long as it lives and that no device holds. Best effort and after the
+            // state has settled; whatever it does, the caller gets the error that ended the login.
+            exchanged?.let { revokeDiscarded(it) }
             throw e
         }
         val refreshToken = response.refreshToken
@@ -752,6 +761,30 @@ public class SessionCoordinator(
             withContext(NonCancellable) { wipe() }
         }
         LogoutOutcome(sessionEnded = serverSessionEnded, tokenRevoked = revoked)
+    }
+
+    /**
+     * RFC 7009 revocation of the refresh token of a response this session is not going to keep, so
+     * that a login refused after the exchange does not leave a live grant at the provider. Revoking
+     * the refresh token also ends the access tokens issued from the same grant (RFC 7009 section
+     * 2.1: the server "SHOULD" invalidate them), which is why only the refresh token is sent; a
+     * response with none has nothing the SDK can revoke and its access token dies at expiry.
+     *
+     * Never throws a [VersolaError] or anything else but the caller's cancellation: the login's
+     * own failure is what the app must see. Repeated under the operation's budget, so an
+     * unreachable provider costs what the login had left and no more.
+     */
+    private suspend fun revokeDiscarded(response: TokenResponse) {
+        val token = response.refreshToken ?: return
+        try {
+            retrying(revocationOrigin()) { tokenClient.revoke(token.copyOf()) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger?.warn("login: revoking the refresh token of the rejected response failed (${if (e is VersolaError) e.message else e.javaClass.simpleName}); it dies at expiry instead")
+        } finally {
+            token.fill(0)
+        }
     }
 
     /** True when the provider took the revocation (RFC 7009: taken, not necessarily live). */

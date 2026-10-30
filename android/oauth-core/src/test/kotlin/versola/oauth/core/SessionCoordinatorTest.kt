@@ -410,6 +410,60 @@ class SessionCoordinatorTest {
     }
 
     @Test
+    fun `a rejected ID token at login revokes the refresh token the provider just issued`() = runTest {
+        val validator = RecordingValidator().apply { refusal = IdTokenRejection.Issuer }
+        val (coordinator, tokenClient, credentialStore) = generic(validator = validator)
+        tokenClient.exchangeResult = { issued(accessToken = "at", refreshToken = "rt", idToken = "h.p.s") }
+
+        val error = failure { coordinator.login(setOf("openid")) }
+
+        assertEquals(IdTokenRejection.Issuer, ((error as VersolaError.Configuration).detail as VersolaError.Configuration.Detail.IdTokenRejected).reason)
+        assertEquals("rt", tokenClient.revokeCalls.single().toString(Charsets.UTF_8))
+        assertNull(credentialStore.refreshToken)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a failing revocation after a rejected ID token never replaces the original error`() = runTest {
+        val validator = RecordingValidator().apply { refusal = IdTokenRejection.Audience }
+        val (coordinator, tokenClient, _) = generic(validator = validator)
+        tokenClient.exchangeResult = { issued(accessToken = "at", refreshToken = "rt", idToken = "h.p.s") }
+        tokenClient.revokeFailure = { VersolaError.Recoverable(VersolaError.Recoverable.Cause.Network("down")) }
+
+        val error = failure { coordinator.login(setOf("openid")) }
+
+        assertEquals(IdTokenRejection.Audience, ((error as VersolaError.Configuration).detail as VersolaError.Configuration.Detail.IdTokenRejected).reason)
+        assertTrue("revocation was attempted", tokenClient.revokeCalls.isNotEmpty())
+    }
+
+    @Test
+    fun `an ID token that cannot be checked at login because the key set is unreachable also revokes what was issued`() = runTest {
+        val validator = object : IdTokenValidator {
+            override suspend fun validate(idToken: String, expectedNonce: String?, accessToken: String?, maxAge: Long?, previous: IdTokenClaims?, serverTime: java.time.Instant?): IdTokenClaims =
+                throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.Network("jwks request failed"))
+        }
+        val (coordinator, tokenClient, credentialStore) = generic(validator = validator)
+        tokenClient.exchangeResult = { issued(accessToken = "at", refreshToken = "rt", idToken = "h.p.s") }
+
+        val error = failure { coordinator.login(setOf("openid")) }
+
+        assertTrue(error is VersolaError.Recoverable)
+        assertEquals("rt", tokenClient.revokeCalls.single().toString(Charsets.UTF_8))
+        assertNull(credentialStore.refreshToken)
+    }
+
+    @Test
+    fun `a rejected ID token with no refresh token issued has nothing to revoke`() = runTest {
+        val validator = RecordingValidator().apply { refusal = IdTokenRejection.Nonce }
+        val (coordinator, tokenClient, _) = generic(validator = validator)
+        tokenClient.exchangeResult = { issued(accessToken = "at", refreshToken = null, idToken = "h.p.s") }
+
+        failure { coordinator.login(setOf("openid")) }
+
+        assertTrue(tokenClient.revokeCalls.isEmpty())
+    }
+
+    @Test
     fun `an ID token on a refresh is validated against the claims it replaces, and a refusal keeps the grant`() = runTest {
         val validator = RecordingValidator()
         val (coordinator, tokenClient, credentialStore) = generic(validator = validator)
