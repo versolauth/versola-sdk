@@ -31,6 +31,9 @@ check "flutter/versola_oauth/pubspec.yaml version" "$pubspec"
 pinned="$(sed -n 's/.*"io\.versola:oauth-android:\([^"]*\)".*/\1/p' flutter/versola_oauth/android/build.gradle.kts | head -1)"
 check "the oauth-android version the Flutter plugin depends on" "$pinned"
 
+gradle_version="$(sed -n 's/^version = "\(.*\)"$/\1/p' flutter/versola_oauth/android/build.gradle.kts | head -1)"
+check "the version in flutter/versola_oauth/android/build.gradle.kts" "$gradle_version"
+
 if ! grep -qE "^## ${version//./\\.}( |$)" flutter/versola_oauth/CHANGELOG.md; then
   echo "mismatch: flutter/versola_oauth/CHANGELOG.md has no '## $version' entry" >&2
   fail=1
