@@ -149,9 +149,24 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # Only to dispatch verify-release below.
+      actions: write
     steps:
       - name: Create the release
         run: gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$RELEASE_TAG" --generate-notes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+
+      # The consumer check (verify-release.yml): apps that install the release from Maven Central,
+      # SwiftPM and a Flutter git dependency. Dispatched here because a release created with the
+      # workflow's own token does not fire that workflow's `release: published` trigger (GitHub
+      # does not start workflow runs from events the GITHUB_TOKEN causes; `workflow_dispatch` is
+      # the documented exception). It waits for the maintainer's click in the Central Portal, up
+      # to three hours; a run that timed out is started again from the Actions tab. It runs on the
+      # default branch, which is where its scripts are.
+      - name: Start the consumer check
+        run: gh workflow run verify-release.yml --repo "$GITHUB_REPOSITORY" -f version="$RELEASE_TAG"
         env:
           RELEASE_TAG: ${{ github.ref_name }}
           GH_TOKEN: ${{ github.token }}
