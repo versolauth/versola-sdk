@@ -30,11 +30,14 @@ export ANDROID_HOME=~/Library/Android/sdk
 export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
 ```
 
-Install the Android platforms once. `compileSdk` is 37, so `android-37.0` is the one the build needs;
-CI installs `android-36` and lets AGP download the rest:
+Install the Android platform once. `compileSdk` is 37, so the build needs `platforms;android-37.0`
+(the sdkmanager id carries the minor version; there is no `platforms;android-37`) and
+`build-tools;36.0.0`, AGP 9.5.0's default. CI installs exactly this pair in every workflow that
+builds Android. API 36 is separate: the emulator image of the instrumented job and the API level
+Robolectric emulates, neither of which needs the platform package:
 
 ```bash
-yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "platforms;android-36" "build-tools;36.0.0"
+yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;36.0.0"
 ```
 
 ## Layout
@@ -47,7 +50,7 @@ android/         Gradle multi-project: oauth-core (protocol engine, plain Kotlin
 ios/Sources/     Swift targets (OAuthCore, OAuthClient; Versola* placeholders); the manifest is Package.swift at the repo root
 flutter/         versola_oauth: the Flutter binding (Pigeon bridge over the native facades)
 conformance/     harness driving every SDK against a staged Versola stack
-tools/           validate-scenarios.py
+tools/           validate-scenarios.py, the release scripts, verify-consumer/ (throwaway consumer apps, below)
 ```
 
 `Package.swift` is at the root because SPM cannot resolve a manifest from a subdirectory. Its
@@ -131,6 +134,24 @@ publishes nowhere: it writes the Maven bundle that would be uploaded to a local 
 ./gradlew centralBundle -PreleaseVersion=0.1.0 -PallowUnsignedBundle   # android/build/central-bundle/versola-0.1.0.zip
 tools/check-release-version.sh 0.1.0                                     # from the repository root; reads files only
 ```
+
+### What a consumer installs (throwaway apps)
+
+`tools/verify-consumer/` builds an app outside the repository from what is *published*, which no
+build of the checkout can show. Run from the repository root; each exits non-zero on failure and
+needs no secrets. `verify-release.yml` runs the three after a release; `flutter.yml` runs the Flutter
+one against every pull request's commit.
+
+```bash
+tools/verify-consumer/android.sh 0.1.0   # app with mavenCentral() + google() only, io.versola:oauth-android:0.1.0, assembleDebug (JDK 21, ANDROID_HOME)
+tools/verify-consumer/ios.sh 0.1.0       # SwiftPM package on the public repository at exactly 0.1.0, product VersolaOAuth, xcodebuild for the iOS simulator
+tools/verify-consumer/flutter.sh 0.1.0   # flutter create + versola_oauth as a git dependency at that ref, flutter build apk and (macOS) ios
+VERIFY_REPO_URL="file://$PWD" tools/verify-consumer/flutter.sh "$(git rev-parse HEAD)"   # the same, against your committed work
+```
+
+`flutter.sh` takes any git ref and finds Flutter in `~/fvm/versions/<pinned>` when it is not on
+`PATH`; `VERIFY_KEEP=1` keeps the generated app for a look. The Android and iOS scripts take a
+version, which must already be published (Maven Central, a pushed tag).
 
 ### Spec and Markdown
 

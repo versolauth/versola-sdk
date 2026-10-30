@@ -56,9 +56,16 @@ publish nothing.
 - `tools/flutter-prepare-publish.sh X.Y.Z`: rewrites the plugin's iOS `Package.swift` from the path
   dependency on the repository root (computed from the manifest's own location) to the tag by URL,
   which is what a published plugin needs; it also removes that computation.
+- `tools/verify-consumer/` and `verify-release.yml`: after the tag, throwaway apps outside the
+  repository install what was published (below, step 6). `android.sh X.Y.Z` builds an app with
+  `mavenCentral()` and `google()` only against `io.versola:oauth-android:X.Y.Z`; `ios.sh X.Y.Z` builds a
+  SwiftPM package that depends on the public repository at exactly that tag, for the simulator;
+  `flutter.sh X.Y.Z` builds an app that takes `versola_oauth` as a git dependency at the tag, for Android
+  and iOS. They run locally too (`develop.md`).
 - `release.yml`, on a pushed `X.Y.Z` tag: the tagged commit must be on `main`, then the version check
   above, then (Android) `test lint apiCheck`, the signed bundle and the upload to the Central Portal,
-  (iOS) a clean-checkout build of the tag, and last the GitHub release with generated notes. The
+  (iOS) a clean-checkout build of the tag, and last the GitHub release with generated notes and the
+  dispatch of `verify-release.yml`. The
   Central job runs in the GitHub environment `maven-central`. `publish-pubdev.yml` is the dormant
   pub.dev counterpart.
 
@@ -136,10 +143,17 @@ deployment can be dropped, rather than on Central.
    Secrets and variables, Actions, Variables) and later tags are published on validation, with no
    click; removing the variable returns to `USER_MANAGED`. Keep reviewers on the `maven-central`
    environment if a human should still stand between the tag and Central.
-6. **Check what a consumer sees**, from a project outside this repository, once Central has it:
-   `implementation("io.versola:oauth-android:X.Y.Z")` with `mavenCentral()` and `google()` resolves, and
-   a Swift package depending on `.package(url: "https://github.com/versolauth/versola-sdk", from: "X.Y.Z")`
-   resolves and builds the `VersolaOAuth` product.
+6. **Check what a consumer sees.** `release.yml` starts `verify-release.yml` when it has created the GitHub
+   release (a dispatch, because a release made with the workflow's own token does not fire
+   `release: published`). The run waits for you to publish the deployment in the Portal (step 5),
+   polling `repo1.maven.org` for the `oauth-android` POM every minute for up to three hours, and then
+   builds three throwaway apps outside the repository: `io.versola:oauth-android:X.Y.Z` from
+   `mavenCentral()` and `google()`; a SwiftPM package at exactly the tag, product `VersolaOAuth`; and a
+   Flutter app with the plugin as a git dependency at the tag, for Android and iOS. **Its green is
+   the proof that Maven Central, SwiftPM and the Flutter git install all work.** If it timed out
+   before you clicked, or you want to repeat it, run `verify-release` from the Actions tab with the
+   version. If it is red, that version cannot be installed by some consumer; the version is
+   immutable on Central, so the fix is the next one.
 7. **pub.dev, first release by hand.** From a clean checkout of the tag:
 
    ```bash

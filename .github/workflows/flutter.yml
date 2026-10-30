@@ -27,6 +27,7 @@ on:
       - "ios/Sources/OAuthCore/**"
       - "ios/Sources/OAuthClient/**"
       - "Package.swift"
+      - "tools/verify-consumer/**"
       - ".github/workflows/flutter.yml"
   pull_request:
     # The same list as above: spelled out twice because the filter is per event, and a YAML
@@ -46,6 +47,7 @@ on:
       - "ios/Sources/OAuthCore/**"
       - "ios/Sources/OAuthClient/**"
       - "Package.swift"
+      - "tools/verify-consumer/**"
       - ".github/workflows/flutter.yml"
 
 permissions:
@@ -141,7 +143,7 @@ jobs:
       - name: Install Android SDK platform
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            "platforms;android-36" "build-tools;36.0.0" > /dev/null
+            "platforms;android-37.0" "build-tools;36.0.0" > /dev/null
 
       - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
 
@@ -198,3 +200,54 @@ jobs:
           -destination "platform=iOS Simulator,name=iPhone 17"
           -only-testing:RunnerTests CODE_SIGNING_ALLOWED=NO
         working-directory: flutter/versola_oauth/example/ios
+
+  # The plugin the way an app gets it: a throwaway app OUTSIDE the checkout with versola_oauth as a
+  # git dependency on this very commit (tools/verify-consumer/flutter.sh). The `android` and `ios`
+  # jobs above build the example app, which lives inside the checkout and therefore cannot show a
+  # break that only appears when the plugin is somewhere else: Flutter symlinks the plugin into
+  # the app, and a manifest that finds the repository root by a relative path builds in the
+  # checkout and fails for every consumer (the iOS symlink bug). This job fails the pull request
+  # for that class of break instead of the first release. macOS so that one job builds both the
+  # APK and the iOS app. The plugin's Android half resolves io.versola:oauth-android from Maven
+  # Central at the version the plugin pins, which is what a consumer gets too.
+  consumer:
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Read the pinned Flutter version
+        id: flutter
+        working-directory: flutter
+        run: |
+          version="$(jq -r .flutter .fvmrc)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected Flutter version: $version" >&2; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ steps.flutter.outputs.version }}
+          channel: stable
+          cache: true
+
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install Android SDK platform
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-37.0" "build-tools;36.0.0" > /dev/null
+
+      # The checkout of a pull request is a detached merge commit that no branch points at, and
+      # pub clones the repository before it resolves `ref`, so a bare SHA could be missing from
+      # the clone. A branch at the commit makes it reachable; the dependency still names the SHA.
+      - name: Build an app that depends on this commit
+        run: |
+          git update-ref refs/heads/verify-consumer HEAD
+          tools/verify-consumer/flutter.sh "$(git rev-parse HEAD)"
+        env:
+          VERIFY_REPO_URL: file://${{ github.workspace }}
