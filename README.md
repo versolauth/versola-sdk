@@ -21,6 +21,7 @@ Documentation: <https://docs.versola.io>.
 | Providers | Any OpenID provider that meets the [contract](spec/providers.md); run in the SDK's tests against Keycloak 26.4 and Ory Hydra v26.2.0 |
 | Optional | DPoP (RFC 9449), pushed authorization requests (RFC 9126), refresh-token rotation, RP-initiated logout, token revocation |
 | Licence | Apache-2.0 |
+| Stability | The API is production ready. The major version is still 0, and interfaces change only when a change is required |
 
 ## Features
 
@@ -49,9 +50,12 @@ token.
 
 ### Install
 
-- **Android:** `implementation("io.versola:oauth-android:0.1.0")` from `mavenCentral()` (and
+The current version is on the [Releases](https://github.com/versolauth/versola-sdk/releases) page;
+write it where `<version>` stands.
+
+- **Android:** `implementation("io.versola:oauth-android:<version>")` from `mavenCentral()` (and
   `google()`).
-- **iOS:** Swift Package Manager, `.package(url: "https://github.com/versolauth/versola-sdk", from: "0.1.0")`,
+- **iOS:** Swift Package Manager, `.package(url: "https://github.com/versolauth/versola-sdk", from: "<version>")`,
   product `VersolaOAuth`.
 - **Flutter:** a git dependency in `pubspec.yaml` (below), with Swift Package Manager integration
   enabled for iOS.
@@ -62,7 +66,7 @@ dependencies:
     git:
       url: https://github.com/versolauth/versola-sdk.git
       path: flutter/versola_oauth
-      ref: 0.1.1
+      ref: <version>
 ```
 
 A Flutter app needs `compileSdk` 37 and `minSdk` 26 in `android/app/build.gradle.kts` and an iOS
@@ -247,6 +251,13 @@ key, and pushed authorization requests (RFC 9126).
 For public clients that use the system browser, yes. It adds ID-token signature validation, secure
 storage and refresh coordination, and drops client secrets and embedded browsers. The migration
 guide is on the documentation website.
+
+### Is the API production ready?
+
+Yes. The Versola OAuth SDK treats its public API as production ready on Android, iOS and Flutter,
+even though the major version is still 0. We won't change an interface unless a change is
+required. When one is, the pull request that makes it says so and carries the regenerated API
+dump, and the minor version goes up; compatible additions and fixes raise only the patch version.
 
 ### How do I add it to my project?
 
