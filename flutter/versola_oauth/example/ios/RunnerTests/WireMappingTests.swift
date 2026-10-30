@@ -56,4 +56,13 @@ final class WireMappingTests: XCTestCase {
         let states: [SessionState] = [.unauthenticated, .authorizing, .authenticated, .refreshing, .stepUpRequired, .locked, .loggingOut]
         XCTAssertEqual(states.map { $0.toMessage().rawValue }, Array(0..<7))
     }
+
+    func testTheAuthorizationSchemeIsTheSpecsSpellingWhateverTheProviderSent() {
+        XCTAssertEqual(VersolaOAuthPlugin.scheme(for: "bearer"), "Bearer")
+        XCTAssertEqual(VersolaOAuthPlugin.scheme(for: "Bearer"), "Bearer")
+        XCTAssertEqual(VersolaOAuthPlugin.scheme(for: "DPoP"), "DPoP")
+        XCTAssertEqual(VersolaOAuthPlugin.scheme(for: "dpop"), "DPoP")
+        // Anything else is Bearer: a DPoP-bound request answered with another type never gets this far.
+        XCTAssertEqual(VersolaOAuthPlugin.scheme(for: "MAC"), "Bearer")
+    }
 }

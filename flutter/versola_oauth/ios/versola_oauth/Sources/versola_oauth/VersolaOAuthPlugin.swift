@@ -188,12 +188,21 @@ extension VersolaOAuthPlugin: OAuthHostApi {
         }
     }
 
+    /// The `Authorization` scheme a Flutter app writes, as the spec names it (`Bearer` or `DPoP`;
+    /// `spec/oauth-sdk-api.md` section 10). The SDK's `tokenType` is the provider's own spelling
+    /// (Hydra answers `bearer`), and the Android half sends the spec's. Anything but `dpop` is
+    /// `Bearer`: the token client already refuses a DPoP-bound request that was answered with
+    /// another type (`hardwareBindingUnavailable`), so no other `token_type` reaches a DPoP-configured
+    /// client, and a bearer-configured one is not asked to tell them apart.
+    static func scheme(for tokenType: String) -> String {
+        tokenType.caseInsensitiveCompare("DPoP") == .orderedSame ? "DPoP" : "Bearer"
+    }
+
     func accessToken(handle: String) async throws -> AccessTokenResult {
         await attempt(AccessTokenFailure.init(error:)) {
             // The one credential that crosses (issue #46 decision 7).
             let token = try await clients.get(handle).accessToken()
-            let scheme = token.tokenType.caseInsensitiveCompare("DPoP") == .orderedSame ? "DPoP" : "Bearer"
-            return AccessTokenOk(token: AccessTokenMessage(value: token.value, tokenType: scheme))
+            return AccessTokenOk(token: AccessTokenMessage(value: token.value, tokenType: Self.scheme(for: token.tokenType)))
         }
     }
 
