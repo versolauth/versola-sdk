@@ -29,6 +29,8 @@ on:
       - "android/browser/**"
       - "android/dpop/**"
       - "android/conformance-oauth/**"
+      - "android/conformance-browser/**"
+      - "android/conformance-browser-app/**"
       - "android/build.gradle.kts"
       - "android/settings.gradle.kts"
       - "android/gradle/**"
@@ -114,6 +116,80 @@ jobs:
             android/conformance-oauth/build/reports/tests
             android/conformance-oauth/build/test-results
             conformance/providers/${{ matrix.provider }}/provider.log
+          if-no-files-found: ignore
+
+  # The system browser leg, which `providers` above replaces with an HTTP conversation: the
+  # host app in android/conformance-browser-app signs in against Keycloak through Chrome on an
+  # emulator, driven by UI Automator (android/conformance-browser). Keycloak only: one provider
+  # is enough to prove the platform half (the tab, the redirect, cancel, background, process
+  # death), and a second adds a login form to maintain and nothing to the leg. The emulator is
+  # the one android.yml's `instrumented` job boots (API 36, google_apis, x86_64: Chrome is on the
+  # image); the provider is reached at its own address through `adb reverse`, so the issuer
+  # matches what its discovery announces. The Auth Tab rows skip, by assumption, on an image
+  # whose Chrome lacks Auth Tab; the log says so. conformance/README.md ("The browser leg").
+  browser-leg:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    defaults:
+      run:
+        working-directory: android
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The emulator needs hardware acceleration; GitHub's Linux runners expose /dev/kvm but not
+      # to the runner user by default.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install Android SDK platform
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36" "build-tools;36.0.0" > /dev/null
+
+      - uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
+
+      - name: Start keycloak
+        working-directory: conformance/providers/keycloak
+        run: |
+          docker compose up -d
+          for i in $(seq 1 90); do curl -fs http://localhost:8080/realms/conformance/.well-known/openid-configuration && exit 0; sleep 2; done
+          echo "keycloak not ready after 180 s" >&2; docker compose logs --no-color | tail -50; exit 1
+
+      - name: The browser leg on an emulator
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 36
+          arch: x86_64
+          target: google_apis
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          disable-animations: true
+          working-directory: android
+          script: |
+            adb reverse tcp:8080 tcp:8080
+            ./gradlew :conformance-browser:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.issuer=http://localhost:8080/realms/conformance
+
+      - name: Provider logs
+        if: always()
+        working-directory: conformance/providers/keycloak
+        run: docker compose logs --no-color > provider.log 2>&1 || true
+
+      - name: Upload test reports and provider logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: browser-leg
+          path: |
+            android/conformance-browser/build/reports/androidTests
+            android/conformance-browser/build/outputs/androidTest-results
+            conformance/providers/keycloak/provider.log
           if-no-files-found: ignore
 
   scenarios:

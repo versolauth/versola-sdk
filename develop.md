@@ -187,7 +187,8 @@ the proxied resource. Instrumentation arguments override the defaults in `Stack.
 
 The browser leg in this tier is auth's login conversation driven over HTTP, not an Auth Tab or
 Custom Tab. Those, App Link delivery and the foreground-return detector are the device tier's to
-prove, so a green conformance run does not cover them.
+prove, so a green conformance run does not cover them. For the generic facade against Keycloak that
+proof exists: "The browser leg on an emulator and a simulator" below.
 
 A scenario with no driver yet is proven against stubs only. Say so in the pull request.
 
@@ -257,6 +258,60 @@ Keycloak 41 tests on each native driver (27 + scenario 33's fourteen) and 38 thr
 A run takes about a minute per provider, most of it scenario 31 waiting for ten-second tokens
 to expire. `conformance/README.md` ("Providers") says how the proxy, the HTTP browser leg and the
 resource server work, what differs per provider, and what this tier does not prove.
+
+## The browser leg on an emulator and a simulator
+
+The generic facade's real system-browser leg, against Keycloak: Chrome on an emulator and
+`ASWebAuthenticationSession` on a simulator, driven by UI Automator and XCUITest the way a user
+drives them (`conformance/README.md`, "The browser leg", says what is asserted and what is not
+proven). Only Keycloak, on purpose. Both halves need the realm's `conformance-device` client, which
+`realm.json` gained, so a Keycloak container started before that change needs `down -v` first:
+
+```bash
+docker compose -f conformance/providers/keycloak/docker-compose.yml down -v
+docker compose -f conformance/providers/keycloak/docker-compose.yml up -d --wait
+```
+
+**Android.** An AVD on API 36 with Chrome (`google_apis` or `google_apis_playstore`), at least four
+cores and 4 GB (the Pixel profile's default of one core and 2 GB made the system UI stop
+responding under Chrome; the runs reported here had four and 4 GB). Create one with `avdmanager` if `Medium_Phone_API_36.0` is smaller, boot
+it, and forward the provider's port so the issuer is the one its discovery announces:
+
+```bash
+emulator -avd Medium_Phone_API_36.0 -no-snapshot-save -no-window &
+adb wait-for-device
+adb reverse tcp:8080 tcp:8080
+cd android && ./gradlew :conformance-browser:connectedDebugAndroidTest \
+  -Pandroid.testInstrumentationRunnerArguments.issuer=http://localhost:8080/realms/conformance
+```
+
+The tests drive `android/conformance-browser-app`, which `connectedDebugAndroidTest` installs next
+to the test package. Without the `issuer` argument every test is skipped, so nothing else changes.
+`adminUser` and `adminPassword` arguments override the compose file's throwaway `admin`/`admin`.
+The first sign-in on a fresh Chrome profile answers its account and notification prompts; the
+tests do that. A `[default]` row that reports skipped means the emulator's Chrome has no Auth Tab
+(the host's log says "no Auth Tab support"); the `[customtabs]` rows run either way. Chrome 133,
+as the Play Store image ships it, is such a Chrome.
+
+**iOS.** A simulator, named by `id` when two share a name; the project resolves the repository
+package by path, so no `swift package resolve` is needed first:
+
+```bash
+cd ios/BrowserLegHost
+TEST_RUNNER_ISSUER=http://localhost:8080/realms/conformance xcodebuild test \
+  -project BrowserLegHost.xcodeproj -scheme BrowserLegHost \
+  -destination "platform=iOS Simulator,id=<udid from: xcrun simctl list devices available>"
+```
+
+`localhost` from the simulator is the host's, so nothing is forwarded. The app is signed ad hoc
+(`CODE_SIGN_IDENTITY = -`): unsigned, it has no entitlements and the Keychain answers -34018. The
+system asks "Open in ...?" the first time a custom-scheme URL is opened in a session; the tests
+answer it. Without `ISSUER` in the runner's environment every test is skipped.
+
+Both host apps double as small example apps over the generic facade: launch one with the issuer
+(`adb shell am start -n versola.conformance.browser.app/.HostActivity --es issuer ...`, or the
+`ISSUER` environment variable on iOS) and use the buttons by hand. `ios/BrowserLegHost` is not part
+of `Package.swift`, and `xcodebuild -scheme Versola-Package` does not see it.
 
 ## Agent setup
 

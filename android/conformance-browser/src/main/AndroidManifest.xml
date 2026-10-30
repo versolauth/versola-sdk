@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      The tests call the provider's admin API (to read and end the sign-in sessions the browser
+      leg created) at http://localhost over `adb reverse`; cleartext is refused by default for
+      an app of this target level. This is the test package, never the SDK's own policy.
+    -->
+    <application android:usesCleartextTraffic="true" />
+</manifest>

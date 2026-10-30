@@ -199,7 +199,7 @@ How it drives the provider:
   browser leg uses a separate client so its traffic never appears there.
 
 What this tier does not prove for the generic facade: Custom Tabs / Auth Tab and redirect
-delivery (device tier); the Keystore and Secure Enclave key tiers under DPoP (scenario 33 proves the
+delivery (the browser leg, [below](#the-browser-leg)); the Keystore and Secure Enclave key tiers under DPoP (scenario 33 proves the
 protocol with a software key; the tiers are device tier); the DPoP case of scenario 32 (the
 authenticated client's `htu` and `ath` are asserted by scenario 33); the `http`
 origin case of scenario 32 (the facade allows `http` on loopback, where the proxy and the
@@ -284,6 +284,76 @@ Run commands are in `develop.md` ("Provider containers"). Like the native driver
 without `OAUTH_CONFORMANCE_ISSUER`, and neither has a CI job: the Android one could run beside
 `:conformance-oauth`, the iOS one cannot (no Docker on GitHub's macOS runners), so the pull request
 names which tier ran.
+
+## The browser leg
+
+The conformance tier above replaces the browser with an HTTP conversation (`HttpLoginBrowser`), so
+it cannot say whether the system browser does what the SDK assumes of it. This tier does: the
+generic facade signs in against **Keycloak only** (one provider is enough to prove the platform
+half; a second adds a login form to maintain and nothing to the leg) through the real system
+browser on an emulator and a simulator, driven the way a user drives it.
+
+| | Android | iOS |
+|---|---|---|
+| Host app | `android/conformance-browser-app`: a debug-only app whose screen is a log of what the SDK did (`state: ...`, `login: ok`, `claims: ...`, `logout: ...`) and which writes the same lines to `files/log.txt` | `ios/BrowserLegHost`, same log on screen |
+| Tests | `android/conformance-browser`: UI Automator, a separate instrumentation package, so a test can kill the host app's process and keep running | `ios/BrowserLegHost/UITests`: XCUITest |
+| Browser | Chrome: Custom Tabs fallback, and Auth Tab where Chrome offers it | `ASWebAuthenticationSession`, the system's "wants to use localhost to sign in" prompt answered |
+| Redirect | the private-use scheme `com.example.versola.devicetier://app/oauth` (`RedirectUriKind.CustomScheme`) | the same scheme |
+| Provider side | Keycloak's admin API: whether alice holds a session at the provider after sign-in and after sign-out | the same |
+
+The host apps are also small example apps over the whole public surface (sign in, ephemeral
+sign in, access token, refresh, sign out, with the session state on screen), usable by hand: launch
+them with the issuer and press the buttons.
+
+What each test asserts, and runs:
+
+- **Sign-in, claims, token, logout** (scenarios 01 and 18): the tab opens on the provider's own
+  login page, alice's credentials from `realm.json` are typed into it, the redirect returns to the
+  app, the state goes `Authorizing` then `Authenticated`, `claims` hold alice, `accessToken()`
+  returns a token the provider's UserInfo accepts, and `logout()` reports `sessionEnded` and
+  `tokenRevoked` while Keycloak's admin API shows the session gone.
+- **Cancel** (the cancel table of `spec/state-machine.md`): back, or the tab's close button
+  (Android), the sheet's Cancel (iOS), is `Recoverable(UserCancelled)`, and the pending request is
+  wiped: a cold start afterwards reports `Unauthenticated`, where a kept request would report
+  `Authorizing`.
+- **Background and back**: the app sent to the background with the tab open and returned to
+  through the recent apps (Android) or `activate()` (iOS) is not a cancel; the pending request is
+  kept and the sign-in completes.
+- **Process death with the browser open** (scenario 12): on Android the process is killed with
+  the tab open (`run-as ... kill -9`), the sign-in is finished in the tab, and the redirect
+  cold-starts the app, which observes `Authorizing` and never `Unauthenticated`. On iOS the app is
+  terminated with the sheet open and a redirect is opened against it by the system.
+- **A redirect that is not the request's** (scenario 15): a redirect with a made-up `state` is
+  refused as `Configuration(StateMismatch)` before any token request, on a live login (Android,
+  fired at the exported redirect activity, and a genuine sign-in afterwards still works) and
+  against a cold-started app (iOS).
+
+What it does not prove, and why (each is also a row in the PR's "Gaps left"):
+
+- **Scenario 12's last assertion, on both platforms.** The cold-started app restores
+  `Authorizing` and the redirect reaches it, but nothing there exchanges the code: on Android
+  `OAuthClient` never awaits the redirect (`VersolaAuthTabActivity`'s KDoc says so; the test that
+  would prove the fix is written and `@Ignore`d, and its failing run is in the PR); on iOS
+  `OAuthClient.resumePendingAuthorization()` discards the grant `flow.resumePendingAuthorization()`
+  returns. The iOS half could not be run with a genuine redirect: the `state` is the SDK's secret
+  and the sheet dies with the app, so the test proves delivery and refusal, not completion.
+- **Auth Tab.** The emulator's Chrome (133, the Play Store image) answers that it has no Auth Tab
+  support even with its `cct-auth-tab` flag enabled, so the SDK falls back to Custom Tabs, which is
+  what ran. The Auth Tab rows exist and skip by assumption when the log says so.
+- **A system cancel** (iOS `canceledLogin` while the app is in the background): the simulator offers
+  no way to make the OS tear the session down, so only the user-cancel half of the rule runs.
+- **A verified App Link or Universal Link.** Both need a host this machine does not control
+  (`assetlinks.json`, `apple-app-site-association` over https), so the redirect kind proven is the
+  private-use scheme.
+- **Hydra and the Versola facade.** One provider on purpose; the Versola facade's browser leg is
+  the same code but its stack is not staged here.
+
+Run it (`develop.md`, "The browser leg on an emulator and a simulator", has the recipes): the
+tests are skipped, not failed, without the issuer in the instrumentation arguments (Android) or
+the test runner's environment (iOS), so `connectedDebugAndroidTest` elsewhere and a plain
+`xcodebuild test` stay unchanged. `conformance.yml` runs the Android half in its `browser-leg` job
+(Keycloak, an API 36 emulator); the iOS half has no CI job, because GitHub's macOS runners have no
+Docker daemon, so it runs locally and the PR says what it ran against.
 
 ## Fault injection
 
