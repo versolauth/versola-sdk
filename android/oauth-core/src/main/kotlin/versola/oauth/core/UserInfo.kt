@@ -119,7 +119,7 @@ public class HttpUserInfoClient(
             .get()
         if (bound) builder.header("DPoP", checkNotNull(dpop).proof("GET", url, accessToken.value))
 
-        return withContext(Dispatchers.IO) {
+        return retrying(originOf(url)) { withContext(Dispatchers.IO) {
             try {
                 httpClient.newCall(builder.build()).execute().use { response ->
                     val payload = response.body.string()
@@ -140,9 +140,7 @@ public class HttpUserInfoClient(
                             }
                         }
 
-                        else -> throw VersolaError.Recoverable(
-                            VersolaError.Recoverable.Cause.Network("userinfo endpoint returned HTTP ${response.code}"),
-                        )
+                        else -> throw ServerFault.failure(response.code, response.headers)
                     }
                 }
             } catch (e: IOException) {
@@ -151,7 +149,7 @@ public class HttpUserInfoClient(
                     e,
                 )
             }
-        }
+        } }
     }
 
     private suspend fun parse(body: Outcome.Body, expectedSubject: String): UserInfo {

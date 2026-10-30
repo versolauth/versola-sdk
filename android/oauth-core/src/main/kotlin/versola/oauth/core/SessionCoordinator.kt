@@ -75,7 +75,22 @@ public class SessionCoordinator(
      * generic facade always passes one.
      */
     private val idTokenValidator: IdTokenValidator? = null,
+    /**
+     * The clock the retry budget and the cooldown measure on: monotonic milliseconds, injected
+     * so a test of a `Retry-After` needs no sleeps. Separate from [elapsedMillis], whose tests
+     * pin token ages and must not move with a retry delay.
+     */
+    retryClock: () -> Long = { System.nanoTime() / NANOS_PER_MILLI },
+    retryRandom: kotlin.random.Random = kotlin.random.Random.Default,
 ) : AccessTokenSource {
+
+    /**
+     * Where each application-visible operation gets its retry budget and where a server's
+     * `Retry-After` is remembered (`spec/retry-policy.md`). The facades wrap the calls the
+     * coordinator does not own (`metadata()`, `userInfo()`) in it too, so that one call is one
+     * budget whichever class serves it.
+     */
+    public val retryScope: RetryScope = RetryScope(retryPolicy, retryClock, retryRandom)
 
     init {
         // Without the probe, restoration knows only what the browser leg left behind, and a
@@ -186,7 +201,7 @@ public class SessionCoordinator(
         // lock that hands out a refresh flight and a flight can finish before this caller
         // reaches it. [refresh] re-reads the cache under that lock and rotates only if it
         // still holds what was rejected here.
-        return AccessToken.of(refresh(rejected = cached, onlyIfStale = true))
+        return AccessToken.of(retryScope.operation { refresh(rejected = cached, onlyIfStale = true) })
     }
 
     /** Outside its refresh skew, measured on the monotonic clock this class was given. */
@@ -195,7 +210,7 @@ public class SessionCoordinator(
 
     override suspend fun renewAccessToken(): AccessToken {
         if (memorySession != null) expireMemorySession()
-        return AccessToken.of(refresh())
+        return AccessToken.of(retryScope.operation { refresh() })
     }
 
     /**
@@ -233,7 +248,7 @@ public class SessionCoordinator(
         maxAge: Long? = null,
         parameters: AuthorizationParameters = AuthorizationParameters(),
         ephemeralBrowser: Boolean = false,
-    ): TokenResponse {
+    ): TokenResponse = retryScope.operation {
         // OpenID Connect Core §11: a refresh token is issued for a grant that asked for
         // `offline_access`, and auth issues none otherwise. This session model has nothing to
         // hold without one — the exchange below refuses a response that omits it — so the
@@ -253,8 +268,24 @@ public class SessionCoordinator(
             warnedOfflineAccess = true
             logger?.warn("the provider advertises offline_access and the configured scopes omit it; a refresh token may not be issued")
         }
+        // Everything repeatable is done before the one step that is not: the key set the ID token
+        // will be checked against is fetched now, with no retries of its own, so that the code
+        // exchange is not followed by a fetch that fails and costs the user a login the provider
+        // already completed. A failure here is ignored: validation fetches again under the budget.
+        prepareValidator()
         val grant = flow.authorize(requested, acrValues, maxAge, parameters, ephemeralBrowser)
-        return finishLogin(grant, maxAge)
+        finishLogin(grant, maxAge)
+    }
+
+    private suspend fun prepareValidator() {
+        val validator = idTokenValidator ?: return
+        try {
+            withoutRetries { validator.prepare() }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: VersolaError) {
+            logger?.warn("login: the provider's keys could not be fetched ahead of the browser (${e.message}); they are fetched again after it")
+        }
     }
 
     /**
@@ -345,9 +376,9 @@ public class SessionCoordinator(
      * `Recoverable(PendingRequestExpired)` when the request is older than ten minutes or its
      * redirect does not arrive within what is left of them.
      */
-    public suspend fun resumePendingLogin(): TokenResponse? {
-        val grant = flow.resumePendingAuthorization() ?: return null
-        return finishLogin(grant, grant.maxAge)
+    public suspend fun resumePendingLogin(): TokenResponse? = retryScope.operation {
+        val grant = flow.resumePendingAuthorization() ?: return@operation null
+        finishLogin(grant, grant.maxAge)
     }
 
     /**
@@ -409,7 +440,7 @@ public class SessionCoordinator(
      * Cancellation belongs to the caller that was cancelled and to nobody else: the callers
      * waiting on an abandoned flight take it over rather than fail with it.
      */
-    public suspend fun refresh(): TokenResponse = refresh(rejected = null, onlyIfStale = false)
+    public suspend fun refresh(): TokenResponse = retryScope.operation { refresh(rejected = null, onlyIfStale = false) }
 
     /**
      * [refresh], with the staleness verdict of [accessToken] re-taken under the lock that
@@ -534,7 +565,7 @@ public class SessionCoordinator(
                 credentialStore.savePendingRotation(key)
                 key
             }
-            val issued = retryPolicy.newBudget().execute(tokenOrigin()) {
+            val issued = retrying(tokenOrigin()) {
                 // A fresh unwrap per attempt, not one unwrap shared across retries:
                 // `TokenClient.refresh` takes ownership of the bytes it is given and zeroes
                 // them once the request body is formed, so a second attempt handed the same
@@ -662,7 +693,7 @@ public class SessionCoordinator(
      * Returns whether auth acknowledged the end of its session, so an app that cares can tell
      * "signed out everywhere" from "signed out here". Most will not look.
      */
-    public suspend fun logout(revoke: Boolean = true, endSession: Boolean = true): LogoutOutcome {
+    public suspend fun logout(revoke: Boolean = true, endSession: Boolean = true): LogoutOutcome = retryScope.operation {
         flow.sessionState.first()
         flow.setState(SessionState.LoggingOut)
         var serverSessionEnded = false
@@ -682,12 +713,14 @@ public class SessionCoordinator(
         } finally {
             withContext(NonCancellable) { wipe() }
         }
-        return LogoutOutcome(sessionEnded = serverSessionEnded, tokenRevoked = revoked)
+        LogoutOutcome(sessionEnded = serverSessionEnded, tokenRevoked = revoked)
     }
 
     /** True when the provider took the revocation (RFC 7009: taken, not necessarily live). */
     private suspend fun revokeQuietly(): Boolean = try {
-        credentialStore.useRefreshToken { tokenClient.revoke(it) } != null
+        // Repeated under the operation's budget (RFC 7009: revoking a revoked token succeeds), with a
+        // fresh unwrap per attempt for the reason `performRefresh` gives.
+        retrying(tokenOrigin()) { credentialStore.useRefreshToken { tokenClient.revoke(it) } } != null
     } catch (e: CancellationException) {
         throw e
     } catch (e: VersolaError) {

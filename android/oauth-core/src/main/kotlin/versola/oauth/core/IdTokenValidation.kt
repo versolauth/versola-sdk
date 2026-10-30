@@ -46,6 +46,10 @@ public class JwksIdTokenValidator(
 
     private val verifier = JwsVerifier(jwksUri, allowedAlgorithms, jwks)
 
+    override suspend fun prepare() {
+        verifier.warm()
+    }
+
     override suspend fun validate(
         idToken: String,
         expectedNonce: String?,

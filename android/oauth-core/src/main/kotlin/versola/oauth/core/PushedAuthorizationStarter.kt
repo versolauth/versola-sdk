@@ -107,19 +107,25 @@ public class PushedAuthorizationStarter(
             )
         }
 
-        return withContext(Dispatchers.IO) {
-            try {
-                httpClient.newCall(httpRequest).execute().use { response ->
-                    interpret(response.code, response.body.string())
+        // The request body holds the PKCE challenge and the state; zeroed once the operation is done
+        // with it, not after each attempt, because a repeat sends the same bytes.
+        return try {
+            retrying(originOf(endpoint)) {
+                withContext(Dispatchers.IO) {
+                    try {
+                        httpClient.newCall(httpRequest).execute().use { response ->
+                            interpret(response.code, response.body.string(), response.headers)
+                        }
+                    } catch (e: IOException) {
+                        throw VersolaError.Recoverable(
+                            VersolaError.Recoverable.Cause.Network("pushed authorization request failed: ${e.message}"),
+                            e,
+                        )
+                    }
                 }
-            } catch (e: IOException) {
-                throw VersolaError.Recoverable(
-                    VersolaError.Recoverable.Cause.Network("pushed authorization request failed: ${e.message}"),
-                    e,
-                )
-            } finally {
-                body.fill(0)
             }
+        } finally {
+            body.fill(0)
         }
     }
 
@@ -129,7 +135,7 @@ public class PushedAuthorizationStarter(
      * Everything else is a deployment answering something other than a PAR endpoint, except the
      * statuses the retry policy already treats as the provider having a bad moment.
      */
-    private fun interpret(status: Int, payload: String): String {
+    private fun interpret(status: Int, payload: String, headers: okhttp3.Headers): String {
         if (status == 200 || status == 201) return requestUri(payload)
         // RFC 9126 §2.3 points at RFC 6749 §5.2, which uses 401 for `invalid_client`; some
         // providers answer 403 for a client not allowed to push. Each carries the error code
@@ -146,11 +152,7 @@ public class PushedAuthorizationStarter(
                 )
             }
         }
-        if (status >= 500 || status == 408 || status == 429) {
-            throw VersolaError.Recoverable(
-                VersolaError.Recoverable.Cause.Network("PAR endpoint returned HTTP $status"),
-            )
-        }
+        if (ServerFault.isServerFault(status)) throw ServerFault.failure(status, headers)
         throw VersolaError.Configuration(
             VersolaError.Configuration.Detail.InvalidConfiguration("PAR endpoint answered $status"),
         )

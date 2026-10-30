@@ -2,6 +2,7 @@ package versola.oauth.core
 
 import java.io.File
 import kotlinx.coroutines.test.runTest
+import kotlin.random.Random
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
@@ -420,12 +421,12 @@ class TokenClientTest {
     }
 
     @Test
-    fun `5xx is transport-shaped rather than a deployment fault`() = runTest {
+    fun `5xx is a Server failure rather than a deployment fault`() = runTest {
         server.enqueue(MockResponse.Builder().code(503).body("<html>upstream is down</html>").build())
 
         val failure = failure { client().exchange(grant()) } as VersolaError.Recoverable
 
-        assertTrue(failure.reason is VersolaError.Recoverable.Cause.Network)
+        assertTrue(failure.reason is VersolaError.Recoverable.Cause.Server)
     }
 
     @Test
@@ -618,5 +619,31 @@ class TokenClientTest {
         }
         server.enqueue(MockResponse.Builder().code(429).build())
         assertTrue(failure { client().revoke(refreshToken.toByteArray()) } is VersolaError.Recoverable)
+    }
+
+    @Test
+    fun `the code exchange makes one request even under an operation's budget`() = runTest {
+        for (status in listOf(500, 503, 429)) {
+            server.enqueue(MockResponse.Builder().code(status).addHeader("Retry-After", "1").build())
+            val before = server.requestCount
+
+            val error = failure { RetryScope(RetryPolicy(), { testScheduler.currentTime }, Random(1)).operation { client().exchange(grant()) } } as VersolaError.Recoverable
+
+            // Single-use code: no repeat, whatever the status and whatever the server asks.
+            val cause = error.reason as VersolaError.Recoverable.Cause.Server
+            assertEquals(status, cause.status)
+            assertEquals("$status", 1, server.requestCount - before)
+        }
+    }
+
+    @Test
+    fun `a 429 from the token endpoint carries its Retry-After, saturated`() = runTest {
+        server.enqueue(MockResponse.Builder().code(429).addHeader("Retry-After", "999999").build())
+
+        val error = failure { client().refresh(refreshToken.toByteArray(), "idem-key-1") } as VersolaError.Recoverable
+
+        val cause = error.reason as VersolaError.Recoverable.Cause.Server
+        assertEquals(429, cause.status)
+        assertEquals(86_400_000L, cause.retryAfterMillis)
     }
 }

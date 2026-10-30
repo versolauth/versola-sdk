@@ -18,6 +18,11 @@ client, or one refresh. Internal steps the SDK performs to satisfy it — a nonc
 refresh triggered by a 401, the replay of the original request afterwards — are **inside** that
 operation's budget, not new operations with budgets of their own.
 
+Only a request that **failed** is spent from the allowances: a `login()` that discovers, fetches the
+keys and pushes makes several repeatable requests on one origin, and a success is not a retry. For a
+request that fails every time the count is the number in the table, which is what the scenarios
+assert.
+
 This is the rule that stops the classic compounding failure, where a refresh with three
 attempts is triggered by a call with three attempts and the pair emits nine requests.
 
@@ -25,8 +30,8 @@ attempts is triggered by a call with three attempts and the pair emits nine requ
 
 | Knob | Default | Hard maximum | Meaning |
 |---|---|---|---|
-| `maxAttemptsPerOrigin` | 3 | 5 | Requests to one origin per operation, original included. |
-| `maxTotalAttempts` | 4 | 8 | Requests across all origins per operation. A refresh plus the replayed call is two. |
+| `maxAttemptsPerOrigin` | 3 | 5 | Requests to one origin per operation, original included, that failed. |
+| `maxTotalAttempts` | 4 | 8 | Failed requests across all origins per operation. A call that fails and the refresh it triggers share it. |
 | `initialBackoff` | 500 ms | — | Delay before the second attempt. |
 | `backoffMultiplier` | 2.0 | 4.0 | Applied per attempt. |
 | `maxBackoff` | 8 s | 30 s | Ceiling on any single delay. |
@@ -74,6 +79,7 @@ failure is repeated only when both say yes, and always inside the operation's bu
 | No response: connect failure, DNS, TLS, reset, timeout | `transport` | A timeout after the request left the device may have been processed, so it is repeated only for an operation that tolerates a repeat (table below). |
 | 408, 429, 500, 502, 503, 504 | `transient` | The provider is busy or briefly broken. 429 and 503 may carry `Retry-After` (below). |
 | Any other 5xx (501, 505, ...) | `permanent server fault` | Not implemented, or an HTTP version the server refuses: a repeat cannot help. Surfaced at once as `Recoverable(Server)` with no retry. |
+| A status the operation has no use for and no more precise error for (a 404 on the key set, a 1xx, a 3xx on discovery) | `unexpected` | `Recoverable(Server(status))`, never repeated. It was a `Network` before, which the budget would have repeated as a transport failure. |
 | 3xx | `Configuration` | Not followed (`errors.md`). |
 | 4xx other than 408 and 429 | the OAuth error, or `Configuration` | `errors.md`. A 4xx is never repeated. |
 | 401 and 400 DPoP challenges | handled internally | The fixed retries above. |
@@ -110,8 +116,9 @@ An operation does everything repeatable **before** its one non-repeatable step. 
 discovery and the push, and warms the JWKS the ID token will be verified against, before the
 browser opens; the code exchange then needs no network request but its own. A JWKS fetch that
 fails only after the code was redeemed would cost the user a login that the provider already
-completed, so a warm-up failure is not an error of its own (the validation fetches again, under
-the budget) but a warm-up success removes that window.
+completed, so a warm-up success removes that window. The warm-up is one request with no retries
+and a failure is not an error of its own: the validation fetches again, under the budget. The time
+the user spends in the browser is not counted against `totalBudget`.
 
 ### `Retry-After`
 
@@ -140,8 +147,8 @@ Read on **429 and 503 only**; on any other status the header is ignored.
 When an operation ends because of a `Retry-After`, the SDK remembers, per origin and in memory,
 the moment the server said it would accept requests again. Until then every SDK-originated
 request to that origin (a refresh triggered by a call, a revocation, a UserInfo) fails
-immediately with the same `Recoverable(Server)`, `retryAfter` set to what is left, **without
-sending anything**. Without this, an app that calls `accessToken()` in a loop, or fifty screens
+immediately with the same `Recoverable(Server)`, `retryAfter` set to what is left and `attempts` 0,
+**without sending anything**. Without this, an app that calls `accessToken()` in a loop, or fifty screens
 that each retry, would send a new request per call to a server that asked for quiet.
 
 - Memory only. A cold start forgets it; the server still enforces its limit, and one request

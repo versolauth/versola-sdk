@@ -59,6 +59,28 @@ public sealed class VersolaError(
             ) : Cause
 
             /**
+             * A provider answered, and the answer kept the operation from finishing: 408, 429,
+             * a 5xx, or a status the operation had no use for. Surfaced once the retry budget
+             * is exhausted, at once when [retryAfterMillis] does not fit what is left of it, at
+             * once for a status a repeat cannot help (501, 505, a 404 where a document was
+             * expected), and at once while a `Retry-After` the server gave is still running
+             * (`spec/retry-policy.md`, cooldown).
+             *
+             * [status] is the last one seen. A 429 and a 5xx are told apart here, not by
+             * category: both are `Recoverable`. [retryAfterMillis] is the `Retry-After` of a 429
+             * or 503, parsed and saturated at one day, and null when there was none or it was
+             * unreadable; an app that gets one does not repeat before it. [attempts] and
+             * [elapsedMillis] are those of the operation, as in [Network]; [attempts] is 0 when
+             * nothing was sent because a cooldown was running.
+             */
+            public data class Server(
+                public val status: Int,
+                public val retryAfterMillis: Long? = null,
+                public val attempts: Int = 1,
+                public val elapsedMillis: Long = 0,
+            ) : Cause
+
+            /**
              * Under [UnlockPolicy.OnAppUnlock], the storage key's authentication window has
              * elapsed and the refresh token cannot currently be unwrapped. The grant is
              * intact: the app presents a prompt bound to the crypto operation and retries.

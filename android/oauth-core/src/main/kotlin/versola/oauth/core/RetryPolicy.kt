@@ -5,7 +5,11 @@ import kotlin.random.Random
 import kotlin.time.Duration
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.coroutines.AbstractCoroutineContextElement
+import kotlin.coroutines.CoroutineContext
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 /**
  * How patient the SDK is with a failure it may retry, within bounds an integrator cannot
@@ -64,7 +68,8 @@ public class RetryPolicy(
     internal fun newBudget(
         clock: () -> Long = { System.nanoTime() / NANOS_PER_MILLI },
         random: Random = Random.Default,
-    ): RetryBudget = RetryBudget(this, clock, random)
+        cooldown: RetryCooldown = RetryCooldown(clock),
+    ): RetryBudget = RetryBudget(this, clock, random, cooldown)
 
     public companion object {
         private const val MAX_ATTEMPTS_PER_ORIGIN_CEILING = 5
@@ -126,8 +131,9 @@ public class RetryPolicy(
  *
  * What is retried is decided by the error taxonomy rather than by a list kept here:
  * [VersolaError.Recoverable.Cause.Network] is the SDK's name for a failure the next attempt
- * might not have — transport, timeout, DNS, 5xx, 408 — and everything else propagates on the
- * first failure. `invalid_grant`, a step-up, a nonce loop, a cancel and every `Configuration`
+ * might not have — transport, timeout, DNS — and [VersolaError.Recoverable.Cause.Server] for an
+ * HTTP answer, repeated only for the statuses [ServerFault.isRepeatable] names (408, 429, 500,
+ * 502, 503, 504); everything else propagates on the first failure. `invalid_grant`, a step-up, a nonce loop, a cancel and every `Configuration`
  * fault are terminal by construction, so none of them can be retried by omission.
  *
  * The two protocol-shaped retries — `use_dpop_nonce` and `invalid_dpop_proof` — are not here.
@@ -139,11 +145,19 @@ internal class RetryBudget(
     private val policy: RetryPolicy,
     private val clock: () -> Long,
     private val random: Random,
+    private val cooldown: RetryCooldown = RetryCooldown(clock),
 ) {
 
     private val startedAt = clock()
-    private val attemptsPerOrigin = mutableMapOf<String, Int>()
-    private var totalAttempts = 0
+    /**
+     * What the operation has spent is its *failed* requests, not every request it made. One
+     * application call now covers several repeatable requests (a `login()` discovers, pushes and
+     * fetches keys), and a success is not a retry: counting it would leave the push two attempts
+     * after a successful discovery on the same origin. For a request that fails every time the
+     * two counts are the same, which is the number `spec/retry-policy.md` fixes.
+     */
+    private val failuresPerOrigin = mutableMapOf<String, Int>()
+    private var totalFailures = 0
     private var lastFailure: VersolaError.Recoverable? = null
 
     /**
@@ -164,23 +178,49 @@ internal class RetryBudget(
      */
     suspend fun <T> execute(origin: String, call: suspend () -> T): T {
         while (true) {
+            // Nothing is sent to an origin that said when it would be ready until then; this
+            // is the one place a request that was never made fails with `attempts` zero.
+            cooldown.refuse(origin)
             refuseIfSpent(origin)
-            attemptsPerOrigin[origin] = (attemptsPerOrigin[origin] ?: 0) + 1
-            totalAttempts++
             try {
                 return call()
             } catch (e: VersolaError.Recoverable) {
-                if (e.reason !is VersolaError.Recoverable.Cause.Network) throw e
+                val cause = e.reason
+                val retryAfter = (cause as? VersolaError.Recoverable.Cause.Server)?.retryAfterMillis
+                val repeatable = when (cause) {
+                    is VersolaError.Recoverable.Cause.Network -> true
+                    is VersolaError.Recoverable.Cause.Server -> ServerFault.isRepeatable(cause.status)
+                    else -> false
+                }
+                // A cause this class does not count (a cancel, a nonce loop, an unlock) is the
+                // caller's as it stands. A status a repeat cannot help (501, a 404 where a
+                // document was expected) is counted and surfaced at once, with no delay.
+                if (cause !is VersolaError.Recoverable.Cause.Network &&
+                    cause !is VersolaError.Recoverable.Cause.Server
+                ) {
+                    throw e
+                }
                 lastFailure = e
+                failuresPerOrigin[origin] = (failuresPerOrigin[origin] ?: 0) + 1
+                totalFailures++
+                if (retryAfter != null && cause is VersolaError.Recoverable.Cause.Server) {
+                    cooldown.start(origin, cause.status, retryAfter)
+                }
+                if (!repeatable) throw exhausted(e)
                 // Computed before the caps are consulted, because a delay that would outlast
                 // the wall-clock ceiling ends the operation here rather than sleeping the
                 // budget away and failing afterwards — the caller is waiting either way, and
                 // the late failure costs it the whole ceiling to learn the same thing.
-                val backoff = backoffAfter(totalAttempts)
-                if (!hasAttemptLeft(origin) || elapsed() + backoff.inWholeMilliseconds > budgetMillis()) {
+                //
+                // A `Retry-After` is the server saying when it will accept the request, so it
+                // replaces the backoff, and one that does not fit is not shortened to fit: an
+                // earlier request is one the server said it would refuse. The operation stops
+                // here and the value goes to the app (`spec/retry-policy.md`).
+                val wait = if (retryAfter != null) retryAfter.milliseconds + retryAfterJitter(retryAfter) else backoffAfter(totalFailures)
+                if (!hasAttemptLeft(origin) || elapsed() + wait.inWholeMilliseconds > budgetMillis()) {
                     throw exhausted(e)
                 }
-                delay(backoff)
+                delay(wait)
             }
         }
     }
@@ -193,23 +233,16 @@ internal class RetryBudget(
      * yet in this one.
      */
     private fun refuseIfSpent(origin: String) {
-        // The first request of an operation is never pre-empted: the budget bounds the
-        // retries of a call, and a call that was never made cannot be one.
-        if (totalAttempts == 0) return
+        // Nothing has failed yet, so nothing is spent: the budget bounds the retries of a call,
+        // and a request that follows only successes is not one.
+        val last = lastFailure ?: return
         if (hasAttemptLeft(origin) && elapsed() < budgetMillis()) return
-        val last = lastFailure ?: throw VersolaError.Recoverable(
-            VersolaError.Recoverable.Cause.Network(
-                detail = "the retry budget for this operation was already spent",
-                attempts = totalAttempts,
-                elapsedMillis = elapsed(),
-            ),
-        )
         throw exhausted(last)
     }
 
     private fun hasAttemptLeft(origin: String): Boolean =
-        totalAttempts < policy.maxTotalAttempts &&
-            (attemptsPerOrigin[origin] ?: 0) < policy.maxAttemptsPerOrigin
+        totalFailures < policy.maxTotalAttempts &&
+            (failuresPerOrigin[origin] ?: 0) < policy.maxAttemptsPerOrigin
 
     /**
      * Full jitter: uniform over `[0, capped]` rather than the capped delay itself. Not
@@ -224,23 +257,148 @@ internal class RetryBudget(
     }
 
     /**
+     * Up to a tenth of the server's `Retry-After`, never more than a second, added on top of it:
+     * every device that was told the same time would otherwise come back in the same instant.
+     */
+    private fun retryAfterJitter(retryAfterMillis: Long): Duration =
+        random.nextLong(minOf(retryAfterMillis / RETRY_AFTER_JITTER_DIVISOR, MAX_RETRY_AFTER_JITTER_MILLIS) + 1).milliseconds
+
+    /**
      * The failure that ended the operation, re-raised with the count and the elapsed time on
      * it. An integrator seeing "3 attempts over 4.2 s" knows the ceiling was reached; the
      * same message without them is indistinguishable from a single failed request.
      */
     private fun exhausted(failure: VersolaError.Recoverable): VersolaError.Recoverable {
-        val reason = failure.reason as VersolaError.Recoverable.Cause.Network
-        return VersolaError.Recoverable(
-            VersolaError.Recoverable.Cause.Network(
-                detail = reason.detail,
-                attempts = totalAttempts,
-                elapsedMillis = elapsed(),
-            ),
-            failure.cause ?: failure,
-        )
+        val counted = when (val reason = failure.reason) {
+            is VersolaError.Recoverable.Cause.Network ->
+                reason.copy(attempts = totalFailures, elapsedMillis = elapsed())
+            is VersolaError.Recoverable.Cause.Server ->
+                reason.copy(attempts = totalFailures, elapsedMillis = elapsed())
+            else -> return failure
+        }
+        return VersolaError.Recoverable(counted, failure.cause ?: failure)
     }
 
-    private fun elapsed(): Long = clock() - startedAt
+    private var pausedMillis = 0L
+
+    /**
+     * Runs [block] without its duration counting against `totalBudget`. The one caller is the
+     * browser: a user reading a consent screen for two minutes has spent none of the SDK's
+     * patience, and a `login()` is a single operation that discovers, pushes, waits for the
+     * user and then validates — the budget would otherwise be spent before the validation
+     * started.
+     */
+    suspend fun <T> paused(block: suspend () -> T): T {
+        val started = clock()
+        try {
+            return block()
+        } finally {
+            pausedMillis += clock() - started
+        }
+    }
+
+    private fun elapsed(): Long = clock() - startedAt - pausedMillis
 
     private fun budgetMillis(): Long = policy.totalBudget.inWholeMilliseconds
+}
+
+private const val RETRY_AFTER_JITTER_DIVISOR = 10L
+private const val MAX_RETRY_AFTER_JITTER_MILLIS = 1_000L
+
+/**
+ * What a server said about when it will accept requests again, per origin, in memory.
+ *
+ * Set when a 429 or 503 carried a readable `Retry-After`; until it passes, [refuse] fails every
+ * SDK-originated request to that origin at once, without sending one. Without this an app that
+ * calls `accessToken()` in a loop, or fifty screens that each retry, would send a new request per
+ * call to a server that asked for quiet. Not persisted, because a cold start costing one request
+ * is the price of not storing a deadline, and nothing starts it but the server's own words: the
+ * SDK does not invent a provider's policy (`spec/retry-policy.md`, "Cooldown").
+ */
+internal class RetryCooldown(private val clock: () -> Long) {
+
+    private class Hold(val untilMillis: Long, val status: Int)
+
+    private val holds = java.util.concurrent.ConcurrentHashMap<String, Hold>()
+
+    fun start(origin: String, status: Int, retryAfterMillis: Long) {
+        val until = clock() + retryAfterMillis
+        holds.merge(origin, Hold(until, status)) { old, new -> if (new.untilMillis >= old.untilMillis) new else old }
+    }
+
+    /** Throws the cooldown's `Server` failure while [origin] is held, with what is left as `retryAfterMillis`. */
+    fun refuse(origin: String) {
+        val hold = holds[origin] ?: return
+        val left = hold.untilMillis - clock()
+        if (left <= 0) {
+            holds.remove(origin, hold)
+            return
+        }
+        throw VersolaError.Recoverable(
+            VersolaError.Recoverable.Cause.Server(
+                status = hold.status,
+                retryAfterMillis = left,
+                attempts = 0,
+                elapsedMillis = 0,
+            ),
+        )
+    }
+}
+
+/**
+ * Carries the operation's [RetryBudget] down the coroutine tree, so a client reaches it without a
+ * parameter. A null budget is an operation that is deliberately single-attempt ([withoutRetries]).
+ */
+internal class RetryBudgetElement(val budget: RetryBudget?) : AbstractCoroutineContextElement(Key) {
+    companion object Key : CoroutineContext.Key<RetryBudgetElement>
+}
+
+/** Runs [block] so that every request in it is made once, whatever budget the caller is under. */
+internal suspend fun <T> withoutRetries(block: suspend () -> T): T = withContext(RetryBudgetElement(null)) { block() }
+
+/** Runs [block] with its duration left out of the current operation's budget, if there is one. */
+internal suspend fun <T> outsideRetryBudget(block: suspend () -> T): T {
+    val budget = coroutineContext[RetryBudgetElement]?.budget ?: return block()
+    return budget.paused(block)
+}
+
+/**
+ * Runs [call] under the current operation's budget, or once when there is none.
+ *
+ * "None" is a client used on its own, outside an application-visible operation (a unit test, an
+ * integrator's own wiring): one request, as before the budget reached every client, because a
+ * retry with no operation to bound it is exactly the unbounded loop the policy exists to prevent.
+ */
+internal suspend fun <T> retrying(origin: String, call: suspend () -> T): T {
+    val budget = coroutineContext[RetryBudgetElement]?.budget ?: return call()
+    return budget.execute(origin, call)
+}
+
+/**
+ * Where one application-visible operation gets its one [RetryBudget], and where the cooldown
+ * outlives it. The facades wrap each public call in [operation]; a call nested inside another
+ * (a refresh inside a `userInfo()`, discovery inside a `login()`) runs on the outer budget rather
+ * than opening its own, which is what stops three attempts times three attempts.
+ */
+@VersolaInternalApi
+public class RetryScope internal constructor(
+    private val policy: RetryPolicy,
+    private val clock: () -> Long,
+    private val random: Random,
+) {
+
+    public constructor(policy: RetryPolicy) : this(
+        policy,
+        { System.nanoTime() / 1_000_000L },
+        Random.Default,
+    )
+
+    private val cooldown = RetryCooldown(clock)
+
+    /** Runs [block] as one operation: under the budget already in force, or under a fresh one. */
+    public suspend fun <T> operation(block: suspend () -> T): T {
+        if (coroutineContext[RetryBudgetElement] != null) return block()
+        return withContext(RetryBudgetElement(policy.newBudget(clock, random, cooldown))) { block() }
+    }
+
 }

@@ -88,7 +88,7 @@ public class OAuthClient private constructor(
     public val claims: IdTokenClaims? get() = coordinator.claims
 
     /** The provider's metadata, discovered once and cached on disk across restarts and logout. */
-    public suspend fun metadata(): ProviderMetadata = flow.metadata()
+    public suspend fun metadata(): ProviderMetadata = coordinator.retryScope.operation { flow.metadata() }
 
     /**
      * Opens the system browser, validates the redirect, exchanges the code, validates the ID
@@ -159,11 +159,11 @@ public class OAuthClient private constructor(
      * the ID token's (OpenID Connect Core 5.3.2); a provider without the endpoint is
      * `Configuration(ProviderUnsupported)`.
      */
-    public suspend fun userInfo(): UserInfo {
+    public suspend fun userInfo(): UserInfo = coordinator.retryScope.operation {
         // After a cold start the claims are read back from the stored ID token first.
         val subject = coordinator.restoreClaims()?.subject
             ?: throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.GrantRejected)
-        return userInfoClient.fetch(coordinator, subject)
+        userInfoClient.fetch(coordinator, subject)
     }
 
     /**

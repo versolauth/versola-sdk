@@ -19,12 +19,25 @@ final class RecoverableError extends OAuthError {
     this.detail,
     this.attempts,
     this.elapsed,
+    this.status,
+    this.retryAfter,
     this.origin,
   });
   final RecoverableCause cause;
   final String? detail;
   final int? attempts;
   final Duration? elapsed;
+
+  /// The HTTP status behind a [RecoverableCause.server] (408, 429, a 5xx, or a status the
+  /// operation could not use). A 429 and a 5xx are told apart here, not by category.
+  final int? status;
+
+  /// What the server's `Retry-After` asked for, on a [RecoverableCause.server] after a 429 or
+  /// 503 that carried a readable one. When it is set the app does not repeat before it and
+  /// schedules the retry instead of looping; when it is null the SDK has already spent its
+  /// budget and the retry is the app's own to pace. [attempts] is 0 when nothing was sent
+  /// because a cooldown from an earlier `Retry-After` was still running.
+  final Duration? retryAfter;
   final String? origin;
 }
 
@@ -33,6 +46,10 @@ enum RecoverableCause {
   systemCancelled,
   pendingRequestExpired,
   network,
+
+  /// A provider answered and the answer kept the operation from finishing: see
+  /// [RecoverableError.status] and [RecoverableError.retryAfter].
+  server,
   unlockRequired,
   nonceLoop,
 

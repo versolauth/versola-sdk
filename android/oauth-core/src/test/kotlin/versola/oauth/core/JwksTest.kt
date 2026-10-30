@@ -2,6 +2,7 @@ package versola.oauth.core
 
 import java.io.File
 import kotlinx.coroutines.test.runTest
+import kotlin.random.Random
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
@@ -181,13 +182,13 @@ class JwksTest {
     }
 
     @Test
-    fun `a 5xx is a Network failure`() = runTest {
+    fun `a 5xx is a Server failure with its status`() = runTest {
         serve("", code = 503)
 
         val error = failure { JwksClient(OkHttpClient()).keys(uri, forceRefresh = false) }
 
         val recoverable = error as VersolaError.Recoverable
-        assertTrue(recoverable.reason is VersolaError.Recoverable.Cause.Network)
+        assertTrue(recoverable.reason is VersolaError.Recoverable.Cause.Server)
     }
 
     @Test
@@ -235,5 +236,42 @@ class JwksTest {
 
         cache.clear()
         assertNull(cache.load())
+    }
+
+    // ---- scenario 34, unit tier: the key set is repeated under the operation's budget -------
+
+    @Test
+    fun `a 500, 503 or 429 on the key set is repeated three times under the operation`() = runTest {
+        for (status in listOf(500, 503, 429)) {
+            repeat(3) { serve("", code = status) }
+            val before = server.requestCount
+
+            val error = failure { RetryScope(RetryPolicy(), { testScheduler.currentTime }, Random(1)).operation { JwksClient(OkHttpClient()).keys(uri, forceRefresh = false) } } as VersolaError.Recoverable
+
+            val cause = error.reason as VersolaError.Recoverable.Cause.Server
+            assertEquals(status, cause.status)
+            assertEquals(3, cause.attempts)
+            assertEquals("$status", 3, server.requestCount - before)
+        }
+    }
+
+    @Test
+    fun `a key set that answers 503 once and then the document is fetched`() = runTest {
+        serve("", code = 503)
+        serve(document)
+
+        RetryScope(RetryPolicy(), { testScheduler.currentTime }, Random(1)).operation { JwksClient(OkHttpClient()).keys(uri, forceRefresh = false) }
+
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun `a 404 on the key set is surfaced after one request`() = runTest {
+        serve("", code = 404)
+
+        val error = failure { RetryScope(RetryPolicy(), { testScheduler.currentTime }, Random(1)).operation { JwksClient(OkHttpClient()).keys(uri, forceRefresh = false) } }
+
+        assertTrue(error is VersolaError.Recoverable)
+        assertEquals(1, server.requestCount)
     }
 }

@@ -7,6 +7,7 @@ import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -230,6 +231,249 @@ class RetryPolicyTest {
         assertEquals(5, delays.size)
         assertTrue("delays outside [0, 1000]: $delays", delays.all { it in 0..1_000 })
         assertTrue("no jitter was applied: $delays", delays.drop(1).toSet().size > 1)
+    }
+
+    // ---- Retry-After and the other server statuses -------------------------------------------
+
+    private fun server(status: Int, retryAfterMillis: Long? = null) = VersolaError.Recoverable(
+        VersolaError.Recoverable.Cause.Server(status, retryAfterMillis),
+    )
+
+    @Test
+    fun `a Retry-After replaces the backoff, with up to a tenth of it as jitter`() = runTest {
+        val scheduler = testScheduler
+        var attempts = 0
+        var secondAt = -1L
+
+        budget(RetryPolicy(totalBudget = 60.seconds), random = Random(7)).execute(ORIGIN) {
+            attempts++
+            if (attempts == 1) throw server(429, 2_000)
+            secondAt = scheduler.currentTime
+        }
+
+        assertEquals(2, attempts)
+        // Not before the server said, and not past the tenth the jitter may add (200 ms).
+        assertTrue("waited ${secondAt}ms", secondAt in 2_000..2_200)
+    }
+
+    @Test
+    fun `a Retry-After of zero retries at once but still counts as an attempt`() = runTest {
+        var attempts = 0
+
+        val failure = failure { budget().execute(ORIGIN) { attempts++; throw server(503, 0) } }
+
+        assertEquals(3, attempts)
+        val reason = (failure as VersolaError.Recoverable).reason as VersolaError.Recoverable.Cause.Server
+        assertEquals(3, reason.attempts)
+        assertEquals(0L, reason.retryAfterMillis)
+        assertEquals(0L, testScheduler.currentTime)
+    }
+
+    @Test
+    fun `a Retry-After that does not fit the budget stops at once, neither sleeping nor shortening the wait`() = runTest {
+        var attempts = 0
+
+        val failure = failure { budget().execute(ORIGIN) { attempts++; throw server(429, 30_000) } }
+
+        assertEquals(1, attempts)
+        // Retrying earlier than the server asked would be sending a request it said it would refuse.
+        assertEquals(0L, testScheduler.currentTime)
+        val reason = (failure as VersolaError.Recoverable).reason as VersolaError.Recoverable.Cause.Server
+        assertEquals(429, reason.status)
+        assertEquals(30_000L, reason.retryAfterMillis)
+        assertEquals(1, reason.attempts)
+    }
+
+    @Test
+    fun `a day-long Retry-After costs no waiting and no second request`() = runTest {
+        var attempts = 0
+
+        val failure = failure { budget(RetryPolicy.Patient).execute(ORIGIN) { attempts++; throw server(503, 86_400_000) } }
+
+        assertEquals(1, attempts)
+        assertEquals(0L, testScheduler.currentTime)
+        assertEquals(
+            86_400_000L,
+            ((failure as VersolaError.Recoverable).reason as VersolaError.Recoverable.Cause.Server).retryAfterMillis,
+        )
+    }
+
+    @Test
+    fun `a Retry-After on a status the SDK does not repeat is not waited for`() = runTest {
+        var attempts = 0
+
+        failure { budget().execute(ORIGIN) { attempts++; throw server(501, 2_000) } }
+
+        assertEquals(1, attempts)
+        assertEquals(0L, testScheduler.currentTime)
+    }
+
+    @Test
+    fun `500 502 503 504 408 and 429 are repeated with the backoff when no Retry-After came`() = runTest {
+        for (status in listOf(500, 502, 503, 504, 408, 429)) {
+            var attempts = 0
+            val failure = failure { budget().execute(ORIGIN) { attempts++; throw server(status) } }
+            assertEquals("$status", 3, attempts)
+            val reason = (failure as VersolaError.Recoverable).reason as VersolaError.Recoverable.Cause.Server
+            assertEquals(status, reason.status)
+            assertEquals(3, reason.attempts)
+            assertNull(reason.retryAfterMillis)
+        }
+    }
+
+    @Test
+    fun `501, 505 and a status no operation expected are surfaced after one request with no delay`() = runTest {
+        for (status in listOf(501, 505, 404, 302)) {
+            var attempts = 0
+            val failure = failure { budget().execute(ORIGIN) { attempts++; throw server(status) } }
+            assertEquals("$status", 1, attempts)
+            val reason = (failure as VersolaError.Recoverable).reason as VersolaError.Recoverable.Cause.Server
+            assertEquals(1, reason.attempts)
+        }
+        assertEquals(0L, testScheduler.currentTime)
+    }
+
+    @Test
+    fun `a Server failure also stops at the per-origin ceiling`() = runTest {
+        var attempts = 0
+
+        failure { budget(RetryPolicy(maxAttemptsPerOrigin = 2, maxTotalAttempts = 4)).execute(ORIGIN) { attempts++; throw server(500) } }
+
+        assertEquals(2, attempts)
+    }
+
+    @Test
+    fun `a request that succeeded spends nothing, so a later one on the same origin keeps its allowance`() = runTest {
+        // A login discovers, then pushes, on one origin: the push is not left with two attempts
+        // because the discovery before it worked.
+        val budget = budget(RetryPolicy(maxAttemptsPerOrigin = 3, maxTotalAttempts = 4))
+        var pushes = 0
+
+        assertEquals("discovered", budget.execute(ORIGIN) { "discovered" })
+        assertEquals("keys", budget.execute(ORIGIN) { "keys" })
+        val failure = failure { budget.execute(ORIGIN) { pushes++; throw server(500) } }
+
+        assertEquals(3, pushes)
+        assertEquals(3, ((failure as VersolaError.Recoverable).reason as VersolaError.Recoverable.Cause.Server).attempts)
+    }
+
+    @Test
+    fun `failures in two steps of one operation share the allowance`() = runTest {
+        // The compounding guard: a call that fails and the refresh it triggers are one operation.
+        val budget = budget(RetryPolicy(maxAttemptsPerOrigin = 3, maxTotalAttempts = 4))
+        var first = 0
+        var second = 0
+
+        failure { budget.execute(ORIGIN) { first++; throw server(500) } }
+        failure { budget.execute(OTHER_ORIGIN) { second++; throw server(500) } }
+
+        assertEquals(3, first)
+        assertEquals(1, second)
+    }
+
+    // ---- the cooldown -------------------------------------------------------------------------
+
+    @Test
+    fun `after a Retry-After nothing is sent to that origin until it has passed`() = runTest {
+        var now = 0L
+        val cooldown = RetryCooldown { now }
+        val policy = RetryPolicy()
+        var sent = 0
+
+        failure { policy.newBudget({ now }, Random(1), cooldown).execute(ORIGIN) { sent++; throw server(429, 30_000) } }
+        assertEquals(1, sent)
+
+        // Inside the window: refused without a request, with what is left and attempts 0.
+        now = 12_000
+        val refused = failure { policy.newBudget({ now }, Random(1), cooldown).execute(ORIGIN) { sent++ } }
+        assertEquals(1, sent)
+        val cause = (refused as VersolaError.Recoverable).reason as VersolaError.Recoverable.Cause.Server
+        assertEquals(429, cause.status)
+        assertEquals(18_000L, cause.retryAfterMillis)
+        assertEquals(0, cause.attempts)
+
+        // After it: sent.
+        now = 30_000
+        val result = policy.newBudget({ now }, Random(1), cooldown).execute(ORIGIN) { sent++; "ok" }
+        assertEquals("ok", result)
+        assertEquals(2, sent)
+    }
+
+    @Test
+    fun `a cooldown holds one origin and leaves the others alone`() = runTest {
+        var now = 0L
+        val cooldown = RetryCooldown { now }
+        val policy = RetryPolicy()
+
+        failure { policy.newBudget({ now }, Random(1), cooldown).execute(ORIGIN) { throw server(503, 30_000) } }
+
+        assertEquals("ok", policy.newBudget({ now }, Random(1), cooldown).execute(OTHER_ORIGIN) { "ok" })
+    }
+
+    @Test
+    fun `exhausting the budget on 5xx without a Retry-After starts no cooldown`() = runTest {
+        val now = 0L
+        val cooldown = RetryCooldown { now }
+        val policy = RetryPolicy()
+        var sent = 0
+
+        failure { policy.newBudget({ now }, Random(1), cooldown).execute(ORIGIN) { sent++; throw server(500) } }
+        failure { policy.newBudget({ now }, Random(1), cooldown).execute(ORIGIN) { sent++; throw server(500) } }
+
+        // A second set of three: the SDK invents no provider policy; the app owns the retry loop.
+        assertEquals(6, sent)
+    }
+
+    // ---- what counts against the budget, and where it applies ---------------------------------
+
+    @Test
+    fun `time spent outside the budget is not spent from it`() = runTest {
+        var now = 0L
+        val budget = RetryPolicy(totalBudget = 20.seconds).newBudget({ now }, Random(1))
+        var attempts = 0
+
+        budget.execute(ORIGIN) { attempts++; "first" }
+        // Two minutes in the browser.
+        budget.paused { now += 120_000 }
+        val result = budget.execute(ORIGIN) { attempts++; "second" }
+
+        assertEquals("second", result)
+        assertEquals(2, attempts)
+    }
+
+    @Test
+    fun `a client used outside any operation makes one request`() = runTest {
+        var attempts = 0
+
+        failure { retrying(ORIGIN) { attempts++; throw server(503) } }
+
+        assertEquals(1, attempts)
+    }
+
+    @Test
+    fun `a nested operation runs on the outer budget instead of opening its own`() = runTest {
+        val scope = RetryScope(RetryPolicy(maxAttemptsPerOrigin = 3, maxTotalAttempts = 3), { testScheduler.currentTime }, Random(1))
+        var attempts = 0
+
+        failure {
+            scope.operation {
+                failure { retrying(ORIGIN) { attempts++; throw server(500) } }
+                // The inner call finds the outer budget spent; a fresh one would make three more.
+                scope.operation { retrying(ORIGIN) { attempts++; throw server(500) } }
+            }
+        }
+
+        assertEquals(3, attempts)
+    }
+
+    @Test
+    fun `a request made without retries stays single whatever budget the caller is under`() = runTest {
+        val scope = RetryScope(RetryPolicy(), { testScheduler.currentTime }, Random(1))
+        var attempts = 0
+
+        failure { scope.operation { withoutRetries { retrying(ORIGIN) { attempts++; throw server(500) } } } }
+
+        assertEquals(1, attempts)
     }
 
     private fun TestScope.budget(

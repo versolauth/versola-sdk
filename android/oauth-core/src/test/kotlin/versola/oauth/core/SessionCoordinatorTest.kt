@@ -256,6 +256,7 @@ class SessionCoordinatorTest {
         credentialStore: FakeCredentialStore = FakeCredentialStore(),
         retryPolicy: RetryPolicy = RetryPolicy.Conservative,
         browser: BrowserAuthorizationSession = FixedRedirectBrowser(pendingStore),
+        retryClock: () -> Long = { System.nanoTime() / 1_000_000L },
     ) = Triple(
         SessionCoordinator(
             authFlow(pendingStore, credentialStore, browser),
@@ -267,6 +268,7 @@ class SessionCoordinatorTest {
                 teardowns++
                 teardownFailure?.let { throw it() }
             },
+            retryClock = retryClock,
         ),
         tokenClient,
         credentialStore,
@@ -299,6 +301,13 @@ class SessionCoordinatorTest {
     private class RecordingValidator : IdTokenValidator {
         val calls = mutableListOf<List<Any?>>()
         var refusal: IdTokenRejection? = null
+        var prepared = 0
+        var prepareFailure: (() -> VersolaError)? = null
+
+        override suspend fun prepare() {
+            prepared++
+            prepareFailure?.let { throw it() }
+        }
 
         override suspend fun validate(idToken: String, expectedNonce: String?, accessToken: String?, maxAge: Long?, previous: IdTokenClaims?, serverTime: java.time.Instant?): IdTokenClaims {
             calls += listOf(idToken, expectedNonce, accessToken, maxAge, previous, serverTime)
@@ -1056,6 +1065,164 @@ class SessionCoordinatorTest {
         assertEquals("seed", credentialStore.refreshToken?.toString(Charsets.UTF_8))
         assertEquals(0, credentialStore.clears)
         assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+    }
+
+    // ---- scenarios 34 to 36, unit tier: server errors, Retry-After and the cooldown --------------
+
+    private fun serverFailure(status: Int, retryAfterMillis: Long? = null) =
+        VersolaError.Recoverable(VersolaError.Recoverable.Cause.Server(status, retryAfterMillis))
+
+    @Test
+    fun `a 429 with Retry-After is waited out and the refresh then replays with the same key`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator(
+            retryPolicy = RetryPolicy(),
+            retryClock = { testScheduler.currentTime },
+        )
+        credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        tokenClient.refreshActions = mutableListOf(
+            { throw serverFailure(429, 2_000) },
+            { issued(refreshToken = "rotated") },
+        )
+
+        coordinator.refresh()
+
+        assertEquals(2, tokenClient.refreshCalls.size)
+        // The same key: the second request is a repeat of the first, not a second rotation.
+        assertEquals(tokenClient.refreshCalls[0].second, tokenClient.refreshCalls[1].second)
+        assertTrue("waited ${testScheduler.currentTime}ms", testScheduler.currentTime in 2_000..2_200)
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a Retry-After past the budget fails the refresh at once and leaves the session Authenticated`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator(
+            retryPolicy = RetryPolicy(),
+            retryClock = { testScheduler.currentTime },
+        )
+        credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        tokenClient.refreshActions = mutableListOf({ throw serverFailure(503, 30_000) })
+
+        val error = failure { coordinator.refresh() } as VersolaError.Recoverable
+
+        val cause = error.reason as VersolaError.Recoverable.Cause.Server
+        assertEquals(503, cause.status)
+        assertEquals(30_000L, cause.retryAfterMillis)
+        assertEquals(1, tokenClient.refreshCalls.size)
+        assertEquals(0L, testScheduler.currentTime)
+        assertEquals("seed", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `after a Retry-After no token request is made until it has passed`() = runTest {
+        var retryNow = 0L
+        val (coordinator, tokenClient, credentialStore) = coordinator(
+            retryPolicy = RetryPolicy(),
+            retryClock = { retryNow },
+        )
+        credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        tokenClient.refreshActions = mutableListOf(
+            { throw serverFailure(429, 30_000) },
+            { issued(refreshToken = "rotated") },
+        )
+        failure { coordinator.refresh() }
+
+        retryNow = 10_000
+        val refused = failure { coordinator.refresh() } as VersolaError.Recoverable
+        val again = failure { coordinator.accessToken() } as VersolaError.Recoverable
+
+        // Nothing went out: the one request is the first one. What is left of the wait is
+        // reported, and attempts is zero because nothing was sent.
+        assertEquals(1, tokenClient.refreshCalls.size)
+        for (error in listOf(refused, again)) {
+            val cause = error.reason as VersolaError.Recoverable.Cause.Server
+            assertEquals(429, cause.status)
+            assertEquals(20_000L, cause.retryAfterMillis)
+            assertEquals(0, cause.attempts)
+        }
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+
+        retryNow = 30_000
+        coordinator.refresh()
+        assertEquals(2, tokenClient.refreshCalls.size)
+    }
+
+    @Test
+    fun `a cooldown is held per coordinator and forgotten by a new one`() = runTest {
+        val (first, firstClient, firstStore) = coordinator(retryPolicy = RetryPolicy(), retryClock = { 0L })
+        firstStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        firstClient.refreshActions = mutableListOf({ throw serverFailure(429, 30_000) })
+        failure { first.refresh() }
+
+        // A cold start: new objects, nothing remembered. One request goes out.
+        val (second, secondClient, secondStore) = coordinator(retryPolicy = RetryPolicy(), retryClock = { 0L })
+        secondStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        secondClient.refreshActions = mutableListOf({ issued() })
+        second.refresh()
+
+        assertEquals(1, secondClient.refreshCalls.size)
+    }
+
+    @Test
+    fun `a 501 on refresh is surfaced after one request`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator(retryPolicy = RetryPolicy())
+        credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        tokenClient.refreshActions = mutableListOf({ throw serverFailure(501) })
+
+        val error = failure { coordinator.refresh() } as VersolaError.Recoverable
+
+        assertEquals(501, (error.reason as VersolaError.Recoverable.Cause.Server).status)
+        assertEquals(1, tokenClient.refreshCalls.size)
+    }
+
+    @Test
+    fun `revocation is repeated under the budget when the provider answers 503, and logout still wipes`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator(retryPolicy = RetryPolicy())
+        credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        tokenClient.revokeFailure = { serverFailure(503) }
+
+        val outcome = coordinator.logout(endSession = false)
+
+        // maxAttemptsPerOrigin, no more, with a fresh unwrap of the token for each.
+        assertEquals(3, tokenClient.revokeCalls.size)
+        assertTrue(tokenClient.revokeCalls.all { it.toString(Charsets.UTF_8) == "seed" })
+        assertFalse(outcome.tokenRevoked)
+        assertNull(credentialStore.refreshToken)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a login's code exchange is not repeated on a 503 with Retry-After`() = runTest {
+        val (coordinator, tokenClient, _) = coordinator(retryPolicy = RetryPolicy.Patient)
+        tokenClient.exchangeResult = { throw serverFailure(503, 1_000) }
+
+        val error = failure { coordinator.login(setOf("openid")) } as VersolaError.Recoverable
+
+        assertEquals(1, tokenClient.exchangeCalls.size)
+        assertEquals(503, (error.reason as VersolaError.Recoverable.Cause.Server).status)
+    }
+
+    @Test
+    fun `the keys the ID token needs are fetched before the browser opens, and a failure there is ignored`() = runTest {
+        val validator = RecordingValidator()
+        val (coordinator, tokenClient, _) = generic(validator = validator)
+        tokenClient.exchangeResult = { issued(idToken = "id-token") }
+
+        coordinator.login(setOf("openid"))
+
+        assertEquals(1, validator.prepared)
+    }
+
+    @Test
+    fun `a failing key fetch ahead of the browser does not fail the login`() = runTest {
+        val validator = RecordingValidator().also { it.prepareFailure = { serverFailure(503) } }
+        val (coordinator, tokenClient, _) = generic(validator = validator)
+        tokenClient.exchangeResult = { issued(idToken = "id-token") }
+
+        coordinator.login(setOf("openid"))
+
+        assertEquals(1, validator.prepared)
+        assertEquals(1, tokenClient.exchangeCalls.size)
     }
 
     @Test

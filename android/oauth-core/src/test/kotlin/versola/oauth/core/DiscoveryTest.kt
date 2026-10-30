@@ -2,6 +2,7 @@ package versola.oauth.core
 
 import java.io.File
 import kotlinx.coroutines.test.runTest
+import kotlin.random.Random
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
@@ -140,12 +141,12 @@ class DiscoveryTest {
     }
 
     @Test
-    fun `a 5xx is transport-shaped and stays recoverable`() = runTest {
+    fun `a 5xx is a Server failure and stays recoverable`() = runTest {
         server.enqueue(MockResponse.Builder().code(503).build())
 
         val error = failure { client.fetch(issuer) } as VersolaError.Recoverable
 
-        assertTrue(error.reason is VersolaError.Recoverable.Cause.Network)
+        assertTrue(error.reason is VersolaError.Recoverable.Cause.Server)
     }
 
     @Test
@@ -235,5 +236,71 @@ class DiscoveryTest {
         service.metadata(forceRefresh = true)
 
         assertEquals(2, server.requestCount)
+    }
+
+    // ---- scenario 34, unit tier: discovery is repeated under the operation's budget ----------
+
+    @Test
+    fun `a 500, 503 or 429 is repeated three times under the operation and surfaced with its status`() = runTest {
+        for (status in listOf(500, 503, 429)) {
+            repeat(3) { server.enqueue(MockResponse.Builder().code(status).build()) }
+            val before = server.requestCount
+
+            val error = failure { RetryScope(RetryPolicy(), { testScheduler.currentTime }, Random(1)).operation { client.fetch(issuer) } } as VersolaError.Recoverable
+
+            val cause = error.reason as VersolaError.Recoverable.Cause.Server
+            assertEquals(status, cause.status)
+            assertEquals(3, cause.attempts)
+            assertEquals("$status", 3, server.requestCount - before)
+        }
+    }
+
+    @Test
+    fun `a 503 that then answers 200 succeeds on the second request`() = runTest {
+        server.enqueue(MockResponse.Builder().code(503).build())
+        server.enqueue(MockResponse.Builder().code(200).body(document(issuer)).build())
+
+        RetryScope(RetryPolicy(), { testScheduler.currentTime }, Random(1)).operation { client.fetch(issuer) }
+
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun `a 429 with Retry-After is waited out and then repeated`() = runTest {
+        server.enqueue(MockResponse.Builder().code(429).addHeader("Retry-After", "3").build())
+        server.enqueue(MockResponse.Builder().code(200).body(document(issuer)).build())
+
+        RetryScope(RetryPolicy(), { testScheduler.currentTime }, Random(1)).operation { client.fetch(issuer) }
+
+        assertEquals(2, server.requestCount)
+        assertTrue("waited ${testScheduler.currentTime}ms", testScheduler.currentTime in 3_000..3_300)
+    }
+
+    @Test
+    fun `a 429 is not a missing document and is never Configuration`() = runTest {
+        server.enqueue(MockResponse.Builder().code(429).build())
+
+        val error = failure { client.fetch(issuer) }
+
+        assertTrue(error is VersolaError.Recoverable)
+    }
+
+    @Test
+    fun `a 404 is still a configuration fault and is not repeated`() = runTest {
+        server.enqueue(MockResponse.Builder().code(404).build())
+
+        val error = failure { RetryScope(RetryPolicy(), { testScheduler.currentTime }, Random(1)).operation { client.fetch(issuer) } }
+
+        assertTrue(error is VersolaError.Configuration)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun `a 501 is surfaced after one request`() = runTest {
+        server.enqueue(MockResponse.Builder().code(501).build())
+
+        failure { RetryScope(RetryPolicy(), { testScheduler.currentTime }, Random(1)).operation { client.fetch(issuer) } }
+
+        assertEquals(1, server.requestCount)
     }
 }

@@ -73,6 +73,15 @@ public class IdTokenClaims(
  */
 public interface IdTokenValidator {
     /**
+     * Gets ready to validate: fetches what [validate] will need (the provider's key set) so that
+     * the one step that cannot be repeated, the code exchange, is not followed by a fetch that
+     * fails. Called before the browser opens, once per `login()`, and a failure is ignored,
+     * because [validate] fetches again under the operation's retry budget. The default does
+     * nothing.
+     */
+    public suspend fun prepare() {}
+
+    /**
      * @param idToken the compact JWS off the token response.
      * @param expectedNonce the `nonce` the authorization request carried; null on a refresh,
      *   where the claim is not required.

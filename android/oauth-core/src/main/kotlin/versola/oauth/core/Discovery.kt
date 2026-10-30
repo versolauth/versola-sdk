@@ -45,13 +45,16 @@ public class HttpDiscoveryClient(
 
     override suspend fun fetch(issuer: String): ProviderMetadata {
         val url = wellKnownUrl(issuer)
-        val body = withContext(Dispatchers.IO) {
+        val body = retrying(originOf(url)) { withContext(Dispatchers.IO) {
             val request = Request.Builder().url(url).header("Accept", "application/json").build()
             try {
                 httpClient.newCall(request).execute().use { response ->
                     val payload = response.body.string()
                     when {
                         response.isSuccessful -> payload
+                        // 408, 429 and 5xx are the provider having a bad moment: transport-shaped,
+                        // repeated under the operation's budget (`spec/retry-policy.md`).
+                        ServerFault.isServerFault(response.code) -> throw ServerFault.failure(response.code, response.headers)
                         // A 4xx means this issuer does not serve a discovery document at all,
                         // which no retry fixes — an integrator typo or the wrong environment.
                         response.code in 400..499 -> throw VersolaError.Configuration(
@@ -59,11 +62,9 @@ public class HttpDiscoveryClient(
                                 "no discovery document at $url (HTTP ${response.code})",
                             ),
                         )
-                        // 5xx is the provider having a bad moment: transport-shaped, retried
-                        // under the caller's budget rather than surfaced as a deployment fault.
-                        else -> throw VersolaError.Recoverable(
-                            VersolaError.Recoverable.Cause.Network("discovery returned HTTP ${response.code}"),
-                        )
+                        // Anything else (an unfollowed redirect, a 1xx) is an answer this client
+                        // cannot use and a repeat cannot change.
+                        else -> throw ServerFault.failure(response.code, response.headers)
                     }
                 }
             } catch (e: IOException) {
@@ -72,7 +73,7 @@ public class HttpDiscoveryClient(
                     e,
                 )
             }
-        }
+        } }
 
         val metadata = try {
             discoveryJson.decodeFromString(ProviderMetadata.serializer(), body)

@@ -248,6 +248,11 @@ public class JwsVerifier(
     private val jwks: JwksClient,
 ) {
 
+    /** Loads the key set into memory and the cache if it is not there; a failure is the caller's to ignore. */
+    internal suspend fun warm() {
+        jwksUri()?.let { jwks.keys(it, forceRefresh = false) }
+    }
+
     /**
      * @return the parsed token, whose [ParsedJws.payload] is now trustworthy.
      * @throws JwsRejection [IdTokenRejection.Malformed], [IdTokenRejection.Algorithm] or
