@@ -234,7 +234,7 @@ jobs:
       # ---- the stack, exactly as versola/.github/workflows/ci-cd.yml stages it ----
 
       - name: Set up JDK 25 for the server
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@v6.1.0
         with:
           distribution: temurin
           java-version: "25"
@@ -278,7 +278,7 @@ jobs:
       # ---- the driver ----
 
       - name: Set up JDK 21 for the SDK
-        uses: actions/setup-java@v6
+        uses: actions/setup-java@v6.1.0
         with:
           distribution: temurin
           java-version: "21"
