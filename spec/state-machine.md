@@ -409,14 +409,15 @@ one grant to one device-installation; reusing it across users on a shared device
 | DPoP private key | Hardware keystore, non-exportable | yes | no (destroyed) |
 | DPoP nonce, per origin | Memory | no | no |
 | Clock skew offset | Memory | no | no |
-| Discovery metadata | Disk, unencrypted | yes, ≤ 24 h | yes |
-| JWK Set (generic facade) | Disk, unencrypted | yes, ≤ `Cache-Control` (5 min to 24 h, 24 h if absent) | yes |
+| Discovery metadata | Disk, unencrypted | yes, until its lifetime ends (`Cache-Control`, 5 min to 24 h, 24 h if absent) | yes |
+| JWK Set (generic facade) | Disk, unencrypted | yes, the same | yes |
 
 Discovery metadata is not credential material and is cached across logout deliberately: a
 re-login should not need a round trip to `/.well-known/openid-configuration`. It is fetched again
-when 24 hours old, in memory and on disk; if the provider cannot be reached then, the old document
-is served once more (it is not what anything is verified against, and a `logout()` offline must
-still finish). The JWK Set is cached the same way but fails closed: an expired set that cannot be
+when its lifetime has ended (the provider's `Cache-Control: max-age` or `Expires`, held between 5
+minutes and 24 hours, 24 hours when it says nothing), in memory and on disk; if the provider cannot
+be reached then, the old document is served once more and the next try waits a minute (it is not
+what anything is verified against, and a `logout()` offline must still finish). The JWK Set is cached the same way but fails closed: an expired set that cannot be
 refetched is not served, because a withdrawn signing key is what it would still vouch for. The two native
 endpoints are kept for the same reason: a refresh in a later process signs for them and has no
 `/native/start` of its own to learn them from. Without the file the SDK falls back to

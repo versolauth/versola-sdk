@@ -86,8 +86,11 @@ val oauth = OAuthClient.create(context, configuration)
 - `create()` does no network I/O and no key generation. It restores persisted state: a stored
   grant yields `Authenticated`; a pending authorization request younger than ten minutes yields
   `Authorizing`; otherwise `Unauthenticated`. Discovery runs lazily on the first operation that
-  needs it and is cached on disk; the cache is refetched when it is older than 24 hours or when a
-  request fails in a way a changed endpoint could explain. Every endpoint the document announces
+  needs it and is cached on disk and in memory; the cache is refetched when it is older than its
+  lifetime (the provider's `Cache-Control: max-age` or `Expires` held between 5 minutes and 24 hours,
+  24 hours when it says nothing; in a running process too, not only at start) or when a request fails
+  in a way a changed endpoint could explain. An expired document whose refetch fails is still served,
+  and the next try waits a minute. Every endpoint the document announces
   must be `https` (cleartext only on `localhost`, `127.0.0.1` or `[::1]`) and may sit on another
   origin than the issuer; otherwise `Configuration(DiscoveryMalformed)`, and a cached copy that
   fails the same check is discarded.
@@ -245,10 +248,9 @@ token is stored first, and the ID token, its claims and that response's access t
 if the checks below pass:
 
 1. Signature with a key from `jwks_uri` (cached for what the provider's `Cache-Control: max-age`
-   or `Expires` says, held between 5 minutes and 24 hours and 24 hours when it says nothing, in
-   memory and on disk, so a withdrawn key stops being trusted within a day; an expired set whose
-   refetch fails is not served, the validation is `Recoverable`; refetched once on an unknown
-   `kid`), algorithm in
+   or `Expires` says, as for discovery, in memory and on disk, so a withdrawn key stops being
+   trusted within a day; an expired set whose refetch fails is not served, the validation is
+   `Recoverable`; refetched once on an unknown `kid`), algorithm in
    the closed set `RS256`, `PS256`, `ES256`, `ES384`, `ES512`, `RS384`, `RS512`, `PS384`, `PS512`,
    and in `id_token_signing_alg_values_supported` when advertised; `none` and HMAC algorithms are
    refused (a public client has no secret to verify with).
@@ -353,6 +355,6 @@ refresh token issued, `offline_access` advertised but not configured, a response
    and a gone browser cannot be told from a slow one. A request nobody awaits is superseded.
 3. `stepUp()` takes the configured scopes by default (section 5); the Versola facade requires
    them as a parameter. The two differ in signature, not in what is sent.
-4. The 24-hour discovery cache age (and the key set's bounds of 5 minutes to 24 hours) and the 30-second refresh skew: all fixed, not configurable.
+4. The discovery and key-set cache lifetime bounds (5 minutes to 24 hours, 24 hours without `Cache-Control`) and the 30-second refresh skew: fixed, not configurable.
 5. Whether `authenticatedSession` on iOS should be a `URLSession` subclass or a wrapper; a wrapper
    keeps the surface small.

@@ -29,6 +29,8 @@ import versola.oauth.core.HttpDiscoveryClient
 import versola.oauth.core.HttpTokenClient
 import versola.oauth.core.HttpUserInfoClient
 import versola.oauth.core.IdTokenClaims
+import versola.oauth.core.LifetimeAwareDiscoveryClient
+import versola.oauth.core.fetchWithLifetime
 import versola.oauth.core.JwksClient
 import versola.oauth.core.JwksIdTokenValidator
 import versola.oauth.core.JwsVerifier
@@ -501,10 +503,14 @@ private class StaticDiscoveryClient(private val metadata: ProviderMetadata) : Di
 private class EndSessionOverride(
     private val delegate: DiscoveryClient,
     private val endSessionEndpoint: String?,
-) : DiscoveryClient {
-    override suspend fun fetch(issuer: String): ProviderMetadata {
-        val metadata = delegate.fetch(issuer)
-        return endSessionEndpoint?.let { metadata.copy(endSessionEndpoint = it) } ?: metadata
+) : LifetimeAwareDiscoveryClient {
+    override suspend fun fetch(issuer: String): ProviderMetadata = fetchWithLifetime(issuer).first
+
+    // The delegate's lifetime travels through: the override changes a value, not how long the
+    // document it came in may be kept.
+    override suspend fun fetchWithLifetime(issuer: String): Pair<ProviderMetadata, Long> {
+        val (metadata, lifetime) = delegate.fetchWithLifetime(issuer)
+        return (endSessionEndpoint?.let { metadata.copy(endSessionEndpoint = it) } ?: metadata) to lifetime
     }
 }
 
