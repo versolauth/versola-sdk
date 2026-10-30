@@ -49,3 +49,12 @@ updates:
       actions:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+  - package-ecosystem: pip
+    directory: /tools
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      python:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
