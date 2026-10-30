@@ -197,9 +197,16 @@ public final class OAuthClient: Sendable {
     /// Hands a redirect the app received by other means (a Universal Link while the app was
     /// cold) to a pending authorization. Returns whether the URL was this client's redirect.
     public func handleRedirect(_ url: URL) async -> Bool {
-        guard let browser, url.scheme == configuration.core.redirectUri.scheme, url.host == configuration.core.redirectUri.host, url.path == configuration.core.redirectUri.path else { return false }
+        guard let browser, Self.isRedirect(url, to: configuration.core.redirectUri) else { return false }
         await browser.deliver(url)
         return true
+    }
+
+    /// Scheme, host and `URL.path` must match the configured redirect; the query and fragment are
+    /// the response, not part of the address. `URL.path` drops a trailing slash, so `/oauth/`
+    /// matches `/oauth` (pinned in `RedirectMatchingTests`). Kept pure so the rule is tested directly.
+    static func isRedirect(_ url: URL, to redirectUri: URL) -> Bool {
+        url.scheme == redirectUri.scheme && url.host == redirectUri.host && url.path == redirectUri.path
     }
 
     private func refuseWhileAuthorizing() async throws {
