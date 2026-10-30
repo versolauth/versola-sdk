@@ -1,10 +1,11 @@
 id: 32-protected-origins
 title: The authenticated client attaches a token only to configured origins and treats them exactly
 issues: [46]
-applies_to: [android, ios, flutter]
+applies_to: [android, ios]
 facade: [oauth]
 mode: any
 preconditions:
+  - The platform has an authenticated client (Android `interceptor` / `authenticatedClient`, iOS `authenticatedSession`). Flutter has none (`spec/oauth-sdk-api.md` section 10 gives it `accessToken()` only), so these assertions are the native facades' and `flutter` is not in `applies_to`.
   - Two resources are staged on different origins; only the first is in protectedOrigins.
   - The SDK is Authenticated.
 steps:

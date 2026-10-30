@@ -7,7 +7,7 @@ import XCTest
 /// `OAuthError` case keeps its category and payload, and nothing that is not an `OAuthError`
 /// carries its text across. The scenarios run against a real provider are the native SDK's own
 /// tier (`conformance/README.md`); `flutter test` proves the Dart half against a mocked channel.
-final class RunnerTests: XCTestCase {
+final class WireMappingTests: XCTestCase {
     func testEveryCategoryKeepsItsKindAndPayload() {
         let network = OAuthError.recoverable(.network(detail: "timeout", attempts: 3, elapsedMillis: 1200)).toMessage()
         XCTAssertEqual(network.category, .recoverable)
@@ -55,5 +55,14 @@ final class RunnerTests: XCTestCase {
     func testTheSevenSessionStatesMapOneToOneAndInOrder() {
         let states: [SessionState] = [.unauthenticated, .authorizing, .authenticated, .refreshing, .stepUpRequired, .locked, .loggingOut]
         XCTAssertEqual(states.map { $0.toMessage().rawValue }, Array(0..<7))
+    }
+
+    func testTheAuthorizationSchemeIsTheSpecsSpellingWhateverTheProviderSent() {
+        XCTAssertEqual(VersolaOAuthPlugin.scheme(for: "bearer"), "Bearer")
+        XCTAssertEqual(VersolaOAuthPlugin.scheme(for: "Bearer"), "Bearer")
+        XCTAssertEqual(VersolaOAuthPlugin.scheme(for: "DPoP"), "DPoP")
+        XCTAssertEqual(VersolaOAuthPlugin.scheme(for: "dpop"), "DPoP")
+        // Anything else is Bearer: a DPoP-bound request answered with another type never gets this far.
+        XCTAssertEqual(VersolaOAuthPlugin.scheme(for: "MAC"), "Bearer")
     }
 }
