@@ -181,7 +181,7 @@ jobs:
           cat > "$RUNNER_TEMP/sample.sh" <<'EOF'
           while :; do
             { date -u +%T; free -m | sed -n 2p; cat /proc/loadavg
-              ps -eo pid,rss,pcpu,args --sort=-rss | head -6 | cut -c1-150
+              ps -eo pid,rss,cputimes,args --sort=-rss | head -6 | cut -c1-150
               docker stats --no-stream --format "{{.Name}} cpu={{.CPUPerc}} mem={{.MemUsage}}"; echo; } >> "$RUNNER_TEMP/diag/samples.log" 2>&1
             sleep 5
           done
@@ -231,7 +231,7 @@ jobs:
           api-level: 36
           arch: x86_64
           target: google_apis
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot -show-kernel
           disable-animations: true
           disable-spellchecker: true
           working-directory: android
@@ -263,7 +263,7 @@ jobs:
           api-level: 36
           arch: x86_64
           target: google_apis
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot -show-kernel
           disable-animations: true
           disable-spellchecker: true
           working-directory: android
