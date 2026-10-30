@@ -8,6 +8,9 @@ The publishing side was written from the vendors' documentation (the sources are
 matter), and the steps below are ordered so that each can be looked at, and undone, before the next.
 
 Releases, tags and publishing are the maintainer's act (`AGENTS.md`, `.claude/rules/ci-release.md`).
+Who may push a tag, and which secrets a branch can read, are repository settings that no workflow
+can enforce: `docs/repository-settings.md` is the runbook for them (branch and tag rulesets, the
+`maven-central` environment, required SHA pinning), and none of it is applied until the owner runs it.
 **A release is a tag**: pushing `X.Y.Z` (for example `0.1.0`, no leading `v`) runs `release.yml`,
 which checks the version, builds, signs and uploads the Android artefacts, builds the Swift package at
 the tag and creates the GitHub release. Only the pub.dev job (`publish-pubdev.yml`) is still gated off
