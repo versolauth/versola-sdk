@@ -268,7 +268,7 @@ handled in app code after `logout()` has wiped locally; the SDK does not special
 | Sign-in | `suspend fun login(options)` | `func login(_ options:) async throws` | `Future<void> login([options])` |
 | Options | `LoginOptions` data class | `LoginOptions` struct | `LoginOptions` |
 | Sign-out | `suspend fun logout(options): LogoutOutcome` | `func logout(_:) async -> LogoutOutcome` | `Future<LogoutOutcome> logout([options])` |
-| Token | `suspend fun accessToken(): AccessToken` | `func accessToken() async throws -> AccessToken` | `Future<AccessToken> accessToken()` |
+| Token | `suspend fun accessToken(): AccessToken` (`isDpopBound`; the scheme is `DPoP` if set, else `Bearer`) | `func accessToken() async throws -> AccessToken` (`tokenType` is `Bearer` or `DPoP`, in that spelling whatever the provider's `token_type` said; a type other than DPoP is `Bearer`, as on Android) | `Future<AccessToken> accessToken()` |
 | Claims | `val claims: IdTokenClaims?` | `var claims: IdTokenClaims? { get async }` | `Future<IdTokenClaims?> claims()` (a method, not a getter: the claims stay native, so the answer is asynchronous, and a `Future` getter would make `client.claims != null` always true) |
 | UserInfo | `suspend fun userInfo(): UserInfo` | `func userInfo() async throws -> UserInfo` | `Future<UserInfo> userInfo()` |
 | Step-up | `suspend fun stepUp(challenge, options)` | `func stepUp(acrValues:maxAge:options:) async throws` (the challenge is the `stepUp` case's payload) | `Future<void> stepUp(challenge, [options])` |

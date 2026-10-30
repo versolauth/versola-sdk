@@ -6,11 +6,14 @@ import Foundation
 /// A short-lived access token, the one credential an app may hold directly (the escape hatch).
 public struct AccessToken: Sendable, Equatable, CustomStringConvertible {
     public let value: String
-    /// RFC 9449 §5: `DPoP` or `Bearer`, read off the token response's `token_type`.
+    /// RFC 9449 §5: `DPoP` or `Bearer`, in exactly that spelling, whatever the provider's
+    /// `token_type` said (Ory Hydra answers `bearer`). It is the scheme to write after
+    /// `Authorization:`, so a type other than DPoP is `Bearer`, as on Android, where the type is
+    /// the boolean `isDpopBound` and the scheme is derived from it.
     public let tokenType: String
     public init(value: String, tokenType: String) {
         self.value = value
-        self.tokenType = tokenType
+        self.tokenType = tokenType.caseInsensitiveCompare("DPoP") == .orderedSame ? "DPoP" : "Bearer"
     }
     public var description: String { "AccessToken(\(tokenType), redacted)" }
 }

@@ -158,6 +158,18 @@ final class SessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(calls, [.exchange])
     }
 
+    /// Ory Hydra answers `token_type: bearer`. What the integrator holds is the scheme to write
+    /// after `Authorization:`, in the spec's spelling (issue #77).
+    func testATokenTypeInTheProvidersSpellingIsHandedOutAsTheSchemeBearer() async throws {
+        let provider = TokenResponse(accessToken: "at-1", tokenType: "bearer", expiresIn: 300, refreshToken: "rt-1", idToken: idToken(), scope: "openid")
+        let f = try fixture(answers: [.success(provider)])
+
+        try await f.coordinator.login(scopes: ["openid"])
+
+        let token = try await f.coordinator.accessToken()
+        XCTAssertEqual(token.tokenType, "Bearer")
+    }
+
     func testARejectedIdTokenPersistsNothingAndSettlesWhereItStarted() async throws {
         let f = try fixture(answers: [.success(response())])
         await f.validator.reject(.nonce)
