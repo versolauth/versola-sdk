@@ -319,7 +319,7 @@ if the checks below pass:
 A failure is `Configuration(IdTokenRejected(reason))`, where `reason` is a closed enum
 (`Signature`, `Algorithm`, `Issuer`, `Audience`, `Expired`, `IssuedAt`, `Nonce`, `AuthTime`,
 `Malformed`, `AccessTokenHash`): at login nothing is persisted, the pending request is discarded,
-the state settles on what it was before `login()`, and the refresh token the provider issued is revoked best effort (RFC 7009; it is a live credential no device holds; the access tokens of the same grant die with it, and a response with no refresh token leaves nothing to revoke); on a refresh the grant stays on the
+the state settles on what it was before `login()`, and the refresh token the provider issued is revoked best effort (RFC 7009; detached from the login so the error is delivered at once, one attempt bounded at five seconds; it is a live credential no device holds; the access tokens of the same grant die with it, and a response with no refresh token leaves nothing to revoke); on a refresh the grant stays on the
 rotated token, nothing else from the response is kept, and the state stays `Authenticated`.
 A key set that cannot be fetched is not a rejection: it is `Recoverable` (`Network` or `Server`),
 raised before any claim is read, with the same consequences. The category is `Configuration` because every cause is

@@ -64,7 +64,12 @@ class Scenario25To27IdTokenValidationBridgeTest : BridgeConformance() {
         // The refresh token the provider issued for the refused ID token is revoked once, best
         // effort, by the native SDK (`spec/oauth-sdk-api.md` section 11).
         metadata.revocationEndpoint?.let { endpoint ->
-            assertEquals(1, after.count { it.method == "POST" && it.url.startsWith(endpoint) })
+            // Detached from the login (the error is delivered first), so awaited here, bounded.
+            val deadline = System.currentTimeMillis() + 5_000
+            while (transcript.entries.drop(since).none { it.method == "POST" && it.url.startsWith(endpoint) } && System.currentTimeMillis() < deadline) {
+                Thread.sleep(25)
+            }
+            assertEquals(1, transcript.entries.drop(since).count { it.method == "POST" && it.url.startsWith(endpoint) })
         }
         // The store is as it was before login(): nothing to refresh with.
         assertEquals(ErrorCategoryMessage.REAUTHENTICATE, bridge.dart.accessToken().failure().category)

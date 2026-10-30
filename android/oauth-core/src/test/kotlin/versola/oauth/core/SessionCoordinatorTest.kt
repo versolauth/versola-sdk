@@ -185,7 +185,13 @@ private class FakeTokenClient : TokenClient {
     var refreshActions: MutableList<suspend () -> TokenResponse> = mutableListOf()
     var revokeFailure: (() -> VersolaError)? = null
 
+    /** When set, a revocation announces itself and then waits, so a test can observe it under way. */
+    var revokeStarted: CompletableDeferred<Unit>? = null
+    var revokeGate: CompletableDeferred<Unit>? = null
+
     override suspend fun revoke(refreshToken: ByteArray) {
+        revokeStarted?.complete(Unit)
+        revokeGate?.await()
         revokeCalls += refreshToken.copyOf()
         refreshToken.fill(0)
         revokeFailure?.let { throw it() }
@@ -310,6 +316,9 @@ class SessionCoordinatorTest {
             // As the generic facade wires it: it sends no Idempotency-Key.
             repeatsRefreshAfterAmbiguousFailure = false,
             retryClock = retryClock,
+            // Unconfined: a detached revocation runs at once up to its first suspension, so a test
+            // that needs it to be slow gates the fake, and one that does not sees it done.
+            background = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + kotlinx.coroutines.Dispatchers.Unconfined),
         ),
         tokenClient,
         credentialStore,
@@ -421,6 +430,23 @@ class SessionCoordinatorTest {
         assertEquals("rt", tokenClient.revokeCalls.single().toString(Charsets.UTF_8))
         assertNull(credentialStore.refreshToken)
         assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `the error that refused a login is delivered before its slow revocation finishes`() = runTest {
+        val validator = RecordingValidator().apply { refusal = IdTokenRejection.Issuer }
+        val tokenClient = FakeTokenClient()
+        tokenClient.revokeStarted = CompletableDeferred()
+        tokenClient.revokeGate = CompletableDeferred()
+        tokenClient.exchangeResult = { issued(accessToken = "at", refreshToken = "rt", idToken = "h.p.s") }
+        val (coordinator, _, _) = generic(validator = validator, tokenClient = tokenClient)
+
+        val error = failure { coordinator.login(setOf("openid")) }
+
+        assertTrue("the caller already has the original error", error is VersolaError.Configuration)
+        assertTrue("and the revocation is under way, not finished", tokenClient.revokeStarted!!.isCompleted && tokenClient.revokeCalls.isEmpty())
+        tokenClient.revokeGate!!.complete(Unit)
+        assertEquals("rt", tokenClient.revokeCalls.single().toString(Charsets.UTF_8))
     }
 
     @Test

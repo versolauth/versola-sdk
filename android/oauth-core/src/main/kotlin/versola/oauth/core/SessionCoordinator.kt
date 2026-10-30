@@ -5,6 +5,11 @@ import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
@@ -93,6 +98,13 @@ public class SessionCoordinator(
      * ([ServerFault.wasNotProcessed]) and every other failure is surfaced after one request.
      */
     private val repeatsRefreshAfterAmbiguousFailure: Boolean = true,
+    /**
+     * Where the best-effort revocation of a refused login's refresh token runs: detached from the
+     * login, so the app gets the error that ended it at once and not after a revocation that may
+     * take a timeout. A scope of the coordinator's own, never the caller's, which may be about to
+     * be cancelled with the screen the error is shown on.
+     */
+    private val background: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
 ) : AccessTokenSource {
 
     /**
@@ -360,8 +372,8 @@ public class SessionCoordinator(
             flow.abandonLogin()
             // The provider already issued these and the SDK is throwing them away: an ID token that
             // failed validation, or could not be checked, leaves a refresh token that is valid at the
-            // server for as long as it lives and that no device holds. Best effort and after the
-            // state has settled; whatever it does, the caller gets the error that ended the login.
+            // server for as long as it lives and that no device holds. Best effort, after the state
+            // has settled and detached: the caller gets the error that ended the login now.
             exchanged?.let { revokeDiscarded(it) }
             throw e
         }
@@ -813,19 +825,24 @@ public class SessionCoordinator(
      * response with none has nothing the SDK can revoke and its access token dies at expiry.
      *
      * Never throws a [VersolaError] or anything else but the caller's cancellation: the login's
-     * own failure is what the app must see. Repeated under the operation's budget, so an
-     * unreachable provider costs what the login had left and no more.
+     * own failure is what the app must see. Detached and bounded: one attempt, five seconds, outside
+     * the login's budget, so the error is delivered at once.
      */
-    private suspend fun revokeDiscarded(response: TokenResponse) {
-        val token = response.refreshToken ?: return
-        try {
-            retrying(revocationOrigin()) { tokenClient.revoke(token.copyOf()) }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            logger?.warn("login: revoking the refresh token of the rejected response failed (${if (e is VersolaError) e.message else e.javaClass.simpleName}); it dies at expiry instead")
-        } finally {
-            token.fill(0)
+    private fun revokeDiscarded(response: TokenResponse) {
+        val token = response.refreshToken?.copyOf() ?: return
+        background.launch {
+            try {
+                // Its own bound and one attempt: the login's budget is over (the error is being
+                // delivered) and a revocation is not worth more than a few seconds of a radio.
+                withTimeoutOrNull(REVOCATION_TIMEOUT_MILLIS) { tokenClient.revoke(token.copyOf()) }
+                    ?: logger?.warn("login: revoking the refresh token of the rejected response timed out; it dies at expiry instead")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logger?.warn("login: revoking the refresh token of the rejected response failed (${if (e is VersolaError) e.message else e.javaClass.simpleName}); it dies at expiry instead")
+            } finally {
+                token.fill(0)
+            }
         }
     }
 
@@ -922,6 +939,9 @@ public class SessionCoordinator(
 }
 
 private const val NANOS_PER_MILLI = 1_000_000L
+
+/** How long the detached revocation of a refused login's refresh token may take. */
+private const val REVOCATION_TIMEOUT_MILLIS = 5_000L
 
 /** OpenID Connect Core §11. */
 private const val OFFLINE_ACCESS = "offline_access"
