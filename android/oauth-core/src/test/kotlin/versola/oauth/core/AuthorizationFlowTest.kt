@@ -72,6 +72,47 @@ private class FakeBrowser(
 }
 
 /**
+ * A browser that answers from a script: the first outcome from `authorize`, each later one from
+ * `awaitPendingRedirect`, and then nothing for as long as it is asked (a redirect that never
+ * comes). Records what the flow asked of it.
+ */
+private class ScriptedBrowser(first: BrowserOutcome, vararg later: BrowserOutcome) : BrowserAuthorizationSession {
+    private val firstOutcome = first
+    private val laterOutcomes = ArrayDeque(later.toList())
+    var launches = 0
+    var awaits = 0
+    var options: BrowserSessionOptions? = null
+
+    /** Completed once the script ran out and the flow is waiting for a redirect that does not come. */
+    val waiting = CompletableDeferred<Unit>()
+
+    override suspend fun authorize(uri: String): BrowserOutcome = error("the flow calls the form with options")
+
+    override suspend fun authorize(uri: String, options: BrowserSessionOptions): BrowserOutcome {
+        launches++
+        this.options = options
+        return firstOutcome
+    }
+
+    override suspend fun awaitPendingRedirect(): BrowserOutcome {
+        awaits++
+        laterOutcomes.removeFirstOrNull()?.let { return it }
+        waiting.complete(Unit)
+        awaitCancellation()
+    }
+}
+
+private class RecordingLogger : VersolaLogger {
+    val lines = mutableListOf<String>()
+    override fun info(message: String) {
+        lines += message
+    }
+    override fun warn(message: String) {
+        lines += message
+    }
+}
+
+/**
  * Stands in for the Keystore key of `:dpop`, which this module deliberately cannot see: the
  * only thing the protocol core needs from it is a thumbprint.
  */
@@ -152,6 +193,7 @@ class AuthorizationFlowTest {
         starter: AuthorizationStarter? = null,
         configuration: VersolaConfiguration = this.configuration,
         hasStoredGrant: (suspend () -> Boolean)? = null,
+        logger: VersolaLogger? = null,
     ) = if (hasStoredGrant == null) {
         AuthorizationFlow(
             configuration = configuration,
@@ -162,6 +204,7 @@ class AuthorizationFlowTest {
             dpopKey = dpopKey,
             clock = { now },
             starter = starter,
+            logger = logger,
         )
     } else {
         AuthorizationFlow(
@@ -174,6 +217,7 @@ class AuthorizationFlowTest {
             clock = { now },
             hasStoredGrant = hasStoredGrant,
             starter = starter,
+            logger = logger,
         )
     }
 
@@ -254,22 +298,123 @@ class AuthorizationFlowTest {
         assertSame(SessionState.Unauthenticated, flow.sessionState.first())
     }
 
+    private fun redirectWith(query: String) = BrowserOutcome.Redirect("https://app.example.com/oauth?$query")
+
     @Test
-    fun `a state mismatch reaches no token endpoint and discards the pending request`() = runTest {
-        // Scenario 15. There is no token client here to reach, which is the point: the
-        // failure is raised by validation, before any exchange could be attempted.
+    fun `a redirect whose state is not the pending request's is ignored and the genuine one completes the login`() = runTest {
+        // Scenario 15. The redirect URI is public, so a URL for it with a state this request never
+        // sent is not its response: ignored, not a failure, and what comes after still answers.
+        // There is no token client here to reach, which is the point: nothing past validation runs.
         val store = RecordingStore()
-        val browser = FakeBrowser(
-            { BrowserOutcome.Redirect("https://app.example.com/oauth?code=c&state=not-the-state") },
-            store,
+        val logger = RecordingLogger()
+        // The genuine redirect can only be written once the state is known, i.e. once authorize
+        // has persisted the request: the script reads it lazily.
+        val lazyGenuine = object : BrowserAuthorizationSession {
+            override suspend fun authorize(uri: String): BrowserOutcome = error("the flow calls the form with options")
+            override suspend fun authorize(uri: String, options: BrowserSessionOptions): BrowserOutcome =
+                redirectWith("code=forged&state=not-the-state&iss=$ISSUER")
+            var awaits = 0
+            override suspend fun awaitPendingRedirect(): BrowserOutcome = when (awaits++) {
+                0 -> redirectWith("code=forged&iss=$ISSUER")
+                else -> redirectWith("code=the-code&state=${store.stored!!.state}&iss=$ISSUER")
+            }
+        }
+
+        val grant = flow(store, lazyGenuine, logger = logger).authorize(setOf("openid"))
+
+        assertEquals("the-code", grant.code)
+        assertEquals("two redirects were stepped over, the third answered", 2, lazyGenuine.awaits)
+        assertEquals("the pending request was never wiped", 0, store.clears)
+        assertEquals(2, logger.lines.size)
+        assertTrue(
+            "the log names no value of the URL or the request: ${logger.lines}",
+            logger.lines.none { "forged" in it || "not-the-state" in it || store.stored!!.state in it || "app.example.com" in it },
+        )
+    }
+
+    @Test
+    fun `while redirects that are not its response arrive the login keeps waiting with its request and state`() = runTest {
+        val store = RecordingStore()
+        val browser = ScriptedBrowser(
+            redirectWith("code=c&state=not-the-state&iss=$ISSUER"),
+            redirectWith("code=c&state=&iss=$ISSUER"),
+            redirectWith("code=c&iss=$ISSUER"),
+            redirectWith("error=access_denied&state=another"),
         )
         val flow = flow(store, browser)
 
-        val error = failure { flow.authorize(setOf("openid")) } as VersolaError.Configuration
+        val caller = launch { flow.authorize(setOf("openid")) }
+        browser.waiting.await()
 
-        assertEquals(VersolaError.Configuration.Detail.StateMismatch, error.detail)
+        assertEquals("every redirect was consumed, none ended the wait", 4, browser.awaits)
+        assertTrue(caller.isActive)
+        assertSame(SessionState.Authorizing, flow.sessionState.first())
+        assertEquals("the request persisted before the browser opened is still the one stored", 1, store.saves)
+        assertEquals(0, store.clears)
+        assertTrue("the login is still in flight, not failed and not abandoned", flow.authorizationInFlight)
+        caller.cancelAndJoin()
+    }
+
+    @Test
+    fun `the flow tells the browser which state it awaits, and that is the persisted one`() = runTest {
+        val store = RecordingStore()
+        var told: String? = null
+        val browser = object : BrowserAuthorizationSession {
+            override suspend fun authorize(uri: String): BrowserOutcome = error("the flow calls the form with options")
+            override suspend fun authorize(uri: String, options: BrowserSessionOptions): BrowserOutcome {
+                told = options.expectedState
+                assertEquals("https://app.example.com/oauth", options.redirectUri)
+                return redirectWith("code=c&state=$told&iss=$ISSUER")
+            }
+            override suspend fun awaitPendingRedirect(): BrowserOutcome = error("not used")
+        }
+
+        val grant = flow(store, browser).authorize(setOf("openid"))
+
+        assertEquals("the state it was told answers the request that was persisted", store.stored!!.state, told)
+        assertEquals("c", grant.code)
+    }
+
+    @Test
+    fun `the user dismissing the browser after a redirect was ignored still ends the login as a cancel`() = runTest {
+        val store = RecordingStore()
+        val browser = ScriptedBrowser(redirectWith("code=c&state=not-the-state"), BrowserOutcome.UserCancelled)
+        val flow = flow(store, browser)
+
+        val error = failure { flow.authorize(setOf("openid")) } as VersolaError.Recoverable
+
+        assertEquals(VersolaError.Recoverable.Cause.UserCancelled, error.reason)
         assertNull(store.stored)
         assertSame(SessionState.Unauthenticated, flow.sessionState.first())
+    }
+
+    @Test
+    fun `a redirect carrying the right state is still judged on its iss, its error and its code`() = runTest {
+        // What stays a failure: the matching state makes it the response, and the response is
+        // validated as before (scenario 16 for iss; the provider's own answer; neither code nor error).
+        for (extra in listOf("&iss=https://evil.example", "")) {
+            val store = RecordingStore()
+            val browser = FakeBrowser({ BrowserOutcome.Redirect("https://app.example.com/oauth?code=c&state=${store.stored!!.state}$extra") }, store)
+            val error = failure { flow(store, browser).authorize(setOf("openid")) } as VersolaError.Configuration
+            assertTrue("'$extra'", error.detail is VersolaError.Configuration.Detail.IssuerMismatch)
+            assertNull("a response that fails validation wipes the request", store.stored)
+        }
+
+        val denied = RecordingStore()
+        val deniedError = failure {
+            flow(denied, FakeBrowser({ BrowserOutcome.Redirect("https://app.example.com/oauth?error=access_denied&state=${denied.stored!!.state}&iss=$ISSUER") }, denied))
+                .authorize(setOf("openid"))
+        }
+        assertEquals(VersolaError.Reauthenticate.Reason.AuthorizationDenied, (deniedError as VersolaError.Reauthenticate).reason)
+        assertNull(denied.stored)
+
+        val empty = RecordingStore()
+        val emptyError = failure {
+            flow(empty, FakeBrowser({ BrowserOutcome.Redirect("https://app.example.com/oauth?state=${empty.stored!!.state}&iss=$ISSUER") }, empty))
+                .authorize(setOf("openid"))
+        } as VersolaError.Configuration
+        assertSame(VersolaError.Configuration.Detail.MalformedAuthorizationResponse, emptyError.detail)
+        assertNull(empty.stored)
     }
 
     @Test
@@ -914,19 +1059,24 @@ class AuthorizationFlowTest {
     }
 
     @Test
-    fun `a redirect for a state this process never issued is still a mismatch`() = runTest {
-        // The stale-redirect skip is not a relaxation of the state check: only a state this
-        // process itself abandoned is stepped over, and only once.
+    fun `a redirect for a state this process never issued does not fail the login either`() = runTest {
+        // The abandoned-tab skip used to be limited to states this process itself had issued, and
+        // anything else failed as a mismatch. Now every redirect that is not the request's own is
+        // stepped over, however many: the genuine one still arrives.
         val store = RecordingStore()
-        val browser = FakeBrowser(
-            { BrowserOutcome.Redirect("https://app.example.com/oauth?code=c&state=someone-elses&iss=$ISSUER") },
-            store,
-        )
-        val flow = flow(store, browser)
+        val strangers = (1..25).map { redirectWith("code=c&state=someone-elses-$it&iss=$ISSUER") }
+        val browser = object : BrowserAuthorizationSession {
+            private val queue = ArrayDeque(strangers.drop(1))
+            override suspend fun authorize(uri: String): BrowserOutcome = error("not used")
+            override suspend fun authorize(uri: String, options: BrowserSessionOptions): BrowserOutcome = strangers.first()
+            override suspend fun awaitPendingRedirect(): BrowserOutcome =
+                queue.removeFirstOrNull() ?: redirectWith("code=mine&state=${store.stored!!.state}&iss=$ISSUER")
+        }
 
-        val error = failure { flow.authorize(setOf("openid")) } as VersolaError.Configuration
+        val grant = flow(store, browser).authorize(setOf("openid"))
 
-        assertSame(VersolaError.Configuration.Detail.StateMismatch, error.detail)
+        assertEquals("mine", grant.code)
+        assertEquals(0, store.clears)
     }
 
     // ---- endSession() ------------------------------------------------------------------
@@ -1165,7 +1315,8 @@ class AuthorizationFlowTest {
     @Test
     fun `a rejected redirect over a stored grant settles on Authenticated too`() = runTest {
         val store = RecordingStore()
-        val browser = FakeBrowser({ BrowserOutcome.Redirect("https://app.example.com/oauth?code=c&state=wrong&iss=$ISSUER") }, store)
+        // The state is the request's, the issuer is not: a response that fails validation.
+        val browser = FakeBrowser(redirectFor(store, extra = "&iss=https://evil.example"), store)
         val flow = flow(store, browser, hasStoredGrant = { true })
 
         failure { flow.authorize(setOf("openid")) }

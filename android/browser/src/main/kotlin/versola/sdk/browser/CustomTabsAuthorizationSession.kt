@@ -11,6 +11,7 @@ import versola.oauth.core.BrowserAuthorizationSession
 import versola.oauth.core.BrowserOutcome
 import versola.oauth.core.BrowserSessionOptions
 import versola.oauth.core.VersolaError
+import versola.oauth.core.VersolaInternalApi
 import versola.oauth.core.VersolaLogger
 
 /**
@@ -28,6 +29,7 @@ import versola.oauth.core.VersolaLogger
  * heuristic, since Chrome's minimize button resumes the app too (architecture review F1),
  * which is why the Auth Tab leg is preferred wherever it is available.
  */
+@OptIn(VersolaInternalApi::class)
 public class CustomTabsAuthorizationSession(
     context: Context,
     private val logger: VersolaLogger? = null,
@@ -43,7 +45,7 @@ public class CustomTabsAuthorizationSession(
     override suspend fun authorize(uri: String, options: BrowserSessionOptions): BrowserOutcome {
         // Anything buffered belongs to a session that no longer exists.
         RedirectDispatcher.drain()
-        RedirectDispatcher.expect(options.redirectUri)
+        RedirectDispatcher.expect(options.redirectUri, options.expectedState, logger)
 
         // Armed before the browser starts, not after: `startActivity` is asynchronous, so
         // arming afterwards can miss the host activity stopping — and a detector that never

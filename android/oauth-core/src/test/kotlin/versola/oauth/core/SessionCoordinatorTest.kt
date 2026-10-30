@@ -748,8 +748,8 @@ class SessionCoordinatorTest {
         createdAtEpochMillis = System.currentTimeMillis() - ageMillis,
     )
 
-    private fun redirect(state: String = "restored-state", iss: String? = ISSUER) = BrowserOutcome.Redirect(
-        "https://app.example.com/oauth?code=the-code&state=$state" + (iss?.let { "&iss=$it" } ?: ""),
+    private fun redirect(state: String? = "restored-state", iss: String? = ISSUER) = BrowserOutcome.Redirect(
+        "https://app.example.com/oauth?code=the-code" + (state?.let { "&state=$it" } ?: "") + (iss?.let { "&iss=$it" } ?: ""),
     )
 
     private class ColdStart(val pending: RecordingPendingStore, val browser: FixedRedirectBrowser)
@@ -815,17 +815,48 @@ class SessionCoordinatorTest {
     }
 
     @Test
-    fun `a resumed redirect carrying another state is refused before any token request`() = runTest {
-        val start = coldStart(outcome = redirect(state = "forged"))
+    fun `a resumed redirect carrying another state is ignored and the resume keeps waiting for its own`() = runTest {
+        // Scenario 15, cold start: what the process finds buffered is judged against the request it
+        // just read, and the redirect that is not its answer neither fails nor wipes anything.
+        val start = coldStart()
+        val answers = ArrayDeque(listOf(redirect(state = "forged"), redirect(state = null), redirect()))
+        start.browser.pendingRedirect = { answers.removeFirst() }
+        val (coordinator, tokenClient, credentialStore) = generic(start.pending, validator = RecordingValidator(), browser = start.browser)
+        tokenClient.exchangeResult = { issued(accessToken = "at", refreshToken = "rt", idToken = "h.p.s") }
+
+        val response = coordinator.resumePendingLogin()
+
+        assertEquals("at", checkNotNull(response).accessToken)
+        assertTrue("both non-matching redirects were consumed and the third answered", answers.isEmpty())
+        assertEquals("only the matching redirect's code was exchanged", 1, tokenClient.exchangeCalls.size)
+        assertEquals("rt", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a resume that was only handed redirects with another state keeps its request and is still waiting`() = runTest {
+        val start = coldStart()
+        val delivered = CompletableDeferred<Unit>()
+        var calls = 0
+        start.browser.pendingRedirect = {
+            if (calls++ == 0) {
+                redirect(state = "forged")
+            } else {
+                delivered.complete(Unit)
+                awaitCancellation()
+            }
+        }
         val (coordinator, tokenClient, credentialStore) = generic(start.pending, validator = RecordingValidator(), browser = start.browser)
 
-        val error = failure { coordinator.resumePendingLogin() } as VersolaError.Configuration
+        val resume = async { coordinator.resumePendingLogin() }
+        delivered.await()
 
-        assertEquals(VersolaError.Configuration.Detail.StateMismatch, error.detail)
-        assertTrue(tokenClient.exchangeCalls.isEmpty())
+        assertTrue("no token request for a redirect that is not the response", tokenClient.exchangeCalls.isEmpty())
+        assertNotNull("the pending request is kept", start.pending.stored)
+        assertEquals(0, start.pending.clears)
+        assertEquals(SessionState.Authorizing, coordinator.sessionState.first())
         assertNull(credentialStore.refreshToken)
-        assertNull(start.pending.stored)
-        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+        resume.cancel()
     }
 
     @Test
