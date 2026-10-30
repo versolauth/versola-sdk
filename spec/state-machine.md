@@ -446,8 +446,10 @@ slot in front of the secret (`credentials/refreshToken`, `credentials/rawIdToken
 `credentials/pendingRotation`, `pending-authorization`). AES-GCM authenticates the whole
 plaintext, so a valid blob moved from one slot to another does not open there and is read as
 the tampered ciphertext it is (`errors.md`: a sign-out). Items written by 0.1.0 carry no name and
-are read as they are, so an upgrade keeps the user signed in; each is rewritten bound the next
-time it is saved (the refresh token at every rotation, the pending request at every login). The
+are read as they are, so an upgrade keeps the user signed in; each credential is rewritten bound
+as soon as it has been read (best effort: a failed rewrite leaves the readable legacy item and is
+retried at the next read), and the pending request, which lives minutes, by the next login. Until
+then a legacy item opens in any slot. The
 format is one-way: an SDK that predates the binding reads a bound item as a garbled token, so
 rolling an app back to it signs the user out. The binding does not stop a stale copy of the
 same slot being put back; that needs a counter nothing here keeps.

@@ -16,8 +16,9 @@ import javax.crypto.AEADBadTagException
  * Format: `00 'V' 'B' 02`, one byte of name length, the name in UTF-8, then the secret. The
  * leading zero byte cannot start anything 0.1.0 stored (opaque tokens, a JWT, a UUID and the
  * pending request's JSON are all printable text), so a plaintext that does not begin with the
- * marker is a 0.1.0 record and is read as it is. It is rewritten in this format the next time
- * the record is saved: the refresh token on every rotation, the pending request at every login.
+ * marker is a 0.1.0 record and is read as it is. The credential store rewrites it in this
+ * format as soon as it has read it (best effort); the pending request, which lives minutes, is
+ * rewritten by the next login.
  * Older SDKs cannot read the new format; see `spec/state-machine.md`, "Persistence".
  */
 internal object RecordBinding {
@@ -36,6 +37,10 @@ internal object RecordBinding {
         return out
     }
 
+    /** Whether [plaintext] carries the marker: false for a 0.1.0 record, which names no slot. */
+    fun isSealed(plaintext: ByteArray): Boolean =
+        plaintext.size >= MARKER.size && plaintext.copyOfRange(0, MARKER.size).contentEquals(MARKER)
+
     /**
      * The secret of [record] in [plaintext], zeroing [plaintext]. A 0.1.0 record, which has no
      * marker, is returned as it is (the same array). A sealed one that names another record,
@@ -43,9 +48,7 @@ internal object RecordBinding {
      * failure a ciphertext that does not authenticate is, and read as the same sign-out.
      */
     fun open(record: String, plaintext: ByteArray): ByteArray {
-        if (plaintext.size < MARKER.size || !plaintext.copyOfRange(0, MARKER.size).contentEquals(MARKER)) {
-            return plaintext
-        }
+        if (!isSealed(plaintext)) return plaintext
         val expected = record.toByteArray(Charsets.UTF_8)
         try {
             val nameLength = plaintext.getOrNull(MARKER.size)?.toInt()?.and(0xFF)

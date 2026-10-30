@@ -137,15 +137,50 @@ public class DataStoreCredentialStore(
      * two apart, and every other failure leaves the grant in place and the caller to retry.
      * A blob that opens but names another slot is read as the tampered one it is.
      */
-    private suspend fun unwrapping(record: String, wrapped: ByteArray): ByteArray = try {
-        RecordBinding.open(record, keyProvider.unwrap(wrapped))
-    } catch (e: CancellationException) {
-        throw e
-    } catch (e: VersolaError) {
-        throw e
-    } catch (e: Exception) {
-        throw StorageFailure.toError(e)
+    private suspend fun unwrapping(record: String, wrapped: ByteArray): ByteArray {
+        val secret = try {
+            val plaintext = keyProvider.unwrap(wrapped)
+            val legacy = !RecordBinding.isSealed(plaintext)
+            RecordBinding.open(record, plaintext).also { if (legacy) rebind(record, wrapped, it) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: VersolaError) {
+            throw e
+        } catch (e: Exception) {
+            throw StorageFailure.toError(e)
+        }
+        return secret
     }
+
+    /**
+     * A record written by 0.1.0 names no slot, so until it is rewritten it would open in any
+     * slot, and an ID token that no refresh rotates would stay that way for good. It is
+     * rewritten bound as soon as it has been read. Best effort: a failed wrap or write leaves
+     * the legacy record, which still reads, and never fails the read that found it. Only
+     * [expected] is replaced: a save that landed in between wins.
+     */
+    private suspend fun rebind(record: String, expected: ByteArray, secret: ByteArray) {
+        try {
+            val bound = wrapping(record, secret)
+            dataStore.updateData { current ->
+                when {
+                    record == REFRESH_TOKEN && current.refreshToken.sameAs(expected) ->
+                        CredentialBlob(bound, current.rawIdToken, current.pendingRotation)
+                    record == ID_TOKEN && current.rawIdToken.sameAs(expected) ->
+                        CredentialBlob(current.refreshToken, bound, current.pendingRotation)
+                    record == PENDING_ROTATION && current.pendingRotation.sameAs(expected) ->
+                        CredentialBlob(current.refreshToken, current.rawIdToken, bound)
+                    else -> current
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // The record stays as it was.
+        }
+    }
+
+    private fun ByteArray?.sameAs(other: ByteArray): Boolean = this != null && contentEquals(other)
 
     /** [secret] bound to [record], wrapped, with the sealed copy zeroed whether or not the wrap held. */
     private suspend fun wrapping(record: String, secret: ByteArray): ByteArray {

@@ -450,4 +450,52 @@ class DataStoreCredentialStoreTest {
 
         assertSignedOut { store.useRefreshToken { String(it) } }
     }
+
+    private suspend fun slotNameOnDisk(field: (CredentialBlob) -> ByteArray?): String? {
+        val wrapped = field(CredentialBlob.decode(file.readBytes())) ?: return null
+        return String(keyProvider.unwrap(wrapped), Charsets.ISO_8859_1)
+    }
+
+    @Test
+    fun `a legacy record is rewritten bound as soon as it has been read`() = runTest {
+        writeLegacyFile(refreshToken, idToken, "idem-key-1")
+
+        assertEquals(idToken, store.rawIdToken())
+        assertTrue("the ID token, which no refresh rotates, is bound now", slotNameOnDisk { it.rawIdToken }!!.contains("credentials/rawIdToken"))
+
+        assertEquals(refreshToken, store.useRefreshToken { String(it) })
+        assertEquals("idem-key-1", store.pendingRotation())
+        assertTrue(slotNameOnDisk { it.refreshToken }!!.contains("credentials/refreshToken"))
+        assertTrue(slotNameOnDisk { it.pendingRotation }!!.contains("credentials/pendingRotation"))
+
+        // And it reads back from the bound form.
+        assertEquals(refreshToken, store.useRefreshToken { String(it) })
+        assertEquals(idToken, store.rawIdToken())
+    }
+
+    @Test
+    fun `a failed rewrite never fails the read, and the legacy record still reads`() = runTest {
+        writeLegacyFile(refreshToken, idToken, null)
+        keyProvider.wrapFailure = ProviderException("keystore busy")
+
+        assertEquals(idToken, store.rawIdToken())
+
+        keyProvider.wrapFailure = null
+        assertFalse("not rewritten", slotNameOnDisk { it.rawIdToken }!!.contains("credentials/"))
+        assertEquals(idToken, store.rawIdToken())
+        assertTrue("rewritten once the key answers", slotNameOnDisk { it.rawIdToken }!!.contains("credentials/rawIdToken"))
+    }
+
+    @Test
+    fun `a save that lands during the read is not overwritten by the rewrite`() = runTest {
+        writeLegacyFile(refreshToken, null, null)
+        keyProvider.onUnwrap = {
+            keyProvider.onUnwrap = null
+            store.save("rotated-while-reading".toByteArray(), null)
+        }
+
+        store.useRefreshToken { String(it) }
+
+        assertEquals("rotated-while-reading", store.useRefreshToken { String(it) })
+    }
 }
