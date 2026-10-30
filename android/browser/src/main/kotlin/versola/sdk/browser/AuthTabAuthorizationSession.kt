@@ -54,6 +54,7 @@ public class AuthTabAuthorizationSession(
         }
         // Anything buffered belongs to a session that no longer exists.
         RedirectDispatcher.drain()
+        RedirectDispatcher.expect(options.redirectUri)
         application.startActivity(VersolaAuthTabActivity.intent(application, uri, redirectUri, options.ephemeral, provider))
         return RedirectDispatcher.await()
     }

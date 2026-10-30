@@ -1,14 +1,21 @@
 package versola.sdk.storage
 
 import java.io.File
+import java.security.ProviderException
+import java.security.UnrecoverableKeyException
+import javax.crypto.AEADBadTagException
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.test.runTest
+import versola.oauth.core.VersolaError
 import versola.oauth.core.PendingAuthorizationCodec
 import versola.oauth.core.PendingAuthorizationRequest
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -109,11 +116,108 @@ class FilePendingAuthorizationStoreTest {
     }
 
     @Test
-    fun `a slot that cannot be unwrapped is discarded rather than surfaced`() = runTest {
-        // The user logs in again. Nothing is recoverable from a slot that will not open, and
+    fun `a slot whose key is gone for good is discarded rather than surfaced`() = runTest {
+        // The user logs in again. Nothing is recoverable from a slot that will never open, and
         // failing loudly here would brick login on a key rotation.
+        for (failure in listOf(
+            AEADBadTagException("Tag mismatch"),
+            UnrecoverableKeyException("key entry is unreadable"),
+            VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.CredentialsInvalidated),
+        )) {
+            store.save(request)
+            keyProvider.unwrapFailure = failure
+
+            assertNull("$failure", store.load())
+            assertFalse("$failure", file.exists())
+        }
+    }
+
+    @Test
+    fun `a locked key keeps the slot and says so`() = runTest {
+        // The login the user is in the middle of is intact; deleting it because the unlock
+        // window elapsed would lose an authorization whose redirect is on its way.
         store.save(request)
-        keyProvider.unwrapFailure = IllegalStateException("key no longer decrypts this")
+        keyProvider.unwrapFailure = VersolaError.Recoverable(VersolaError.Recoverable.Cause.UnlockRequired)
+
+        try {
+            store.load()
+            fail("a locked key must not read as nothing pending")
+        } catch (e: VersolaError.Recoverable) {
+            assertSame(VersolaError.Recoverable.Cause.UnlockRequired, e.reason)
+        }
+        assertTrue(file.exists())
+
+        keyProvider.unwrapFailure = null
+        assertEquals(request.state, store.load()!!.state)
+    }
+
+    @Test
+    fun `a transient keystore failure keeps the slot and is recoverable`() = runTest {
+        store.save(request)
+        keyProvider.unwrapFailure = ProviderException("Failed to communicate with the keystore service")
+
+        try {
+            store.load()
+            fail("a keystore hiccup must not read as nothing pending")
+        } catch (e: VersolaError.Recoverable) {
+            assertTrue(e.reason is VersolaError.Recoverable.Cause.Network)
+        }
+        assertTrue(file.exists())
+
+        keyProvider.unwrapFailure = null
+        assertEquals(request.state, store.load()!!.state)
+    }
+
+    @Test
+    fun `a cancelled caller is a cancellation and leaves the slot`() = runTest {
+        store.save(request)
+        keyProvider.unwrapFailure = CancellationException("the caller's scope ended")
+
+        try {
+            store.load()
+            fail("cancellation must propagate")
+        } catch (e: CancellationException) {
+            assertEquals("the caller's scope ended", e.message)
+        }
+        assertTrue(file.exists())
+    }
+
+    @Test
+    fun `a slot that authenticates but does not decode is discarded`() = runTest {
+        // The plaintext opened, so the key is fine; what it holds is not a pending request.
+        // Nothing will ever make it one.
+        file.parentFile.mkdirs()
+        file.writeBytes(keyProvider.wrap("not json".toByteArray()))
+
+        assertNull(store.load())
+        assertFalse(file.exists())
+    }
+
+    @Test
+    fun `a request written by 0 1 0 without record binding is still read`() = runTest {
+        // The plaintext handed to the key provider was the bare JSON.
+        file.parentFile.mkdirs()
+        file.writeBytes(keyProvider.wrap(PendingAuthorizationCodec.encode(request)))
+
+        val restored = store.load()!!
+
+        assertEquals(request.state, restored.state)
+        assertArrayEquals(PendingAuthorizationCodec.encode(request), PendingAuthorizationCodec.encode(restored))
+    }
+
+    @Test
+    fun `a saved request is bound to its slot`() = runTest {
+        store.save(request)
+
+        val plaintext = String(keyProvider.unwrap(file.readBytes()), Charsets.ISO_8859_1)
+
+        assertTrue(plaintext.contains("pending-authorization"))
+    }
+
+    @Test
+    fun `a blob sealed for another slot is discarded, not read as a request`() = runTest {
+        file.parentFile.mkdirs()
+        file.writeBytes(keyProvider.wrap(RecordBinding.seal("credentials/rawIdToken", PendingAuthorizationCodec.encode(request))))
 
         assertNull(store.load())
         assertFalse(file.exists())

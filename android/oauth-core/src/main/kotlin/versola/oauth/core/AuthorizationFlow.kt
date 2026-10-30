@@ -86,6 +86,15 @@ public class AuthorizationFlow(
     }
 
     private val state = MutableStateFlow<SessionState>(SessionState.Unauthenticated)
+
+    /**
+     * Called once, when the restore finds a pending request to resume (`Authorizing`): a
+     * cold-started process's cue to finish the sign-in its redirect answers. A hook rather than
+     * a check at construction because the restore can fail (see [ensureRestored]) and succeed on
+     * a later read, and the resume belongs to that moment.
+     */
+    public var onRestoredAuthorizing: (() -> Unit)? = null
+
     private val restoreLock = Mutex()
     private var restored = false
     private var expiredOnRestore = false
@@ -99,7 +108,12 @@ public class AuthorizationFlow(
      * publish a placeholder before the store had been read.
      */
     public val sessionState: Flow<SessionState> = flow {
-        ensureRestored()
+        try {
+            ensureRestored()
+        } catch (e: VersolaError.Recoverable) {
+            // The store could not be read yet; the state says `Locked` and the next read tries
+            // again. A collector is not handed a storage error.
+        }
         emitAll(state)
     }
 
@@ -443,7 +457,24 @@ public class AuthorizationFlow(
         if (restored) return
         restoreLock.withLock {
             if (restored) return
-            val pending = pendingStore.load()
+            // The grant is read before the pending request, and asked without the key. A pending
+            // slot that is out of reach (a locked key, a keystore fault) has not said there is
+            // nothing in it, so with no grant to decide the state it must not be read as
+            // `Unauthenticated`: the state is `Locked`, the operation that asked fails with the
+            // storage error, and nothing is remembered (`restored` stays false), so the next call
+            // reads again. The slot is never discarded on its account. With a grant the slot is
+            // only residue and the state does not depend on it. Cancellation is not a
+            // `Recoverable` and passes through.
+            val granted = hasStoredGrant()
+            val pending = try {
+                pendingStore.load()
+            } catch (e: VersolaError.Recoverable) {
+                if (!granted) {
+                    state.value = SessionState.Locked
+                    throw e
+                }
+                null
+            }
             state.value = when {
                 // A stored grant outranks whatever the browser leg left behind, and it is
                 // read first for both directions of that: without it a returning session
@@ -459,7 +490,7 @@ public class AuthorizationFlow(
                 // that the next 401 does not ask for again, and the alternative — believing
                 // a pending request that may or may not have been redeemed — has no way to
                 // tell the two apart.
-                hasStoredGrant() -> {
+                granted -> {
                     if (pending != null) pendingStore.clear()
                     SessionState.Authenticated
                 }
@@ -472,6 +503,7 @@ public class AuthorizationFlow(
                 else -> SessionState.Authorizing
             }
             restored = true
+            if (state.value == SessionState.Authorizing) onRestoredAuthorizing?.invoke()
         }
     }
 

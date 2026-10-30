@@ -14,12 +14,16 @@ internal class ReversingKeyProvider : CredentialKeyProvider {
     var unwrapFailure: Throwable? = null
     var wrapFailure: Throwable? = null
 
+    /** Runs inside [unwrap] before it answers, for a test that must be suspended in it. */
+    var onUnwrap: (suspend () -> Unit)? = null
+
     override suspend fun wrap(plaintext: ByteArray): ByteArray {
         wrapFailure?.let { throw it }
         return plaintext.reversedArray()
     }
 
     override suspend fun unwrap(blob: ByteArray): ByteArray {
+        onUnwrap?.invoke()
         unwrapFailure?.let { throw it }
         return blob.reversedArray()
     }

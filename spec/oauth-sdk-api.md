@@ -245,6 +245,14 @@ tier is `Software` where hardware was required (`Dpop(requireHardware = true)` o
 `dpop(required: true)` on iOS) is `Configuration(HardwareBindingUnavailable)` before any request to
 the authorization endpoint (`errors.md`). Scenario 33 holds all of this against a real provider.
 
+On Android the key is generated in StrongBox first. A StrongBox that is absent (the Keystore's
+`StrongBoxUnavailableException`) falls through to the TEE at once; any other provider fault of the
+attempt may be transient (a busy secure element), so it is retried once before the fall-through.
+The key is generated once and kept, so a fall-through is not revisited: the key stays in the TEE
+until it is regenerated (the next `login()`, or a logout), and `keyAttestation()` reports
+`TrustedEnvironment`, not `StrongBox`, for that whole time. `requireHardware` is satisfied by the
+TEE; there is no way to require StrongBox itself.
+
 ## 10. The authenticated client
 
 The platform's HTTP client with the session attached, so most integrators never hold a token:
