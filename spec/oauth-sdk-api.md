@@ -94,9 +94,17 @@ val oauth = OAuthClient.create(context, configuration)
   by the app with its intent filter as the Versola facade does today) and through
   `handleRedirect(url)` on iOS, which the app calls from its URL handler and which returns whether
   the URL was one the SDK was waiting for. The Flutter plugin wires both natively.
-- There is no `resumePendingAuthorization()`: a redirect delivered to a cold-started process
-  completes the pending request and publishes `Authenticated` or an error state transition on its
-  own. An app that wants to await it observes `sessionState`.
+- There is no `resumePendingAuthorization()` on Android: a redirect delivered to a cold-started
+  process completes the pending request and publishes `Authenticated` or an error state
+  transition on its own. `create()` starts that work on a scope the SDK owns, when the restored
+  state is `Authorizing`; it runs the tail of `login()` (redirect validation, code exchange,
+  ID-token validation, persistence, then `Authenticated`), with `max_age` taken from the restored
+  request. An app that wants to await it observes `sessionState`.
+- **Deviation, iOS:** the redirect cannot start the SDK by itself, because the app's URL handler
+  is the only thing the system calls. The app calls `resumePendingAuthorization()` on launch when
+  `sessionState` is `authorizing` and passes the URL to `handleRedirect(url)`; the call awaits the
+  redirect and finishes the sign-in with the same tail as `login()`. Observing `sessionState`
+  works as on Android.
 
 ## 5. Operations
 
