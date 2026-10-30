@@ -183,6 +183,13 @@ class Scenario34To36ServerErrorsBridgeTest : BridgeConformance() {
         assertEquals(1, transcript.matching("POST", token).size)
         assertEquals(SessionStateMessage.UNAUTHENTICATED, bridge.dart.sessionState())
 
+        // The Retry-After of 1 s on that exchange holds the origin: the next login() is refused before
+        // its browser opens, until it has passed.
+        val refused = server(bridge.dart.login().failure())
+        assertEquals(0L, refused.attempts)
+        assertEquals(1, browser.opened.size)
+        android.os.SystemClock.sleep(1_300)
+
         bridge.dart.login().assertOk()
         assertEquals(2, browser.opened.size)
         assertEquals(SessionStateMessage.AUTHENTICATED, bridge.dart.sessionState())
@@ -380,7 +387,8 @@ class Scenario34To36ServerErrorsBridgeTest : BridgeConformance() {
         assertEquals(sent, bridge.refreshRequests().size)
 
         proxy.clearRewrites()
-        Thread.sleep(2_300)
+        // Robolectric's SystemClock, the clock the cooldown runs on, advances by sleeping.
+        android.os.SystemClock.sleep(2_300)
         bridge.dart.refresh().assertOk()
 
         assertEquals(sent + 1, bridge.refreshRequests().size)
