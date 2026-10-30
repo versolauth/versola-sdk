@@ -65,10 +65,10 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     testImplementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
-    testImplementation("com.squareup.okhttp3:okhttp:5.4.0")
+    testImplementation("com.squareup.okhttp3:okhttp:5.5.1")
     // The proxy in front of the provider and the protected resources are MockWebServers with
     // a dispatcher, the same server the unit tier stubs with; here it forwards.
-    testImplementation("com.squareup.okhttp3:mockwebserver3:5.4.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver3:5.5.1")
     testImplementation("org.robolectric:robolectric:4.17")
     testImplementation("androidx.test:core:1.7.0")
 }

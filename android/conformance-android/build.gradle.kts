@@ -29,10 +29,10 @@ android {
 
 dependencies {
     androidTestImplementation(project(":sdk"))
-    androidTestImplementation("com.squareup.okhttp3:okhttp:5.4.0")
+    androidTestImplementation("com.squareup.okhttp3:okhttp:5.5.1")
     // The upstream a registered edge resource proxies to runs on the device and is reached
     // from the host through `adb forward`; MockWebServer is that upstream.
-    androidTestImplementation("com.squareup.okhttp3:mockwebserver3:5.4.0")
+    androidTestImplementation("com.squareup.okhttp3:mockwebserver3:5.5.1")
     androidTestImplementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
     androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     androidTestImplementation("androidx.test:runner:1.7.0")
