@@ -32,6 +32,7 @@ package actor AuthorizationFlow {
     private let hasStoredGrant: @Sendable () async throws -> Bool
     private let starter: AuthorizationStarter?
     private let logger: OAuthLogger?
+    private let didRestoreAuthorizing: (@Sendable () async -> Void)?
 
     private var restored = false
     private var restoreTask: Task<Void, Error>?
@@ -56,6 +57,11 @@ package actor AuthorizationFlow {
     ///     ("no grant") suits the browser leg on its own; a coordinator must supply the real one,
     ///     or a returning session reads as signed out on every cold start.
     ///   - starter: builds the request when it is not the plain PKCE request this class builds.
+    ///   - didRestoreAuthorizing: called once, after a restore that published `authorizing` (the
+    ///     process was killed mid-browser), from whichever call performed the restore. A restore
+    ///     that failed publishes nothing and calls nothing; the next one that succeeds does. The
+    ///     facade starts finishing the request from it, so that no caller has to remember to.
+    ///     It must not wait for the request to finish.
     package init(
         configuration: CoreConfiguration,
         discovery: DiscoveryService,
@@ -68,8 +74,10 @@ package actor AuthorizationFlow {
         random: RandomSource = SystemRandomSource(),
         hasStoredGrant: @escaping @Sendable () async throws -> Bool = { false },
         starter: AuthorizationStarter? = nil,
-        logger: OAuthLogger? = nil
+        logger: OAuthLogger? = nil,
+        didRestoreAuthorizing: (@Sendable () async -> Void)? = nil
     ) {
+        self.didRestoreAuthorizing = didRestoreAuthorizing
         self.configuration = configuration
         self.discovery = discovery
         self.pendingStore = pendingStore
@@ -128,6 +136,7 @@ package actor AuthorizationFlow {
         }
         await states.set(next)
         restored = true
+        if next == .authorizing { await didRestoreAuthorizing?() }
     }
 
     // MARK: Transitions the coordinator drives

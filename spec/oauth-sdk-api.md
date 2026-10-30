@@ -100,14 +100,31 @@ val oauth = OAuthClient.create(context, configuration)
   state is `Authorizing`; it runs the tail of `login()` (redirect validation, code exchange,
   ID-token validation, persistence, then `Authenticated`), with `max_age` taken from the restored
   request. An app that wants to await it observes `sessionState`.
-- **iOS:** the same: `create()` starts that work when the restored state is `Authorizing`, and the
+- **iOS:** the same: a restore that finds `Authorizing` starts that work (`create()` performs the
+  restore; if the Keychain cannot be read at launch, the next call that restores does), and the
   session completes on its own once the redirect arrives. The only difference is how the redirect
   reaches the SDK: the app's URL handler is the only thing the system calls, so the app passes the
   URL to `handleRedirect(url)` (the Flutter plugin does it natively). `resumePendingAuthorization()`
   stays on the iOS `OAuthClient` and is optional: an app that wants to await the outcome calls it,
-  and calling it after `create()` joins the resume `create()` started instead of making a second
-  attempt (the code is single-use). It also finishes a pending request `create()` did not see,
-  one a system cancel left in the running process. Observing `sessionState` works as on Android.
+  and calling it while the resume `create()` started is running joins that resume instead of making
+  a second attempt (the code is single-use). It also finishes a pending request the automatic
+  resume did not see, one a system cancel left in the running process. Observing `sessionState`
+  works as on Android.
+- On both platforms the typed error of the background resume is only logged (the log line holds
+  the error's own text or only its type, never a secret), because no caller awaits it. A failure
+  after the redirect arrived settles the state as `login()` does; one before it (the store or the
+  provider's discovery cannot be read) leaves `Authorizing` and the pending request in place.
+- `logout()` ends a resume that is still waiting for its redirect, then proceeds: the resume
+  holds the authorization lock that the end-session step needs, and the pending request is
+  abandoned by the local wipe.
+- **Order.** While the state is `Authorizing` no grant is stored. An app that calls an
+  authenticated operation (`accessToken()`, `refresh()`, `userInfo()`, a request through the
+  authenticated client or session) before the resume has left `Authorizing` gets the
+  no-grant `Reauthenticate` error, and on iOS today that error wipes local
+  state, including the pending request and the DPoP key the code exchange is bound to
+  (`dpop_jkt`), so the sign-in can no longer finish. Observe `sessionState` until it has left
+  `Authorizing` before touching those operations. A known gap, tracked separately: a missing
+  grant should not wipe anything.
 
 ## 5. Operations
 

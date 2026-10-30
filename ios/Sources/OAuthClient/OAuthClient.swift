@@ -1,5 +1,6 @@
 import AuthenticationServices
 import Foundation
+import os
 import OAuthCore
 
 /// The generic facade of `spec/oauth-sdk-api.md`: a public client for any conforming OpenID
@@ -20,7 +21,7 @@ public final class OAuthClient: Sendable {
     private let browser: WebAuthenticationBrowser?
     private let httpSession: URLSession
     /// Single flight for the resume `create` starts and an explicit `resumePendingAuthorization()`.
-    private let backgroundResume = BackgroundResume()
+    private let backgroundResume: ResumeFlight
 
     /// One client per configuration per process: a second `create` with the same issuer and
     /// client id returns the first instance (two coordinators over one Keychain item would race
@@ -42,20 +43,41 @@ public final class OAuthClient: Sendable {
             clients[configuration.storageKey] = client
             return (client, true)
         }
-        func forgetAll() { clients.removeAll() }
+        /// Ends the resumes the forgotten clients started, and waits for them: a task left
+        /// waiting for a redirect would outlive the test, or the driver run, that created it.
+        func forgetAll() async {
+            let forgotten = Array(clients.values)
+            clients.removeAll()
+            for client in forgotten { await client.backgroundResume.cancelInFlight() }
+        }
     }
 
     /// Validates nothing further (the configuration did) and wires the default implementations.
     /// No network I/O and no key generation happen here: discovery runs on the first operation
     /// that needs it, the DPoP key is generated on first use.
     ///
-    /// An authorization that outlived the process that began it (the app was killed while the
-    /// browser was up) finishes on its own: when the restored state is `authorizing`, `create`
-    /// starts finishing it in the background, as the Android `create` does. It waits for the
+    /// Restores the persisted state (a read of the Keychain, no network). An authorization that
+    /// outlived the process that began it (the app was killed while the browser was up) is
+    /// finished from there, as the Android `create` does: when the restored state is
+    /// `authorizing`, the SDK starts finishing it in the background. That work waits for the
     /// redirect the app hands to ``handleRedirect(_:)`` for what is left of the request's ten
-    /// minutes, then runs the tail of ``login(_:)`` and publishes `authenticated`; a failure
-    /// settles the state as `login` does and is logged, not thrown. Observe ``sessionStates()``
-    /// to follow it. Nothing is started when no authorization is pending.
+    /// minutes, then runs the tail of ``login(_:)`` and publishes `authenticated`. Observe
+    /// ``sessionStates()`` to follow it. Nothing is started when no authorization is pending.
+    ///
+    /// A failure is logged, not thrown, and the log line carries the typed error's text or only
+    /// the error's type, never a secret. A failure after the redirect arrived settles the state
+    /// as `login` does; one before it (the store or the provider's discovery cannot be read)
+    /// leaves `authorizing` and the pending request as they were, and the app may call
+    /// ``resumePendingAuthorization()`` to try again. When the Keychain cannot be read at launch
+    /// (before first unlock), the restore is repeated by the next call that needs it, and the
+    /// resume starts then.
+    ///
+    /// **Order.** While the state is `authorizing`, the SDK holds no grant, so do not call
+    /// ``accessToken()``, ``refresh()``, ``userInfo()`` or an ``authenticatedSession(origins:)``
+    /// request until ``sessionStates()`` has left `authorizing`: with no grant stored they end the
+    /// session (`reauthenticate`), which erases the pending request and the DPoP key the code
+    /// exchange is bound to, and the sign-in cannot finish. ``login(_:)`` is refused meanwhile,
+    /// and ``logout(_:)`` abandons the pending sign-in.
     ///
     /// - Parameter presentationAnchor: the window the browser sheet is presented from, supplied
     ///   by the app; the SDK never finds a window by itself.
@@ -66,7 +88,7 @@ public final class OAuthClient: Sendable {
         let (client, created) = try await registry.resolve(configuration) {
             try build(configuration: configuration, presentationAnchor: presentationAnchor, browser: nil, credentialStore: nil, pendingStore: nil, metadataCache: nil, jwksCache: nil, makeDpopKey: nil)
         }
-        if created { await client.resumeInBackground() }
+        if created { await client.restore() }
         return client
     }
 
@@ -90,7 +112,7 @@ public final class OAuthClient: Sendable {
         let (client, created) = try await registry.resolve(configuration) {
             try build(configuration: configuration, presentationAnchor: nil, browser: browser, credentialStore: credentialStore, pendingStore: pendingStore, metadataCache: metadataCache, jwksCache: jwksCache, makeDpopKey: makeDpopKey)
         }
-        if created { await client.resumeInBackground() }
+        if created { await client.restore() }
         return client
     }
 
@@ -100,7 +122,8 @@ public final class OAuthClient: Sendable {
         await registry.forgetAll()
     }
 
-    private init(configuration: OAuthConfiguration, flow: AuthorizationFlow, coordinator: SessionCoordinator, userInfoClient: UserInfoClient, proofs: DpopProofSource?, dpopKey: SecureEnclaveDpopKey?, browser: WebAuthenticationBrowser?, httpSession: URLSession) {
+    private init(configuration: OAuthConfiguration, flow: AuthorizationFlow, coordinator: SessionCoordinator, userInfoClient: UserInfoClient, proofs: DpopProofSource?, dpopKey: SecureEnclaveDpopKey?, browser: WebAuthenticationBrowser?, httpSession: URLSession, backgroundResume: ResumeFlight) {
+        self.backgroundResume = backgroundResume
         self.configuration = configuration
         self.flow = flow
         self.coordinator = coordinator
@@ -176,77 +199,46 @@ public final class OAuthClient: Sendable {
     }
 
     /// Finishes an authorization that outlived the process that started it (scenario 12). **Now
-    /// optional for that case**: ``create(configuration:presentationAnchor:)`` starts this work
-    /// itself when the restored state is `authorizing`, so an app only feeds the redirect the
-    /// system delivers to ``handleRedirect(_:)``. Calling this after `create` is harmless: while
-    /// the resume `create` started is running it waits for that one and returns, or throws its
-    /// failure, instead of making a second attempt (the code is single-use); once it is done
-    /// there is nothing pending and this returns without effect.
+    /// optional for that case**: the SDK starts this work itself when a restore finds
+    /// `authorizing` (see ``create(configuration:presentationAnchor:)``, including the order it
+    /// asks the app to keep), so an app only feeds the redirect the system delivers to
+    /// ``handleRedirect(_:)``. Calling this after `create` is harmless: while that resume is
+    /// running this waits for it and returns, or throws its failure, instead of making a second
+    /// attempt (the code is single-use); once it is done there is nothing pending and this
+    /// returns without effect. A caller that is cancelled stops waiting; the resume itself goes
+    /// on until its redirect or its ten minutes end it, or ``logout(_:)`` does.
     ///
-    /// It remains the way to finish a pending request that `create` did not see: one left in this
-    /// process by a system cancel (the app was sent to the background while the sheet was up),
-    /// which has no caller to complete it. It waits for the redirect (for what is left of the
-    /// request's ten minutes), validates it against the pending request, exchanges the code,
-    /// validates the ID token and persists the grant, the same steps `login` ends with, and
-    /// publishes `authenticated`. Returns without effect when nothing is pending; a failure
-    /// settles the state as `login` does and is thrown.
+    /// It remains the way to finish a pending request the automatic resume did not see or could
+    /// not finish: one left in this process by a system cancel (the app was sent to the
+    /// background while the sheet was up), or one whose resume failed before the redirect was
+    /// used. It waits for the redirect (for what is left of the request's ten minutes),
+    /// validates it against the pending request, exchanges the code, validates the ID token and
+    /// persists the grant, the same steps `login` ends with, and publishes `authenticated`.
+    /// Returns without effect when nothing is pending; a failure is thrown, and one after the
+    /// redirect arrived settles the state as `login` does.
     public func resumePendingAuthorization() async throws {
-        // One resume at a time per client, whoever asks: the exchange sits outside the flow's
-        // gate, so a second caller admitted behind the first would find the request still
-        // stored and wait for a redirect that was already consumed.
-        guard try await backgroundResume.enter() else { return }
-        do {
-            let acted = try await resume()
-            await backgroundResume.finish(acted ? .completed : .nothingToDo)
-        } catch {
-            // A caller that gave up has not failed the resume for the others.
-            await backgroundResume.finish(error is CancellationError ? .nothingToDo : .failed(error))
-            throw error
-        }
+        try await backgroundResume.resume()
     }
 
-    private func resume() async throws -> Bool {
-        let coordinator = self.coordinator
-        return try await coordinator.operation { try await coordinator.resumePendingLogin() } != nil
-    }
-
-    /// Starts finishing a cold-started authorization, from `create`. Acts only when the restored
-    /// state is `authorizing`, so a client with nothing pending costs one read of the store. The
-    /// wait for the redirect is bounded by what is left of the request's ten minutes
-    /// (`AuthorizationFlow.resumePendingAuthorization`), and the work after it is
-    /// `SessionCoordinator.resumePendingLogin`, the tail of `login` itself. A failure has
-    /// already settled the state, so it is logged and not rethrown into a task nobody awaits.
-    /// The task runs until the redirect or the ten minutes end it.
-    ///
-    /// The resume is registered before `create` returns, so an explicit
-    /// `resumePendingAuthorization()` made right after it joins this one instead of racing it.
-    private func resumeInBackground() async {
-        // First call on a fresh client: always the leader.
-        guard (try? await backgroundResume.enter()) == true else { return }
-        let flow = self.flow
-        let logger = configuration.logger
-        let resume = self.backgroundResume
-        Task {
-            do {
-                try await flow.ensureRestored()
-                guard await flow.states.current == .authorizing else {
-                    await resume.finish(.nothingToDo)
-                    return
-                }
-                let acted = try await self.resume()
-                await resume.finish(acted ? .completed : .nothingToDo)
-            } catch {
-                // The typed error's own text, which carries no secret; for anything else only
-                // the type, since a parser's or a provider's message could.
-                logger.warn("resuming the pending authorization failed: \(error is OAuthError ? String(describing: error) : String(describing: type(of: error)))")
-                await resume.finish(error is CancellationError ? .nothingToDo : .failed(error))
-            }
-        }
+    /// The restore `create` asks for. When it finds `authorizing`, the flow's callback (wired in
+    /// `build`) has already started the resume by the time this returns, so an explicit
+    /// `resumePendingAuthorization()` made right after the `create` call that built the client
+    /// joins that resume instead of racing it. A later `create` for the same configuration
+    /// returns the existing client and does none of this.
+    private func restore() async {
+        // A failure is not final: `sessionState` and every operation restore again, and the
+        // callback fires on the first restore that succeeds.
+        try? await flow.ensureRestored()
     }
 
     /// Signs out (`spec/oauth-sdk-api.md` section 12): revokes, ends the provider's session
     /// through the browser, wipes locally; the wipe is unconditional.
+    ///
+    /// A resume still waiting for its redirect is ended first: it holds the flow's gate, which
+    /// the provider's end-session step needs, so logout would otherwise wait for a redirect that
+    /// may never come (up to ten minutes). The pending sign-in is abandoned by the wipe.
     public func logout(_ options: LogoutOptions = .default) async -> LogoutOutcome {
+        await backgroundResume.cancelInFlight()
         let coordinator = self.coordinator
         return await coordinator.operation { await coordinator.logout(revoke: options.revoke, endSession: options.endSession) }
     }
@@ -383,6 +375,7 @@ public final class OAuthClient: Sendable {
             ? WebAuthenticationBrowser(presentationAnchor: presentationAnchor!, appState: Self.isForeground, logger: logger)
             : nil
         let states = SessionStateHub()
+        let resumeFlight = ResumeFlight()
         let flow = AuthorizationFlow(
             configuration: core,
             discovery: discovery,
@@ -393,7 +386,9 @@ public final class OAuthClient: Sendable {
             dpopKey: proofs,
             hasStoredGrant: { try await credentialStore.hasGrant() },
             starter: PushedAuthorizationStarter(configuration: core, httpClient: httpClient, policy: configuration.pushedAuthorization),
-            logger: logger
+            logger: logger,
+            // A restore that finds `authorizing` is the cold start of scenario 12: finish it.
+            didRestoreAuthorizing: { await resumeFlight.startIfIdle() }
         )
         let jwks = JwksClient(httpClient: httpClient, cache: injectedJwksCache ?? FileJwksCache(directory: directory))
         let validator = JwksIdTokenValidator(
@@ -430,6 +425,12 @@ public final class OAuthClient: Sendable {
             // processed is repeated (`RefreshReplay`).
             repeatsAmbiguousRefresh: false
         )
+        resumeFlight.bind(
+            run: { try await coordinator.operation { try await coordinator.resumePendingLogin() } != nil },
+            // The typed error's own text, which carries no secret; for anything else only the
+            // type, since a parser's or a provider's message could.
+            log: { error in logger.warn("resuming the pending authorization failed: \(error is OAuthError ? String(describing: error) : String(describing: type(of: error)))") }
+        )
         let userInfo = HTTPUserInfoClient(
             userinfoEndpoint: { try await discovery.metadata().userinfoEndpoint },
             httpClient: httpClient,
@@ -440,7 +441,7 @@ public final class OAuthClient: Sendable {
                 jwks: jwks
             )
         )
-        return OAuthClient(configuration: configuration, flow: flow, coordinator: coordinator, userInfoClient: userInfo, proofs: proofs, dpopKey: dpopKey, browser: webBrowser, httpSession: configuration.urlSession)
+        return OAuthClient(configuration: configuration, flow: flow, coordinator: coordinator, userInfoClient: userInfo, proofs: proofs, dpopKey: dpopKey, browser: webBrowser, httpSession: configuration.urlSession, backgroundResume: resumeFlight)
     }
 
     /// Application Support, excluded from backup: the pending request and the refresh token
@@ -477,34 +478,88 @@ import UIKit
 import AppKit
 #endif
 
-/// Single flight for finishing a pending authorization, shared by the resume `create` starts and
-/// an explicit `resumePendingAuthorization()`: the first caller does the work, the others wait for
-/// it, carry its failure, and (when it had nothing to do) take their turn. Waiting honours
-/// cancellation.
-private actor BackgroundResume {
+/// Single flight for finishing a pending authorization, shared by the resume the SDK starts when
+/// a restore finds `authorizing` and an explicit `resumePendingAuthorization()`. The work runs in
+/// a task this actor owns, not in a caller's: a caller that is cancelled stops waiting and leaves
+/// it running, and `logout` and `forgetAll` can end it. Callers wait for it, carry its failure,
+/// and (when it had nothing to do) take their own turn. Waiting honours cancellation.
+private actor ResumeFlight {
     enum Outcome: Sendable {
-        /// A pending authorization was finished; a joined caller has nothing left to do.
+        /// A pending authorization was finished.
         case completed
-        /// Nothing was pending; a joined caller looks for itself.
+        /// Nothing was pending.
         case nothingToDo
+        /// Ended on purpose (logout, a forgotten client): there is nothing left to resume.
+        case ended
         case failed(any Error)
     }
 
-    private var running = false
-    private var waiters: [(id: UUID, continuation: CheckedContinuation<Outcome, any Error>)] = []
-
-    /// True: the caller leads and must call `finish`. False: a resume ran to completion while
-    /// the caller waited. Throws that resume's failure, or the caller's cancellation.
-    func enter() async throws -> Bool {
-        while running {
-            if case .completed = try await park() { return false }
-        }
-        running = true
-        return true
+    private struct Work: Sendable {
+        let run: @Sendable () async throws -> Bool
+        let log: @Sendable (any Error) -> Void
     }
 
-    func finish(_ outcome: Outcome) {
-        running = false
+    /// Bound once, right after the coordinator exists: the flow, which calls back into this
+    /// object, is built before the coordinator the work needs.
+    private let work = OSAllocatedUnfairLock<Work?>(initialState: nil)
+    private var task: Task<Void, Never>?
+    private var waiters: [(id: UUID, continuation: CheckedContinuation<Outcome, any Error>)] = []
+
+    nonisolated func bind(run: @escaping @Sendable () async throws -> Bool, log: @escaping @Sendable (any Error) -> Void) {
+        work.withLock { $0 = Work(run: run, log: log) }
+    }
+
+    /// The restore found `authorizing`. Starts the resume unless one is running; a failure is
+    /// only logged, as nobody is waiting on it.
+    func startIfIdle() {
+        guard task == nil, let work = work.withLock({ $0 }) else { return }
+        launch(work, logFailure: true)
+    }
+
+    /// An explicit call: waits for the running resume, or starts one. Returns when a resume
+    /// finished the sign-in or was ended; throws a resume's failure or the caller's cancellation.
+    func resume() async throws {
+        var started = false
+        while true {
+            if task == nil {
+                // Our own resume found nothing to do, or none can be started.
+                if started { return }
+                guard let work = work.withLock({ $0 }) else { return }
+                launch(work, logFailure: false)
+                started = true
+            }
+            switch try await park() {
+            case .completed, .ended: return
+            case .nothingToDo: continue
+            case .failed: return // park throws a failure; unreachable
+            }
+        }
+    }
+
+    /// Ends the running resume and waits until it has let go of the flow's gate.
+    func cancelInFlight() async {
+        guard let task else { return }
+        task.cancel()
+        await task.value
+    }
+
+    private func launch(_ work: Work, logFailure: Bool) {
+        task = Task {
+            let outcome: Outcome
+            do {
+                outcome = try await work.run() ? .completed : .nothingToDo
+            } catch is CancellationError {
+                outcome = .ended
+            } catch {
+                if logFailure { work.log(error) }
+                outcome = .failed(error)
+            }
+            self.finish(outcome)
+        }
+    }
+
+    private func finish(_ outcome: Outcome) {
+        task = nil
         let ending = waiters
         waiters = []
         for waiter in ending {
