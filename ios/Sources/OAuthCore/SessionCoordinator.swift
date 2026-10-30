@@ -96,11 +96,12 @@ package actor SessionCoordinator: AccessTokenSource {
         return try await OperationBudget.$current.withValue(budget) { try await body() }
     }
 
-    /// Starts `warmUp` without waiting for it, outside any budget (one attempt: it is a courtesy,
-    /// and must not spend the allowance the login itself needs).
-    private nonisolated func startWarmUp() {
+    /// Runs `warmUp` and waits for it, outside any budget: one request, no repeat, and whatever
+    /// it meets is not an error. It is a courtesy and must not spend the allowance the login
+    /// itself needs; what it fetches is fetched again, under the budget, if it failed.
+    private nonisolated func runWarmUp() async {
         guard let warmUp else { return }
-        Task { await OperationBudget.$current.withValue(nil) { await warmUp() } }
+        await OperationBudget.$current.withValue(nil) { await warmUp() }
     }
 
     // MARK: - Claims
@@ -180,11 +181,11 @@ package actor SessionCoordinator: AccessTokenSource {
             logger?.warn("the provider advertises offline_access and the configured scopes omit it; a refresh token may not be issued")
         }
         // Discovery under this operation's budget first (the warm-up below must not be the request
-        // that fetches it, because it runs outside any budget), then, while the user is in the
-        // browser, the provider's key set, so the redeemed code never waits on a request that
-        // could have been made earlier.
+        // that fetches it, because it runs outside any budget), then the provider's key set, before
+        // the browser opens (`spec/retry-policy.md`, "Order of work"), so that a code the provider
+        // redeems never waits on a request that could have been made earlier.
         _ = try await flow.metadata()
-        startWarmUp()
+        await runWarmUp()
         let grant = try await flow.authorize(scopes: requested, acrValues: acrValues, maxAge: maxAge, parameters: parameters, ephemeralBrowser: ephemeralBrowser)
         return try await finishLogin(grant, maxAge: maxAge)
     }

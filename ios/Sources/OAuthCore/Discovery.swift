@@ -54,11 +54,10 @@ package struct HTTPDiscoveryClient: DiscoveryClient {
             throw OAuthError.configuration(.invalidConfiguration(
                 detail: "no discovery document at \(location) (HTTP \(response.statusCode))"
             ))
-        // What is left (a 1xx or 3xx nothing classified) stays what it was: a failed read.
+        // What is left (a 1xx, an unfollowed 3xx) is an answer this client cannot use and a
+        // repeat cannot change: reported with its status, never repeated.
         default:
-            throw OAuthError.recoverable(.network(
-                detail: "discovery returned HTTP \(response.statusCode)", attempts: 1, elapsedMillis: 0
-            ))
+            throw ServerFailure.unexpected(response.statusCode)
         }
         do {
             return try JSONDecoder().decode(ProviderMetadata.self, from: response.body)

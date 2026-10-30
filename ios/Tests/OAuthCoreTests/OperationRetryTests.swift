@@ -85,6 +85,16 @@ final class OperationRetryTests: XCTestCase {
         }
     }
 
+    func testAStatusDiscoveryHasNoUseForIsServerAndNeverRepeated() async {
+        for status in [100, 302, 304] {
+            let http = http([answer(status)])
+            let error = await failure { try await self.within(self.operationBudget()) { try await self.discover(http) } }
+            let count = await http.requests.count
+            XCTAssertEqual(count, 1, "HTTP \(status)")
+            XCTAssertEqual(error, .recoverable(.server(status: status, retryAfterMillis: nil, attempts: 1, elapsedMillis: 0)))
+        }
+    }
+
     func testATransportFailureOfDiscoveryIsRepeatedAsNetwork() async {
         let http = RecordingHTTP { _ in throw TransportFailure() }
         let error = await failure { try await self.within(self.operationBudget()) { try await self.discover(http) } }
@@ -119,6 +129,17 @@ final class OperationRetryTests: XCTestCase {
             let count = await http.requests.count
             XCTAssertEqual(count, 1, "HTTP \(status)")
         }
+    }
+
+    func testAStatusTheKeySetHasNoUseForIsServerWithItsStatusAndNeverRepeated() async {
+        for status in [204, 401, 404] {
+            let http = http([answer(status)])
+            let error = await failure { try await self.within(self.operationBudget()) { try await JwksClient(httpClient: http).keys(uri: "https://id.example.com/jwks", forceRefresh: true) } }
+            let count = await http.requests.count
+            XCTAssertEqual(count, 1, "HTTP \(status)")
+            XCTAssertEqual(error, .recoverable(.server(status: status, retryAfterMillis: nil, attempts: 1, elapsedMillis: 0)))
+        }
+        XCTAssertEqual(world.delays, [])
     }
 
     func testTheKeySetRecoversOnTheRepeat() async throws {
