@@ -224,6 +224,22 @@ final class Scenario34To36ServerErrorsTest: ProviderConformance {
         XCTAssertEqual(network.matching("POST", tokenPath(metadata)).count, tokenRequests, "nor was a refresh spent on it")
     }
 
+    func test34AKeySetFetchThatFailsDuringIdTokenValidationAfterTheExchangeIsRepeatedAndTheLoginSucceeds() async throws {
+        // A cold key cache per test (`client()` builds a fresh `MemoryJwksCache`): the key set is
+        // fetched during validation, after the code was redeemed, which is the window that matters.
+        let client = try await client()
+        let jwksUri = try await client.metadata().jwksUri
+        let jwksPath = path(try XCTUnwrap(jwksUri))
+        let stamps = respondWith(jwksPath, status: 503, times: 2)
+
+        try await client.login()
+
+        XCTAssertEqual(stamps.all.count, 3, "two 503s were repeated, the third request was forwarded")
+        XCTAssertEqual(network.matching("GET", jwksPath).count, 3)
+        let state = await client.sessionState
+        XCTAssertEqual(state, .authenticated)
+    }
+
     // MARK: 35
 
     func test35A429WithRetryAfterTwoIsWaitedOutBeforeTheSecondRequest() async throws {
@@ -376,6 +392,46 @@ final class Scenario34To36ServerErrorsTest: ProviderConformance {
         XCTAssertEqual(refreshes(metadata).count, 2)
         let state = await client.sessionState
         XCTAssertEqual(state, .authenticated)
+    }
+
+    /// A cold start forgets the cooldown: the new client for the same configuration, with the grant the
+    /// old one stored, sends one request, and the server answers it as it likes.
+    func test36AfterAColdStartTheNewClientSendsOneRequestAndIsNotRefusedByTheOldCooldown() async throws {
+        withoutEndSession()
+        let credentials = InMemoryCredentialStore()
+        let first = try await client(credentials: credentials)
+        try await first.login()
+        let metadata = try await first.metadata()
+        respondWith(tokenPath(metadata), status: 429, headers: ["Retry-After": "30"])
+        let refused = await oauthError { try await first.refresh() }
+        XCTAssertEqual(serverCause(refused)?.retryAfterMillis, 30_000)
+        let before = refreshes(metadata).count
+
+        // The app is killed and started again: same configuration, same stored grant, new process.
+        await OAuthClient.forgetAll()
+        let second = try await client(credentials: credentials)
+        let error = await oauthError { try await second.refresh() }
+
+        let cause = serverCause(error)
+        XCTAssertEqual(cause?.status, 429)
+        XCTAssertEqual(cause?.attempts, 1, "a request was sent: nothing carried the cooldown across the restart")
+        XCTAssertEqual(refreshes(metadata).count - before, 1)
+    }
+
+    /// The application's own requests are not the SDK's to hold back: the cooldown covers what the SDK
+    /// sends to the provider, never a request through the authenticated session.
+    func test36ARequestThroughTheAuthenticatedSessionIsNotBlockedWhileTheCooldownRuns() async throws {
+        let (client, metadata) = try await signedIn()
+        let session = try client.authenticatedSession()
+        respondWith(tokenPath(metadata), status: 429, headers: ["Retry-After": "30"])
+        let refused = await oauthError { try await client.refresh() }
+        XCTAssertEqual(serverCause(refused)?.retryAfterMillis, 30_000)
+
+        let (_, response) = try await session.data(for: URLRequest(url: URL(string: ResourceServer.origin + "/api")!))
+
+        XCTAssertEqual(response.statusCode, 200, "the live token is attached and the call goes through")
+        let sent = network.transcript.filter { $0.url.hasPrefix(ResourceServer.origin) }
+        XCTAssertEqual(sent.count, 1)
     }
 
     func test36ExhaustingTheBudgetOn503WithoutARetryAfterStartsNoCooldown() async throws {
