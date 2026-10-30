@@ -179,18 +179,36 @@ public class OAuthClient private constructor(
      * already settled the state, so it is logged and not rethrown into a scope nobody awaits.
      */
     private fun resumeInBackground(scope: CoroutineScope) {
+        // The restore finding `Authorizing` is the cue, whenever it happens: at once, or on a
+        // later read after a restore that failed because the store was out of reach (a locked
+        // key). Nothing but the restore starts a resume, so a `login()` of this process is
+        // never mistaken for a sign-in to finish.
+        flow.onRestoredAuthorizing = {
+            scope.launch {
+                try {
+                    coordinator.resumePendingLogin()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    warnResumeFailed(e)
+                }
+            }
+        }
         scope.launch {
             try {
-                if (flow.sessionState.first() != SessionState.Authorizing) return@launch
-                coordinator.resumePendingLogin()
+                flow.sessionState.first()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                // The class name, and the typed error's own text, which carries no secret; an
-                // exception message from a parser or a provider could.
-                configuration.logger.warn("resuming the pending authorization failed: ${if (e is VersolaError) e.toString() else e.javaClass.simpleName}")
+                warnResumeFailed(e)
             }
         }
+    }
+
+    // The class name, and the typed error's own text, which carries no secret; an exception
+    // message from a parser or a provider could.
+    private fun warnResumeFailed(e: Throwable) {
+        configuration.logger.warn("resuming the pending authorization failed: ${if (e is VersolaError) e.toString() else e.javaClass.simpleName}")
     }
 
     /**

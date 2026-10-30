@@ -133,6 +133,14 @@ waits for can no longer be spent. The request is discarded and the SDK restores
 `Authenticated`. Asked without the storage key (`hasGrant`), so a cold start does not become an
 unlock prompt under `OnAppUnlock`.
 
+A pending request that cannot be read yet (Android: the storage key is locked, or the Keystore
+failed transiently) has not said there is nothing in it. With no grant to decide the state the
+restore publishes `Locked`, never `Unauthenticated`; the operation that asked fails with the
+`Recoverable` storage error; the slot is not discarded; and the restore is **not** remembered, so
+the next read tries again. A collector of the state is not handed the error. When a later read
+finds the request, the cold-start resume is started then, not only at creation. With a grant the
+unreadable request is only residue and the state does not depend on it.
+
 The cost is a re-authorization started over a live session — a step-up, an account switch — and
 then killed mid-browser: it resolves in favour of the session that already exists rather than
 resuming. Nothing is lost that the next 401 does not ask for again, and the two cases are

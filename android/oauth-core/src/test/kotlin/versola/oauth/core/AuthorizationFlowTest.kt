@@ -302,35 +302,77 @@ class AuthorizationFlowTest {
         assertSame(SessionState.Authorizing, first)
     }
 
+    private fun restoredRequest() = PendingAuthorizationRequest(
+        state = "restored-state",
+        nonce = "restored-nonce",
+        codeVerifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+        scopes = listOf("openid"),
+        redirectUri = "https://app.example.com/oauth",
+        acrValues = emptyList(),
+        maxAge = null,
+        createdAtEpochMillis = 0,
+    )
+
     @Test
-    fun `a pending slot that is out of reach on a cold start neither crashes the state nor is discarded`() = runTest {
-        val restored = PendingAuthorizationRequest(
-            state = "restored-state",
-            nonce = "restored-nonce",
-            codeVerifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
-            scopes = listOf("openid"),
-            redirectUri = "https://app.example.com/oauth",
-            acrValues = emptyList(),
-            maxAge = null,
-            createdAtEpochMillis = 0,
-        )
-        val store = RecordingStore(restored)
+    fun `a pending slot out of reach with no grant is Locked, not Unauthenticated, and is read again`() = runTest {
+        val store = RecordingStore(restoredRequest())
         store.loadFailure = VersolaError.Recoverable(VersolaError.Recoverable.Cause.UnlockRequired)
-        val browser = FakeBrowser(
-            { BrowserOutcome.Redirect("https://app.example.com/oauth?code=c&state=restored-state&iss=$ISSUER") },
-            store,
-        )
+        val browser = FakeBrowser({ BrowserOutcome.UserCancelled }, store)
         val flow = flow(store, browser, now = 1_000)
+        var resumeCues = 0
+        flow.onRestoredAuthorizing = { resumeCues++ }
 
         // The state collector is not handed the storage failure, and nothing is deleted on its
         // account: the slot is a login the user may be in the middle of.
-        assertSame(SessionState.Unauthenticated, flow.sessionState.first())
+        assertSame(SessionState.Locked, flow.sessionState.first())
         assertEquals(0, store.clears)
-        assertEquals(restored, store.stored)
+        assertEquals(0, resumeCues)
 
-        // Once the slot can be read again it still resumes.
+        // An operation fails with it, rather than starting a login over the unread slot.
+        val refused = failure { flow.authorize(setOf("openid")) } as VersolaError.Recoverable
+        assertSame(VersolaError.Recoverable.Cause.UnlockRequired, refused.reason)
+        assertEquals(0, store.saves)
+
+        // Nothing was remembered: once the slot reads, the state is the restored one, and the
+        // resume is cued exactly then.
         store.loadFailure = null
-        assertEquals("c", flow.resumePendingAuthorization()!!.code)
+        assertSame(SessionState.Authorizing, flow.sessionState.first())
+        assertEquals(1, resumeCues)
+        flow.sessionState.first()
+        assertEquals("the cue is given once", 1, resumeCues)
+    }
+
+    @Test
+    fun `a stored grant decides the state even when the pending slot cannot be read`() = runTest {
+        val store = RecordingStore(restoredRequest())
+        store.loadFailure = VersolaError.Recoverable(VersolaError.Recoverable.Cause.UnlockRequired)
+        val flow = flow(store, FakeBrowser({ BrowserOutcome.UserCancelled }, store), now = 1_000, hasStoredGrant = { true })
+
+        assertSame(SessionState.Authenticated, flow.sessionState.first())
+        assertEquals("the unreadable slot is residue and is left", 0, store.clears)
+    }
+
+    @Test
+    fun `the grant is read before the pending slot`() = runTest {
+        val order = mutableListOf<String>()
+        val store = object : PendingAuthorizationStore {
+            override suspend fun save(request: PendingAuthorizationRequest) = Unit
+            override suspend fun load(): PendingAuthorizationRequest? = null.also { order += "pending" }
+            override suspend fun clear() = Unit
+        }
+        val flow = AuthorizationFlow(
+            configuration = configuration,
+            discovery = DiscoveryService(ISSUER, StaticDiscovery(metadata), MemoryMetadataCache()),
+            pendingStore = store,
+            browser = FakeBrowser({ BrowserOutcome.UserCancelled }, RecordingStore()),
+            tokenBinding = TokenBinding.Bearer,
+            clock = { 0 },
+            hasStoredGrant = { order += "grant"; false },
+        )
+
+        flow.sessionState.first()
+
+        assertEquals(listOf("grant", "pending"), order)
     }
 
     @Test
