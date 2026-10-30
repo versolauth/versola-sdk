@@ -125,12 +125,11 @@ final class JwksTests: XCTestCase {
             let stub = JoseStubHTTP()
             await stub.enqueue("/jwks.json", status: status, body: JoseTestTokens.jwks(rsa))
             let error = await joseThrown { _ = try await JwksClient(httpClient: stub).keys(uri: uri, forceRefresh: false) }
-            // A 503 is the provider being busy (`server`); the rest were never classified and stay
-            // a failure to read the keys (`network`). Neither is a key.
-            switch error as? OAuthError {
-            case .recoverable(.server(let seen, _, _, _))? where status == 503: XCTAssertEqual(seen, 503)
-            case .recoverable(.network)? where status != 503: break
-            default: XCTFail("status \(status): \(String(describing: error))")
+            // Every one is `server` with its status: a 503 because the provider is busy, the rest
+            // because the key set has no use for them (`spec/retry-policy.md`, "unexpected").
+            // Never a key, and never a transport failure.
+            guard case .recoverable(.server(let seen, nil, 1, _))? = error as? OAuthError, seen == status else {
+                return XCTFail("status \(status): \(String(describing: error))")
             }
         }
     }

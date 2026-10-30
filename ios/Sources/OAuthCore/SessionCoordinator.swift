@@ -24,11 +24,6 @@ package actor SessionCoordinator: AccessTokenSource {
     /// What the servers asked for, per origin (`spec/retry-policy.md`, "Cooldown"): shared by
     /// every operation of this client, so one that ended on a `Retry-After` quiets the next.
     private let cooldown: RetryCooldown
-    /// Fetches what a login will need once the code is redeemed (the provider's key set), best
-    /// effort, so that a provider that goes down while the user is in the browser cannot cost
-    /// them a login the provider already completed. Failure is not an error: the validation
-    /// fetches again, under the budget.
-    private let warmUp: (@Sendable () async -> Void)?
 
     private struct Cached: Sendable {
         let response: TokenResponse
@@ -62,8 +57,7 @@ package actor SessionCoordinator: AccessTokenSource {
         onCredentialsWiped: @escaping @Sendable () async throws -> Void = {},
         logger: OAuthLogger? = nil,
         refreshTokens: RefreshTokenPolicy = .required,
-        idTokenValidator: IdTokenValidator? = nil,
-        warmUp: (@Sendable () async -> Void)? = nil
+        idTokenValidator: IdTokenValidator? = nil
     ) {
         self.flow = flow
         self.tokenClient = tokenClient
@@ -75,7 +69,6 @@ package actor SessionCoordinator: AccessTokenSource {
         self.refreshTokens = refreshTokens
         self.idTokenValidator = idTokenValidator
         self.cooldown = RetryCooldown(clock: clock)
-        self.warmUp = warmUp
     }
 
     // MARK: - Operations
@@ -94,13 +87,6 @@ package actor SessionCoordinator: AccessTokenSource {
     package nonisolated func newOperation<T: Sendable>(_ body: @Sendable () async throws -> T) async rethrows -> T {
         let budget = retryPolicy.newBudget(clock: clock, cooldown: cooldown)
         return try await OperationBudget.$current.withValue(budget) { try await body() }
-    }
-
-    /// Starts `warmUp` without waiting for it, outside any budget (one attempt: it is a courtesy,
-    /// and must not spend the allowance the login itself needs).
-    private nonisolated func startWarmUp() {
-        guard let warmUp else { return }
-        Task { await OperationBudget.$current.withValue(nil) { await warmUp() } }
     }
 
     // MARK: - Claims
@@ -179,12 +165,6 @@ package actor SessionCoordinator: AccessTokenSource {
             warnedOfflineAccess = true
             logger?.warn("the provider advertises offline_access and the configured scopes omit it; a refresh token may not be issued")
         }
-        // Discovery under this operation's budget first (the warm-up below must not be the request
-        // that fetches it, because it runs outside any budget), then, while the user is in the
-        // browser, the provider's key set, so the redeemed code never waits on a request that
-        // could have been made earlier.
-        _ = try await flow.metadata()
-        startWarmUp()
         let grant = try await flow.authorize(scopes: requested, acrValues: acrValues, maxAge: maxAge, parameters: parameters, ephemeralBrowser: ephemeralBrowser)
         return try await finishLogin(grant, maxAge: maxAge)
     }
@@ -213,12 +193,8 @@ package actor SessionCoordinator: AccessTokenSource {
                 // Its own budget, not the one the login began with: the user's time in the browser
                 // is not the SDK's to be charged for. The exchange itself is made once (a repeat
                 // would replay a spent code); what can be repeated is the key set the validation
-                // reads, and that was asked for before the browser opened.
+                // reads, under this budget.
                 let (issued, validated): (TokenResponse, IdTokenClaims?) = try await self.newOperation {
-                    if let warmUp = self.warmUp {
-                        _ = try await flow.metadata()
-                        await OperationBudget.$current.withValue(nil) { await warmUp() }
-                    }
                     let issued = try await tokenClient.exchange(grant)
                     // Validated before anything is persisted (`spec/oauth-sdk-api.md` section 11).
                     var validated: IdTokenClaims?

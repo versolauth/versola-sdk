@@ -122,8 +122,8 @@ final class SessionCoordinatorTests: XCTestCase {
         TokenResponse(accessToken: "at-\(refresh ?? "none")-\(UUID().uuidString.prefix(4))", tokenType: "Bearer", expiresIn: expiresIn, refreshToken: refresh, idToken: idToken(subject: subject), scope: "openid")
     }
 
-    private func fixture(answers: [Result<TokenResponse, OAuthError>], policy: RefreshTokenPolicy = .optional, store: MemoryCredentials = MemoryCredentials(), retry: RetryPolicy? = nil, pending: PendingAuthorizationRequest? = nil, browser: ScriptedBrowser = ScriptedBrowser.answering()) throws -> Fixture {
-        let clock = TickingClock(Date(timeIntervalSince1970: 1_700_000_000))
+    private func fixture(answers: [Result<TokenResponse, OAuthError>], policy: RefreshTokenPolicy = .optional, store: MemoryCredentials = MemoryCredentials(), retry: RetryPolicy? = nil, pending: PendingAuthorizationRequest? = nil, browser: ScriptedBrowser = ScriptedBrowser.answering(), clock injectedClock: TickingClock? = nil, validatorOverride: IdTokenValidator? = nil) throws -> Fixture {
+        let clock = injectedClock ?? TickingClock(Date(timeIntervalSince1970: 1_700_000_000))
         let configuration = CoreConfiguration(issuer: Self.issuer, clientId: "mobile", redirectUri: URL(string: Self.redirect)!, postLogoutRedirectUri: URL(string: "https://app.example.com/signed-out"))
         let discovery = DiscoveryService(issuer: Self.issuer, client: StaticDiscoveryClient(metadata: AuthzKit.metadata()), cache: MemoryMetadataCache())
         let pendingStore = MemoryPendingStore(pending)
@@ -138,7 +138,7 @@ final class SessionCoordinatorTests: XCTestCase {
         let coordinator = SessionCoordinator(
             flow: flow, tokenClient: tokens, credentialStore: store,
             retryPolicy: try retry ?? RetryPolicy(maxAttemptsPerOrigin: 2, maxTotalAttempts: 2, initialBackoff: 0, backoffMultiplier: 1, maxBackoff: 0, totalBudget: 10),
-            clock: Clock(now: { clock.peek() }), logger: logger, refreshTokens: policy, idTokenValidator: validator
+            clock: Clock(now: { clock.peek() }), logger: logger, refreshTokens: policy, idTokenValidator: validatorOverride ?? validator
         )
         return Fixture(coordinator: coordinator, flow: flow, store: store, tokens: tokens, validator: validator, logger: logger, clock: clock, pendingStore: pendingStore)
     }
@@ -674,5 +674,66 @@ final class SessionCoordinatorTests: XCTestCase {
         }
         XCTAssertTrue(fresh, "the part of a login after the browser has a budget of its own")
         XCTAssertNil(OperationBudget.current, "and nothing leaks out of the operation")
+    }
+
+    /// A validator that, like the real one reading the key set, makes a repeatable request under
+    /// the operation's budget: it fails `failures` times with a 500, then validates.
+    private struct KeySetValidator: IdTokenValidator {
+        let requests: Box<Int>
+        let failures: Int
+        func validate(idToken: String, expectedNonce: String?, accessToken: String?, maxAge: Int?, previous: IdTokenClaims?, serverTime: Date?) async throws -> IdTokenClaims {
+            let requests = self.requests
+            let failures = self.failures
+            try await OperationBudget.run(origin: "https://id.example.com") {
+                let n = await requests.value + 1
+                await requests.set(n)
+                if n <= failures { throw OAuthError.recoverable(.server(status: 500, retryAfterMillis: nil, attempts: 1, elapsedMillis: 0)) }
+            }
+            return try IdTokenClaimsParser.parseStored(idToken)
+        }
+    }
+
+    /// The time the user spends in the browser is not the SDK's (`spec/retry-policy.md`, "Order of
+    /// work"): five minutes on the sign-in page, then a failing request the budget repeats, still
+    /// gets its whole allowance and its time.
+    func testAFiveMinuteBrowserLegDoesNotSpendTheBudgetOfTheRequestsAfterIt() async throws {
+        let clock = TickingClock(Date(timeIntervalSince1970: 1_700_000_000))
+        let browser = ScriptedBrowser { uri, _ in
+            clock.advance(300)
+            return .redirect(AuthzKit.redirect(answering: uri))
+        }
+        let requests = Box(0)
+        let f = try fixture(answers: [.success(response())], browser: browser, clock: clock, validatorOverride: KeySetValidator(requests: requests, failures: 1))
+        let opened = clock.peek()
+
+        try await f.coordinator.operation { try await f.coordinator.login(scopes: ["openid"]) }
+
+        XCTAssertGreaterThanOrEqual(clock.peek().timeIntervalSince(opened), 300, "the browser leg really took five minutes")
+        let made = await requests.value
+        XCTAssertEqual(made, 2, "the failed request was repeated once the user was back")
+        let state = await f.flow.states.current
+        XCTAssertEqual(state, .authenticated)
+    }
+
+    func testAfterAFiveMinuteBrowserLegAFailingRequestStillGetsTheWholeAllowance() async throws {
+        let clock = TickingClock(Date(timeIntervalSince1970: 1_700_000_000))
+        let browser = ScriptedBrowser { uri, _ in
+            clock.advance(300)
+            return .redirect(AuthzKit.redirect(answering: uri))
+        }
+        let requests = Box(0)
+        let f = try fixture(answers: [.success(response())], browser: browser, clock: clock, validatorOverride: KeySetValidator(requests: requests, failures: 100))
+
+        do {
+            try await f.coordinator.operation { try await f.coordinator.login(scopes: ["openid"]) }
+            XCTFail("no error")
+        } catch let error as OAuthError {
+            // The fixture's policy allows two attempts per origin: both are made, none is lost to the browser.
+            guard case .recoverable(.server(500, nil, 2, _)) = error else { return XCTFail("\(error)") }
+        }
+        let made = await requests.value
+        XCTAssertEqual(made, 2)
+        let state = await f.flow.states.current
+        XCTAssertEqual(state, .unauthenticated)
     }
 }

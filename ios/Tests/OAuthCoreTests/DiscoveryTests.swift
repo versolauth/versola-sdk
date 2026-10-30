@@ -142,6 +142,15 @@ final class DiscoveryTests: XCTestCase {
         }
     }
 
+    func testAStatusDiscoveryHasNoUseForIsServerWithItsStatus() async {
+        for status in [100, 302, 304] {
+            let http = RecordingHTTP.json(status, "")
+            await assertThrows(.recoverable(.server(status: status, retryAfterMillis: nil, attempts: 1, elapsedMillis: 0))) {
+                try await self.service(http).metadata()
+            }
+        }
+    }
+
     func testAFailedFetchIsNotRememberedSoTheNextCallRetries() async throws {
         let calls = Box(0)
         let body = document

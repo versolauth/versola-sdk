@@ -31,6 +31,14 @@ package enum ServerFailure {
         ))
     }
 
+    /// `recoverable(.server)` for a status the operation has no use for and has no more precise
+    /// error for (a 404 on the key set, a 3xx or 1xx on discovery): reported with its status and
+    /// never repeated, because `repeatable` only admits the transient statuses. It was a `network`
+    /// failure before, which a budget would have repeated as a transport failure.
+    package static func unexpected(_ status: Int) -> OAuthError {
+        .recoverable(.server(status: status, retryAfterMillis: nil, attempts: 1, elapsedMillis: 0))
+    }
+
     /// The failure a retry budget may repeat: a transport failure, or a transient `server`
     /// answer, with the delay the server asked for.
     package struct Repeatable {
