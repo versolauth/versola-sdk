@@ -54,10 +54,6 @@ and the conformance container images (`.github/dependabot.yml`). Gradle resolves
 against a recorded checksum (`android/gradle/verification-metadata.xml`), every action is pinned to a
 commit SHA, and the Gradle dependency graph is submitted to GitHub from `security.yml`.
 
-Who can push to `main`, create a release tag or read the release secrets is a repository setting,
-not a file: `docs/repository-settings.md` says what it should be and how to set it. It is a
-runbook for the owner and describes settings that are not applied by merging it.
-
 Scanning runs in `.github/workflows/security.yml` on pull requests, pushes to `main`, weekly
 and on demand. TruffleHog checks verified secrets in PR/push commit ranges. Trivy scans the
 working tree for secrets and known high/critical vulnerabilities with available fixes, and
