@@ -72,6 +72,7 @@ package struct HTTPUserInfoClient: UserInfoClient {
         guard let endpoint = try await userinfoEndpoint() else {
             throw OAuthError.configuration(.providerUnsupported(capability: "userinfo"))
         }
+        try ProviderMetadata.requireSecure("userinfo_endpoint", endpoint)
         guard let url = URL(string: endpoint), url.scheme != nil, url.host != nil else {
             throw OAuthError.configuration(.invalidConfiguration(detail: "userinfo_endpoint is not an absolute URL"))
         }

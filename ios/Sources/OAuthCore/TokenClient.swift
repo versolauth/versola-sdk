@@ -103,7 +103,9 @@ package struct HTTPTokenClient: TokenClient {
     /// resource access, not revocation). RFC 7009 §2.2 answers 200 for an unknown token too,
     /// so a 2xx says only that the server took the request.
     package func revoke(refreshToken: String) async throws {
-        guard let endpoint = try await metadata().revocationEndpoint, !endpoint.isEmpty, let url = URL(string: endpoint) else { return }
+        guard let endpoint = try await metadata().revocationEndpoint, !endpoint.isEmpty else { return }
+        try ProviderMetadata.requireSecure("revocation_endpoint", endpoint)
+        guard let url = URL(string: endpoint) else { return }
         let body = FormEncoding.body([
             ("token_type_hint", "refresh_token"),
             ("token", refreshToken),

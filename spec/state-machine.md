@@ -148,7 +148,7 @@ A store that cannot be read yet (the device was never unlocked since boot; iOS a
 `Locked`, never `Unauthenticated`, fails the operation that asked with
 `Recoverable(UnlockRequired)`, and is **not** remembered: the next call, once the app has asked
 the user to unlock, reads again. The grant is read before the pending request for this reason
-too: an unreadable pending slot must not decide what a returning user sees.
+too: an unreadable pending slot must not decide what a returning user sees. With a grant the restore also **clears the pending slot on every cold start**, unread (it is residue, above); a slot that cannot be cleared yet fails the restore the same way and is retried.
 
 The cost is a re-authorization started over a live session — a step-up, an account switch — and
 then killed mid-browser: it resolves in favour of the session that already exists rather than

@@ -411,6 +411,7 @@ package actor AuthorizationFlow {
             guard let endpoint = try await discovery.metadata().endSessionEndpoint, !endpoint.isEmpty else {
                 return false
             }
+            try ProviderMetadata.requireSecure("end_session_endpoint", endpoint)
             let postLogoutRedirectUri = configuration.postLogoutRedirectUri
             // `state` goes whether or not a redirect URI does: it costs nothing and is what lets
             // the redirect be told apart from a stale one.

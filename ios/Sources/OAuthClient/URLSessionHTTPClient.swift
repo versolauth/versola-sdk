@@ -93,12 +93,17 @@ package struct URLSessionHTTPClient: HTTPClient {
                 // Refused on the declared length before a byte of the body is read, and again on
                 // what arrives: a server may lie about, or omit, the length.
                 if response.expectedContentLength > Int64(limit) { throw Self.tooLarge(limit) }
-                var data = Data()
+                // `AsyncBytes` has no chunked read, so the cost per byte is kept to an append to a
+                // pre-sized array and a comparison; one `Data` is made at the end. A document
+                // is a few KiB in practice; the limit bounds the worst case, not the usual one.
+                var buffer = [UInt8]()
+                let declared = response.expectedContentLength
+                buffer.reserveCapacity(declared > 0 ? min(Int(declared), limit) : 4096)
                 for try await byte in bytes {
-                    data.append(byte)
-                    if data.count > limit { throw Self.tooLarge(limit) }
+                    buffer.append(byte)
+                    if buffer.count > limit { throw Self.tooLarge(limit) }
                 }
-                return (data, response)
+                return (Data(buffer), response)
             }
             group.addTask {
                 try await Task.sleep(for: .seconds(deadline))

@@ -104,21 +104,23 @@ public struct ProviderMetadata: Sendable, Equatable, Codable {
         }
         if authorizationEndpoint.isEmpty { throw OAuthError.configuration(.discoveryFieldMissing(field: "authorization_endpoint")) }
         if tokenEndpoint.isEmpty { throw OAuthError.configuration(.discoveryFieldMissing(field: "token_endpoint")) }
-        // Every endpoint the SDK would send something to or read keys from. A document served over
-        // https can still name `http://` for the token endpoint, and the refresh token would then
-        // be POSTed in the clear: refused here, where the document is read. Other origins are
-        // allowed (a CDN for `jwks_uri`, another host for sign-out); the rule is the scheme.
-        let endpoints: [(String, String?)] = [
-            ("authorization_endpoint", authorizationEndpoint), ("token_endpoint", tokenEndpoint),
-            ("userinfo_endpoint", userinfoEndpoint), ("revocation_endpoint", revocationEndpoint),
-            ("end_session_endpoint", endSessionEndpoint), ("jwks_uri", jwksUri),
-            ("pushed_authorization_request_endpoint", pushedAuthorizationRequestEndpoint),
-        ]
-        for (name, value) in endpoints {
-            guard let value, !value.isEmpty else { continue }
-            if !Self.isSecureEndpoint(value) {
-                throw OAuthError.configuration(.discoveryMalformed(detail: "\(name) must be an absolute https URL (http only on loopback)"))
-            }
+        // The endpoints every session needs, refused where the document is read: a document served
+        // over https can still name `http://` for the token endpoint, and the refresh token would
+        // then be POSTed in the clear. The rest (UserInfo, revocation, sign-out, PAR) are checked
+        // where they are used (`requireSecure`), so one an app never calls does not make the whole
+        // provider unusable. Other origins are allowed (a CDN for `jwks_uri`, another host for
+        // sign-out); the rule is the scheme.
+        try Self.requireSecure("authorization_endpoint", authorizationEndpoint)
+        try Self.requireSecure("token_endpoint", tokenEndpoint)
+        if let jwksUri, !jwksUri.isEmpty { try Self.requireSecure("jwks_uri", jwksUri) }
+    }
+
+    /// Refuses an endpoint that is not an absolute `https` URL with a host (`http` on loopback
+    /// only): `Configuration(DiscoveryMalformed)` naming the member. Called where an optional
+    /// endpoint is about to be used, and by `validate` for the required ones.
+    package static func requireSecure(_ name: String, _ endpoint: String) throws {
+        if !isSecureEndpoint(endpoint) {
+            throw OAuthError.configuration(.discoveryMalformed(detail: "\(name) must be an absolute https URL (http only on loopback)"))
         }
     }
 
