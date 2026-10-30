@@ -68,6 +68,35 @@
       "optionalClientScopes": [
         "offline_access"
       ]
+    },
+    {
+      "clientId": "conformance-device",
+      "name": "Versola SDK device tier (public client, PKCE S256; the browser leg on an emulator and a simulator)",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect",
+      "standardFlowEnabled": true,
+      "implicitFlowEnabled": false,
+      "directAccessGrantsEnabled": false,
+      "serviceAccountsEnabled": false,
+      "redirectUris": [
+        "com.example.versola.devicetier://app/oauth"
+      ],
+      "webOrigins": [],
+      "attributes": {
+        "pkce.code.challenge.method": "S256",
+        "post.logout.redirect.uris": "com.example.versola.devicetier://app/signed-out",
+        "require.pushed.authorization.requests": "false"
+      },
+      "defaultClientScopes": [
+        "profile",
+        "email",
+        "basic",
+        "roles"
+      ],
+      "optionalClientScopes": [
+        "offline_access"
+      ]
     }
   ],
   "users": [
