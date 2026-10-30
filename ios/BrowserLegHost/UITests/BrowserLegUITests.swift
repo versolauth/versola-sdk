@@ -14,7 +14,7 @@ import XCTest
 /// does not control.
 ///
 /// Scenario ids: 01 (the browser half of the happy path), 12 (a redirect delivered to a
-/// terminated app), 15 (state mismatch) and 18 (logout); the cancel table of
+/// terminated app), 15 (a redirect that is not the awaited response) and 18 (logout); the cancel table of
 /// `spec/state-machine.md`.
 @MainActor
 final class BrowserLegUITests: XCTestCase {
@@ -109,7 +109,10 @@ final class BrowserLegUITests: XCTestCase {
         XCTAssertTrue(done.contains("state: authenticated"), done)
     }
 
-    func testARedirectOpenedByTheSystemAgainstATerminatedAppReachesTheRestoredRequestAndIsRefusedWithAWrongState() async throws {
+    /// Scenario 15: the redirect URI is public, so any other app (or a stale link) can have the
+    /// system open it. Delivered to the app the sign-in is pending in, a redirect with a state the
+    /// request never sent is not its response: ignored, and the pending request survives.
+    func testARedirectOpenedByTheSystemAgainstATerminatedAppIsIgnoredWithAWrongStateAndTheRequestSurvives() async throws {
         app.buttons["login"].tap()
         _ = try await awaitLoginForm()
 
@@ -125,13 +128,26 @@ final class BrowserLegUITests: XCTestCase {
         if open.waitForExistence(timeout: 5) { open.tap() }
 
         XCTAssertTrue(app.wait(for: .runningForeground, timeout: 20), "the redirect cold-started the app")
-        let log = try await awaitLog("resume: failed")
-        let restarted = log.components(separatedBy: "process: started").last!
-        XCTAssertTrue(restarted.contains("state: authorizing"), "the pending request survived: the app observes authorizing\n\(restarted)")
+        let log = try await awaitLog("redirect: taken by the SDK")
+        // Nothing may follow: no failure, no completion, no wipe. The resume had the redirect and
+        // went on waiting; a failure would have been logged as `resume: failed` at once.
+        try await Task.sleep(for: .seconds(3))
+        let after = app.staticTexts["status"].label
+        let restarted = after.components(separatedBy: "process: started").last!
+        XCTAssertTrue(log.contains("state: authorizing"), "the pending request survived: the app observes authorizing\n\(log)")
         let first = restarted.split(separator: "\n").first { $0.hasPrefix("state: ") }
         XCTAssertEqual(first, "state: authorizing", "never unauthenticated on cold start\n\(restarted)")
-        XCTAssertTrue(restarted.contains("redirect: taken by the SDK"), restarted)
-        XCTAssertTrue(restarted.contains("resume: failed Configuration(stateMismatch)"), "refused as a state mismatch\n\(restarted)")
+        XCTAssertFalse(restarted.contains("resume: failed"), "a redirect that is not the response does not fail the login\n\(restarted)")
+        XCTAssertFalse(restarted.contains("state: unauthenticated"), "and does not wipe the request\n\(restarted)")
+        XCTAssertFalse(restarted.contains("state: authenticated"), "no sign-in happened\n\(restarted)")
+
+        // Still pending for a later process: the request was not discarded on the way.
+        app.terminate()
+        app.launchArguments = []
+        app.launch()
+        let relaunched = try await awaitLog("state: ")
+        let later = relaunched.components(separatedBy: "process: started").last!
+        XCTAssertTrue(later.contains("state: authorizing"), "the request is still there for the next start\n\(later)")
     }
 
     // MARK: Driving the system
