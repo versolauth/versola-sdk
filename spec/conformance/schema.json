@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://versola.kz/schemas/mobile-sdk/conformance-scenario.json",
+  "$id": "https://versola.io/schemas/mobile-sdk/conformance-scenario.json",
   "title": "Versola mobile SDK conformance scenario",
   "type": "object",
   "additionalProperties": false,

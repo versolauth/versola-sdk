@@ -5,7 +5,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-private const val ISSUER = "https://id.versola.kz"
+private const val ISSUER = "https://id.versola.io"
 
 private fun pending(state: String = "the-state") = PendingAuthorizationRequest(
     state = state,

@@ -6,11 +6,11 @@ without the integrator having to learn OAuth.
 ```kotlin
 val versola = Versola.configure(
     context,
-    issuer      = "https://id.versola.kz",
+    issuer      = "https://id.versola.io",
     clientId    = "mobile-app",
     redirectUri = "https://app.example.com/oauth",
     // Separate configuration: edge's address is not in the OAuth metadata.
-    edgeBaseUrl = "https://versola.kz",
+    edgeBaseUrl = "https://versola.io",
 )
 
 versola.login(scopes = setOf("openid", "profile"))
@@ -29,10 +29,10 @@ native endpoints instead, with the same API and the same key-bound tokens:
 ```kotlin
 val versola = Versola.configure(
     context,
-    issuer      = "https://id.versola.kz",
+    issuer      = "https://id.versola.io",
     clientId    = "mobile-app",
     redirectUri = "https://app.example.com/oauth",   // an https App Link is required here
-    edgeBaseUrl = "https://versola.kz",
+    edgeBaseUrl = "https://versola.io",
     backChannel = BackChannel.Edge,
 )
 ```

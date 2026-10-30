@@ -119,7 +119,7 @@ From `versola.oauth.userinfo.model.UserInfoError`.
 | `InvalidDpopProof` | handled internally, then `Reauthenticate` | Same one-retry rule as the token endpoint; nothing reaches the app until the retry also fails. Also covers the RFC 9449 §7.2 downgrade refusal: a `Bearer`-scheme request carrying a key-bound token. |
 | `UseDpopNonce` | handled internally | Retry once against the **userinfo origin's** nonce cache. |
 
-## Edge — `versola.kz`
+## Edge — `versola.io`
 
 From `EdgeService`'s failure outcomes. Note the `WWW-Authenticate` scheme differs by cause;
 **parse the `error` value, not the scheme**.

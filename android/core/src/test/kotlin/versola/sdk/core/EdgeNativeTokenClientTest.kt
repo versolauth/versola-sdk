@@ -51,7 +51,7 @@ private class MemoryEndpoints(var stored: NativeEndpoints? = null) : NativeEndpo
     }
 }
 
-private const val AUTH_MTLS = "https://id.versola.kz:9008"
+private const val AUTH_MTLS = "https://id.versola.io:9008"
 
 class EdgeNativeTokenClientTest {
 
@@ -81,20 +81,20 @@ class EdgeNativeTokenClientTest {
         binding: TokenBinding.Dpop = TokenBinding.Dpop(),
     ): EdgeNativeTokenClient {
         val metadata = ProviderMetadata(
-            issuer = "https://id.versola.kz",
-            authorizationEndpoint = "https://id.versola.kz/authorize",
-            tokenEndpoint = "https://id.versola.kz/token",
-            revocationEndpoint = "https://id.versola.kz/revoke",
+            issuer = "https://id.versola.io",
+            authorizationEndpoint = "https://id.versola.io/authorize",
+            tokenEndpoint = "https://id.versola.io/token",
+            revocationEndpoint = "https://id.versola.io/revoke",
             dpopSigningAlgValuesSupported = listOf("ES256"),
             mtlsEndpointAliases = aliases,
         )
         return EdgeNativeTokenClient(
-            configuration = VersolaConfiguration.create("https://id.versola.kz", "mobile-app", "https://app.example.com/oauth"),
+            configuration = VersolaConfiguration.create("https://id.versola.io", "mobile-app", "https://app.example.com/oauth"),
             edgeBaseUrl = edge,
             httpClient = OkHttpClient(),
             dpop = proofs,
             discovery = DiscoveryService(
-                issuer = "https://id.versola.kz",
+                issuer = "https://id.versola.io",
                 client = object : DiscoveryClient {
                     override suspend fun fetch(issuer: String): ProviderMetadata = metadata
                 },
@@ -112,7 +112,7 @@ class EdgeNativeTokenClientTest {
         nonce = "n",
         scopes = setOf("openid"),
         state = "edge-state",
-        iss = "https://id.versola.kz",
+        iss = "https://id.versola.io",
         extension = mapOf(
             EdgeAuthorizationStarter.BLOB to "sealed",
             EdgeAuthorizationStarter.TOKEN_ENDPOINT to "$AUTH_MTLS/token",
@@ -153,7 +153,7 @@ class EdgeNativeTokenClientTest {
         val body = request.body!!.utf8()
         assertTrue(body.contains("code=the-code"))
         assertTrue(body.contains("state=edge-state"))
-        assertTrue(body.contains("iss=https%3A%2F%2Fid.versola.kz"))
+        assertTrue(body.contains("iss=https%3A%2F%2Fid.versola.io"))
         assertTrue(body.contains("blob=sealed"))
         // No verifier — edge sealed it in the blob — and no client id: the path names the client.
         assertFalse(body.contains("code_verifier"))
@@ -176,9 +176,9 @@ class EdgeNativeTokenClientTest {
             """"blob":"sealed","tokenEndpoint":"$AUTH_MTLS/token","revocationEndpoint":"$AUTH_MTLS/revoke"}"""
         val pending = PendingAuthorizationCodec.decode(legacy.toByteArray())
         val grant = AuthorizationResponseValidator.validate(
-            redirect = "https://app.example.com/oauth?code=the-code&state=edge-state&iss=https%3A%2F%2Fid.versola.kz",
+            redirect = "https://app.example.com/oauth?code=the-code&state=edge-state&iss=https%3A%2F%2Fid.versola.io",
             pending = pending,
-            issuer = "https://id.versola.kz",
+            issuer = "https://id.versola.io",
             issParameterSupported = false,
         )
 
@@ -203,7 +203,7 @@ class EdgeNativeTokenClientTest {
         val grant = AuthorizationResponseValidator.validate(
             redirect = "https://app.example.com/oauth?code=the-code&state=edge-state",
             pending = pending,
-            issuer = "https://id.versola.kz",
+            issuer = "https://id.versola.io",
             issParameterSupported = false,
         )
 
@@ -315,13 +315,13 @@ class EdgeNativeTokenClientTest {
     @Test
     fun `without a remembered endpoint the mutual-TLS alias is signed for, then the plain endpoint`() = runTest {
         server.enqueue(issued())
-        client(aliases = MtlsEndpointAliases(tokenEndpoint = "https://mtls.id.versola.kz/token"))
+        client(aliases = MtlsEndpointAliases(tokenEndpoint = "https://mtls.id.versola.io/token"))
             .refresh("rt".toByteArray(), "k")
-        assertEquals("https://mtls.id.versola.kz/token", proofs.proofsFor.last())
+        assertEquals("https://mtls.id.versola.io/token", proofs.proofsFor.last())
 
         server.enqueue(issued())
         client().refresh("rt".toByteArray(), "k")
-        assertEquals("https://id.versola.kz/token", proofs.proofsFor.last())
+        assertEquals("https://id.versola.io/token", proofs.proofsFor.last())
     }
 
     @Test

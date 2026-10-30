@@ -6,8 +6,8 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertThrows
 import org.junit.Test
 
-private const val AUTH = "https://id.versola.kz/token"
-private const val EDGE = "https://versola.kz/resources/42"
+private const val AUTH = "https://id.versola.io/token"
+private const val EDGE = "https://versola.io/resources/42"
 
 class DpopNonceCacheTest {
 
@@ -28,9 +28,9 @@ class DpopNonceCacheTest {
     fun `the path and query are not part of the key`() {
         val cache = DpopNonceCache()
 
-        cache.store("https://versola.kz/resources/42?page=2", "edge-nonce")
+        cache.store("https://versola.io/resources/42?page=2", "edge-nonce")
 
-        assertEquals("edge-nonce", cache.nonceFor("https://versola.kz/permissions/me"))
+        assertEquals("edge-nonce", cache.nonceFor("https://versola.io/permissions/me"))
     }
 
     @Test
@@ -50,7 +50,7 @@ class DpopNonceCacheTest {
     fun `an explicit default port is the same origin as an implicit one`() {
         val cache = DpopNonceCache()
 
-        cache.store("https://versola.kz:443/resources/42", "edge-nonce")
+        cache.store("https://versola.io:443/resources/42", "edge-nonce")
 
         assertEquals("edge-nonce", cache.nonceFor(EDGE))
     }
@@ -88,7 +88,7 @@ class DpopNonceRetryTest {
 
         val error = assertThrows(VersolaError.Recoverable::class.java) { retry.accept(AUTH, "second") }
 
-        assertEquals(VersolaError.Recoverable.Cause.NonceLoop("https://id.versola.kz"), error.reason)
+        assertEquals(VersolaError.Recoverable.Cause.NonceLoop("https://id.versola.io"), error.reason)
     }
 
     @Test
@@ -99,7 +99,7 @@ class DpopNonceRetryTest {
 
         val error = assertThrows(VersolaError.Recoverable::class.java) { retry.accept(AUTH, null) }
 
-        assertEquals(VersolaError.Recoverable.Cause.NonceLoop("https://id.versola.kz"), error.reason)
+        assertEquals(VersolaError.Recoverable.Cause.NonceLoop("https://id.versola.io"), error.reason)
     }
 
     @Test
@@ -128,10 +128,10 @@ class DpopNonceRetryTest {
 
     @Test
     fun `an origin survives a raw query, an IPv6 literal and userinfo`() {
-        assertEquals("https://versola.kz", Origin.of("""https://versola.kz/x?filter={"a":1}""").value)
+        assertEquals("https://versola.io", Origin.of("""https://versola.io/x?filter={"a":1}""").value)
         assertEquals("http://[::1]:9003", Origin.of("http://[::1]:9003/token").value)
         assertEquals("http://[::1]", Origin.of("http://[::1]:80/token").value)
-        assertEquals("https://id.versola.kz", Origin.of("https://user:pw@id.versola.kz:443/token").value)
+        assertEquals("https://id.versola.io", Origin.of("https://user:pw@id.versola.io:443/token").value)
         assertEquals("http://localhost:9005", Origin.of("http://LOCALHOST:9005").value)
     }
 }

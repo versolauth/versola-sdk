@@ -60,7 +60,7 @@ class NativeAuthorizationStarterTest {
     }
 
     private fun starter(clientId: String = "mobile-app") = HttpNativeAuthorizationStarter(
-        configuration = VersolaConfiguration.create("https://id.versola.kz", clientId, "https://app.example.com/oauth"),
+        configuration = VersolaConfiguration.create("https://id.versola.io", clientId, "https://app.example.com/oauth"),
         edgeBaseUrl = edge,
         httpClient = OkHttpClient(),
         dpop = proofs,
@@ -79,8 +79,8 @@ class NativeAuthorizationStarterTest {
         .setHeader("Content-Type", "application/json")
         .body(
             """{"client_id":"mobile-app","request_uri":"urn:ietf:params:oauth:request_uri:abc","expires_in":60,""" +
-                """"authorization_endpoint":"https://id.versola.kz/authorize","state":"edge-state","blob":"sealed",""" +
-                """"token_endpoint":"https://id.versola.kz:9008/token","revocation_endpoint":"https://id.versola.kz:9008/revoke"}""",
+                """"authorization_endpoint":"https://id.versola.io/authorize","state":"edge-state","blob":"sealed",""" +
+                """"token_endpoint":"https://id.versola.io:9008/token","revocation_endpoint":"https://id.versola.io:9008/revoke"}""",
         )
         .build()
 
@@ -108,7 +108,7 @@ class NativeAuthorizationStarterTest {
         assertFalse(body.contains("client_id"))
         assertEquals("edge-state", start.state)
         assertEquals("sealed", start.blob)
-        assertEquals("https://id.versola.kz:9008/token", start.tokenEndpoint)
+        assertEquals("https://id.versola.io:9008/token", start.tokenEndpoint)
         assertEquals("urn:ietf:params:oauth:request_uri:abc", start.requestUri)
     }
 

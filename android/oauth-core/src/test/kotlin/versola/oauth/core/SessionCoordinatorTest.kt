@@ -22,7 +22,7 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-private const val ISSUER = "https://id.versola.kz"
+private const val ISSUER = "https://id.versola.io"
 
 /** One slot, exactly like the real store: a second save replaces rather than accumulates. */
 private class RecordingPendingStore : PendingAuthorizationStore {

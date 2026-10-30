@@ -94,7 +94,7 @@ original failed with 401 before reaching the application — not when it failed 
 ```kotlin
 Versola.configure(
     context,
-    issuer = "https://id.versola.kz",
+    issuer = "https://id.versola.io",
     clientId = "mobile-app",
     redirectUri = "https://app.example.com/oauth",
     retry = RetryPolicy(
