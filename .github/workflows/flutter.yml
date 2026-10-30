@@ -243,8 +243,9 @@ jobs:
             "platforms;android-37.0" "build-tools;36.0.0" > /dev/null
 
       # The checkout of a pull request is a detached merge commit that no branch points at, and
-      # pub clones the repository before it resolves `ref`, so a bare SHA could be missing from
-      # the clone. A branch at the commit makes it reachable; the dependency still names the SHA.
+      # pub clones the repository's refs before it resolves `ref`, so a bare SHA is missing from
+      # the clone ("Could not find git ref ... bad object", reproduced on a detached clone). A
+      # branch at the commit makes it reachable; the dependency still names the SHA.
       - name: Build an app that depends on this commit
         run: |
           git update-ref refs/heads/verify-consumer HEAD
