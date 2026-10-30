@@ -231,7 +231,7 @@ jobs:
           api-level: 36
           arch: x86_64
           target: google_apis
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot -show-kernel
+          emulator-options: -no-window -gpu guest -noaudio -no-boot-anim -camera-back none -no-snapshot -show-kernel
           disable-animations: true
           disable-spellchecker: true
           working-directory: android
@@ -263,7 +263,7 @@ jobs:
           api-level: 36
           arch: x86_64
           target: google_apis
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot -show-kernel
+          emulator-options: -no-window -gpu guest -noaudio -no-boot-anim -camera-back none -no-snapshot -show-kernel
           disable-animations: true
           disable-spellchecker: true
           working-directory: android
@@ -413,7 +413,7 @@ jobs:
           api-level: 34
           arch: x86_64
           target: google_apis
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          emulator-options: -no-window -gpu guest -noaudio -no-boot-anim -camera-back none
           disable-animations: true
           working-directory: sdk/android
           # The issuer auth announces is http://localhost:9003, and the SDK holds the
