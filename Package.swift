@@ -47,6 +47,9 @@ let package = Package(
             name: "OAuthClient",
             dependencies: ["OAuthCore"],
             path: "ios/Sources/OAuthClient",
+            // The privacy manifest declares the file-timestamp API FileCaches reads (App Store
+            // privacy manifest requirement); it ships inside the package with the code.
+            resources: [.process("PrivacyInfo.xcprivacy")],
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         .testTarget(
