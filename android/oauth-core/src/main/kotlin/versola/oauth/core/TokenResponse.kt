@@ -57,7 +57,9 @@ public class TokenResponse internal constructor(
                 accessToken = payload.accessToken,
                 tokenType = payload.tokenType,
                 expiresInSeconds = payload.expiresIn,
-                refreshToken = payload.refreshToken?.toByteArray(Charsets.UTF_8),
+                // An empty `refresh_token` means none was issued, not a credential of zero bytes
+                // (AppAuth-Android #931): it would otherwise be stored and spent on refresh.
+                refreshToken = payload.refreshToken?.takeIf { it.isNotBlank() }?.toByteArray(Charsets.UTF_8),
                 idToken = payload.idToken,
                 serverDate = serverDate,
                 // RFC 6749 §5.1: space-delimited, and present only when it differs from what
