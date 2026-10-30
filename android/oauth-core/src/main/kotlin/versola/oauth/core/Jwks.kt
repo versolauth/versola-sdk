@@ -141,13 +141,17 @@ public interface JwksCache {
     public suspend fun clear()
 }
 
+/** What [FileJwksCache] writes: the document and the instant it stops being good, in one file. */
+@kotlinx.serialization.Serializable
+internal class ExpiringDocument(val expiresAt: Long, val document: String)
+
 /**
  * A plain file, written through a temporary so a crash never leaves half a document.
  *
- * Its expiry is the file's modification time, set at save to the instant the document stops being
- * good: no second file to keep in step, nothing to parse, and a copy written before expiry
- * existed has a modification time in the past and so reads as expired once, which is the safe way
- * to migrate it.
+ * The expiry travels inside the file, beside the document, so one atomic write sets both and
+ * nothing that merely touches the file (a backup tool, a `touch`, a restore) can move it. A file
+ * written before expiry existed holds the bare document, which does not decode as this envelope and
+ * so reads as a miss once and is replaced: the safe way to migrate it.
  */
 @VersolaInternalApi
 public class FileJwksCache(
@@ -157,9 +161,16 @@ public class FileJwksCache(
 
     override suspend fun load(): String? = withContext(Dispatchers.IO) {
         try {
-            if (file.exists() && CacheLifetime.isFresh(file.lastModified(), clock())) file.readText() else null
+            if (!file.exists()) return@withContext null
+            val stored = discoveryJson.decodeFromString(ExpiringDocument.serializer(), file.readText())
+            stored.document.takeIf { CacheLifetime.isFresh(stored.expiresAt, clock()) }
         } catch (e: IOException) {
             // Unreadable is a miss, never a failure: the document is one request away.
+            null
+        } catch (e: kotlinx.serialization.SerializationException) {
+            // Not this envelope: a bare document from before expiry existed, or damage. A miss.
+            null
+        } catch (e: IllegalArgumentException) {
             null
         }
     }
@@ -168,10 +179,9 @@ public class FileJwksCache(
         withContext(Dispatchers.IO) {
             file.parentFile?.mkdirs()
             val temporary = File(file.parentFile, file.name + ".tmp")
-            temporary.writeText(json)
-            // A failure to stamp leaves the write time, which is already in the past: the copy
-            // then reads as expired, and the next call fetches. Safe, and not worth failing for.
-            temporary.setLastModified(clock() + lifetimeMillis)
+            temporary.writeText(
+                discoveryJson.encodeToString(ExpiringDocument.serializer(), ExpiringDocument(clock() + lifetimeMillis, json)),
+            )
             if (!temporary.renameTo(file)) temporary.delete()
         }
     }

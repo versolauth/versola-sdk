@@ -160,15 +160,13 @@ class JwksTest {
     fun `a corrupt cache is dropped and the keys are fetched`() = runTest {
         val file = File(folder.newFolder(), "jwks.json")
         file.writeText("}{ not a key set")
-        // Unexpired, so that it is the parse and not the age that drops it.
-        file.setLastModified(System.currentTimeMillis() + 3_600_000)
         serve(document)
 
         val loaded = JwksClient(OkHttpClient(), FileJwksCache(file)).keys(uri, forceRefresh = false)
 
         assertTrue(loaded.fetched)
         assertEquals(1, server.requestCount)
-        assertEquals(document, file.readText())
+        assertEquals("replaced with the fetched document", document, FileJwksCache(file).load())
     }
 
     @Test
@@ -297,6 +295,17 @@ class JwksTest {
     }
 
     @Test
+    fun `a response that carries an Age has that much less of its lifetime`() = runTest {
+        // max-age of an hour, already ten minutes old when it arrived: fifty minutes left.
+        assertEquals(1, requestsAfter("Cache-Control" to "max-age=3600", "Age" to "600", afterMillis = 50 * minute - 1))
+        server.close(); start()
+        assertEquals(2, requestsAfter("Cache-Control" to "max-age=3600", "Age" to "600", afterMillis = 50 * minute))
+        server.close(); start()
+        // Older than its whole lifetime: the five-minute floor, not a negative one.
+        assertEquals(2, requestsAfter("Cache-Control" to "max-age=60", "Age" to "3000", afterMillis = 5 * minute))
+    }
+
+    @Test
     fun `an Expires that does not parse is already past and gets the shortest lifetime`() = runTest {
         assertEquals(2, requestsAfter("Expires" to "0", afterMillis = 5 * minute))
     }
@@ -319,16 +328,28 @@ class JwksTest {
     }
 
     @Test
-    fun `a copy written before keys expired reads as expired once, and is replaced`() = runTest {
+    fun `a bare copy written before keys expired reads as a miss once, and is replaced`() = runTest {
         val file = File(folder.newFolder(), "jwks.json")
-        file.writeText(document)
-        file.setLastModified(System.currentTimeMillis() - 7 * 24 * hour)
+        file.writeText(document) // as an older SDK left it
         serve(document)
 
         val loaded = JwksClient(OkHttpClient(), FileJwksCache(file)).keys(uri, forceRefresh = false)
 
         assertTrue(loaded.fetched)
-        assertTrue("replaced with a fresh stamp", file.lastModified() > System.currentTimeMillis())
+        assertEquals(document, FileJwksCache(file).load())
+    }
+
+    @Test
+    fun `touching the file does not move its expiry`() = runTest {
+        var now = 1_000_000_000_000L
+        val file = File(folder.newFolder(), "jwks.json")
+        val cache = FileJwksCache(file) { now }
+        cache.save(document, hour)
+
+        file.setLastModified(now + 365 * 24 * hour) // a backup tool, a restore, a touch
+        now += hour
+
+        assertNull(cache.load())
     }
 
     @Test

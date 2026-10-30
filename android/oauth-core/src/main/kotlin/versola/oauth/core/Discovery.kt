@@ -131,27 +131,46 @@ public class HttpDiscoveryClient(
     }
 }
 
+/** What [FileProviderMetadataCache] writes: the document and the instant it stops being good, in one file. */
+@kotlinx.serialization.Serializable
+internal class ExpiringMetadata(val expiresAt: Long, val metadata: ProviderMetadata)
+
 /**
  * A plain JSON file. Not encrypted, by the same reasoning as [ProviderMetadataCache].
  *
- * Its expiry is the file's modification time, set at save to the instant the document stops being
- * good (the same device as [FileJwksCache], for the same reasons): nothing second to keep in step,
- * and a copy written before expiry existed has a modification time in the past and so reads as
- * expired once, which is the safe way to migrate it.
+ * The expiry travels inside the file, beside the document ([ExpiringMetadata]), so one atomic write
+ * sets both and nothing that merely touches the file can move it. A file written before expiry
+ * existed holds the bare document: it still loads, with an expiry of zero, so it is used as the
+ * fallback if the provider is unreachable and is otherwise fetched again, once.
  */
 public class FileProviderMetadataCache(
     private val file: File,
     private val clock: () -> Long = System::currentTimeMillis,
 ) : ProviderMetadataCache {
 
+    private fun read(): ExpiringMetadata? {
+        if (!file.exists()) return null
+        val text = file.readText()
+        return try {
+            discoveryJson.decodeFromString(ExpiringMetadata.serializer(), text)
+        } catch (e: Exception) {
+            // The envelope failed: a bare document from before expiry existed, or damage; the
+            // second parse tells them apart.
+            ExpiringMetadata(0, discoveryJson.decodeFromString(ProviderMetadata.serializer(), text))
+        }
+    }
+
     override suspend fun expiresAtEpochMillis(): Long? = withContext(Dispatchers.IO) {
-        file.lastModified().takeIf { it > 0 }
+        try {
+            read()?.expiresAt
+        } catch (e: Exception) {
+            null
+        }
     }
 
     override suspend fun load(): ProviderMetadata? = withContext(Dispatchers.IO) {
-        if (!file.exists()) return@withContext null
         try {
-            discoveryJson.decodeFromString(ProviderMetadata.serializer(), file.readText())
+            read()?.metadata
         } catch (e: Exception) {
             // A cache that cannot be read is a cache miss, never a failure: the document is
             // one round trip away and the alternative is bricking login on a corrupt file.
@@ -168,10 +187,9 @@ public class FileProviderMetadataCache(
         withContext(Dispatchers.IO) {
             file.parentFile?.mkdirs()
             val temporary = File(file.parentFile, file.name + ".tmp")
-            temporary.writeText(discoveryJson.encodeToString(ProviderMetadata.serializer(), metadata))
-            // A failure to stamp leaves the write time, already in the past: the copy then reads
-            // as expired and the next call fetches. Safe, and not worth failing for.
-            temporary.setLastModified(clock() + lifetimeMillis)
+            temporary.writeText(
+                discoveryJson.encodeToString(ExpiringMetadata.serializer(), ExpiringMetadata(clock() + lifetimeMillis, metadata)),
+            )
             if (!temporary.renameTo(file)) temporary.delete()
         }
     }

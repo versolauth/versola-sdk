@@ -13,7 +13,8 @@ import okhttp3.Headers
  * without asking the provider on every launch, and it is the 24 hours `spec/oauth-sdk-api.md`
  * section 4 gives discovery. The floor keeps a provider that sends `max-age=0` or `no-store` from
  * being asked on every ID token, which the retry policy's budget would turn into a request storm.
- * An unknown `kid` still forces one refetch whatever is cached; that is a separate path.
+ * An unknown `kid` still forces one refetch whatever is cached; that is a separate path. A response
+ * that carries an `Age` has that much less of its lifetime to live.
  */
 internal object CacheLifetime {
     const val MIN_MILLIS: Long = 5 * 60 * 1000
@@ -36,7 +37,10 @@ internal object CacheLifetime {
             }
             else -> MAX_MILLIS
         }
-        return requested.coerceIn(MIN_MILLIS, MAX_MILLIS)
+        // A response that sat in a cache or a proxy is already `Age` seconds old (RFC 9111 section
+        // 4.2.3): it has that much less of its lifetime left. An `Age` that does not parse is none.
+        val age = headers["Age"]?.trim()?.toLongOrNull()?.coerceIn(0, MAX_MILLIS / 1000) ?: 0L
+        return (requested - age * 1000).coerceIn(MIN_MILLIS, MAX_MILLIS)
     }
 
     /**

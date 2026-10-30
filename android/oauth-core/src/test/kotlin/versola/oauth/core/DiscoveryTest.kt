@@ -382,16 +382,42 @@ class DiscoveryTest {
     }
 
     @Test
-    fun `a copy written before documents expired reads as expired once, and is replaced`() = runTest {
+    fun `a bare copy written before documents expired is fetched again once, and replaced`() = runTest {
         val file = File(folder.newFolder(), "provider-metadata.json")
-        FileProviderMetadataCache(file).save(discoveryJson.decodeFromString(ProviderMetadata.serializer(), document(issuer)))
-        file.setLastModified(System.currentTimeMillis() - 7 * day) // as an older SDK left it
+        file.writeText(document(issuer)) // as an older SDK left it
         serve()
 
         DiscoveryService(issuer, client, FileProviderMetadataCache(file)).metadata()
 
         assertEquals(1, server.requestCount)
-        assertTrue("replaced with a stamp in the future", file.lastModified() > System.currentTimeMillis())
+        assertTrue("replaced with an expiry in the future", FileProviderMetadataCache(file).expiresAtEpochMillis()!! > System.currentTimeMillis())
+    }
+
+    @Test
+    fun `a bare copy is still the fallback when the provider cannot be reached`() = runTest {
+        val file = File(folder.newFolder(), "provider-metadata.json")
+        file.writeText(document(issuer))
+        server.enqueue(MockResponse.Builder().code(503).build())
+
+        val metadata = DiscoveryService(issuer, client, FileProviderMetadataCache(file)).metadata()
+
+        assertEquals("$issuer/token", metadata.tokenEndpoint)
+    }
+
+    @Test
+    fun `touching the file does not move its expiry`() = runTest {
+        var now = 1_000_000_000_000L
+        val file = File(folder.newFolder(), "provider-metadata.json")
+        val cache = FileProviderMetadataCache(file) { now }
+        cache.save(discoveryJson.decodeFromString(ProviderMetadata.serializer(), document(issuer)), hour)
+
+        file.setLastModified(now + 365 * day)
+        now += hour
+
+        assertEquals(1_000_000_000_000L + hour, cache.expiresAtEpochMillis())
+        serve()
+        DiscoveryService(issuer, client, cache) { now }.metadata()
+        assertEquals("expired despite the touch", 1, server.requestCount)
     }
 
     @Test
