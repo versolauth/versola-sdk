@@ -62,7 +62,7 @@ package struct URLSessionHTTPClient: HTTPClient {
         if let detail {
             text = detail
         } else if let error {
-            let code = (error as? URLError).map { " (URLError \($0.code.rawValue))" } ?? ""
+            let code = (error as? URLError).map { NetworkFailure.suffix(forURLErrorCode: $0.code.rawValue) } ?? ""
             text = Self.stripURLs(error.localizedDescription) + code
         } else {
             text = "transport failure"

@@ -60,6 +60,24 @@ final class URLSessionHTTPClientTests: XCTestCase {
         }
     }
 
+    /// What the core reads back to decide whether a refresh without an `Idempotency-Key` may be
+    /// sent again (`RefreshReplay`): the real `URLError` codes, through the text this client writes.
+    func testTheDetailTellsWhetherTheRequestEverConnected() {
+        let never: [URLError.Code] = [
+            .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed, .notConnectedToInternet,
+            .secureConnectionFailed, .serverCertificateHasBadDate, .serverCertificateUntrusted,
+            .serverCertificateHasUnknownRoot, .serverCertificateNotYetValid, .clientCertificateRejected,
+            .clientCertificateRequired,
+        ]
+        let maybe: [URLError.Code] = [.timedOut, .networkConnectionLost, .badServerResponse, .cannotParseResponse, .resourceUnavailable, .unknown]
+        func detail(_ code: URLError.Code) -> String {
+            guard case .recoverable(.network(let detail, _, _)) = URLSessionHTTPClient.networkError(URLError(code, userInfo: [NSURLErrorFailingURLStringErrorKey: "https://auth.example.com/cb?code=abc"]), elapsed: .zero) else { return "" }
+            return detail
+        }
+        for code in never { XCTAssertTrue(NetworkFailure.neverConnected(detail(code)), "\(code.rawValue)") }
+        for code in maybe { XCTAssertFalse(NetworkFailure.neverConnected(detail(code)), "\(code.rawValue)") }
+    }
+
     func testURLsInAnErrorTextAreStripped() {
         let stripped = URLSessionHTTPClient.stripURLs("could not connect to https://auth.example.com/cb?code=abc now")
         XCTAssertEqual(stripped, "could not connect to <url> now")

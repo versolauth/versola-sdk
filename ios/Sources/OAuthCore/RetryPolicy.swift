@@ -116,7 +116,13 @@ package actor RetryBudget {
 
     /// Runs `call` against `origin`, repeating it while the failure, the allowances and the
     /// wall-clock budget all permit.
-    package func execute<T: Sendable>(origin: String, _ call: @Sendable () async throws -> T) async throws -> T {
+    ///
+    /// - Parameter mayRepeat: asked of a failure that is otherwise repeatable, and a `false` ends
+    ///   the call with that failure after the request that produced it, no delay and no count
+    ///   against the allowances. It is how a request that cannot be repeated safely after an
+    ///   *ambiguous* failure (the provider may have processed it) is kept from being repeated,
+    ///   while the failures that prove it was not processed still are.
+    package func execute<T: Sendable>(origin: String, mayRepeat: (@Sendable (OAuthError) -> Bool)? = nil, _ call: @Sendable () async throws -> T) async throws -> T {
         var callAttempts = 0
         while true {
             // The cooldown first: a request the server asked us not to send is not a request.
@@ -128,6 +134,7 @@ package actor RetryBudget {
                 return try await call()
             } catch let error as OAuthError {
                 guard let repeatable = ServerFailure.repeatable(error) else { throw error }
+                if let mayRepeat, !mayRepeat(error) { throw error }
                 failuresPerOrigin[origin, default: 0] += 1
                 totalFailures += 1
                 lastFailure = error

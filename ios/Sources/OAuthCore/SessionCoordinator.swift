@@ -24,6 +24,10 @@ package actor SessionCoordinator: AccessTokenSource {
     /// What the servers asked for, per origin (`spec/retry-policy.md`, "Cooldown"): shared by
     /// every operation of this client, so one that ended on a `Retry-After` quiets the next.
     private let cooldown: RetryCooldown
+    /// Whether a refresh may be repeated after a failure that does not prove it was not processed.
+    /// True where the refresh carries an `Idempotency-Key` (the Versola facade): a repeat resolves
+    /// to the same rotation. False where it does not (the generic facade): see `RefreshReplay`.
+    private let repeatsAmbiguousRefresh: Bool
 
     private struct Cached: Sendable {
         let response: TokenResponse
@@ -57,7 +61,8 @@ package actor SessionCoordinator: AccessTokenSource {
         onCredentialsWiped: @escaping @Sendable () async throws -> Void = {},
         logger: OAuthLogger? = nil,
         refreshTokens: RefreshTokenPolicy = .required,
-        idTokenValidator: IdTokenValidator? = nil
+        idTokenValidator: IdTokenValidator? = nil,
+        repeatsAmbiguousRefresh: Bool = true
     ) {
         self.flow = flow
         self.tokenClient = tokenClient
@@ -69,6 +74,7 @@ package actor SessionCoordinator: AccessTokenSource {
         self.refreshTokens = refreshTokens
         self.idTokenValidator = idTokenValidator
         self.cooldown = RetryCooldown(clock: clock)
+        self.repeatsAmbiguousRefresh = repeatsAmbiguousRefresh
     }
 
     // MARK: - Operations
@@ -294,7 +300,8 @@ package actor SessionCoordinator: AccessTokenSource {
             let budget = OperationBudget.current ?? retryPolicy.newBudget(clock: clock, cooldown: cooldown)
             let tokenClient = self.tokenClient
             let store = self.credentialStore
-            let issued = try await budget.execute(origin: origin) {
+            let mayRepeat: (@Sendable (OAuthError) -> Bool)? = repeatsAmbiguousRefresh ? nil : RefreshReplay.provablyNotProcessed
+            let issued = try await budget.execute(origin: origin, mayRepeat: mayRepeat) {
                 // A fresh read per attempt: the token is read for the duration of one request.
                 guard let token = try await store.refreshToken() else { throw Self.noGrantStored() }
                 return try await tokenClient.refresh(refreshToken: token, idempotencyKey: idempotencyKey)

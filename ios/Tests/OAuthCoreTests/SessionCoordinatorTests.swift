@@ -122,7 +122,7 @@ final class SessionCoordinatorTests: XCTestCase {
         TokenResponse(accessToken: "at-\(refresh ?? "none")-\(UUID().uuidString.prefix(4))", tokenType: "Bearer", expiresIn: expiresIn, refreshToken: refresh, idToken: idToken(subject: subject), scope: "openid")
     }
 
-    private func fixture(answers: [Result<TokenResponse, OAuthError>], policy: RefreshTokenPolicy = .optional, store: MemoryCredentials = MemoryCredentials(), retry: RetryPolicy? = nil, pending: PendingAuthorizationRequest? = nil, browser: ScriptedBrowser = ScriptedBrowser.answering(), clock injectedClock: TickingClock? = nil, validatorOverride: IdTokenValidator? = nil) throws -> Fixture {
+    private func fixture(answers: [Result<TokenResponse, OAuthError>], policy: RefreshTokenPolicy = .optional, store: MemoryCredentials = MemoryCredentials(), retry: RetryPolicy? = nil, pending: PendingAuthorizationRequest? = nil, browser: ScriptedBrowser = ScriptedBrowser.answering(), clock injectedClock: TickingClock? = nil, validatorOverride: IdTokenValidator? = nil, repeatsAmbiguousRefresh: Bool = true) throws -> Fixture {
         let clock = injectedClock ?? TickingClock(Date(timeIntervalSince1970: 1_700_000_000))
         let configuration = CoreConfiguration(issuer: Self.issuer, clientId: "mobile", redirectUri: URL(string: Self.redirect)!, postLogoutRedirectUri: URL(string: "https://app.example.com/signed-out"))
         let discovery = DiscoveryService(issuer: Self.issuer, client: StaticDiscoveryClient(metadata: AuthzKit.metadata()), cache: MemoryMetadataCache())
@@ -138,7 +138,8 @@ final class SessionCoordinatorTests: XCTestCase {
         let coordinator = SessionCoordinator(
             flow: flow, tokenClient: tokens, credentialStore: store,
             retryPolicy: try retry ?? RetryPolicy(maxAttemptsPerOrigin: 2, maxTotalAttempts: 2, initialBackoff: 0, backoffMultiplier: 1, maxBackoff: 0, totalBudget: 10),
-            clock: Clock(now: { clock.peek() }), logger: logger, refreshTokens: policy, idTokenValidator: validatorOverride ?? validator
+            clock: Clock(now: { clock.peek() }), logger: logger, refreshTokens: policy, idTokenValidator: validatorOverride ?? validator,
+            repeatsAmbiguousRefresh: repeatsAmbiguousRefresh
         )
         return Fixture(coordinator: coordinator, flow: flow, store: store, tokens: tokens, validator: validator, logger: logger, clock: clock, pendingStore: pendingStore)
     }
@@ -735,5 +736,114 @@ final class SessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(made, 2)
         let state = await f.flow.states.current
         XCTAssertEqual(state, .unauthenticated)
+    }
+
+    // MARK: - A refresh without an Idempotency-Key (the generic facade)
+
+    private static func patient() -> RetryPolicy { try! RetryPolicy(maxAttemptsPerOrigin: 3, maxTotalAttempts: 4, initialBackoff: 0, backoffMultiplier: 1, maxBackoff: 0, totalBudget: 10) }
+
+    private func network(_ urlErrorCode: Int?) -> OAuthError {
+        let suffix = urlErrorCode.map { NetworkFailure.suffix(forURLErrorCode: $0) } ?? ""
+        return .recoverable(.network(detail: "the request failed" + suffix, attempts: 1, elapsedMillis: 0))
+    }
+
+    private func refreshCalls(_ f: Fixture) async -> Int {
+        await f.tokens.calls.filter { if case .refresh = $0 { return true } else { return false } }.count
+    }
+
+    /// Runs a refresh that fails with `failure` on every request, in a coordinator whose refresh
+    /// carries no `Idempotency-Key`; returns how many refresh requests were made.
+    private func refreshAnswering(_ failure: OAuthError, file: StaticString = #filePath, line: UInt = #line) async throws -> (Int, OAuthError?, Fixture) {
+        let f = try fixture(
+            answers: [.success(response(refresh: "rt-1", expiresIn: 60))] + Array(repeating: .failure(failure), count: 5),
+            retry: Self.patient(), repeatsAmbiguousRefresh: false
+        )
+        try await f.coordinator.login(scopes: ["openid"])
+        f.clock.advance(61)
+        var thrown: OAuthError?
+        do { _ = try await f.coordinator.accessToken() } catch let error as OAuthError { thrown = error }
+        return (await refreshCalls(f), thrown, f)
+    }
+
+    /// Failures that prove the provider never processed the refresh are repeated, up to the allowance.
+    func testARefreshWithoutAKeyIsRepeatedAfterAFailureToConnect() async throws {
+        // cannotFindHost, cannotConnectToHost, dnsLookupFailed, notConnectedToInternet, secureConnectionFailed and the certificate errors.
+        for code in [-1003, -1004, -1006, -1009, -1200, -1201, -1202, -1203, -1204, -1205, -1206] {
+            let (requests, error, f) = try await refreshAnswering(network(code))
+            XCTAssertEqual(requests, 3, "URLError \(code)")
+            guard case .recoverable(.network(_, 3, _))? = error else { XCTFail("URLError \(code): \(String(describing: error))"); continue }
+            let state = await f.flow.states.current
+            XCTAssertEqual(state, .authenticated)
+        }
+    }
+
+    func testARefreshWithoutAKeyIsRepeatedOn408429And503() async throws {
+        for status in [408, 429, 503] {
+            let (requests, error, _) = try await refreshAnswering(serverError(status))
+            XCTAssertEqual(requests, 3, "HTTP \(status)")
+            guard case .recoverable(.server(status, nil, 3, _))? = error else { XCTFail("HTTP \(status): \(String(describing: error))"); continue }
+        }
+    }
+
+    /// Anything that may have followed a processed request is surfaced after the one request.
+    func testARefreshWithoutAKeyIsSurfacedAfterOneRequestWhenTheProviderMayHaveProcessedIt() async throws {
+        let ambiguous: [(String, OAuthError)] = [
+            ("timed out (-1001)", network(-1001)),
+            ("connection lost (-1005)", network(-1005)),
+            ("bad server response (-1011)", network(-1011)),
+            ("cannot parse response (-1017)", network(-1017)),
+            ("an error that says nothing", network(nil)),
+            ("HTTP 500", serverError(500)),
+            ("HTTP 502", serverError(502)),
+            ("HTTP 504", serverError(504)),
+            ("HTTP 501", serverError(501)),
+        ]
+        for (name, failure) in ambiguous {
+            let (requests, error, f) = try await refreshAnswering(failure)
+            XCTAssertEqual(requests, 1, name)
+            XCTAssertEqual(error, failure, "\(name): the failure itself, unchanged")
+            // The grant, the rotation slot and the state are exactly as a failed refresh leaves them.
+            let stored = await f.store.refresh
+            XCTAssertEqual(stored, "rt-1", name)
+            let slot = await f.store.rotation
+            XCTAssertNotNil(slot, "\(name): the slot stays for the next attempt")
+            let state = await f.flow.states.current
+            XCTAssertEqual(state, .authenticated, name)
+        }
+    }
+
+    func testAnAmbiguousFailureIsSurfacedWithoutADelayOrACooldown() async throws {
+        let (requests, _, f) = try await refreshAnswering(serverError(500))
+        XCTAssertEqual(requests, 1)
+        // Nothing was refused afterwards: another refresh is sent at once.
+        f.clock.advance(1)
+        _ = try? await f.coordinator.accessToken()
+        let again = await refreshCalls(f)
+        XCTAssertEqual(again, 2)
+    }
+
+    /// The Versola facade sends the key, so a repeat resolves to the same rotation: it keeps repeating everything.
+    func testARefreshWithAKeyStillRepeatsAnAmbiguousFailure() async throws {
+        let failure = serverError(500)
+        let f = try fixture(
+            answers: [.success(response(refresh: "rt-1", expiresIn: 60))] + Array(repeating: .failure(failure), count: 5),
+            retry: Self.patient()
+        )
+        try await f.coordinator.login(scopes: ["openid"])
+        f.clock.advance(61)
+        _ = try? await f.coordinator.accessToken()
+        let requests = await refreshCalls(f)
+        XCTAssertEqual(requests, 3)
+    }
+
+    func testTheFailureClassesAreReadFromTheDetailTheFacadesHttpClientWrites() {
+        XCTAssertTrue(NetworkFailure.neverConnected("A server with the specified hostname could not be found. (URLError -1003)"))
+        XCTAssertTrue(NetworkFailure.neverConnected("x (URLError -1200)"))
+        XCTAssertFalse(NetworkFailure.neverConnected("The request timed out. (URLError -1001)"))
+        XCTAssertFalse(NetworkFailure.neverConnected("The network connection was lost. (URLError -1005)"))
+        XCTAssertFalse(NetworkFailure.neverConnected("(URLError nonsense)"))
+        XCTAssertFalse(NetworkFailure.neverConnected("(URLError -1003"))
+        XCTAssertFalse(NetworkFailure.neverConnected("token request failed"))
+        XCTAssertFalse(NetworkFailure.neverConnected(""))
     }
 }

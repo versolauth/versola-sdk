@@ -131,7 +131,7 @@ public final class OAuthClient: Sendable {
         try await refuseWhileAuthorizing()
         let coordinator = self.coordinator
         let scopes = Array((options.scopes ?? configuration.scopes).union(["openid"])).sorted()
-        try await coordinator.operation {
+        _ = try await coordinator.operation {
             try await coordinator.login(
                 scopes: scopes,
                 acrValues: options.acrValues,
@@ -148,7 +148,7 @@ public final class OAuthClient: Sendable {
         try await refuseWhileAuthorizing()
         let coordinator = self.coordinator
         let scopes = Array((options.scopes ?? configuration.scopes).union(["openid"])).sorted()
-        try await coordinator.operation {
+        _ = try await coordinator.operation {
             try await coordinator.login(
                 scopes: scopes,
                 acrValues: acrValues,
@@ -168,7 +168,7 @@ public final class OAuthClient: Sendable {
     /// settles the state as `login` does and is thrown.
     public func resumePendingAuthorization() async throws {
         let coordinator = self.coordinator
-        try await coordinator.operation { try await coordinator.resumePendingLogin() }
+        _ = try await coordinator.operation { try await coordinator.resumePendingLogin() }
     }
 
     /// Signs out (`spec/oauth-sdk-api.md` section 12): revokes, ends the provider's session
@@ -352,7 +352,10 @@ public final class OAuthClient: Sendable {
             },
             logger: logger,
             refreshTokens: .optional,
-            idTokenValidator: validator
+            idTokenValidator: validator,
+            // The refresh above sends no Idempotency-Key, so only a failure that proves it was not
+            // processed is repeated (`RefreshReplay`).
+            repeatsAmbiguousRefresh: false
         )
         let userInfo = HTTPUserInfoClient(
             userinfoEndpoint: { try await discovery.metadata().userinfoEndpoint },

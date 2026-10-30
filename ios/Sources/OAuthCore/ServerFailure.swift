@@ -56,6 +56,46 @@ package enum ServerFailure {
     }
 }
 
+/// Whether a refresh that failed may be sent again when it carried no `Idempotency-Key`.
+///
+/// Without the key the provider cannot tell a repeat from a replay: a refresh whose answer was
+/// lost may already have rotated the token, and sending the old one again is what a rotating
+/// provider answers by revoking the whole family (`spec/retry-policy.md`, "Idempotency"). So a
+/// refresh is repeated only when it provably was **not processed**: a transport failure before a
+/// connection existed (no host, no route, no internet, a failed handshake or certificate), or an
+/// HTTP 408, 429 or 503, which a server sends instead of processing. A timeout after connecting, a
+/// connection lost or reset, and a 500, 502 or 504 may each follow a processed request, and are
+/// surfaced after the one request.
+package enum RefreshReplay {
+    package static func provablyNotProcessed(_ error: OAuthError) -> Bool {
+        switch error {
+        case .recoverable(.network(let detail, _, _)): return NetworkFailure.neverConnected(detail)
+        case .recoverable(.server(let status, _, _, _)): return status == 408 || status == 429 || status == 503
+        default: return false
+        }
+    }
+}
+
+/// What a `network` failure's detail says about how far the request got. The detail is written by
+/// the facade's HTTP client (`URLSessionHTTPClient`) in one shape, `... (URLError <code>)`, and read
+/// back here; a detail of any other shape (a stub's, an unknown error) says nothing and counts as
+/// possibly processed, the conservative reading.
+package enum NetworkFailure {
+    /// `NSURLError` codes raised before any byte of the request left the device: cannotFindHost,
+    /// cannotConnectToHost, dnsLookupFailed, notConnectedToInternet, and the secure-connection
+    /// failures (secureConnectionFailed and the server and client certificate errors).
+    static let neverConnectedCodes: Set<Int> = [-1003, -1004, -1006, -1009, -1200, -1201, -1202, -1203, -1204, -1205, -1206]
+
+    package static func suffix(forURLErrorCode code: Int) -> String { " (URLError \(code))" }
+
+    package static func neverConnected(_ detail: String) -> Bool {
+        guard let open = detail.range(of: "(URLError ", options: .backwards),
+              let close = detail[open.upperBound...].firstIndex(of: ")"),
+              let code = Int(detail[open.upperBound..<close]) else { return false }
+        return neverConnectedCodes.contains(code)
+    }
+}
+
 /// `Retry-After` (RFC 9110 section 10.2.3), read on 429 and 503 only.
 ///
 /// A value is either `delta-seconds` (a non-negative integer) or an HTTP-date. An HTTP-date is
