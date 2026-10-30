@@ -91,9 +91,24 @@ internal class Harness {
      */
     fun awaitLoginForm() {
         await("the provider's login form", FLOW_TIMEOUT_MILLIS) {
-            for (label in CHROME_PROMPTS) device.findObject(By.pkg(CHROME).text(label))?.click()
+            dismissChromePrompts()
             device.findObject(By.res("username")).takeIf { it != null }
         }
+    }
+
+    /** Answers the first-run prompts if Chrome is showing any; a no-op once it is past them. */
+    fun dismissChromePrompts() {
+        for (label in CHROME_PROMPTS) device.findObject(By.pkg(CHROME).text(label))?.click()
+    }
+
+    /**
+     * What is on screen, as the text of every node, for a failure message: a timeout on a screen
+     * nobody expected (a first-run page this list does not know) is diagnosed from this.
+     */
+    fun screenText(): String {
+        val out = java.io.ByteArrayOutputStream()
+        device.dumpWindowHierarchy(out)
+        return Regex("""(?:text|content-desc)="([^"]+)"""").findAll(out.toString()).joinToString(" | ") { it.groupValues[1] }.take(1500)
     }
 
     /** Types alice's credentials from the realm into the form and submits it. */
@@ -149,7 +164,7 @@ internal class Harness {
         while (true) {
             probe()?.let { return it }
             if (SystemClock.elapsedRealtime() > deadline) {
-                error("timed out after ${timeoutMillis}ms waiting for $what; top activity ${topActivity()}; host log:\n${log()}")
+                error("timed out after ${timeoutMillis}ms waiting for $what; top activity ${topActivity()}; on screen: ${screenText()}; host log:\n${log()}")
             }
             SystemClock.sleep(POLL_MILLIS)
         }
@@ -163,6 +178,8 @@ internal class Harness {
         private const val POLL_MILLIS = 500L
 
         /** The answers that leave Chrome unsigned and unsynced; anything else is the provider's page. */
-        private val CHROME_PROMPTS = listOf("Use without an account", "No thanks", "Got it")
+        private val CHROME_PROMPTS = listOf(
+            "Use without an account", "Accept & continue", "Accept and continue", "No thanks", "No, thanks", "Got it", "Skip",
+        )
     }
 }

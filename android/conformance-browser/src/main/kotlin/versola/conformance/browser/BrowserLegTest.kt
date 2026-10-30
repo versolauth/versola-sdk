@@ -51,8 +51,8 @@ class BrowserLegTest(private val leg: String) {
     @Test
     fun browserOpensAliceSignsInRedirectReturnsAndLogoutEndsTheProviderSession() {
         startLogin()
-        harness.awaitTopActivity("CustomTabActivity")
         harness.awaitLoginForm()
+        harness.awaitTopActivity("CustomTabActivity")
         assertEquals("the browser is Chrome's", Harness.CHROME, harness.topActivity().substringBefore('/'))
         assertEquals("an Auth Tab is the SDK's trampoline over Chrome's tab", leg == "default", harness.hasActivity("VersolaAuthTabActivity"))
 
@@ -178,10 +178,21 @@ class BrowserLegTest(private val leg: String) {
     private fun startLogin() {
         harness.tap("login")
         harness.awaitLog("state: Authorizing")
-        harness.awaitTopActivity("CustomTabActivity")
+        // Which leg the SDK chose is logged (a fallback) or visible (the Auth Tab trampoline)
+        // before the browser is: awaited with Chrome's first-run prompts answered, since on a
+        // fresh image the first thing Chrome shows is not the tab.
+        val chosen = harness.await("the SDK to open a browser", Harness.FLOW_TIMEOUT_MILLIS) {
+            harness.dismissChromePrompts()
+            when {
+                "no Auth Tab support" in harness.log() -> "customtabs"
+                harness.hasActivity("VersolaAuthTabActivity") -> "authtab"
+                leg == "customtabs" && "state: Authorizing" in harness.log() && harness.hasActivity("CustomTabActivity") -> "customtabs"
+                else -> null
+            }
+        }
         // `default` is the SDK's own choice: where Chrome has no Auth Tab it falls back, and a
         // row that cannot exercise Auth Tab is skipped rather than passed on the wrong leg.
-        assumeTrue("this emulator's Chrome has no Auth Tab support", leg != "default" || "no Auth Tab support" !in harness.log())
+        assumeTrue("this emulator's Chrome has no Auth Tab support", leg != "default" || chosen == "authtab")
     }
 
     /** The cancel half of `spec/state-machine.md`: `Recoverable(UserCancelled)`, and the request does not outlive it. */
