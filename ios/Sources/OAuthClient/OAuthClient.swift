@@ -143,10 +143,15 @@ public final class OAuthClient: Sendable {
         )
     }
 
-    /// Finishes an authorization that outlived the process that started it (scenario 12):
-    /// call it on launch when `sessionState` is `authorizing`. nil when nothing was pending.
+    /// Finishes an authorization that outlived the process that started it (scenario 12): call
+    /// it on launch when `sessionState` is `authorizing`, and feed the redirect the system
+    /// delivers to `handleRedirect(_:)`. It waits for that redirect (for what is left of the
+    /// request's ten minutes), validates it against the restored request, exchanges the code,
+    /// validates the ID token and persists the grant, the same steps `login` ends with, and
+    /// publishes `authenticated`. Returns without effect when nothing is pending; a failure
+    /// settles the state as `login` does and is thrown.
     public func resumePendingAuthorization() async throws {
-        _ = try await flow.resumePendingAuthorization()
+        try await coordinator.resumePendingLogin()
     }
 
     /// Signs out (`spec/oauth-sdk-api.md` section 12): revokes, ends the provider's session

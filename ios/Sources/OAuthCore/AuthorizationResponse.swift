@@ -92,7 +92,8 @@ package enum AuthorizationResponseValidator {
             nonce: pending.nonce,
             scopes: pending.scopes,
             state: pending.state,
-            iss: iss
+            iss: iss,
+            maxAge: pending.maxAge
         )
     }
 

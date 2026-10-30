@@ -254,6 +254,15 @@ public class SessionCoordinator(
             logger?.warn("the provider advertises offline_access and the configured scopes omit it; a refresh token may not be issued")
         }
         val grant = flow.authorize(requested, acrValues, maxAge, parameters, ephemeralBrowser)
+        return finishLogin(grant, maxAge)
+    }
+
+    /**
+     * The tail of a login: everything after the redirect has been validated. Shared by [login] and
+     * [resumePendingLogin] so that a sign-in finished in a cold-started process passes through
+     * exactly the checks and the persistence order of one finished in the process that began it.
+     */
+    private suspend fun finishLogin(grant: AuthorizationGrant, maxAge: Long?): TokenResponse {
         // One attempt, with no retry budget around it. An authorization code is single-use
         // and the token endpoint offers no idempotency for `authorization_code` —
         // `Idempotency-Key` is honoured for the refresh family alone (`OAuthTokenService`) —
@@ -323,6 +332,22 @@ public class SessionCoordinator(
         flow.completeLogin()
         cachedAccessToken = Cached(response, elapsedMillis())
         return response
+    }
+
+    /**
+     * Finishes a login that outlived the process that started it (scenario 12): the redirect is
+     * awaited ([AuthorizationFlow.resumePendingAuthorization]), validated against the restored
+     * request, and the code exchanged, the ID token validated, the grant persisted and
+     * `Authenticated` published by the same steps [login] ends with. `max_age` comes from the
+     * restored request, since no caller is left to supply it.
+     *
+     * Returns null when nothing was pending. Throws what [login] throws, and
+     * `Recoverable(PendingRequestExpired)` when the request is older than ten minutes or its
+     * redirect does not arrive within what is left of them.
+     */
+    public suspend fun resumePendingLogin(): TokenResponse? {
+        val grant = flow.resumePendingAuthorization() ?: return null
+        return finishLogin(grant, grant.maxAge)
     }
 
     /**

@@ -3,8 +3,11 @@ package versola.oauth
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import java.util.concurrent.atomic.AtomicInteger
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
 import mockwebserver3.Dispatcher
@@ -22,6 +25,8 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import versola.oauth.core.BrowserAuthorizationSession
+import versola.oauth.core.BrowserOutcome
 import versola.oauth.core.IdTokenRejection
 import versola.oauth.core.PushedAuthorization
 import versola.oauth.core.SessionState
@@ -35,6 +40,21 @@ private class RecordingLogger : VersolaLogger {
     override fun info(message: String) {}
     override fun warn(message: String) {
         warnings += message
+    }
+}
+
+/**
+ * The browser of a process the redirect cold-started: nothing is opened, and what the OS
+ * delivered is waiting in [outcome]. [awaited] counts how often the SDK asked for it.
+ */
+private class ColdStartBrowser(private val outcome: () -> BrowserOutcome) : BrowserAuthorizationSession {
+    var awaited = 0
+
+    override suspend fun authorize(uri: String): BrowserOutcome = throw AssertionError("a cold-started process opens no browser")
+
+    override suspend fun awaitPendingRedirect(): BrowserOutcome {
+        awaited++
+        return outcome()
     }
 }
 
@@ -77,8 +97,11 @@ class OAuthClientTest {
 
     @After
     fun stop() {
+        OAuthClient.resumeScope = defaultResumeScope
         server.close()
     }
+
+    private val defaultResumeScope = OAuthClient.resumeScope
 
     /** The client id of the configuration under test: the ID token's audience. */
     private var clientId: String = CLIENT_ID
@@ -331,5 +354,113 @@ class OAuthClientTest {
         val outcome = client.logout()
         assertFalse(outcome.tokenRevoked)
         assertTrue(browser.launched.last().contains("id_token_hint="))
+    }
+
+    // ---- a redirect delivered to a cold-started process (scenario 12) ------------------------
+
+    private class KilledLogin(val configuration: OAuthConfiguration, val state: String, val nonce: String)
+
+    /**
+     * A login that opened the browser and then lost its process: the pending request is on disk,
+     * no caller is left, and the singleton registry of the dead process is gone.
+     */
+    private suspend fun kotlinx.coroutines.test.TestScope.killedMidBrowser(): KilledLogin {
+        val configuration = configuration()
+        browser.hold = CompletableDeferred()
+        val login = async(start = CoroutineStart.UNDISPATCHED) { runCatching { client(configuration).login() } }
+        browser.opened.await()
+        val query = browser.launched.single().substringAfter('?').split('&').associate { it.substringBefore('=') to it.substringAfter('=') }
+        login.cancelAndJoin()
+        OAuthClient.forgetAll()
+        return KilledLogin(configuration, query.getValue("state"), query.getValue("nonce"))
+    }
+
+    private fun redirectFor(killed: KilledLogin, state: String = killed.state, iss: String = provider.issuer) =
+        BrowserOutcome.Redirect("$REDIRECT_URI?code=the-code&state=$state&iss=${java.net.URLEncoder.encode(iss, "UTF-8")}")
+
+    private fun kotlinx.coroutines.test.TestScope.restartWith(killed: KilledLogin, cold: ColdStartBrowser): OAuthClient {
+        OAuthClient.resumeScope = backgroundScope
+        return OAuthClient.create(application, killed.configuration, browser = cold, keyProvider = ReversingKeyProvider)
+    }
+
+    @Test
+    fun `a redirect delivered to a cold-started process completes the sign-in on its own`() = runTest {
+        val killed = killedMidBrowser()
+        tokenBody = { tokenResponse(refreshToken = true, nonce = killed.nonce) }
+        val cold = ColdStartBrowser { redirectFor(killed) }
+
+        val client = restartWith(killed, cold)
+
+        // Nothing is called: the app only observes. Authorizing first, never Unauthenticated.
+        val states = mutableListOf<SessionState>()
+        client.sessionState.first { it.also(states::add) == SessionState.Authenticated }
+        assertEquals(SessionState.Authorizing, states.first())
+        assertFalse(SessionState.Unauthenticated in states)
+        assertEquals("alice", client.claims?.subject)
+        assertEquals("at", client.accessToken().value)
+        assertEquals(1, cold.awaited)
+        // The restored verifier produced the exchange, and the code was spent once.
+        assertEquals(1, requests.count { it.url.encodedPath == "/token" })
+        assertTrue(requests.single { it.url.encodedPath == "/token" }.body!!.utf8().contains("code_verifier="))
+        // Persisted: a third process restores a session without the browser.
+        OAuthClient.forgetAll()
+        assertEquals(SessionState.Authenticated, client(killed.configuration).sessionState.first())
+    }
+
+    @Test
+    fun `a cold-started process with nothing pending waits for no redirect`() = runTest {
+        val configuration = configuration()
+        val cold = ColdStartBrowser { throw AssertionError("nothing to wait for") }
+        OAuthClient.resumeScope = backgroundScope
+
+        val client = OAuthClient.create(application, configuration, browser = cold, keyProvider = ReversingKeyProvider)
+
+        assertEquals(SessionState.Unauthenticated, client.sessionState.first())
+        testScheduler.advanceUntilIdle()
+        assertEquals(0, cold.awaited)
+        assertTrue(requests.isEmpty())
+    }
+
+    @Test
+    fun `a redirect carrying another state is refused in a cold-started process before any token request`() = runTest {
+        val killed = killedMidBrowser()
+        val cold = ColdStartBrowser { redirectFor(killed, state = "forged") }
+
+        val client = restartWith(killed, cold)
+
+        assertEquals(SessionState.Unauthenticated, client.sessionState.first { it != SessionState.Authorizing })
+        assertTrue(requests.none { it.url.encodedPath == "/token" })
+        assertNull(client.claims)
+        assertTrue(logger.warnings.any { it.contains("StateMismatch") })
+        // The failed request is gone: a cold start after this one reports nothing pending.
+        OAuthClient.forgetAll()
+        assertEquals(SessionState.Unauthenticated, client(killed.configuration).sessionState.first())
+    }
+
+    @Test
+    fun `a redirect from another issuer is refused in a cold-started process before any token request`() = runTest {
+        val killed = killedMidBrowser()
+        val cold = ColdStartBrowser { redirectFor(killed, iss = "https://evil.example.com") }
+
+        val client = restartWith(killed, cold)
+
+        assertEquals(SessionState.Unauthenticated, client.sessionState.first { it != SessionState.Authorizing })
+        assertTrue(requests.none { it.url.encodedPath == "/token" })
+        assertTrue(logger.warnings.any { it.contains("IssuerMismatch") })
+    }
+
+    @Test
+    fun `an ID token with the wrong nonce is refused in a cold-started process and nothing is persisted`() = runTest {
+        val killed = killedMidBrowser()
+        tokenBody = { tokenResponse(refreshToken = true, nonce = "not-the-one") }
+        val cold = ColdStartBrowser { redirectFor(killed) }
+
+        val client = restartWith(killed, cold)
+
+        assertEquals(SessionState.Unauthenticated, client.sessionState.first { it != SessionState.Authorizing })
+        assertNull(client.claims)
+        assertTrue(runCatching { client.accessToken() }.exceptionOrNull() is VersolaError.Reauthenticate)
+        OAuthClient.forgetAll()
+        assertEquals(SessionState.Unauthenticated, client(killed.configuration).sessionState.first())
     }
 }
