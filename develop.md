@@ -14,7 +14,7 @@ right and this file is stale.
 | Kotlin | 2.4.20 | pinned in `android/build.gradle.kts`; `explicitApi()` is on |
 | Gradle | 9.7.1 | through the wrapper, never a system Gradle |
 | Xcode | 16.3 or newer, with an iOS simulator | `Package.swift` (swift-tools 6.0, Swift 6 language mode) |
-| Flutter | not installed yet | `flutter/` is a placeholder; the plan is to pin it with fvm |
+| Flutter | 3.47.8 (Dart 3.13.7) | pinned in `flutter/.fvmrc`, run through [fvm](https://fvm.app) (`brew install fvm`, then `fvm install` in `flutter/`) |
 | Python | 3.12 | `tools/validate-scenarios.py` |
 | Docker | any recent | the conformance stack and, once #46 lands, the provider containers |
 | jq | any recent | the agent hooks under `.claude/` |
@@ -44,7 +44,7 @@ android/         Gradle multi-project: oauth-core (protocol engine, plain Kotlin
                  edge back channel), dpop, storage, browser, okhttp, sdk (the Versola facade),
                  oauth (the generic OAuthClient facade)
 ios/Sources/     Swift targets (OAuthCore, OAuthClient; Versola* placeholders); the manifest is Package.swift at the repo root
-flutter/         plugin + Pigeon bridge (placeholder)
+flutter/         versola_oauth: the Flutter binding (Pigeon bridge over the native facades)
 conformance/     harness driving every SDK against a staged Versola stack
 tools/           validate-scenarios.py
 ```
@@ -95,9 +95,26 @@ Xcode upgrades (it moved from "iPhone 16" to "iPhone 17"); list yours with
 
 ### Flutter
 
-Not installed and not built yet. When the plugin lands, Flutter is pinned with fvm and this
-section gets the `flutter analyze` and `flutter test` commands. No protocol logic lives in
-Dart: the binding calls the native SDKs through Pigeon.
+Run from `flutter/versola_oauth/`. Flutter is pinned in `flutter/.fvmrc`; `fvm install` in
+`flutter/` fetches it once, and every command goes through `fvm` so the system Flutter, if any,
+is never used. No protocol logic lives in Dart: the binding calls the native SDKs through Pigeon.
+
+```bash
+fvm dart run pigeon --input pigeons/messages.dart   # regenerate the bridge after editing the contract
+fvm dart format --set-exit-if-changed .
+fvm flutter analyze
+fvm flutter test                                    # Dart unit tests, bridge mocked
+cd example && fvm flutter build apk --debug          # the example app on Android
+cd example && fvm flutter build ios --no-codesign    # and on iOS
+cd example/ios && xcodebuild test -workspace Runner.xcworkspace -scheme Runner \
+  -destination "platform=iOS Simulator,name=iPhone 17" -only-testing:RunnerTests   # the Swift glue's unit tests
+cd example/android && ./gradlew :versola_oauth:testDebugUnitTest                  # the Kotlin glue's unit tests
+```
+
+The example's Android build includes `android/` as a composite build and substitutes the
+`kz.versola:oauth-android` artefact, which is not published yet, with the `:oauth` project; it
+needs the same `JAVA_HOME` (21) and `ANDROID_HOME` as the Android build. The iOS half depends on
+the repository package by path (Swift Package Manager only; the SDK is not on CocoaPods).
 
 ### Spec and Markdown
 

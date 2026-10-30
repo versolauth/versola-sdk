@@ -6,5 +6,5 @@
     "MD041": false,
     "MD060": false
   },
-  "ignores": ["LICENSE", "node_modules"]
+  "ignores": ["LICENSE", "node_modules", "flutter/.fvm", "flutter/*/build", "flutter/*/.dart_tool"]
 }

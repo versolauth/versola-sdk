@@ -4,9 +4,8 @@ paths: ["flutter/**"]
 
 # Flutter
 
-`flutter/` is a placeholder today and Flutter is not installed on the maintainer's Mac (issue #46,
-"Prerequisites": a pinned Flutter in `flutter/.fvmrc` is proposed). These rules hold when the
-plugin lands: `versola_oauth` for the generic SDK, and the Versola plugin later. Security rules are
+`flutter/versola_oauth` is the generic SDK's binding (issue #46, B6); the Versola plugin comes
+later. Flutter is pinned in `flutter/.fvmrc` and run through fvm (`develop.md`). Security rules are
 in `security.md`; what the platform SDKs do is in `android-kotlin.md` and `ios-swift.md`.
 
 ## A binding, not a third implementation
@@ -20,6 +19,12 @@ in `security.md`; what the platform SDKs do is in `android-kotlin.md` and `ios-s
 - Native code in the plugin (`flutter/<plugin>/android`, `.../ios`) is glue: it calls the native
   SDK's public API (not its `@VersolaInternalApi` wiring) and converts types. It contains no
   protocol logic either, and it adds no second copy of the Android or iOS rules.
+- The native SDKs are consumed as this repository's own builds: the Android half depends on
+  `kz.versola:oauth-android`, which the example app's `settings.gradle.kts` substitutes with the
+  `:oauth` project through a composite build until the artefact is published; the iOS half depends
+  on the root `Package.swift` by path (SwiftPM only, no podspec: CocoaPods is dormant). Both pins
+  (AGP and Kotlin in the example, the iOS floor in the plugin's `Package.swift`) follow the
+  native builds and change with them.
 
 ## Bridge
 
@@ -34,9 +39,23 @@ in `security.md`; what the platform SDKs do is in `android-kotlin.md` and `ios-s
   platform error is mapped; an unmapped one is a `Configuration` with a detail, never a crash.
 - `Stream<SessionState>` comes from an event channel fed by the native `Flow` / `AsyncStream`. The
   stream carries the seven states of `spec/state-machine.md` and no Flutter-only state. Cancel the
-  native collection when the Dart subscription cancels.
+  native collection when the Dart subscription cancels. One channel per client: the Pigeon
+  `instanceName` is the handle native's `create` answered with, so Dart derives no identity of its
+  own. Pigeon's generated stream is single-listener per channel name (a second `EventChannel` of
+  the same name replaces the first's handler), so the Dart client subscribes once and shares the
+  subscription among its listeners.
+- Every host method answers a Result, including the ones that look infallible (`sessionState`,
+  `claims`, `logout`, `keyAttestation`), and native catches everything: an SDK error crosses as
+  itself, any other exception as a `Configuration` naming only its class. A channel failure that
+  still reaches Dart is turned into a `ConfigurationError` carrying the exception's code and none
+  of its message. A native case Dart does not know is `unknown` with the name, never a different
+  real case (a guessed `network` starts a retry loop).
+- Registering an event channel's handler (`FlutterEventChannel.setStreamHandler`,
+  `EventChannel.setStreamHandler`) happens on the platform thread; on iOS that is a `MainActor`
+  hop out of any actor, or the engine aborts the process.
 - Generated files (`*.g.dart`, the generated Kotlin and Swift) are never hand-edited, and the guard
-  hook denies it; change the Pigeon definition and regenerate. They are not exported from
+  hook denies it; change the Pigeon definition (`pigeons/messages.dart`) and regenerate with
+  `fvm dart run pigeon --input pigeons/messages.dart`. They are not exported from
   `lib/<package>.dart` and no generated type appears in the public Dart API ("subject to change
   without warning" upstream): public types are hand-written wrappers.
 

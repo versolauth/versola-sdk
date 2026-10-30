@@ -264,12 +264,12 @@ handled in app code after `logout()` has wiped locally; the SDK does not special
 |---|---|---|---|
 | Entry point | `OAuthClient.create(context, config)` | `OAuthClient.create(configuration:presentationAnchor:)` (static, async: one instance per configuration per process, as on Android; an `init` could not return an existing one) | `OAuthClient.create(config)` |
 | Configuration | `OAuthConfiguration(...)` data class | `OAuthConfiguration` struct | `OAuthConfiguration` |
-| State | `Flow<SessionState>` (cold; the first emission is the restored state, which a `StateFlow` could not promise) | `sessionStates() -> AsyncStream<SessionState>` (one stream per observer) | `Stream<SessionState>` |
+| State | `Flow<SessionState>` (cold; the first emission is the restored state, which a `StateFlow` could not promise) | `sessionStates() -> AsyncStream<SessionState>` (one stream per observer) | `Stream<SessionState> sessionStates()` (any number of listeners over one native subscription; a late listener first gets the latest state), `Future<SessionState> currentSessionState()` |
 | Sign-in | `suspend fun login(options)` | `func login(_ options:) async throws` | `Future<void> login([options])` |
 | Options | `LoginOptions` data class | `LoginOptions` struct | `LoginOptions` |
 | Sign-out | `suspend fun logout(options): LogoutOutcome` | `func logout(_:) async -> LogoutOutcome` | `Future<LogoutOutcome> logout([options])` |
 | Token | `suspend fun accessToken(): AccessToken` | `func accessToken() async throws -> AccessToken` | `Future<AccessToken> accessToken()` |
-| Claims | `val claims: IdTokenClaims?` | `var claims: IdTokenClaims? { get async }` | `IdTokenClaims? get claims` |
+| Claims | `val claims: IdTokenClaims?` | `var claims: IdTokenClaims? { get async }` | `Future<IdTokenClaims?> claims()` (a method, not a getter: the claims stay native, so the answer is asynchronous, and a `Future` getter would make `client.claims != null` always true) |
 | UserInfo | `suspend fun userInfo(): UserInfo` | `func userInfo() async throws -> UserInfo` | `Future<UserInfo> userInfo()` |
 | Step-up | `suspend fun stepUp(challenge, options)` | `func stepUp(acrValues:maxAge:options:) async throws` (the challenge is the `stepUp` case's payload) | `Future<void> stepUp(challenge, [options])` |
 | HTTP | `interceptor(origins)`, `authenticatedClient(origins)` | `authenticatedSession(origins)` | `accessToken()` |

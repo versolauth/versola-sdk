@@ -24,13 +24,18 @@ updates:
       swift:
         patterns: ["*"]
         update-types: ["minor", "patch"]
-  # Dormant: flutter/ is a placeholder with no pubspec.yaml. Dependabot starts opening PRs when
-  # one is committed; the entry is here so the Dart package is covered from its first commit.
+  # The versola_oauth plugin (flutter/versola_oauth/pubspec.yaml); pins are exact, so every
+  # update is a PR.
   - package-ecosystem: pub
-    directory: /flutter
+    directory: /flutter/versola_oauth
     schedule:
       interval: weekly
     open-pull-requests-limit: 3
+    # The Pigeon version is part of the contract: both native halves are generated from
+    # pigeons/messages.dart with it, so a bump that does not regenerate leaves the generated
+    # files claiming the old version under a new pin. Bump it by hand, with the regeneration.
+    ignore:
+      - dependency-name: pigeon
     groups:
       pub:
         patterns: ["*"]
