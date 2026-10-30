@@ -296,16 +296,21 @@ public final class OAuthClient: Sendable {
             )
         }
 
+        // The Keychain outlives the app: a reinstall must not open signed in as the previous
+        // install's user (`FirstLaunchGuard`). One guard for every Keychain store of this client.
+        let storageKey = configuration.storageKey
+        let firstLaunch = FirstLaunchGuard(directory: directory, deleteAll: { try KeychainItem.deleteAll(service: KeychainItem.service(forStorageKey: storageKey)) })
+
         let dpopKey: SecureEnclaveDpopKey?
         if case .dpop(let required) = configuration.tokenBinding {
-            dpopKey = makeDpopKey?(required, logger) ?? SecureEnclaveDpopKey(storageKey: configuration.storageKey, requireHardware: required, logger: logger)
+            dpopKey = makeDpopKey?(required, logger) ?? SecureEnclaveDpopKey(storageKey: configuration.storageKey, requireHardware: required, logger: logger, firstLaunch: firstLaunch)
         } else {
             dpopKey = nil
         }
         let proofs: DpopProofFactory? = dpopKey.map { DpopProofFactory(key: $0) }
 
-        let credentialStore: CredentialStore = injectedCredentials ?? KeychainCredentialStore(storageKey: configuration.storageKey, unlockPolicy: configuration.unlockPolicy)
-        let pendingStore: PendingAuthorizationStore = injectedPending ?? KeychainPendingAuthorizationStore(storageKey: configuration.storageKey, unlockPolicy: configuration.unlockPolicy)
+        let credentialStore: CredentialStore = injectedCredentials ?? KeychainCredentialStore(storageKey: configuration.storageKey, unlockPolicy: configuration.unlockPolicy, firstLaunch: firstLaunch)
+        let pendingStore: PendingAuthorizationStore = injectedPending ?? KeychainPendingAuthorizationStore(storageKey: configuration.storageKey, unlockPolicy: configuration.unlockPolicy, firstLaunch: firstLaunch)
         let webBrowser: WebAuthenticationBrowser? = injectedBrowser == nil
             ? WebAuthenticationBrowser(presentationAnchor: presentationAnchor!, appState: Self.isForeground, logger: logger)
             : nil

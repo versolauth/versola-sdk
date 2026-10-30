@@ -188,6 +188,15 @@ final class KeychainTests: XCTestCase {
         XCTAssertEqual(refresh2, "r2")
         XCTAssertNil(id2)
 
+        // A refresh: the ID token it returns is stored without a rotation, and one that returns
+        // none leaves the stored one alone.
+        try await credentials.saveRefreshed(refreshToken: nil, rawIdToken: "id3")
+        try await credentials.saveRefreshed(refreshToken: "r3", rawIdToken: nil)
+        let refresh3 = try await credentials.refreshToken()
+        let id3 = try await credentials.rawIdToken()
+        XCTAssertEqual(refresh3, "r3")
+        XCTAssertEqual(id3, "id3")
+
         try await credentials.savePendingRotation("rotation-1")
         let rotation = try await credentials.pendingRotation()
         XCTAssertEqual(rotation, "rotation-1")
@@ -202,11 +211,18 @@ final class KeychainTests: XCTestCase {
         let updated = try await pending.load()
         XCTAssertEqual(updated?.state, "state-2")
 
-        try await credentials.clear()
-        try await pending.clear()
+        // What a reinstall must not inherit: one query takes every account of the service.
+        try KeychainItem.deleteAll(service: KeychainItem.service(forStorageKey: storageKey))
         let goneGrant = try await credentials.hasGrant()
         let gonePending = try await pending.load()
+        let goneId = try await credentials.rawIdToken()
         XCTAssertFalse(goneGrant)
         XCTAssertNil(gonePending)
+        XCTAssertNil(goneId)
+
+        try await credentials.save(refreshToken: "r4", rawIdToken: "id4")
+        try await credentials.clear()
+        let clearedGrant = try await credentials.hasGrant()
+        XCTAssertFalse(clearedGrant)
     }
 }

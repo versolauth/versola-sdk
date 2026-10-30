@@ -34,17 +34,28 @@ package protocol DpopKeyStore: Sendable {
 /// user presence: a gated key breaks the background refresh (#1 section 4).
 package struct KeychainDpopKeyStore: DpopKeyStore {
     private let item: KeychainItem
+    private let firstLaunch: FirstLaunchGuard?
 
-    package init(storageKey: String, accessGroup: String? = nil) {
+    package init(storageKey: String, accessGroup: String? = nil, firstLaunch: FirstLaunchGuard? = nil) {
+        self.firstLaunch = firstLaunch
         item = KeychainItem(
             service: KeychainItem.service(forStorageKey: storageKey), account: "dpop-key",
             accessibility: .afterFirstUnlock, accessGroup: accessGroup
         )
     }
 
-    package func load() throws -> Data? { try item.read() }
-    package func save(_ data: Data) throws { try item.write(data) }
-    package func delete() throws { try item.delete() }
+    package func load() throws -> Data? {
+        try firstLaunch?.ensure()
+        return try item.read()
+    }
+    package func save(_ data: Data) throws {
+        try firstLaunch?.ensure()
+        try item.write(data)
+    }
+    package func delete() throws {
+        try firstLaunch?.ensure()
+        try item.delete()
+    }
 }
 
 /// An EC P-256 key for DPoP proofs: a `SecureEnclave.P256` key where the device has one, a
@@ -99,9 +110,9 @@ package actor SecureEnclaveDpopKey: DpopSigningKey {
     ///   - requireHardware: throw `hardwareBindingUnavailable` instead of falling back to a
     ///     software key (`TokenBinding.dpop` with a hardware requirement).
     ///   - logger: receives the one warning a software-tier key deserves.
-    package init(storageKey: String, accessGroup: String? = nil, requireHardware: Bool = false, logger: (any OAuthLogger)? = nil) {
+    package init(storageKey: String, accessGroup: String? = nil, requireHardware: Bool = false, logger: (any OAuthLogger)? = nil, firstLaunch: FirstLaunchGuard? = nil) {
         self.init(
-            store: KeychainDpopKeyStore(storageKey: storageKey, accessGroup: accessGroup), requireHardware: requireHardware,
+            store: KeychainDpopKeyStore(storageKey: storageKey, accessGroup: accessGroup, firstLaunch: firstLaunch), requireHardware: requireHardware,
             logger: logger, secureEnclaveAvailable: SecureEnclave.isAvailable
         )
     }

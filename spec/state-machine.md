@@ -371,6 +371,18 @@ one grant to one device-installation; reusing it across users on a shared device
 | Clock skew offset | Memory | no | no |
 | Discovery metadata | Disk, unencrypted | yes | yes |
 
+**Uninstall.** Android's credentials are files in the app's own data and go with the app. The
+iOS Keychain outlives it: a reinstall on the same device would otherwise open signed in as the
+previous install's user. The iOS SDK therefore writes a marker file beside its caches
+(Application Support, excluded from backup, so it goes with the app and is not restored by an
+iCloud backup) and, on the first launch that finds neither a marker nor any cache, deletes every
+Keychain item of the client (refresh token, ID token, rotation slot, pending request, DPoP key)
+before any of them is read. A launch that finds caches but no marker is an upgrade from a version
+that wrote none, and keeps its session. If the delete fails because the device is locked, the
+marker is not written and the operation that triggered it fails with `Recoverable(UnlockRequired)`;
+the next one tries again. A Keychain access group shared between apps is not subject to this
+(an item in a shared group outlives any one app on purpose); the generic facade configures none.
+
 Discovery metadata is not credential material and is cached across logout deliberately: a
 re-login should not need a round trip to `/.well-known/openid-configuration`. The two native
 endpoints are kept for the same reason: a refresh in a later process signs for them and has no

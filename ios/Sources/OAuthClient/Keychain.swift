@@ -144,6 +144,19 @@ struct KeychainItem: Sendable {
         if status != errSecSuccess { throw Self.error(for: status) }
     }
 
+    /// Every item of a client's service, whatever its account: the one query `FirstLaunchGuard`
+    /// needs, which deletes the DPoP key and the pending request along with the credentials.
+    static func deleteAll(service: String) throws {
+        let query: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrSynchronizable as String: false,
+            kSecUseDataProtectionKeychain as String: true,
+        ]
+        let status = SecItemDelete(query as CFDictionary)
+        if status != errSecSuccess && status != errSecItemNotFound { throw error(for: status) }
+    }
+
     func delete() throws {
         let status = SecItemDelete(query as CFDictionary)
         if status != errSecSuccess && status != errSecItemNotFound { throw Self.error(for: status) }
@@ -176,8 +189,10 @@ package actor KeychainCredentialStore: CredentialStore {
     private let refreshItem: KeychainItem
     private let idTokenItem: KeychainItem
     private let rotationItem: KeychainItem
+    private let firstLaunch: FirstLaunchGuard?
 
-    package init(storageKey: String, unlockPolicy: UnlockPolicy, accessGroup: String? = nil) {
+    package init(storageKey: String, unlockPolicy: UnlockPolicy, accessGroup: String? = nil, firstLaunch: FirstLaunchGuard? = nil) {
+        self.firstLaunch = firstLaunch
         let service = KeychainItem.service(forStorageKey: storageKey)
         let accessibility = KeychainAccessibility(unlockPolicy)
         refreshItem = KeychainItem(service: service, account: "refresh-token", accessibility: accessibility, accessGroup: accessGroup)
@@ -186,15 +201,25 @@ package actor KeychainCredentialStore: CredentialStore {
     }
 
     /// Attributes only: a cold start must not turn into an unlock prompt under `onAppUnlock`.
-    package func hasGrant() async throws -> Bool { try refreshItem.exists() }
+    package func hasGrant() async throws -> Bool {
+        try firstLaunch?.ensure()
+        return try refreshItem.exists()
+    }
 
-    package func refreshToken() async throws -> String? { try refreshItem.read().flatMap { String(data: $0, encoding: .utf8) } }
+    package func refreshToken() async throws -> String? {
+        try firstLaunch?.ensure()
+        return try refreshItem.read().flatMap { String(data: $0, encoding: .utf8) }
+    }
 
-    package func rawIdToken() async throws -> String? { try idTokenItem.read().flatMap { String(data: $0, encoding: .utf8) } }
+    package func rawIdToken() async throws -> String? {
+        try firstLaunch?.ensure()
+        return try idTokenItem.read().flatMap { String(data: $0, encoding: .utf8) }
+    }
 
     /// The refresh token first, then the ID token: if the process dies between the two the
     /// grant is the new one, which is the part that cannot be recovered.
     package func save(refreshToken: String, rawIdToken: String?) async throws {
+        try firstLaunch?.ensure()
         try refreshItem.write(Data(refreshToken.utf8))
         if let rawIdToken {
             try idTokenItem.write(Data(rawIdToken.utf8))
@@ -205,11 +230,13 @@ package actor KeychainCredentialStore: CredentialStore {
     }
 
     package func saveRefreshed(refreshToken: String?, rawIdToken: String?) async throws {
+        try firstLaunch?.ensure()
         if let refreshToken { try refreshItem.write(Data(refreshToken.utf8)) }
         if let rawIdToken { try idTokenItem.write(Data(rawIdToken.utf8)) }
     }
 
     package func savePendingRotation(_ idempotencyKey: String?) async throws {
+        try firstLaunch?.ensure()
         if let idempotencyKey {
             try rotationItem.write(Data(idempotencyKey.utf8))
         } else {
@@ -217,12 +244,16 @@ package actor KeychainCredentialStore: CredentialStore {
         }
     }
 
-    package func pendingRotation() async throws -> String? { try rotationItem.read().flatMap { String(data: $0, encoding: .utf8) } }
+    package func pendingRotation() async throws -> String? {
+        try firstLaunch?.ensure()
+        return try rotationItem.read().flatMap { String(data: $0, encoding: .utf8) }
+    }
 
     /// Every item is attempted, the refresh token first, and the failures come back together: a
     /// delete that fails (a locked device) must not leave the other two behind, and the caller
     /// must not be told the wipe succeeded while a credential remains.
     package func clear() async throws {
+        try firstLaunch?.ensure()
         try KeychainItem.deleteAll([
             (refreshItem.account, refreshItem.delete),
             (idTokenItem.account, idTokenItem.delete),
@@ -237,8 +268,10 @@ package actor KeychainCredentialStore: CredentialStore {
 /// it is a credential and gets the same class as the refresh token).
 package actor KeychainPendingAuthorizationStore: PendingAuthorizationStore {
     private let item: KeychainItem
+    private let firstLaunch: FirstLaunchGuard?
 
-    package init(storageKey: String, unlockPolicy: UnlockPolicy, accessGroup: String? = nil) {
+    package init(storageKey: String, unlockPolicy: UnlockPolicy, accessGroup: String? = nil, firstLaunch: FirstLaunchGuard? = nil) {
+        self.firstLaunch = firstLaunch
         item = KeychainItem(
             service: KeychainItem.service(forStorageKey: storageKey), account: "pending-authorization",
             accessibility: KeychainAccessibility(unlockPolicy), accessGroup: accessGroup
@@ -246,10 +279,12 @@ package actor KeychainPendingAuthorizationStore: PendingAuthorizationStore {
     }
 
     package func save(_ request: PendingAuthorizationRequest) async throws {
+        try firstLaunch?.ensure()
         try item.write(try PendingRequestCoding.encode(request))
     }
 
     package func load() async throws -> PendingAuthorizationRequest? {
+        try firstLaunch?.ensure()
         guard let data = try item.read() else { return nil }
         // A record this version cannot read is no record: the flow starts over rather than
         // failing every launch. It is removed so the next save is not an update of garbage.
@@ -260,7 +295,10 @@ package actor KeychainPendingAuthorizationStore: PendingAuthorizationStore {
         return request
     }
 
-    package func clear() async throws { try item.delete() }
+    package func clear() async throws {
+        try firstLaunch?.ensure()
+        try item.delete()
+    }
 }
 
 enum PendingRequestCoding {
