@@ -1085,11 +1085,12 @@ class SessionCoordinatorTest {
         // `Unauthenticated`, not `Authenticated`.
         val (coordinator, tokenClient, credentialStore) = coordinator()
         val gate = CompletableDeferred<Unit>()
-        credentialStore.pendingRotationDelay = gate
         assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+        credentialStore.hasGrantGate = gate
 
         val abandoned = async(start = CoroutineStart.UNDISPATCHED) { coordinator.refresh() }
-        assertEquals(SessionState.Refreshing, coordinator.sessionState.first())
+        // The grant is asked about before `Refreshing` is published: nothing was entered.
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
         abandoned.cancelAndJoin()
 
         assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
@@ -1579,6 +1580,40 @@ class SessionCoordinatorTest {
         // Nothing was stored, so nothing is wiped: the key a login may be about to bind to stays.
         assertEquals(0, credentialStore.clears)
         assertEquals(0, teardowns)
+    }
+
+    @Test
+    fun `a session whose grant was removed from under it settles Unauthenticated and drops its token, wiping nothing`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = stored()
+        tokenClient.refreshActions = mutableListOf({ issued(accessToken = "held") })
+        coordinator.refresh()
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+        credentialStore.refreshToken = null // removed from under the app, not cleared by the SDK
+
+        val error = failure { coordinator.refresh() }
+
+        assertTrue(error is VersolaError.Reauthenticate)
+        assertEquals(1, tokenClient.refreshCalls.size)
+        assertNull(coordinator.currentAccessToken())
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+        assertEquals(0, credentialStore.clears)
+        assertEquals(0, teardowns)
+    }
+
+    @Test
+    fun `a real invalid_grant still wipes`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = coordinator()
+        credentialStore.refreshToken = stored()
+        tokenClient.refreshActions = mutableListOf({
+            throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.GrantRejected)
+        })
+
+        failure { coordinator.refresh() }
+
+        assertEquals(1, credentialStore.clears)
+        assertEquals(1, teardowns)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
     }
 
     @Test

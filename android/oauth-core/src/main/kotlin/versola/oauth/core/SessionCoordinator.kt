@@ -512,7 +512,6 @@ public class SessionCoordinator(
             }
 
             val startedIn = epoch.get()
-            flow.setState(SessionState.Refreshing)
 
             val result = try {
                 Result.success(performRefresh(startedIn, priorState))
@@ -566,6 +565,12 @@ public class SessionCoordinator(
 
     private suspend fun performRefresh(startedIn: Long, priorState: SessionState): TokenResponse {
         val response = try {
+            // Asked before `Refreshing` is published, and without the storage key: a refresh with
+            // no grant stored makes no token request and is not a transition at all (see the
+            // `NoGrantStored` catch). The answer is re-checked below, where the token is unwrapped,
+            // because the store can change between the two.
+            if (!credentialStore.hasGrant()) throw NoGrantStored()
+            flow.setState(SessionState.Refreshing)
             // Step 1. Recorded once, from one unwrap that spends nothing — hashing does not
             // take ownership of what it reads, so this unwrap is independent of the one(s)
             // below and leaves the stored token exactly as it was.
@@ -676,13 +681,20 @@ public class SessionCoordinator(
             // anyway destroys what is *not* the grant's: the pending authorization of a login in
             // flight (an app that asks for a token before it has looked at `sessionState`) and the
             // DPoP key its `dpop_jkt` already committed that authorization to, after which the
-            // code exchange signs with a key the code is not bound to. The state goes back to
-            // where there is something to wait for, or to signed out; the caller is told the
-            // session is not there, as before.
-            publishIfCurrent(
-                startedIn,
-                if (priorState == SessionState.Authorizing) SessionState.Authorizing else SessionState.Unauthenticated,
-            )
+            // code exchange signs with a key the code is not bound to. The state is where it was
+            // (`Authorizing` stays, so does `Unauthenticated`); a session that believed it held a
+            // grant — the item was removed from under the app — settles `Unauthenticated` with its
+            // in-memory token and claims dropped. The caller is told the session is not there.
+            refreshFlight.mutex.withLock {
+                if (epoch.get() == startedIn) {
+                    if (priorState != SessionState.Authorizing) {
+                        cachedAccessToken = null
+                        claims = null
+                        claimsRestored = false
+                    }
+                    flow.setState(if (priorState == SessionState.Authorizing) SessionState.Authorizing else SessionState.Unauthenticated)
+                }
+            }
             throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.GrantRejected)
         } catch (e: CancellationException) {
             // Not an outcome of the refresh, and not this function's to settle: [refresh]
