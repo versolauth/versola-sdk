@@ -302,7 +302,9 @@ Mandatory on every platform, before the token response is persisted (OIDC Core 3
 
 1. Signature with a key from `jwks_uri` (cached for the same lifetime as the discovery document, so
    a withdrawn key stops being trusted within a day even in a long-running process, and an expired
-   set is never served when its refetch fails; refetched once on an unknown `kid`), algorithm in
+   set is not served when its refetch fails, except to the check of a refresh's ID token, up to a
+   week past its lifetime (`retry-policy.md`, "A stale key set for a refresh"); refetched once on
+   an unknown `kid`), algorithm in
    the closed set `RS256`, `PS256`, `ES256`, `ES384`, `ES512`, `RS384`, `RS512`, `PS384`, `PS512`,
    and in `id_token_signing_alg_values_supported` when advertised; `none` and HMAC algorithms are
    refused (a public client has no secret to verify with).

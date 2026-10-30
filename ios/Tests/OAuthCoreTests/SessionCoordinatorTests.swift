@@ -21,7 +21,13 @@ final class SessionCoordinatorTests: XCTestCase {
         var rotationAtRequest: [String?] = []
         func hasGrant() async throws -> Bool { refresh != nil }
         func refreshToken() async throws -> String? { refresh }
-        func rawIdToken() async throws -> String? { idToken }
+        /// A read of the ID token that fails, as a Keychain that locked mid-refresh does.
+        var idTokenReadFailure: OAuthError?
+        func failIdTokenReads(_ error: OAuthError?) { idTokenReadFailure = error }
+        func rawIdToken() async throws -> String? {
+            if let idTokenReadFailure { throw idTokenReadFailure }
+            return idToken
+        }
         var saveFailure: OAuthError?
         func failSave(_ error: OAuthError?) { saveFailure = error }
         func save(refreshToken: String, rawIdToken: String?) async throws {
@@ -804,6 +810,43 @@ final class SessionCoordinatorTests: XCTestCase {
         // The login's validation saw rt-1 stored (it ran before the save), the refresh's saw rt-2.
         let seen = await observed.value
         XCTAssertEqual(seen.last, "rt-2", "validation of a refresh's ID token starts with the rotation already stored")
+    }
+
+    /// Writing the rotation must not depend on reading anything: a store that locks between the
+    /// answer and the write would otherwise lose the rotation and replay a spent token.
+    func testTheRotationIsWrittenWithoutReadingTheStoredIdToken() async throws {
+        let f = try await loggedInWithShortToken()
+        await f.store.failIdTokenReads(.recoverable(.unlockRequired))
+
+        _ = try? await f.coordinator.accessToken()
+
+        let stored = await f.store.refresh
+        XCTAssertEqual(stored, "rt-2")
+        let slot = await f.store.rotation
+        XCTAssertNil(slot)
+    }
+
+    /// A stale key set is for the refresh's ID token alone (`JwksStaleness`): the login's check
+    /// must not see it allowed.
+    func testOnlyTheIdTokenOfARefreshMayBeJudgedAgainstAStaleKeySet() async throws {
+        let seen = Box<[Bool]>([])
+        let f = try fixture(answers: [.success(response(refresh: "rt-1", expiresIn: 60)), .success(response(refresh: "rt-2"))], validatorOverride: StalenessProbeValidator(seen: seen))
+        try await f.coordinator.login(scopes: ["openid"])
+        f.clock.advance(61)
+        _ = try await f.coordinator.accessToken()
+
+        let allowed = await seen.value
+        XCTAssertEqual(allowed, [false, true], "login, then refresh")
+    }
+
+    private struct StalenessProbeValidator: IdTokenValidator {
+        let seen: Box<[Bool]>
+        func validate(idToken: String, expectedNonce: String?, accessToken: String?, maxAge: Int?, previous: IdTokenClaims?, serverTime: Date?) async throws -> IdTokenClaims {
+            var all = await seen.value
+            all.append(JwksStaleness.allowed)
+            await seen.set(all)
+            return try IdTokenClaimsParser.parseStored(idToken)
+        }
     }
 
     func testARefreshAnsweredWithoutAnIdTokenKeepsTheStoredOne() async throws {

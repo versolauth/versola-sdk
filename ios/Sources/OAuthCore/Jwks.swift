@@ -21,6 +21,15 @@ package actor MemoryJwksCache: JwksCache {
     package func lifetime() async throws -> TimeInterval? { storedLifetime }
 }
 
+/// Whether a key set past its lifetime may be used when the provider cannot be reached for a
+/// fresh one. Off everywhere except the check of the ID token on a **refresh**, where the
+/// provider has already rotated the refresh token and a key-set outage would otherwise cost the
+/// session its access token on every attempt for as long as the outage lasts. A task-local, so
+/// the rule is the caller's and the key client has no flag to forget to clear.
+package enum JwksStaleness {
+    @TaskLocal package static var allowed = false
+}
+
 /// Fetches and caches the provider's JWK Set (`jwks_uri`).
 ///
 /// The HTTP client is the facade's and never follows redirects for the SDK's own requests: the
@@ -37,9 +46,14 @@ package actor JwksClient {
     package struct Loaded: Sendable {
         package let keys: JsonWebKeySet
         package let fetched: Bool
-        package init(keys: JsonWebKeySet, fetched: Bool) {
+        /// Past its lifetime, served because the provider could not be reached
+        /// (`JwksStaleness`). `fetched` is true then: a refetch has just failed, and another for an
+        /// unknown `kid` would only fail again.
+        package let stale: Bool
+        package init(keys: JsonWebKeySet, fetched: Bool, stale: Bool = false) {
             self.keys = keys
             self.fetched = fetched
+            self.stale = stale
         }
     }
 
@@ -86,7 +100,26 @@ package actor JwksClient {
             task = Task { try await self.fetchAndStore(uri) }
             inFlight = task
         }
-        return Loaded(keys: try await task.value, fetched: true)
+        do {
+            return Loaded(keys: try await task.value, fetched: true)
+        } catch let error as OAuthError {
+            // Only for a provider that could not be reached or answered badly for now, and only
+            // where the caller said an outage must not cost it more than the check: a document
+            // that is not a key set is a deployment fault and is never papered over.
+            if !forceRefresh, JwksStaleness.allowed, case .recoverable = error, let stale = await staleKeys() {
+                return Loaded(keys: stale, fetched: true, stale: true)
+            }
+            throw error
+        }
+    }
+
+    /// The expired set, while it is within `CacheLifetime.maximumStale` of its expiry.
+    private func staleKeys() async -> JsonWebKeySet? {
+        if let inMemory, clock.uptime() < inMemoryExpiresAt + CacheLifetime.maximumStale { return inMemory }
+        guard let stored = try? await cache.load(), let savedAt = (try? await cache.savedAt()).flatMap({ $0 }) else { return nil }
+        let lifetime = (try? await cache.lifetime()).flatMap { $0 } ?? CacheLifetime.defaultLifetime
+        let age = clock.now().timeIntervalSince(savedAt)
+        return age >= 0 && age < lifetime + CacheLifetime.maximumStale ? stored : nil
     }
 
     /// The key set held in memory, while it is within its lifetime.

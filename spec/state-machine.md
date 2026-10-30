@@ -227,7 +227,8 @@ session. What the app sees is the validation's own outcome, and the grant is int
 |---|---|---|---|---|
 | passes | stored | the new ones | none | `Authenticated` |
 | fails (`IdTokenRejected`: signature, `iss`, `aud`, `sub` changed, ...) | stored | not kept: the previous claims and stored ID token stand | `Configuration(IdTokenRejected)` | `Authenticated` |
-| cannot run (the key set cannot be fetched: `Network`, `Server`, `UnlockRequired`) | stored | not kept | the `Recoverable` cause | `Authenticated` (`Locked` for `UnlockRequired`) |
+| the key set cannot be fetched, but one past its lifetime (at most a week) holds the key | stored | the new ones, judged against that set (`retry-policy.md`, "A stale key set for a refresh") | none | `Authenticated` |
+| cannot run (the key set cannot be fetched and no usable stale one is held, or it lacks the `kid`: `Network`, `Server`, `UnlockRequired`) | stored | not kept: the previous access token is whatever the cache held (expired, which is why a refresh ran), nothing new | the `Recoverable` cause | `Authenticated` (`Locked` for `UnlockRequired`) |
 
 The stored ID token (what `id_token_hint` and the claims of a cold start are read from) is
 replaced only by one that **passed**, never by an unchecked one. A refresh response without

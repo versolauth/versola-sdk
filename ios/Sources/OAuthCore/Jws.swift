@@ -302,6 +302,11 @@ package struct JwsVerifier: Sendable {
 
         var loaded = try await jwks.keys(uri: uri, forceRefresh: false)
         var candidates = try Self.select(loaded.keys, token, algorithm)
+        if candidates.isEmpty && loaded.stale {
+            // The set in hand is past its lifetime because the provider could not be reached, and
+            // it lacks this key: an outage, not evidence of a forgery.
+            throw OAuthError.recoverable(.network(detail: "the key set could not be fetched, and the one held does not have this key", attempts: 1, elapsedMillis: 0))
+        }
         if candidates.isEmpty && !loaded.fetched {
             // One refetch, and only for a key the set in hand does not have (a rotation),
             // never for a signature that fails under a known key: a forgery must not cost a

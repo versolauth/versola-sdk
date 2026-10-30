@@ -362,7 +362,13 @@ package actor SessionCoordinator: AccessTokenSource {
             // token that is wrong and `recoverable` for a key set that could not be fetched.
             var refreshedClaims: IdTokenClaims?
             if let validator = idTokenValidator, let idToken = issued.idToken {
-                refreshedClaims = try await validator.validate(idToken: idToken, expectedNonce: nil, accessToken: issued.accessToken, maxAge: nil, previous: await restoreClaims(), serverTime: issued.serverDate)
+                // With a key set past its lifetime allowed when the provider cannot be reached for a
+                // new one (`JwksStaleness`): the rotation is already kept, and without this a key-set
+                // outage costs every `accessToken()` a rotation and its access token until it ends.
+                let previous = await restoreClaims()
+                refreshedClaims = try await JwksStaleness.$allowed.withValue(true) {
+                    try await validator.validate(idToken: idToken, expectedNonce: nil, accessToken: issued.accessToken, maxAge: nil, previous: previous, serverTime: issued.serverDate)
+                }
             }
             warnIfNoExpiry(issued)
             // The validation awaited; the grant may have been wiped meanwhile.

@@ -276,6 +276,107 @@ final class JwksTests: XCTestCase {
         guard case .recoverable? = error as? OAuthError else { return XCTFail("\(String(describing: error))") }
     }
 
+    // MARK: - Stale if error (the ID token of a refresh only)
+
+    /// The provider has already rotated the refresh token when the ID token is judged, so a key
+    /// set that cannot be refetched must not cost the refresh its access token for the length of
+    /// the outage: the expired set is used, bounded, and only for this check.
+    func testAnExpiredSetIsServedStaleToARefreshValidationWhenTheRefetchFails() async throws {
+        let stub = JoseStubHTTP()
+        await stub.enqueue("/jwks.json", headers: ["Cache-Control": "max-age=300"], body: JoseTestTokens.jwks(rsa))
+        await stub.enqueueFailure("/jwks.json")
+        let time = ManualClock()
+        let client = JwksClient(httpClient: stub, clock: time.clock)
+        _ = try await client.keys(uri: uri, forceRefresh: false)
+        time.advance(301)
+
+        let uri = self.uri
+        let loaded = try await staleAllowed { try await client.keys(uri: uri, forceRefresh: false) }
+
+        XCTAssertEqual(loaded.keys.keys, [rsa])
+        XCTAssertTrue(loaded.stale, "the caller can tell the set is past its lifetime")
+        XCTAssertTrue(loaded.fetched, "a refetch was just tried: the verifier must not try another for an unknown kid")
+    }
+
+    func testStaleIsNeverServedToAnyoneElse() async throws {
+        let stub = JoseStubHTTP()
+        await stub.enqueue("/jwks.json", headers: ["Cache-Control": "max-age=300"], body: JoseTestTokens.jwks(rsa))
+        await stub.enqueueFailure("/jwks.json")
+        let time = ManualClock()
+        let client = JwksClient(httpClient: stub, clock: time.clock)
+        _ = try await client.keys(uri: uri, forceRefresh: false)
+        time.advance(301)
+
+        let error = await joseThrown { _ = try await client.keys(uri: uri, forceRefresh: false) }
+
+        guard case .recoverable? = error as? OAuthError else { return XCTFail("\(String(describing: error))") }
+    }
+
+    func testStaleIsBoundedToAWeekPastTheLifetime() async throws {
+        let stub = JoseStubHTTP()
+        await stub.enqueue("/jwks.json", headers: ["Cache-Control": "max-age=300"], body: JoseTestTokens.jwks(rsa))
+        await stub.enqueueFailure("/jwks.json")
+        await stub.enqueueFailure("/jwks.json")
+        let time = ManualClock()
+        let client = JwksClient(httpClient: stub, clock: time.clock)
+        let uri = self.uri
+        _ = try await client.keys(uri: uri, forceRefresh: false)
+
+        time.advance(300 + CacheLifetime.maximumStale - 1)
+        let inside = try await staleAllowed { try await client.keys(uri: uri, forceRefresh: false) }
+        time.advance(2)
+        let error = await joseThrown { _ = try await staleAllowed { try await client.keys(uri: uri, forceRefresh: false) } }
+
+        XCTAssertTrue(inside.stale)
+        guard case .recoverable? = error as? OAuthError else { return XCTFail("a key set older than the bound was served: \(String(describing: error))") }
+    }
+
+    func testAnAnswerThatIsNotAKeySetIsNotMaskedByTheStaleCopy() async throws {
+        let stub = JoseStubHTTP()
+        await stub.enqueue("/jwks.json", headers: ["Cache-Control": "max-age=300"], body: JoseTestTokens.jwks(rsa))
+        await stub.enqueue("/jwks.json", text: "<html>captive portal</html>")
+        let time = ManualClock()
+        let client = JwksClient(httpClient: stub, clock: time.clock)
+        _ = try await client.keys(uri: uri, forceRefresh: false)
+        time.advance(301)
+
+        let uri = self.uri
+        let error = await joseThrown { _ = try await staleAllowed { try await client.keys(uri: uri, forceRefresh: false) } }
+
+        guard case .configuration(.discoveryMalformed)? = error as? OAuthError else { return XCTFail("\(String(describing: error))") }
+    }
+
+    func testAnExpiredSetOnDiskIsServedStaleToAColdClientWhenTheRefetchFails() async throws {
+        let time = ManualClock()
+        let stub = JoseStubHTTP()
+        await stub.enqueueFailure("/jwks.json")
+        let disk = AgedKeys(JsonWebKeySet(keys: [rsa]), at: time.clock.now() - 3 * 24 * 3600, lifetime: 3600)
+
+        let uri = self.uri
+        let loaded = try await staleAllowed { try await JwksClient(httpClient: stub, cache: disk, clock: time.clock).keys(uri: uri, forceRefresh: false) }
+
+        XCTAssertEqual(loaded.keys.keys, [rsa])
+        XCTAssertTrue(loaded.stale)
+    }
+
+    /// A stale set that lacks the token's `kid` is an outage, not evidence of a forgery.
+    func testAStaleSetWithoutTheKidIsRecoverableNotASignatureRejection() async throws {
+        let stub = JoseStubHTTP()
+        await stub.enqueue("/jwks.json", headers: ["Cache-Control": "max-age=300"], body: JoseTestTokens.jwks(ec))
+        await stub.enqueueFailure("/jwks.json")
+        let time = ManualClock()
+        let client = JwksClient(httpClient: stub, clock: time.clock)
+        let uri = self.uri
+        let verifier = JwsVerifier(jwksUri: { uri }, allowedAlgorithms: { [] }, jwks: client)
+        _ = try await client.keys(uri: uri, forceRefresh: false)
+        time.advance(301)
+        let token = JoseTestTokens.rsa("RS256", payload: JoseTestTokens.json(["sub": "alice"]), kid: "rsa")
+
+        let error = await joseThrown { _ = try await staleAllowed { try await verifier.verify(token) } }
+
+        guard case .recoverable? = error as? OAuthError else { return XCTFail("\(String(describing: error))") }
+    }
+
     func testAKeySetOnDiskOlderThanItsLifetimeIsNotUsedByAColdClient() async throws {
         let time = ManualClock()
         let stub = JoseStubHTTP()
@@ -313,4 +414,9 @@ final class JwksTests: XCTestCase {
         XCTAssertTrue(forced.fetched)
         XCTAssertEqual(forced.keys.keys.map(\.kid), ["rsa", "ec"])
     }
+}
+
+/// Runs `body` as the check of a refresh's ID token does: a key set past its lifetime is allowed.
+private func staleAllowed<T: Sendable>(_ body: @Sendable () async throws -> T) async rethrows -> T {
+    try await JwksStaleness.$allowed.withValue(true) { try await body() }
 }

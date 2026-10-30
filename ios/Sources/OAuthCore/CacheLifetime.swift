@@ -12,6 +12,11 @@ package enum CacheLifetime {
     package static let defaultLifetime: TimeInterval = 24 * 3600
     package static let minimum: TimeInterval = 300
     package static let maximum: TimeInterval = 24 * 3600
+    /// How long past its lifetime a key set may still be used to judge the ID token of a refresh
+    /// when the provider cannot be reached for a new one (`JwksStaleness`). A week: an outage
+    /// longer than that is the app's to handle, and a key the provider withdrew is not trusted
+    /// past it by any path.
+    package static let maximumStale: TimeInterval = 7 * 24 * 3600
 
     /// The lifetime a response with this `Cache-Control` value earns. Only the directives of a
     /// private cache are read (`max-age`, `no-store`, `no-cache`): `s-maxage` is for shared ones.
