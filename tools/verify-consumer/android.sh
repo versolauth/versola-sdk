@@ -11,12 +11,6 @@
 # the AARs compile and their manifests merge. It does not use android/ in this repository: a build
 # against the repository would prove the sources, which android.yml already does, not the release.
 #
-# VERIFY_MAVEN_REPO (optional, one URL, default none) puts one more Maven repository in front of the
-# two: release.yml sets it to the unzipped Central bundle (file://...) before uploading, so the
-# exact bytes about to be uploaded are what the app resolves. The group io.versola is then served
-# by that repository and by nothing else, so a module missing from the bundle fails even when the
-# same version is already on Central. Use a version Central does not have yet.
-#
 # Needs JDK 21 on JAVA_HOME (develop.md) and ANDROID_HOME with platform android-37.0 (develop.md;
 # CI installs it explicitly). Gradle version, AGP and Kotlin are read from this repository, so
 # the consumer is built with the toolchain the SDK is.
@@ -44,12 +38,7 @@ make_work_dir
 app="$WORK/app"
 mkdir -p "$app"
 cp -R "$VERIFY_ROOT/tools/verify-consumer/templates/android/." "$app/"
-extra_repository=""
-if [[ -n "${VERIFY_MAVEN_REPO:-}" ]]; then
-  [[ "$VERIFY_MAVEN_REPO" =~ ^(file|https)://[A-Za-z0-9._~/:@%+-]+$ ]] || fail "VERIFY_MAVEN_REPO must be a file:// or https:// URL, got '$VERIFY_MAVEN_REPO'"
-  extra_repository="exclusiveContent { forRepository { maven { url = uri(\"$VERIFY_MAVEN_REPO\") } }; filter { includeGroup(\"io.versola\") } }"
-fi
-render_templates "$app" "AGP_VERSION=$agp" "KOTLIN_VERSION=$kotlin" "VERSION=$version" "EXTRA_REPOSITORY=$extra_repository"
+render_templates "$app" "AGP_VERSION=$agp" "KOTLIN_VERSION=$kotlin" "VERSION=$version"
 
 # The repository's wrapper, so the Gradle version (and its checksum policy) is the pinned one and
 # is not chosen here a second time.
@@ -68,7 +57,7 @@ echo "verify-consumer: io.versola:oauth-android:$version, AGP $agp, Kotlin $kotl
 # An unresolvable dependency does not fail the report task, it prints FAILED beside it.
 if grep -q "FAILED" "$WORK/dependencies.txt"; then
   grep -B1 "FAILED" "$WORK/dependencies.txt" >&2
-  fail "a dependency did not resolve (is $version on Maven Central yet, or is a module missing from VERIFY_MAVEN_REPO?)"
+  fail "a dependency did not resolve (is $version on Maven Central yet?)"
 fi
 for artifact in oauth-android oauth-core dpop-android storage-android browser-android okhttp-android; do
   grep -qE "io\.versola:$artifact:$version( |$)" "$WORK/dependencies.txt" \

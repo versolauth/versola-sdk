@@ -147,15 +147,12 @@ of them runs on pull requests (a pull request's own builds are the jobs of `andr
 tools/verify-consumer/android.sh 0.1.0   # app with mavenCentral() + google() only, io.versola:oauth-android:0.1.0, assembleDebug (JDK 21, ANDROID_HOME)
 tools/verify-consumer/ios.sh 0.1.0       # SwiftPM package on the public repository at exactly 0.1.0, product VersolaOAuth, xcodebuild for the iOS simulator
 tools/verify-consumer/flutter.sh 0.1.0   # flutter create + versola_oauth as a git dependency at that ref, flutter build apk and (macOS) ios
-VERIFY_REPO_URL="file://$PWD" tools/verify-consumer/flutter.sh "$(git rev-parse HEAD)"   # the plugin from your committed work (its Android half still takes the published oauth-android it pins)
-VERIFY_MAVEN_REPO="file://$bundle" tools/verify-consumer/android.sh X.Y.Z   # the unzipped Central bundle first, io.versola from nowhere else
-tools/verify-consumer/check-bundle.sh "$bundle" X.Y.Z   # all six modules present, a .asc beside every artefact file
+tools/verify-consumer/check-bundle.sh "$bundle" X.Y.Z   # an unzipped Central bundle: six modules, sources and javadoc, checksums, a .asc per file, POMs naming the version
 ```
 
-`VERIFY_MAVEN_REPO` is how `release.yml` checks the signed bundle before uploading it: build one with
-`./gradlew centralBundle -PreleaseVersion=9.9.9 -PallowUnsignedBundle` (a version Central does not
-have), `unzip` it somewhere, and point the variable at it; `check-bundle.sh` then reports the
-unsigned files, as it should for that bundle.
+`check-bundle.sh` is how `release.yml` checks the signed bundle before uploading it: build one with
+`./gradlew centralBundle -PreleaseVersion=9.9.9 -PallowUnsignedBundle`, `unzip` it somewhere and run
+the script on the directory; it reports the unsigned files, as it should for that bundle.
 
 `flutter.sh` takes any git ref and finds Flutter in `~/fvm/versions/<pinned>` when it is not on
 `PATH`; `VERIFY_KEEP=1` keeps the generated app for a look. The Android and iOS scripts take a

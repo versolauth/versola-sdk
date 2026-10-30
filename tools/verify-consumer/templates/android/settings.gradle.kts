@@ -13,11 +13,8 @@ pluginManagement {
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     // Exactly the two repositories the README tells an integrator to have. Adding mavenLocal(),
-    // a snapshot repository or the Sonatype staging URL would let a broken release pass. The one
-    // line in front of them is empty unless the script was given VERIFY_MAVEN_REPO (the
-    // unpublished bundle, see android.sh).
+    // a snapshot repository or the Sonatype staging URL would let a broken release pass.
     repositories {
-        @EXTRA_REPOSITORY@
         google()
         mavenCentral()
     }

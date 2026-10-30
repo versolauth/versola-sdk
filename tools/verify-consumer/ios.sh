@@ -15,8 +15,7 @@
 # package and its generation crashes on some Xcode versions; a library product of the throwaway
 # package gets its own scheme, named after the product, and builds the dependency graph under it.
 #
-# Needs macOS with Xcode and an iOS simulator runtime (develop.md). VERIFY_REPO_URL overrides the
-# repository URL (a `file://` URL of a checkout works for a tag that is not pushed yet).
+# Needs macOS with Xcode and an iOS simulator runtime (develop.md).
 set -euo pipefail
 # shellcheck source=tools/verify-consumer/common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"

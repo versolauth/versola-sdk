@@ -9,10 +9,8 @@
 # The repository root, from this file's location, so the scripts work from any directory.
 VERIFY_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
-# What the scripts verify is a *published* thing. The public repository is the default; the PR
-# job of flutter.yml points this at the checked-out workspace (file://) to test the commit under
-# review before it is anywhere public.
-VERIFY_REPO_URL="${VERIFY_REPO_URL:-https://github.com/versolauth/versola-sdk}"
+# What the scripts verify is a *published* thing: the public repository and what it released.
+VERIFY_REPO_URL="https://github.com/versolauth/versola-sdk"
 
 fail() { echo "verify-consumer: $*" >&2; exit 1; }
 

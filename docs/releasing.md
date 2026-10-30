@@ -57,8 +57,8 @@ publish nothing.
   dependency on the repository root (computed from the manifest's own location) to the tag by URL,
   which is what a published plugin needs; it also removes that computation.
 - `tools/verify-consumer/` and `verify-release.yml`: before the upload, `release.yml` checks the signed
-  bundle (every module present, a signature beside every file, a throwaway app that resolves
-  `io.versola:oauth-android` from the unzipped bundle alone); after the tag, throwaway apps outside the
+  bundle (`check-bundle.sh`: every module present with sources and javadoc, checksums and a signature
+  beside every file, every POM naming the tag and only modules that are in the bundle); after the tag, throwaway apps outside the
   repository install what was published (below, step 6). `android.sh X.Y.Z` builds an app with
   `mavenCentral()` and `google()` only against `io.versola:oauth-android:X.Y.Z`; `ios.sh X.Y.Z` builds a
   SwiftPM package that depends on the public repository at exactly that tag, for the simulator;
@@ -137,11 +137,11 @@ deployment can be dropped, rather than on Central.
    unless the upload step passed, and a validated deployment can be dropped in the Portal) and tag
    again. For the first release, consider requiring reviewers on the `maven-central` environment
    (Settings, Environments) so that the upload waits for a click.
-5. **Central.** `maven-central` runs the tests, builds the signed bundle, **checks it as a consumer
-   would resolve it** (the zip is unzipped; `check-bundle.sh` wants all six modules and a `.asc` beside every artefact
-   file, then a throwaway app with `mavenCentral()` and `google()` builds against the bundle, which is
-   the only source of `io.versola`; a failure stops the job before anything is uploaded, so the Publish
-   click below is on a checked artefact), uploads it as
+5. **Central.** `maven-central` runs the tests, builds the signed bundle, **checks it**
+   (the zip is unzipped and `check-bundle.sh` wants all six modules with sources and javadoc, checksums and
+   a `.asc` beside every artefact file, and every POM naming the tag and only modules that are in the
+   bundle; a failure stops the job before anything is uploaded, so the Publish click below is on a
+   checked artefact), uploads it as
    `USER_MANAGED` (or `AUTOMATIC`, below) and waits for validation. A rejected bundle fails the job. A validated one waits in
    the Portal: look at it, then publish it there (or drop it). Central releases are immutable: a
    published version is never replaced, only superseded. Once a `USER_MANAGED` release has gone

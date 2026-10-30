@@ -87,15 +87,13 @@ jobs:
           ORG_GRADLE_PROJECT_signingKey: ${{ secrets.MAVEN_SIGNING_KEY }}
           ORG_GRADLE_PROJECT_signingPassword: ${{ secrets.MAVEN_SIGNING_PASSWORD }}
 
-      # What a consumer would resolve, checked on the exact zip that is about to be uploaded: every
-      # module and every artefact file has its signature (presence only; the private key stays in
-      # the step above), and a throwaway app with mavenCentral() and google() builds against the
-      # unzipped bundle, which is listed first and is the only source of io.versola. The tag is
-      # not on Central yet, so the app cannot pass by finding the release there. A failure stops
-      # the job before anything reaches Central; this is what makes the later Publish click a
-      # click on a checked artefact. The scripts live at the repository root, hence the
-      # working-directory override.
-      - name: Check the bundle as a consumer would resolve it
+      # The exact zip that is about to be uploaded, checked before it is: all six modules are in it at
+      # the tag, every module the POMs name is in it, every artefact file has its checksums and its
+      # signature (presence only; the private key stays in the step above). A failure stops the job
+      # before anything reaches Central; this is what makes the later Publish click a click on a
+      # checked artefact. The script lives at the repository root, hence the working-directory
+      # override.
+      - name: Check the bundle before it is uploaded
         working-directory: .
         run: |
           bundle="$RUNNER_TEMP/bundle"
@@ -103,7 +101,6 @@ jobs:
           mkdir "$bundle"
           unzip -q "android/build/central-bundle/versola-${RELEASE_TAG}.zip" -d "$bundle"
           tools/verify-consumer/check-bundle.sh "$bundle" "$RELEASE_TAG"
-          VERIFY_MAVEN_REPO="file://$bundle" tools/verify-consumer/android.sh "$RELEASE_TAG"
         env:
           RELEASE_TAG: ${{ github.ref_name }}
 

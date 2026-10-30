@@ -2,7 +2,6 @@
 # Builds a throwaway Flutter app that depends on the plugin by GIT, the way an app does today.
 #
 #   tools/verify-consumer/flutter.sh 0.1.0                        # the release tag, from GitHub
-#   VERIFY_REPO_URL="file://$PWD" tools/verify-consumer/flutter.sh "$(git rev-parse HEAD)"  # a commit
 #
 # `flutter create` makes the app, `flutter pub add versola_oauth --git-url <repo> --git-path
 # flutter/versola_oauth --git-ref <ref>` adds the plugin, Android gets compileSdk 37 and minSdk 26
@@ -13,8 +12,7 @@
 # appears when the plugin is somewhere else. Flutter symlinks the plugin into the app and
 # SwiftPM resolved the plugin's relative `path:` against that symlink; the checkout built, the git
 # dependency did not (the fix is in flutter/versola_oauth/ios/versola_oauth/Package.swift, and this
-# script is the check that would have caught it). Pass a commit SHA with VERIFY_REPO_URL=file://...
-# to test a change before it is pushed anywhere, or the tag to test what was released.
+# script is the check that would have caught it).
 #
 # Needs the Flutter version pinned in flutter/.fvmrc (CI installs it with subosito/flutter-action;
 # locally the script also finds ~/fvm/versions/<version>), JDK 21 on JAVA_HOME and ANDROID_HOME
