@@ -13,8 +13,13 @@ Documentation: <https://docs.versola.io>. Overview, quick starts for all platfor
 frequently asked questions are in the
 [repository README](https://github.com/versolauth/versola-sdk#readme).
 
-> **Not published yet:** there is no pub.dev package or release tag; the first version will be
-> 0.1.0. Until then depend on the package by path from a checkout of the repository.
+## Install
+
+```bash
+flutter pub add versola_oauth
+```
+
+Version 0.1.0. While the major version is 0, a minor release may change the public API.
 
 ## Usage
 
