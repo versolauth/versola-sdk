@@ -42,7 +42,21 @@ class StrongBoxFallbackTest {
     }
 
     @Test
-    fun `a provider fault from StrongBox falls back to the TEE`() {
+    fun `a transient provider fault from StrongBox is retried once and StrongBox is kept`() {
+        val asked = mutableListOf<Boolean>()
+
+        val result = withStrongBoxFallback(logger) { strongBox ->
+            asked += strongBox
+            if (asked.size == 1) throw ProviderException("Failed to generate key pair.") else "strongbox key"
+        }
+
+        assertEquals("strongbox key", result)
+        assertEquals("the key keeps its tier: the TEE is never asked", listOf(true, true), asked)
+        assertTrue(logs.single(), logs.single().startsWith("info: StrongBox key generation failed (ProviderException), retrying once"))
+    }
+
+    @Test
+    fun `a provider fault that persists falls back to the TEE after the retry`() {
         val asked = mutableListOf<Boolean>()
 
         val result = withStrongBoxFallback(logger) { strongBox ->
@@ -51,21 +65,23 @@ class StrongBoxFallbackTest {
         }
 
         assertEquals("tee key", result)
-        assertEquals(listOf(true, false), asked)
-        assertEquals(1, logs.size)
-        assertTrue(logs.single(), logs.single().startsWith("info: StrongBox unavailable (ProviderException), falling back to the TEE"))
+        assertEquals(listOf(true, true, false), asked)
+        assertTrue(logs.last(), logs.last().startsWith("info: StrongBox unavailable (ProviderException), falling back to the TEE"))
     }
 
     @Test
-    fun `a subclass of the provider fault falls back the same way`() {
-        // StrongBoxUnavailableException is one, and cannot be constructed on a JVM.
+    fun `an absent StrongBox falls back at once, with no retry`() {
+        // StrongBoxUnavailableException is the absent case and cannot be constructed on a JVM.
         class StrongBoxLike(message: String) : ProviderException(message)
+        val asked = mutableListOf<Boolean>()
 
-        val result = withStrongBoxFallback(logger) { strongBox ->
+        val result = withStrongBoxFallback(logger, isAbsent = { it is StrongBoxLike }) { strongBox ->
+            asked += strongBox
             if (strongBox) throw StrongBoxLike("No StrongBox available") else "tee key"
         }
 
         assertEquals("tee key", result)
+        assertEquals(listOf(true, false), asked)
         assertTrue(logs.single().contains("StrongBoxLike"))
     }
 

@@ -4,6 +4,7 @@ import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyInfo
 import android.security.keystore.KeyProperties
+import android.security.keystore.StrongBoxUnavailableException
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.KeyStore
@@ -209,12 +210,26 @@ public class KeystoreDpopKey(
  * not implement) is thrown by `generateKeyPair` as a plain `ProviderException`, and caught
  * only by the narrower type it used to break `login()` on those devices for good. A failed
  * generation deletes the entry it started, so the TEE attempt under the same alias is clean.
+ *
+ * A fault that is not [isAbsent] may be transient (a busy secure element), and the key is
+ * generated once and kept, so falling through on it would pin the TEE tier for the key's whole
+ * life: StrongBox is tried a second time first. Absence is final and falls through at once.
  * Anything that is not a `ProviderException` is not read as "no StrongBox" and propagates, as
  * does a failure of the TEE attempt itself.
  */
-internal fun <T> withStrongBoxFallback(logger: VersolaLogger?, generate: (strongBox: Boolean) -> T): T =
+internal fun <T> withStrongBoxFallback(
+    logger: VersolaLogger?,
+    isAbsent: (ProviderException) -> Boolean = { it is StrongBoxUnavailableException },
+    generate: (strongBox: Boolean) -> T,
+): T =
     try {
-        generate(true)
+        try {
+            generate(true)
+        } catch (e: ProviderException) {
+            if (isAbsent(e)) throw e
+            logger?.info("StrongBox key generation failed (${e.javaClass.simpleName}), retrying once: ${e.message}")
+            generate(true)
+        }
     } catch (e: ProviderException) {
         logger?.info("StrongBox unavailable (${e.javaClass.simpleName}), falling back to the TEE: ${e.message}")
         generate(false)
