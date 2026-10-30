@@ -54,7 +54,8 @@ publish nothing.
   version, the `oauth-android` version the plugin pins, its `CHANGELOG.md` and the development version
   agree.
 - `tools/flutter-prepare-publish.sh X.Y.Z`: rewrites the plugin's iOS `Package.swift` from the path
-  dependency on this checkout to the tag by URL, which is what a published plugin needs.
+  dependency on the repository root (computed from the manifest's own location) to the tag by URL,
+  which is what a published plugin needs; it also removes that computation.
 - `release.yml`, on a pushed `X.Y.Z` tag: the tagged commit must be on `main`, then the version check
   above, then (Android) `test lint apiCheck`, the signed bundle and the upload to the Central Portal,
   (iOS) a clean-checkout build of the tag, and last the GitHub release with generated notes. The

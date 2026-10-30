@@ -12,8 +12,8 @@ trap for the next reader. Security rules are in `security.md`, test conventions 
 
 - Gradle 9.7.1 (`android/gradle/wrapper`), JDK 21 to build (Temurin 21 in CI; Robolectric's API 36
   image needs it) with Java 17 bytecode for consumers (`JavaVersion.VERSION_17` in every Android
-  module, `jvmTarget` 17 in `:oauth-core`), Kotlin 2.4.20, AGP 9.4.1, `minSdk = 26`,
-  `compileSdk = 36`. The versions are declared
+  module, `jvmTarget` 17 in `:oauth-core`), Kotlin 2.4.21, AGP 9.5.0, `minSdk = 26`,
+  `compileSdk = 37`. The versions are declared
   in `android/build.gradle.kts` and each module's `build.gradle.kts`; change one in every module
   together, and ask first to lower `minSdk` or raise it.
 - Libraries declare no `targetSdk` (AGP would force consumers to match it); target 36 is the app's

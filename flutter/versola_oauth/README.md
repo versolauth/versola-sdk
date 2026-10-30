@@ -15,11 +15,19 @@ frequently asked questions are in the
 
 ## Install
 
-```bash
-flutter pub add versola_oauth
+Add the plugin to `pubspec.yaml` as a git dependency on the repository:
+
+```yaml
+dependencies:
+  versola_oauth:
+    git:
+      url: https://github.com/versolauth/versola-sdk.git
+      path: flutter/versola_oauth
+      ref: 0.1.1
 ```
 
-Version 0.1.0. While the major version is 0, a minor release may change the public API.
+The app needs `compileSdk` 37 and `minSdk` 26 in `android/app/build.gradle.kts` and an iOS
+deployment target of 17.4; a lower value fails the build with a message that names the minimum.
 
 ## Usage
 
