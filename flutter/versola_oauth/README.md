@@ -1,9 +1,20 @@
 # versola_oauth
 
-The Versola generic OAuth 2.0 / OpenID Connect SDK for Flutter: a binding over the native
-Android (`io.versola:oauth-android`) and iOS (`VersolaOAuth`) SDKs of this repository. The API is
-`spec/oauth-sdk-api.md` section 13 in Dart; the behaviour is the native SDKs', proven by the same
-conformance scenarios. No protocol logic runs in Dart (`.claude/rules/flutter.md`).
+OAuth 2.0 and OpenID Connect (OIDC) sign-in for Flutter apps on Android and iOS: authorization code
+flow with PKCE in the system browser, ID-token validation, secure token storage and refresh,
+through the native Versola OAuth SDKs. The Dart API holds no protocol logic: it forwards to the
+Android (Kotlin) and iOS (Swift) SDKs, and only the short-lived access token ever reaches Dart.
+
+Works with any OpenID provider that supports the authorization code flow with PKCE for public
+clients, such as Keycloak and Ory Hydra. Requires Flutter 3.47 and Dart 3.13, Android `minSdk` 26
+and iOS 17.4, with Swift Package Manager integration enabled on iOS.
+
+Documentation: <https://docs.versola.io>. Overview, quick starts for all platforms and the
+frequently asked questions are in the
+[repository README](https://github.com/versolauth/versola-sdk#readme).
+
+> **Not published yet:** there is no pub.dev package or release tag; the first version will be
+> 0.1.0. Until then depend on the package by path from a checkout of the repository.
 
 ## Usage
 
@@ -14,59 +25,41 @@ final client = await OAuthClient.create(const OAuthConfiguration(
   issuer: 'https://id.example.com',
   clientId: 'example-app',
   redirectUri: 'https://app.example.com/oauth',
-  scopes: {'openid', 'profile'},
+  scopes: {'openid', 'profile', 'offline_access'},
 ));
 
-// Any number of listeners; the seven states of spec/state-machine.md, and a redirect that
-// finishes an authorization in a cold-started process arrives here too.
 client.sessionStates().listen((state) => print(state));
 
 try {
   await client.login();
-  final token = await client.accessToken(); // the one credential that crosses the bridge
+  final token = await client.accessToken(); // call your API with dio or http
+  await client.logout();
 } on StepUpError catch (e) {
   await client.stepUp(e);
 } on ReauthenticateError {
-  // sign in again
+  // show the sign-in screen
 } on RecoverableError {
   // retry, or ask the user again
-} on ConfigurationError catch (e) {
-  // a deployment mistake: fix it, do not catch it in production
+} on ConfigurationError {
+  // a deployment mistake: fix the configuration
 }
 ```
 
-Errors are the four categories of `spec/errors.md` as a sealed hierarchy (`RecoverableError`,
-`ReauthenticateError`, `StepUpError`, `ConfigurationError`); the category is the contract, the
-payload is the native case.
-
-## Platform setup
-
-- **Android**: declare the redirect URI on `versola.sdk.browser.VersolaRedirectActivity` in the
-  app manifest (`example/android/app/src/main/AndroidManifest.xml` shows the verified App Link
-  snippet). `minSdk` 26. Until `io.versola:oauth-android` is published, the app's
-  `settings.gradle.kts` includes this repository's `android/` build with a dependency
-  substitution, as the example does.
-- **iOS**: Swift Package Manager only (the SDK is not on CocoaPods). iOS 17.4 or newer. The
-  browser sheet is presented from the key window of the foreground scene; an app with its own
-  window handling sets `VersolaOAuthPlugin.presentationAnchor` before the first `create`.
+Errors are four categories (`RecoverableError`, `ReauthenticateError`, `StepUpError`,
+`ConfigurationError`). Declare the redirect URI in the app's Android manifest and iOS associated
+domains, as the provider and the platform guides describe.
 
 ## Developing
 
-Run from this directory with the pinned toolchain (`flutter/.fvmrc`):
+Run from this directory with the toolchain pinned in `flutter/.fvmrc`:
 
 ```bash
-fvm dart run pigeon --input pigeons/messages.dart   # after a change to the bridge contract
+fvm dart run pigeon --input pigeons/messages.dart   # after a change to pigeons/messages.dart
 fvm dart format --set-exit-if-changed .
 fvm flutter analyze
 fvm flutter test
-cd example && fvm flutter build apk --debug
-cd example && fvm flutter build ios --no-codesign
-cd example/ios && xcodebuild test -workspace Runner.xcworkspace -scheme Runner \
-  -destination "platform=iOS Simulator,name=iPhone 17" -only-testing:RunnerTests   # Swift glue
-cd example/android && ./gradlew :versola_oauth:testDebugUnitTest                  # Kotlin glue
 ```
 
-`flutter test` proves the Dart mapping and the error categories against a mocked channel; the
-Kotlin and Swift unit tests prove the wire mapping of the native half; the example builds prove the
-bridge compiles against both native SDKs. The native behaviour is
-proven by the SDKs' own tiers (`conformance/README.md`).
+## Licence
+
+Apache-2.0.

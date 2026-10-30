@@ -3,6 +3,7 @@ package versola.conformance.browser
 import android.os.SystemClock
 import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.uiautomator.By
+import androidx.test.uiautomator.StaleObjectException
 import androidx.test.uiautomator.UiDevice
 import androidx.test.uiautomator.Until
 
@@ -92,6 +93,10 @@ internal class Harness {
     fun awaitLoginForm() {
         await("the provider's login form", FLOW_TIMEOUT_MILLIS) {
             dismissChromePrompts()
+            // Present on two looks a moment apart: on a cold Chrome the page lays out again once
+            // the first-run prompts are gone, and a node seen once can be gone the next instant.
+            if (device.findObject(By.res("username")) == null) return@await null
+            SystemClock.sleep(STABLE_MILLIS)
             device.findObject(By.res("username")).takeIf { it != null }
         }
     }
@@ -127,7 +132,15 @@ internal class Harness {
      * bullets, so its length is what is compared.
      */
     private fun typeInto(field: String, value: String) {
-        device.findObject(By.res(field)).click()
+        // The lookup is awaited and the click retried on a node that went stale or missing between
+        // the look and the click (the page re-laid out), within the same bound as everything else.
+        await("the $field field to be clicked", UI_TIMEOUT_MILLIS) {
+            try {
+                device.findObject(By.res(field))?.also { it.click() }
+            } catch (e: StaleObjectException) {
+                null
+            }
+        }
         await("the $field field to take focus", UI_TIMEOUT_MILLIS) { device.findObject(By.res(field).focused(true)) }
         shell("input text $value")
         await("the $field field to hold what was typed", UI_TIMEOUT_MILLIS) {
@@ -191,6 +204,7 @@ internal class Harness {
         const val UI_TIMEOUT_MILLIS = 15_000L
         const val FLOW_TIMEOUT_MILLIS = 45_000L
         private const val POLL_MILLIS = 500L
+        private const val STABLE_MILLIS = 700L
 
         /** The answers that leave Chrome unsigned and unsynced; anything else is the provider's page. */
         private val CHROME_PROMPTS = listOf(
