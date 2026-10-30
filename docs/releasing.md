@@ -1,11 +1,11 @@
 # Releasing
 
 How a release of the Versola SDKs is built, checked and published, and which parts are the
-maintainer's. Nothing has been published yet, and nothing in this document has run against a real
-Maven Central, pub.dev or GitHub release: the build side was exercised locally, the publishing side
-only by reading the vendors' documentation (the sources are named where they matter). The first
-release is therefore also the first test of every workflow, and the steps below are ordered so that
-each can be looked at, and undone, before the next.
+maintainer's. 0.1.0 is published: `release.yml` ran once, for that tag, and its Android artefacts are
+on Maven Central under a GitHub release of the same name. pub.dev is not published to (the first
+publish is by hand, step 7), and `verify-release.yml` has not yet run against a published version.
+The publishing side was written from the vendors' documentation (the sources are named where they
+matter), and the steps below are ordered so that each can be looked at, and undone, before the next.
 
 Releases, tags and publishing are the maintainer's act (`AGENTS.md`, `.claude/rules/ci-release.md`).
 **A release is a tag**: pushing `X.Y.Z` (for example `0.1.0`, no leading `v`) runs `release.yml`,
@@ -65,16 +65,17 @@ publish nothing.
   `flutter.sh X.Y.Z` builds an app that takes `versola_oauth` as a git dependency at the tag, for Android
   and iOS. They run locally too (`develop.md`).
 - `release.yml`, on a pushed `X.Y.Z` tag: the tagged commit must be on `main`, then the version check
-  above, then (Android) `test lint apiCheck`, the signed bundle and the upload to the Central Portal,
-  (iOS) a clean-checkout build of the tag, and last the GitHub release with generated notes and the
-  dispatch of `verify-release.yml`. The
+  above, then (iOS) a clean-checkout build of the tag, which has to pass before the upload starts,
+  (Android) `test lint apiCheck`, the signed bundle and the upload to the Central Portal, and last the
+  GitHub release with generated notes and the dispatch of `verify-release.yml`. The
   Central job runs in the GitHub environment `maven-central`. `publish-pubdev.yml` is the dormant
   pub.dev counterpart.
 
-What was verified locally, on `-PreleaseVersion=0.1.0`: all six modules publish; every POM names
+What was verified locally, before 0.1.0 was tagged, on `-PreleaseVersion=0.1.0`: all six modules publish; every POM names
 only coordinates that are in the bundle; each artefact has sources, javadoc, POM and Gradle module
 metadata with MD5 and SHA-1 checksums; a bundle signed with a throwaway key has a signature for every
-file (40 of them) and one of them verifies with the matching public key. What was not verified:
+file (40 of them) and one of them verifies with the matching public key. What was not verified
+then (the Portal accepted 0.1.0's bundle):
 that the Portal accepts the bundle (the Android javadoc jars are what AGP generates from Kotlin
 sources, and `oauth-core`'s is empty, a placeholder Central's requirements allow), that it tolerates
 the checksum files Gradle also writes next to the signatures, and the upload and status calls.

@@ -6,10 +6,10 @@ name: release
 # GitHub release is created with generated notes. docs/releasing.md has the runbook and what has
 # to exist first (the Central namespace, the signing key and the four secrets).
 #
-# Nothing in this file has run on GitHub yet: the first tag is its first run, which is why the
-# Central upload is USER_MANAGED by default (a deployment that waits in the Portal for a click and
-# can be dropped there; the repository variable MAVEN_CENTRAL_PUBLISHING_TYPE=AUTOMATIC publishes
-# on validation instead) and why docs/releasing.md has the maintainer look at a local bundle first.
+# It has run once, for 0.1.0, which is on Maven Central. The Central upload is USER_MANAGED by
+# default (a deployment that waits in the Portal for a click and can be dropped there; the
+# repository variable MAVEN_CENTRAL_PUBLISHING_TYPE=AUTOMATIC publishes on validation instead) and
+# docs/releasing.md has the maintainer look at a local bundle first: Central releases are immutable.
 #
 # The pub.dev job lives in publish-pubdev.yml (it is dormant: the first publish is by hand).
 # CocoaPods and npm below are dormant too: there is no podspec and no React Native package.
@@ -53,7 +53,10 @@ jobs:
   # an AUTOMATIC one is published as soon as Central validates it, and Central releases are
   # immutable. Switch only once a USER_MANAGED release has gone through.
   maven-central:
-    needs: verify-version
+    # swiftpm too, although the two share nothing: a Swift package that does not build at the tag
+    # has to stop the release before the upload, not after it. A Central release cannot be
+    # withdrawn, and a retag after a red swiftpm would be a second deployment of the same version.
+    needs: [verify-version, swiftpm]
     runs-on: ubuntu-latest
     # The signing key and the Portal token are secrets of this environment (or of the repository).
     # GitHub creates the environment on first use; adding required reviewers to it (Settings,
@@ -149,8 +152,9 @@ jobs:
 
   # SwiftPM consumers resolve the release tag itself: there is nothing to publish. What this job
   # proves is that the tagged tree resolves and builds from a clean checkout, which is what a
-  # consumer's `.package(url:, from:)` will do. The simulator name drifts with the runner's Xcode
-  # (ios.yml says so).
+  # consumer's `.package(url:, from:)` will do. A build, not a test, so the destination is the
+  # generic simulator one: no device name to go stale when the runner's Xcode drops it (ios.yml's
+  # test step needs a named device and says so).
   swiftpm:
     needs: verify-version
     runs-on: macos-latest
@@ -159,7 +163,7 @@ jobs:
         with:
           persist-credentials: false
       - run: swift package resolve
-      - run: xcodebuild build -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 17"
+      - run: xcodebuild build -scheme Versola-Package -destination "generic/platform=iOS Simulator"
 
   # The GitHub release for the tag, with notes generated from the merged pull requests. Created
   # only after the Android bundle validated and the Swift package built at the tag, so a failed
