@@ -197,7 +197,8 @@ A scenario with no driver yet is proven against stubs only. Say so in the pull r
 The generic facade (`OAuthClient`, issue #46) is proven against providers other than Versola
 from `conformance/providers/<name>/`: a compose file plus the provider's pre-provisioned
 configuration (Keycloak's `realm.json`: the `conformance` realm, the public clients
-`conformance-app` and `conformance-app-norefresh`, the user `alice`; Hydra's `hydra.yml` and
+`conformance-app`, `conformance-app-norefresh` and `conformance-app-dpop` (the provider refuses it a
+token that is not DPoP-bound; scenario 33), the user `alice`; Hydra's `hydra.yml` and
 `clients.json`, with Ory's reference login-consent app as the user). The driver is
 `android/conformance-oauth`, Robolectric unit tests over a real network, skipped unless the
 provider's issuer is in the environment.
@@ -244,6 +245,15 @@ versions in `example/android/settings.gradle.kts` of `android/build.gradle.kts`'
 Name the simulator by `id` when two devices share a name. Hydra is the same with its issuer and
 `hydra`. Do not enable parallel testing for `RunnerTests` (the scheme sets it off): the virtual
 network is one per process, as in the native iOS driver.
+
+A Keycloak container started before `conformance-app-dpop` was added to `realm.json` does not have
+the client (the import leaves an existing realm alone): `down -v` and `up` it again, or scenario 33
+fails at its first login. Scenario 33 skips itself on a provider that does not advertise ES256 DPoP
+proofs (Hydra), with that reason. Its DPoP key is software-tier in every run described here (the JVM
+and the iOS host or simulator have no secure element), so the Keystore's StrongBox and TEE tiers and the
+Secure Enclave remain the device tier's; the run says so, the PR says so. The counts to expect:
+Keycloak 41 tests on each native driver (27 + scenario 33's fourteen) and 38 through each Flutter bridge
+(the iOS one runs 3 wire-mapping tests more); Hydra 25 passed and 16 skipped natively.
 
 A run takes about a minute per provider, most of it scenario 31 waiting for ten-second tokens
 to expire. `conformance/README.md` ("Providers") says how the proxy, the HTTP browser leg and the

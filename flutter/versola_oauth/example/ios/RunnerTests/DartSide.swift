@@ -108,6 +108,11 @@ final class DartSide: Sendable {
         throw HostApiFailed(method: "claims", error: (result as! ClaimsFailure).error)
     }
 
+    /// The key tier as the wire spells it (`software`, `secureEnclave`), nil under Bearer; the failure the host answered otherwise.
+    func keyAttestation() async throws -> KeyAttestationResult {
+        remember("keyAttestation", try await call("keyAttestation", [handle]) as! KeyAttestationResult)
+    }
+
     func userInfo() async throws -> UserInfoResult {
         remember("userInfo", try await call("userInfo", [handle]) as! UserInfoResult)
     }

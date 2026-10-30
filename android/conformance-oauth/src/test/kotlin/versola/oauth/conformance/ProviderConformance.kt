@@ -2,6 +2,7 @@ package versola.oauth.conformance
 
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
+import java.security.Security
 import kotlinx.coroutines.flow.first
 import okhttp3.OkHttpClient
 import org.junit.After
@@ -18,6 +19,7 @@ import versola.oauth.ProviderEndpoints
 import versola.oauth.core.CredentialKeyProvider
 import versola.oauth.core.PushedAuthorization
 import versola.oauth.core.SessionState
+import versola.oauth.core.TokenBinding
 import versola.oauth.core.VersolaError
 import versola.oauth.core.VersolaLogger
 
@@ -39,6 +41,7 @@ abstract class ProviderConformance {
     protected lateinit var proxy: ProviderProxy
     protected lateinit var browser: HttpLoginBrowser
     protected lateinit var resource: ResourceServer
+    protected lateinit var keystore: SoftwareAndroidKeyStore
     protected val transcript = Transcript()
     protected val logger = RecordingLogger()
     protected val httpClient: OkHttpClient = OkHttpClient.Builder().addNetworkInterceptor(transcript).build()
@@ -51,6 +54,11 @@ abstract class ProviderConformance {
         // A provider told the proxy's address in advance (Hydra) means the same issuer in
         // every test; the per-process registry would refuse the next test's configuration.
         OAuthClient.forgetAll()
+        // A JVM has no Android Keystore; a DPoP key needs one to be generated in (scenario 33).
+        // Replaced per test so the keys one test generated are not another's.
+        keystore = SoftwareAndroidKeyStore()
+        Security.removeProvider("AndroidKeyStore")
+        Security.insertProviderAt(keystore, 1)
         proxy = ProviderProxy(provider).also { it.start(provider.proxyPort) }
         // The browser leg has its own client: what it sends to the login form is the user's
         // traffic, not the SDK's, and must not appear in the transcript.
@@ -61,6 +69,7 @@ abstract class ProviderConformance {
     @After
     fun unstage() {
         if (!::proxy.isInitialized) return
+        Security.removeProvider("AndroidKeyStore")
         proxy.stop()
         resource.stop()
         // Scenario 01's last assertion holds for every facade: no token, code or verifier at
@@ -86,6 +95,7 @@ abstract class ProviderConformance {
         scopes: Set<String> = provider.scopes,
         protectedOrigins: Set<String> = setOf(resource.origin),
         pushedAuthorization: PushedAuthorization = PushedAuthorization.WhenAdvertised,
+        tokenBinding: TokenBinding = TokenBinding.Bearer,
     ): OAuthConfiguration = OAuthConfiguration(
         issuer = if (endpoints == null) proxy.issuer else null,
         endpoints = endpoints,
@@ -95,6 +105,7 @@ abstract class ProviderConformance {
         scopes = scopes,
         protectedOrigins = protectedOrigins,
         pushedAuthorization = pushedAuthorization,
+        tokenBinding = tokenBinding,
         logger = logger,
         httpClient = httpClient,
     )

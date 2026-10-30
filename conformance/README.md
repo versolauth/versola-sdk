@@ -13,7 +13,7 @@ of work at the bottom. iOS has no driver for the Versola facade yet.
 
 The generic facade has its own drivers, `android/conformance-oauth` (Robolectric unit tests,
 real network) and `ios/Tests/OAuthConformanceTests` (XCTest, on the Mac host or an iOS
-simulator), which run scenarios 24 to 32 green against Keycloak 26.4 and Ory Hydra 26.2 staged
+simulator), which run scenarios 24 to 33 green against Keycloak 26.4 and Ory Hydra 26.2 staged
 from [`providers/`](providers/); see [Providers](#providers) below.
 
 ## Why it is not more unit tests
@@ -176,11 +176,32 @@ How it drives the provider:
   and sends them `Secure` or not, as a browser does on loopback.
 - **`ResourceServer`**, a protected resource that accepts the provider's access tokens by
   asking its UserInfo endpoint, and answers 401 with a `Bearer` challenge otherwise.
+- **`DpopResourceServer`** (scenario 33), a resource that verifies DPoP itself, holding only the
+  provider's public keys: the access token's RS256 signature, issuer, expiry and `cnf.jkt`; the
+  `DPoP` scheme and exactly one proof; the proof's `typ`, `alg`, public `jwk`, signature, `htm`,
+  `htu`, `iat` window, unseen `jti`, `ath` and the `jwk` thumbprint against `cnf.jkt`; and,
+  when told to, a nonce (`force-dpop-nonce` / `always-demand-dpop-nonce` for a resource). It
+  records a verdict with the reason for every request, so a negative test asserts which check
+  refused, and it shares no code with the SDK's proof builder. Its `assertStolenTokenIsRefused`
+  holds the cases (no proof, Bearer, another key, wrong `ath` / `htu` / `htm` / `iat`, two proofs,
+  a re-bound token) and a control request that is accepted; the proofs of those cases are signed
+  with the SDK's own key, reached through the driver's key store (below), so each refusal is one
+  claim's and not a forger's.
+- **The DPoP key** (scenario 33). A JVM has no Android Keystore, so the Android driver registers
+  `SoftwareAndroidKeyStore` as the `AndroidKeyStore` JCA provider: the SDK's own `KeystoreDpopKey`
+  runs unmodified and is handed a plain P-256 key pair, with StrongBox refused as on a phone without
+  it and no security level to read back. The tier it reports, and so the tier the scenario proves,
+  is **Software**. The iOS driver passes the SDK's `SecureEnclaveDpopKey` an in-memory store and
+  tells it no Secure Enclave exists (an unsigned host's Keychain refuses it, -34018, and a
+  simulator has none): software again. The Keystore's StrongBox and TEE tiers and the Secure
+  Enclave tier are the device tier's, and a scenario 33 run says nothing about them.
 - **`Transcript`**, a network interceptor on the SDK's client; the assertions read it, and the
   browser leg uses a separate client so its traffic never appears there.
 
 What this tier does not prove for the generic facade: Custom Tabs / Auth Tab and redirect
-delivery (the browser leg, [below](#the-browser-leg)); the DPoP case of scenario 32 (Keystore, device tier); the `http`
+delivery (the browser leg, [below](#the-browser-leg)); the Keystore and Secure Enclave key tiers under DPoP (scenario 33 proves the
+protocol with a software key; the tiers are device tier); the DPoP case of scenario 32 (the
+authenticated client's `htu` and `ath` are asserted by scenario 33); the `http`
 origin case of scenario 32 (the facade allows `http` on loopback, where the proxy and the
 resources live); scenario 31's clock step, which is real time against ten-second tokens rather
 than a moved device clock; and the comparison with a reference transcript. Keycloak sends no
@@ -190,7 +211,7 @@ proxy's header only.
 ### Through the Flutter bridge
 
 The Flutter plugin (`flutter/versola_oauth`) is a binding over the native generic facades, so
-scenarios 24 to 32 run once more through it: a scenario that passes natively and fails through the
+scenarios 24 to 33 run once more through it: a scenario that passes natively and fails through the
 bridge is a finding in the bridge (`.claude/rules/flutter.md`). Dart cannot reach the driver's
 wiring (the replaced browser leg and stores sit behind `@VersolaInternalApi` on Android and
 `package` access on iOS), so the drivers live natively in the example app's test targets and send
@@ -205,8 +226,8 @@ every operation through the plugin's generated Pigeon host API the way Dart does
   `FlutterBinaryMessenger` and `FlutterPluginRegistrar`, run on a simulator.
 
 **Shared, not copied.** The support classes of the native drivers (`Provider`, `ProviderProxy` /
-`VirtualNetwork`, `HttpLoginBrowser`, `Transcript`, `ResourceServer`, `HarnessSigner`,
-`ProviderConformance`) are compiled from `android/conformance-oauth/src/test/kotlin` and
+`VirtualNetwork`, `HttpLoginBrowser`, `Transcript`, `ResourceServer`, `DpopResourceServer`,
+`SoftwareAndroidKeyStore`, `HarnessSigner`, `ProviderConformance`) are compiled from `android/conformance-oauth/src/test/kotlin` and
 `ios/Tests/OAuthConformanceTests` where they live: the Gradle test source set of the example app
 names that directory and filters out its `Scenario*` files, and `RunnerTests` references the Swift
 files in place. A support module or symlinks would move or alias the native driver's files, which other changes
@@ -214,9 +235,10 @@ are editing. A file added to or removed
 from `ios/Tests/OAuthConformanceTests` must also be added to or removed from the `RunnerTests`
 target (the project lists the files by name; the Scenario files stay out), and the example's Gradle
 test pins and plugin versions follow `android/conformance-oauth` and `android/build.gradle.kts`
-(`develop.md`). The bridge scenarios are the native ones, test for test (27 on each platform), so the
-pass counts are comparable; the tests whose assertions differ from their native twin (24, 31's second
-test and 32) carry `bridge` in their names, and the next paragraphs say how.
+(`develop.md`). The bridge scenarios are the native ones, test for test (27 on each platform for
+scenarios 24 to 32; eleven of scenario 33's fourteen, so 38 per platform against Keycloak), so the pass counts
+are comparable; the tests whose assertions differ from their native twin (24, 31's second test, 32 and
+33) carry `bridge` in their names, and the next paragraphs say how.
 
 **How the wiring gets in.** The test builds the native client first, with the driver's browser,
 key provider or stores, and then calls the plugin's `create` through the host API with the
@@ -241,6 +263,15 @@ authenticated client. The spec follows: `32-protected-origins.yaml` lists
 `android` and `ios` only, and `24-generic-happy-path.yaml` notes which of its assertions are the
 native facades'. An empty `protectedOrigins` is accepted by `create` (no authenticated client needs
 origins), which is why the scenario's "empty set is refused" assertion has no bridge test.
+
+Scenario 33 is the same: Flutter has no authenticated client and mints no proof, so the call's own
+proof, the resource's nonce challenges and the replay of a proof the SDK sent are the native
+drivers' alone, and `33-dpop-end-to-end.yaml` says so in its `notes`. The bridge asserts the rest
+with the token `accessToken()` returns (`tokenType` `DPoP`, which a Flutter app cannot present):
+the binding on the wire, the key kept across a refresh, `userInfo()` and `logout()` under DPoP, the
+provider's nonce challenge and the `dpop_jkt` refusal, the stolen-token refusals, `requireHardware`
+(`dpopRequireHardware`) refused as `hardwareBindingUnavailable`, and a Bearer-configured client
+against the DPoP-requiring one.
 
 Two things about what the state-stream check can see. Its `cancel` assertion reads the native
 side, not Dart's receipts: the messenger counts every message the plugin sends on the channel, kept
@@ -331,7 +362,7 @@ The capabilities `spec/conformance/README.md` lists, and where each lives:
 | Capability | Mechanism |
 |---|---|
 | `drop-response` | A small TCP proxy in front of auth and edge (`stack/chaos`) that, on a control call from the driver, lets the next matching request through and discards the response. |
-| `force-dpop-nonce`, `always-demand-dpop-nonce` | The same proxy, answering a scripted `use_dpop_nonce` for the next N requests to an origin. |
+| `force-dpop-nonce`, `always-demand-dpop-nonce` | The same proxy, answering a scripted `use_dpop_nonce` for the next N requests to an origin. For the generic facade, a resource that demands a nonce (`DpopResourceServer(nonce = …)`, which answers `use_dpop_nonce` to every proof without it, and with `offered` different from `nonce` keeps challenging a client that retries), and, for the provider's token endpoint, the proxy answering a canned 400 `use_dpop_nonce` with a `DPoP-Nonce` header once or on every request (`ProviderProxy.intercept` / `VirtualNetwork.intercept`; scenario 33). |
 | `clock-skew` | `adb shell date` on the emulator before the scenario, restored after. For the generic facade's JVM driver, a `Date` header the proxy adds (the server's clock) and short-lived tokens (scenario 31); the device clock is not moved. |
 | `process-death` | `adb shell am kill` on the harness package at the named point; the test re-launches through `am instrument` with the scenario's second half. |
 | `omit-discovery-field` | The proxy rewriting `/.well-known/openid-configuration`. For the generic facade, `ProviderProxy.rewriteJson` in `android/conformance-oauth`. |
@@ -366,7 +397,7 @@ it with the stack's addresses as instrumentation arguments:
    "it is equivalent".
 6. `conformance.yml` on a schedule once a `VERSOLA_CHECKOUT_TOKEN` secret exists.
 7. iOS, unchanged scenarios, once #11–#14 exist.
-8. ~~The generic facade against Keycloak (scenarios 24–32, `android/conformance-oauth`).~~ Done.
+8. ~~The generic facade against Keycloak (scenarios 24–33, `android/conformance-oauth`).~~ Done.
 9. ~~The generic facade against Ory Hydra (`providers/hydra/`, `HydraLogin`).~~ Done; 25 of
    27 tests, the two PAR tests skipped by assumption.
 10. ~~The iOS driver for the generic facade (`ios/Tests/OAuthConformanceTests`).~~ Done, local

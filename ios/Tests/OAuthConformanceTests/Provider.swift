@@ -42,6 +42,9 @@ struct Provider: Sendable {
     static let clientId = "conformance-app"
     /// The same client without refresh tokens and with ten-second access tokens (scenario 31).
     static let noRefreshClientId = "conformance-app-norefresh"
+    /// The same client again, but the provider refuses a token that is not bound to a DPoP key
+    /// (scenario 33). Keycloak only: Hydra does not advertise DPoP (`spec/providers.md`).
+    static let dpopClientId = "conformance-app-dpop"
     static let redirectUri = "https://conformance.example.com/oauth"
     static let postLogoutRedirectUri = "https://conformance.example.com/signed-out"
 
