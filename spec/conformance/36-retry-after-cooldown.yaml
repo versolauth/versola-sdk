@@ -1,0 +1,37 @@
+id: 36-retry-after-cooldown
+title: After a Retry-After the SDK sends nothing to that origin until it has passed, and forgets it on a cold start
+issues: [22, 46]
+applies_to: [android, ios, flutter]
+facade: [oauth]
+mode: any
+fault_injection: [respond-with-status, process-death]
+preconditions:
+  - The SDK is configured with the default RetryPolicy.
+  - The token, revocation and UserInfo endpoints are on one origin (the provider's), so one cooldown covers all three.
+  - The session is Authenticated with an expired access token.
+steps:
+  - actor: harness
+    action: Answer the refresh with 429 and Retry-After 30.
+  - actor: app
+    action: Call accessToken(), and then call it again, userInfo() and logout() within the next second.
+  - actor: harness
+    action: Wait until thirty seconds have passed since the first answer, then forward requests again.
+  - actor: app
+    action: Call accessToken().
+  - actor: harness
+    action: Answer the refresh with 429 and Retry-After 30 again, then kill the process and cold-start the app.
+  - actor: app
+    action: Call accessToken() in the new process.
+  - actor: harness
+    action: Answer the refresh with 500 and no Retry-After until the budget is exhausted, then call accessToken() again at once.
+assertions:
+  - The first call fails with Recoverable, cause Server, status 429, retryAfter 30 s, after one request.
+  - The three calls inside the window fail at once with the same cause and a retryAfter that shrinks by the time passed, and the proxy sees no request from them. logout() still wipes the local session and reports tokenRevoked false.
+  - After the thirty seconds the next accessToken() sends a request and succeeds against a forwarding proxy.
+  - After a cold start the SDK sends one request (the cooldown is not persisted), and the session is Authenticated throughout.
+  - Exhausting the budget on 500 without Retry-After starts no cooldown, and the immediate second call makes a new set of attempts.
+  - Requests through the authenticated client to protected origins are never blocked by the cooldown.
+notes: >
+  The cooldown protects a server that asked for quiet from an app that retries in a loop. It is
+  memory-only and starts only from what the server said; the SDK does not invent a provider's
+  policy, so without Retry-After the retry loop above the SDK belongs to the app.

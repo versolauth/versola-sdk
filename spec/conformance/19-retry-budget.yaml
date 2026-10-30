@@ -32,4 +32,5 @@ assertions:
 notes: >
   Edge has no rate limiter yet (versola#310), but the ceiling is not contingent on that: a
   retry loop in a shipped app runs on every installed device until the next release reaches
-  them. 429 and Retry-After handling is tracked separately in #22.
+  them. 429 and Retry-After are scenarios 34 to 36; which operations are repeated at all is
+  scenario 34.

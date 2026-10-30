@@ -1,0 +1,35 @@
+id: 35-retry-after
+title: Retry-After on 429 and 503 is honoured in preference to the backoff, bounded by the budget, and never fails a request when malformed
+issues: [22, 46]
+applies_to: [android, ios, flutter]
+facade: [oauth]
+mode: any
+fault_injection: [respond-with-status, clock-skew]
+preconditions:
+  - The SDK is configured with the default RetryPolicy (totalBudget 20 s).
+  - The session is Authenticated with an expired access token, so accessToken() makes a refresh.
+steps:
+  - actor: harness
+    action: Answer the first refresh with 429 and Retry-After 2, then forward the second.
+  - actor: harness
+    action: Repeat with 503 and an HTTP-date four seconds after the response's Date header, while the device clock is set one hour ahead of the server's.
+  - actor: harness
+    action: Repeat with Retry-After 0, with 30, with 86400, and with each of -1, 1.5, an empty value, "soon", two Retry-After headers, and an HTTP-date in the past.
+  - actor: harness
+    action: Repeat with 500 and a Retry-After 5.
+  - actor: app
+    action: Call accessToken() in each case and record the gap between the requests the proxy saw.
+assertions:
+  - With Retry-After 2 the second request arrives no earlier than two seconds after the first, and no later than three (the jitter is at most a tenth of the value, capped at one second). The computed backoff is not used.
+  - With an HTTP-date the wait is measured against the response's Date header, about four seconds, whatever the device clock says.
+  - With Retry-After 0 the second request is sent at once and the attempt still counts; three answers of Retry-After 0 end the operation with Recoverable, cause Server, attempts 3.
+  - With Retry-After 30 the SDK sends no second request and does not sleep, because 30 s exceeds totalBudget. It fails at once with Recoverable, cause Server, status as answered, retryAfter 30 s. The wait was not shortened to fit.
+  - With Retry-After 86400 the same, with retryAfter saturating at one day (86400 s), and without overflow.
+  - With each malformed value the request is retried under the ordinary backoff, as if the header were absent; none of them fails the request or raises Configuration.
+  - A Retry-After on a 500 is ignored, and the delays are the policy's own.
+  - On every path the number of requests is at most maxAttemptsPerOrigin and the operation ends within totalBudget.
+notes: >
+  Clamping a long Retry-After to the budget and retrying early (the first sketch in #22) sends a
+  request the server said it would refuse; stopping and reporting the value is the rule. 429 is
+  the rate limiter's answer and 503 the overload's; both carry the header in the RFCs, which is why
+  no other status is read.

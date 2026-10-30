@@ -117,7 +117,7 @@ val oauth = OAuthClient.create(context, configuration)
 | `claims` | — (property, memory) | `IdTokenClaims?` of the last validated ID token; null when unauthenticated. After a cold start the stored ID token is read back by the first operation (`accessToken()`, `userInfo()`, a refresh), without re-verifying it: it was validated before it was stored | — |
 | `userInfo()` | the UserInfo response is validated | `UserInfo` (the standard claims typed, the rest as a read-only map); `sub` must equal the ID token's `sub` (OIDC Core 5.3.2) | `Configuration(ProviderUnsupported)` when no endpoint, `Recoverable`, `Reauthenticate` |
 | `stepUp(challenge, options)` | as `login()` | re-authorizes with the challenge's `acr_values` and `max_age` and the configured scopes (or the options'); the app re-issues the refused call | as `login()` |
-| `metadata()` | discovery is cached | `ProviderMetadata` | `Configuration(Discovery*)`, `Recoverable(Network)` |
+| `metadata()` | discovery is cached | `ProviderMetadata` | `Configuration(Discovery*)`, `Recoverable(Network or Server)` |
 | `authenticatedClient(origins)` / `interceptor(origins)` / `authenticatedSession(origins)` | — | section 10 | — |
 | `keyAttestation()` | the DPoP key exists | `KeyAttestation?` (null under `Bearer`) | — |
 

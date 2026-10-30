@@ -45,7 +45,8 @@
           "clock-skew",
           "process-death",
           "omit-discovery-field",
-          "network-partition"
+          "network-partition",
+          "respond-with-status"
         ]
       },
       "description": "Harness capabilities the scenario requires. See conformance/README.md."

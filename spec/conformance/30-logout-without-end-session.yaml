@@ -22,4 +22,4 @@ steps:
 assertions:
   - After every variant the credential store holds no refresh token, ID token or pending request.
   - The revocation request carries token, token_type_hint refresh_token and client_id, and no client secret.
-  - Revocation attempts stay within the operation's retry budget.
+  - With the revocation endpoint answering 503 on every attempt, the SDK makes exactly maxAttemptsPerOrigin revocation requests (three by default), with growing delays, and no more. Revocation is repeated (`spec/retry-policy.md`, operations); a single request is a failure of this scenario.

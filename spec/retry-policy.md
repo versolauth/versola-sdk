@@ -63,22 +63,114 @@ budgets. None of them are affected by the numbers above.
 
 ## What is retried
 
-Transport failures, timeouts, DNS, 5xx, and 408. These consume the configurable budget above.
+Two questions decide whether a failed request is repeated: **what the response was**, and **what
+the operation is**. The first is the classification below, the second the operation table. A
+failure is repeated only when both say yes, and always inside the operation's budget.
 
-Status-code retries apply to **requests the SDK originates** — discovery and the token
-endpoint — and not to an application request carried through edge. A 5xx there is the
-application's answer, returned to the caller rather than retried: the SDK does not know whether
-the call was idempotent, and a replayed `POST` that the server had in fact processed is a
-duplicate the user pays for. Transport failures on that request are still retried, because a
-request that never reached a server cannot have been processed by one. The only status-driven
-repeat on an application request is the single replay after a 401-triggered refresh, below.
+### Classification
 
-429 is not listed, because nothing in the server emits one yet. When edge's rate limiter lands
-([versola#310](https://github.com/versolauth/versola/issues/310)) the SDK should treat 429 as
-its own cause and honour `Retry-After` in preference to its own backoff — clamped to
-`totalBudget`, so a `Retry-After: 86400` cannot park a request for a day. Tracked in #22, out
-of scope for phase 1. Until then a 429 falls through to the generic `Recoverable` path and is
-retried under the budget like any other transient failure, which is safe but imprecise.
+| Outcome | Class | Notes |
+|---|---|---|
+| No response: connect failure, DNS, TLS, reset, timeout | `transport` | A timeout after the request left the device may have been processed, so it is repeated only for an operation that tolerates a repeat (table below). |
+| 408, 429, 500, 502, 503, 504 | `transient` | The provider is busy or briefly broken. 429 and 503 may carry `Retry-After` (below). |
+| Any other 5xx (501, 505, ...) | `permanent server fault` | Not implemented, or an HTTP version the server refuses: a repeat cannot help. Surfaced at once as `Recoverable(Server)` with no retry. |
+| 3xx | `Configuration` | Not followed (`errors.md`). |
+| 4xx other than 408 and 429 | the OAuth error, or `Configuration` | `errors.md`. A 4xx is never repeated. |
+| 401 and 400 DPoP challenges | handled internally | The fixed retries above. |
+
+A `transport` or `transient` failure on an operation that tolerates a repeat consumes the
+configurable budget. On any other operation it is surfaced at once.
+
+### Operations
+
+Every request the SDK originates is in this table, and each row says why. The default is "retried":
+an operation is excluded only for a reason written in the row.
+
+| Operation | Repeated on `transport` / `transient` | Why |
+|---|---|---|
+| Discovery (`GET`) | yes | Read-only. |
+| JWKS (`GET`) | yes | Read-only. |
+| Pushed authorization request (`POST /par`) | yes | A second push creates a second `request_uri`; the first expires unused. Nothing is spent. |
+| `authorization_code` exchange | **no** | The code is single-use and the server offers no idempotency for this grant (above). The user signs in again. |
+| Refresh (`POST /token`, `refresh_token`) | yes | Carries `Idempotency-Key` (below), so a repeat after a dropped response resolves to the same rotation. |
+| Revocation (`POST`, RFC 7009) | yes | Revoking an already revoked token succeeds by definition. |
+| UserInfo (`GET`) | yes | Read-only. |
+| Edge `/native/start` | yes | As a pushed authorization request. |
+| Edge `/native/complete` | **no** | It redeems the code, as the exchange above. |
+| Edge `/native/token`, `/native/revoke` | yes | As refresh and revocation. |
+| The application's request through the authenticated client | **no on status; transport only if never sent** | The SDK cannot know the call was idempotent. A failure to establish the connection is repeated, because a request that never left the device cannot have been processed; a 429, 5xx or timeout after sending is the application's, with its `Retry-After` header intact. |
+
+One budget serves one application-visible operation across every row it touches (above): a
+`login()` that discovers, fetches the JWKS and pushes a request shares one allowance, and a
+discovery that failed twice leaves less for the push.
+
+### Order of work
+
+An operation does everything repeatable **before** its one non-repeatable step. `login()` completes
+discovery and the push, and warms the JWKS the ID token will be verified against, before the
+browser opens; the code exchange then needs no network request but its own. A JWKS fetch that
+fails only after the code was redeemed would cost the user a login that the provider already
+completed, so a warm-up failure is not an error of its own (the validation fetches again, under
+the budget) but a warm-up success removes that window.
+
+### `Retry-After`
+
+Read on **429 and 503 only**; on any other status the header is ignored.
+
+- **Forms.** `delta-seconds` (a non-negative integer) or an HTTP-date (RFC 9110 section 10.2.3).
+  An HTTP-date is measured against the response's `Date` header when it has one, and against the
+  device clock otherwise, so a skewed device clock does not stretch or shrink the wait. Anything
+  else (negative, fractional, empty, repeated, unparseable, a date in the past) is treated as
+  absent and the policy's own backoff applies. A malformed header never fails the request.
+- **In preference to the backoff.** With a value `R` the delay before the next attempt is `R` plus
+  jitter of up to `min(R / 10, 1 s)`, not the computed backoff: the server has said when it will
+  accept the request, and an earlier one is a request it said it would refuse. `maxBackoff` does
+  not cap it.
+- **Never retried early to fit the budget.** If `R` plus the time already spent exceeds
+  `totalBudget`, the SDK does not sleep and does not shorten the wait. It stops at once and
+  surfaces `Recoverable(Server)` carrying `retryAfter`, so a `Retry-After: 86400` costs no
+  waiting and no request, and the app decides what to do with the day. This replaces the earlier
+  draft ("clamped to `totalBudget`"), which would have retried earlier than the server allowed.
+- **Still an attempt.** A request made after waiting counts against `maxAttemptsPerOrigin` and
+  `maxTotalAttempts` like any other, so `Retry-After: 0` repeated forever is still three requests.
+- **Surfaced values saturate** at one day, so arithmetic on them cannot overflow.
+
+### Cooldown
+
+When an operation ends because of a `Retry-After`, the SDK remembers, per origin and in memory,
+the moment the server said it would accept requests again. Until then every SDK-originated
+request to that origin (a refresh triggered by a call, a revocation, a UserInfo) fails
+immediately with the same `Recoverable(Server)`, `retryAfter` set to what is left, **without
+sending anything**. Without this, an app that calls `accessToken()` in a loop, or fifty screens
+that each retry, would send a new request per call to a server that asked for quiet.
+
+- Memory only. A cold start forgets it; the server still enforces its limit, and one request
+  after a restart is the cost of not persisting a deadline.
+- Only what the server said. Exhausting the budget on 5xx with no `Retry-After` starts no cooldown:
+  the SDK does not invent a provider's policy, and the app owns the retry loop above it.
+- The application's requests through the authenticated client are never blocked by it.
+
+### What the app sees
+
+`Recoverable` carries one of two network causes. `Network` is a transport failure (nothing
+answered). `Server(status, retryAfter, attempts, elapsed)` is an HTTP answer that kept the
+operation from finishing: `status` is the last status seen (408, 429 or 5xx), `retryAfter` is the
+parsed header (absent when there was none), and the attempt count and elapsed time say whether the
+ceiling was reached. Both leave the session where it was (`Authenticated` after a failed refresh;
+the pre-`login()` state after a failed login). What the app does:
+
+- `retryAfter` present: do not repeat before it; schedule the retry instead of looping.
+- Absent: offer a retry, or back off on the app's side. The SDK has already spent its budget.
+- A 429 and a 5xx are distinguished by `status`, not by category: both are `Recoverable`.
+
+The default log level records each attempt as a status, an attempt number and a delay, and no
+header or body.
+
+### Not done, on purpose
+
+No circuit breaker beyond the cooldown, no persisted deadline, no retry of an application request
+on a status, and no retry loop that outlives the operation that started it (background refresh is
+the app's scheduler's, not a timer in the SDK).
 
 ## Idempotency
 
