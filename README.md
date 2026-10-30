@@ -173,7 +173,8 @@ client.sessionStates().listen((state) => render(state)); // any number of listen
 
 try {
   await client.login();
-  final token = await client.accessToken(); // call your API with dio or http; no authenticated client
+  final api = client.httpClient(); // a package:http Client: the SDK attaches and refreshes the token
+  final response = await api.get(Uri.https('api.example.com', '/items'));
   await client.logout();
 } on StepUpError catch (e) {
   await client.stepUp(e);

@@ -73,7 +73,7 @@ final class Scenario24GenericHappyPathBridgeTest: BridgeConformance {
 
         // The one credential that crosses: the access token, bearer, usable by the app at the
         // protected resource. The SDK itself sends nothing to the resource: attaching the token
-        // is the app's (a Flutter app has no authenticated session, section 10).
+        // is the app's when it uses accessToken(); the authenticated client, httpClient(), is scenario 32's bridge tests.
         let accessToken = try self.token(await dart.accessToken())
         try await assertTokenIsUsableAtTheResource(accessToken, subject: claims.subject)
         XCTAssertFalse(network.transcript.contains { $0.url.hasPrefix(ResourceServer.origin) })

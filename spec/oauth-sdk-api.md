@@ -230,7 +230,7 @@ The platform's HTTP client with the session attached, so most integrators never 
 |---|---|
 | Android | `interceptor(origins)`: an OkHttp application interceptor; `authenticatedClient(origins)`: the configured client plus the interceptor, redirects off |
 | iOS | `authenticatedSession(origins)`: a `URLSession` wrapper (`data(for:)`) that attaches the token and handles the retries |
-| Flutter | `accessToken()` only (section 13); a `dio` interceptor helper in a separate package later |
+| Flutter | `httpClient({origins})`: a `package:http` `Client` (`BaseClient`) whose `send` hands the request to the native authenticated client above and returns its response, so the token, the DPoP key and its proofs and the refresh never reach Dart; an app wraps it with its own interceptors, ours innermost |
 
 Behaviour, per request to a protected origin: attach `Authorization: Bearer` or `DPoP` plus a proof;
 on 401 with `error="invalid_token"` (or no `error`) refresh once and replay once; on 401 with
@@ -239,6 +239,40 @@ on 401 with `error="invalid_token"` (or no `error`) refresh once and replay once
 returned as the response it is (403, 404, 429, 5xx are the app's). A request to any other origin
 passes through untouched, and `origins` must be non-empty and `https` (or `http` on a loopback
 host, as in section 3; `InvalidConfiguration` otherwise). All of this sits inside the originating call's retry budget.
+
+A request the app addresses to a protected origin carries the SDK's credential and no other: the
+client sets `Authorization` (and, for a key-bound token, `DPoP`) itself, replacing any value the app
+supplied under those names, so an app's own `Authorization` is never sent beside the SDK's; under a
+bearer token a `DPoP` header the app supplied is dropped. On any other origin the app's headers go
+out untouched.
+
+A key-bound (DPoP) access token with no proof source configured fails closed with
+`Configuration(InvalidConfiguration)` and nothing is sent, never as a bare `Bearer`.
+
+Flutter's `httpClient()` is the same behaviour reached through the bridge: Dart describes the
+request (method, URL, header pairs, bytes) and receives the response (status, reason phrase where
+the platform has one, header pairs, bytes); nothing credential-shaped crosses. What the bridge
+shapes, and what is therefore Flutter's deviation from the native clients:
+
+- `origins`, where given, replaces `protectedOrigins` for that client (it does not narrow them), as
+  it does for the native clients.
+- The body is buffered in memory in both directions and in both runtimes; there is no streaming and
+  no limit beyond the process's memory.
+- `origins` is validated natively when the first request is sent, because `httpClient()` returns
+  synchronously: an empty set (and, with none given, an empty `protectedOrigins`) or a non-`https`
+  origin fails that request with `Configuration(InvalidConfiguration)` before anything is sent.
+- A request that is not a valid HTTP request (a relative URL, a header name that is not a token or a
+  value that is not visible ASCII, space or tab, a body on `GET`) is
+  `Configuration(InvalidConfiguration)` with a fixed text that does not quote the header.
+- A call that produced no HTTP response (no route, DNS, TLS, the native client's own timeout) is not
+  an SDK error and has no place in the taxonomy; Dart raises `package:http`'s `ClientException`
+  carrying the native exception's class name and never its message. Timeouts are the native
+  client's own configuration.
+- Response headers: Android reports every value of a repeated header, iOS's `URLSession` folds them
+  into one comma-separated value; Dart joins repeated names with a comma (`package:http`'s
+  convention). `Set-Cookie` cannot be split reliably from that.
+- There is no cancellation: `package:http`'s `Abortable` is not honoured and a Dart-side timeout
+  stops waiting without stopping the native call.
 
 The access token is also available as a value (`accessToken()`), documented as the escape hatch: a
 token handed to app code is one the app can log.
@@ -304,7 +338,7 @@ handled in app code after `logout()` has wiped locally; the SDK does not special
 | Claims | `val claims: IdTokenClaims?` | `var claims: IdTokenClaims? { get async }` | `Future<IdTokenClaims?> claims()` (a method, not a getter: the claims stay native, so the answer is asynchronous, and a `Future` getter would make `client.claims != null` always true) |
 | UserInfo | `suspend fun userInfo(): UserInfo` | `func userInfo() async throws -> UserInfo` | `Future<UserInfo> userInfo()` |
 | Step-up | `suspend fun stepUp(challenge, options)` | `func stepUp(acrValues:maxAge:options:) async throws` (the challenge is the `stepUp` case's payload) | `Future<void> stepUp(challenge, [options])` |
-| HTTP | `interceptor(origins)`, `authenticatedClient(origins)` | `authenticatedSession(origins)` | `accessToken()` |
+| HTTP | `interceptor(origins)`, `authenticatedClient(origins)` | `authenticatedSession(origins)` | `httpClient({origins})`, a `package:http` `Client`; `accessToken()` stays the escape hatch |
 | Browser leg | Auth Tab (androidx.browser, activity result) where the Custom Tabs provider supports it, Custom Tabs otherwise, any browser last; `WebView` unrepresentable | `ASWebAuthenticationSession` | native |
 | Redirect | an Auth Tab returns it as its result; otherwise the manifest-declared activity | `ASWebAuthenticationSession` returns it; `handleRedirect(_ url: URL) async -> Bool` feeds a Universal Link received while the app was cold to the pending authorization that `create()` resumes | native |
 | Errors | `sealed class VersolaError : Exception` (the rename to `OAuthError` is deferred, ADR 0001) | `enum OAuthError: Error, Sendable` with the same four cases and payloads | `sealed class OAuthError implements Exception` |
@@ -316,7 +350,9 @@ APIs are `async` on a `Sendable` client; the coordinator is an actor. Dart APIs 
 plugin forwards to the native SDK and never reimplements protocol logic (`flutter.md`).
 
 Flutter: the Dart side may receive the short-lived access token (issue #46 decision 7) and nothing
-else credential-shaped; refresh tokens, keys and the pending request stay native.
+else credential-shaped; refresh tokens, keys and the pending request stay native. A DPoP-bound
+token is used through `httpClient()`, which executes the request natively, so no proof-minting
+capability crosses the bridge.
 
 ## 14. Persistence
 

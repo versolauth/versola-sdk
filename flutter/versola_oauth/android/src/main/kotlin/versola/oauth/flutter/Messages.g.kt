@@ -1553,6 +1553,296 @@ data class KeyAttestationFailure (
     return "KeyAttestationFailure(error=$error)"
   }
 }
+
+/**
+ * One header line, name and value as they are on the wire. A list of these rather than a map:
+ * a name that appears twice (`WWW-Authenticate`, `Set-Cookie`) keeps both values and their order
+ * across the bridge. The name's case is whatever the sender used; matching is the receiver's
+ * case-insensitive business.
+ *
+ * Generated class from Pigeon that represents data sent in messages.
+ */
+data class HttpHeaderMessage (
+  val name: String,
+  val value: String
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): HttpHeaderMessage {
+      val name = pigeonVar_list[0] as String
+      val value = pigeonVar_list[1] as String
+      return HttpHeaderMessage(name, value)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      name,
+      value,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other == null || other.javaClass != javaClass) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    val other = other as HttpHeaderMessage
+    return MessagesPigeonUtils.deepEquals(this.name, other.name) && MessagesPigeonUtils.deepEquals(this.value, other.value)
+  }
+
+  override fun hashCode(): Int {
+    var result = javaClass.hashCode()
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.name)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.value)
+    return result
+  }
+  override fun toString(): String {
+    return "HttpHeaderMessage(name=$name, value=$value)"
+  }
+}
+
+/**
+ * An HTTP request the native authenticated client executes (`spec/oauth-sdk-api.md` section
+ * 10). The body is bytes and is buffered whole: the bridge does not stream. `origins` is the
+ * protected-origin set for this call, or null for the configuration's `protectedOrigins`.
+ *
+ * Generated class from Pigeon that represents data sent in messages.
+ */
+data class HttpRequestMessage (
+  val method: String,
+  val url: String,
+  val headers: List<HttpHeaderMessage>,
+  val body: ByteArray? = null,
+  val origins: List<String>? = null
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): HttpRequestMessage {
+      val method = pigeonVar_list[0] as String
+      val url = pigeonVar_list[1] as String
+      val headers = pigeonVar_list[2] as List<HttpHeaderMessage>
+      val body = pigeonVar_list[3] as ByteArray?
+      val origins = pigeonVar_list[4] as List<String>?
+      return HttpRequestMessage(method, url, headers, body, origins)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      method,
+      url,
+      headers,
+      body,
+      origins,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other == null || other.javaClass != javaClass) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    val other = other as HttpRequestMessage
+    return MessagesPigeonUtils.deepEquals(this.method, other.method) && MessagesPigeonUtils.deepEquals(this.url, other.url) && MessagesPigeonUtils.deepEquals(this.headers, other.headers) && MessagesPigeonUtils.deepEquals(this.body, other.body) && MessagesPigeonUtils.deepEquals(this.origins, other.origins)
+  }
+
+  override fun hashCode(): Int {
+    var result = javaClass.hashCode()
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.method)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.url)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.headers)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.body)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.origins)
+    return result
+  }
+  override fun toString(): String {
+    return "HttpRequestMessage(method=$method, url=$url, headers=$headers, body=${body?.contentToString()}, origins=$origins)"
+  }
+}
+
+/**
+ * The response as the server sent it: status, headers (every value of a repeated name, where
+ * the platform reports them apart) and the whole body. A 3xx, a 429 and a 5xx are responses.
+ *
+ * Generated class from Pigeon that represents data sent in messages.
+ */
+data class HttpResponseMessage (
+  val status: Long,
+  val reasonPhrase: String? = null,
+  val headers: List<HttpHeaderMessage>,
+  val body: ByteArray
+)
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): HttpResponseMessage {
+      val status = pigeonVar_list[0] as Long
+      val reasonPhrase = pigeonVar_list[1] as String?
+      val headers = pigeonVar_list[2] as List<HttpHeaderMessage>
+      val body = pigeonVar_list[3] as ByteArray
+      return HttpResponseMessage(status, reasonPhrase, headers, body)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      status,
+      reasonPhrase,
+      headers,
+      body,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other == null || other.javaClass != javaClass) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    val other = other as HttpResponseMessage
+    return MessagesPigeonUtils.deepEquals(this.status, other.status) && MessagesPigeonUtils.deepEquals(this.reasonPhrase, other.reasonPhrase) && MessagesPigeonUtils.deepEquals(this.headers, other.headers) && MessagesPigeonUtils.deepEquals(this.body, other.body)
+  }
+
+  override fun hashCode(): Int {
+    var result = javaClass.hashCode()
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.status)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.reasonPhrase)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.headers)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.body)
+    return result
+  }
+  override fun toString(): String {
+    return "HttpResponseMessage(status=$status, reasonPhrase=$reasonPhrase, headers=$headers, body=${body.contentToString()})"
+  }
+}
+
+/**
+ * Generated class from Pigeon that represents data sent in messages.
+ * This class should not be extended by any user class outside of the generated file.
+ */
+sealed class HttpResult 
+/** Generated class from Pigeon that represents data sent in messages. */
+data class HttpOk (
+  val response: HttpResponseMessage
+) : HttpResult()
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): HttpOk {
+      val response = pigeonVar_list[0] as HttpResponseMessage
+      return HttpOk(response)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      response,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other == null || other.javaClass != javaClass) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    val other = other as HttpOk
+    return MessagesPigeonUtils.deepEquals(this.response, other.response)
+  }
+
+  override fun hashCode(): Int {
+    var result = javaClass.hashCode()
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.response)
+    return result
+  }
+  override fun toString(): String {
+    return "HttpOk(response=$response)"
+  }
+}
+
+/**
+ * The SDK refused or could not finish the call: a step-up challenge, a session the provider
+ * refused, a nonce that kept changing, a `Configuration` problem (an invalid origin set, a
+ * request that is not a valid HTTP request). The typed taxonomy, as everywhere else.
+ *
+ * Generated class from Pigeon that represents data sent in messages.
+ */
+data class HttpFailure (
+  val error: ErrorMessage
+) : HttpResult()
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): HttpFailure {
+      val error = pigeonVar_list[0] as ErrorMessage
+      return HttpFailure(error)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      error,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other == null || other.javaClass != javaClass) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    val other = other as HttpFailure
+    return MessagesPigeonUtils.deepEquals(this.error, other.error)
+  }
+
+  override fun hashCode(): Int {
+    var result = javaClass.hashCode()
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.error)
+    return result
+  }
+  override fun toString(): String {
+    return "HttpFailure(error=$error)"
+  }
+}
+
+/**
+ * The request never produced an HTTP response (no route, DNS, TLS, a connection reset, the
+ * native client's own timeout). Not an SDK error and not a category of `spec/errors.md`: the
+ * Dart client turns it into `package:http`'s `ClientException`. `exception` is the native
+ * exception's class name and nothing else; its message can carry the URL.
+ *
+ * Generated class from Pigeon that represents data sent in messages.
+ */
+data class HttpTransportFailure (
+  val exception: String
+) : HttpResult()
+ {
+  companion object {
+    fun fromList(pigeonVar_list: List<Any?>): HttpTransportFailure {
+      val exception = pigeonVar_list[0] as String
+      return HttpTransportFailure(exception)
+    }
+  }
+  fun toList(): List<Any?> {
+    return listOf(
+      exception,
+    )
+  }
+  override fun equals(other: Any?): Boolean {
+    if (other == null || other.javaClass != javaClass) {
+      return false
+    }
+    if (this === other) {
+      return true
+    }
+    val other = other as HttpTransportFailure
+    return MessagesPigeonUtils.deepEquals(this.exception, other.exception)
+  }
+
+  override fun hashCode(): Int {
+    var result = javaClass.hashCode()
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.exception)
+    return result
+  }
+  override fun toString(): String {
+    return "HttpTransportFailure(exception=$exception)"
+  }
+}
 private open class MessagesPigeonCodec : StandardMessageCodec() {
   override fun readValueOfType(type: Byte, buffer: ByteBuffer): Any? {
     return when (type) {
@@ -1716,6 +2006,36 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
           KeyAttestationFailure.fromList(it)
         }
       }
+      161.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          HttpHeaderMessage.fromList(it)
+        }
+      }
+      162.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          HttpRequestMessage.fromList(it)
+        }
+      }
+      163.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          HttpResponseMessage.fromList(it)
+        }
+      }
+      164.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          HttpOk.fromList(it)
+        }
+      }
+      165.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          HttpFailure.fromList(it)
+        }
+      }
+      166.toByte() -> {
+        return (readValue(buffer) as? List<Any?>)?.let {
+          HttpTransportFailure.fromList(it)
+        }
+      }
       else -> super.readValueOfType(type, buffer)
     }
   }
@@ -1849,6 +2169,30 @@ private open class MessagesPigeonCodec : StandardMessageCodec() {
         stream.write(160)
         writeValue(stream, value.toList())
       }
+      is HttpHeaderMessage -> {
+        stream.write(161)
+        writeValue(stream, value.toList())
+      }
+      is HttpRequestMessage -> {
+        stream.write(162)
+        writeValue(stream, value.toList())
+      }
+      is HttpResponseMessage -> {
+        stream.write(163)
+        writeValue(stream, value.toList())
+      }
+      is HttpOk -> {
+        stream.write(164)
+        writeValue(stream, value.toList())
+      }
+      is HttpFailure -> {
+        stream.write(165)
+        writeValue(stream, value.toList())
+      }
+      is HttpTransportFailure -> {
+        stream.write(166)
+        writeValue(stream, value.toList())
+      }
       else -> super.writeValue(stream, value)
     }
   }
@@ -1879,6 +2223,12 @@ interface OAuthHostApi {
   suspend fun claims(handle: String): ClaimsResult
   suspend fun userInfo(handle: String): UserInfoResult
   suspend fun keyAttestation(handle: String): KeyAttestationResult
+  /**
+   * Executes one request with the native authenticated client (`OAuthClient.call` on Android,
+   * `authenticatedSession` on iOS): the token and the DPoP proof are attached, refreshed and
+   * replayed natively and never cross; only the request and the response do.
+   */
+  suspend fun httpRequest(handle: String, request: HttpRequestMessage): HttpResult
 
   companion object {
     /** The codec used by OAuthHostApi. */
@@ -2074,6 +2424,26 @@ interface OAuthHostApi {
             CoroutineScope(Dispatchers.Main).launch {
               val wrapped: List<Any?> = try {
                 listOf(api.keyAttestation(handleArg))
+              } catch (exception: Throwable) {
+                MessagesPigeonUtils.wrapError(exception)
+              }
+              reply.reply(wrapped)
+            }
+          }
+        } else {
+          channel.setMessageHandler(null)
+        }
+      }
+      run {
+        val channel = BasicMessageChannel<Any?>(binaryMessenger, "dev.flutter.pigeon.versola_oauth.OAuthHostApi.httpRequest$separatedMessageChannelSuffix", codec)
+        if (api != null) {
+          channel.setMessageHandler { message, reply ->
+            val args = message as List<Any?>
+            val handleArg = args[0] as String
+            val requestArg = args[1] as HttpRequestMessage
+            CoroutineScope(Dispatchers.Main).launch {
+              val wrapped: List<Any?> = try {
+                listOf(api.httpRequest(handleArg, requestArg))
               } catch (exception: Throwable) {
                 MessagesPigeonUtils.wrapError(exception)
               }

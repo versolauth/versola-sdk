@@ -69,7 +69,9 @@ in `security.md`; what the platform SDKs do is in `android-kotlin.md` and `ios-s
 
 - Allowed: configuration values, session state, typed results and errors, the user's validated
   claims, and the short-lived access token, returned only from the call whose purpose is to hand
-  the app a token (issue #46 decision 7: Flutter apps call APIs through `dio` or `http`).
+  the app a token (issue #46 decision 7). Apps call their API through `OAuthClient.httpClient()`, a
+  `package:http` client that executes the request natively, so a DPoP-bound token is usable from Dart
+  with no proof-minting capability crossing; `dio` uses it through a small adapter.
 - Never: the refresh token, any private key, key material, a DPoP proof minting capability, the
   pending request, `state`, the PKCE verifier, or the ID token's raw form for storage. No secret
   in a `PlatformException` message, in `debugPrint`, in the example app's UI or in a test fixture.
@@ -105,6 +107,12 @@ cd example && flutter build ios --no-codesign   # and on iOS
   `pigeon` and anything else); `pubspec.lock` is gitignored (`.gitignore`), so the constraints are
   what makes a build repeatable. A new dependency needs approval, with licence and
   maintenance noted (`security.md`).
+  The exact-minor pin is for build tooling (`pigeon`, whose version is part of the generated
+  contract). A package whose types appear in the public API and which integrators share (`http`)
+  gets a range across the major, with the tested version as its floor: a one-minor pin in a library
+  fails the integrator's own resolve, since such a package is in nearly every app's graph. Verify
+  such a range against the floor and the newest release in range (`flutter pub upgrade <pkg>` in a
+  scratch copy) when it is set and when Dependabot bumps it.
 - Dependabot watches `pub` under `/flutter/versola_oauth` (with `pigeon` ignored: a bump comes with
   the regeneration) and the example's Gradle build; minors arrive grouped, majors separately
   (`ci-release.md`).
