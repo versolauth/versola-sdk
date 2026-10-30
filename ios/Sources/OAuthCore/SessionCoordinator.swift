@@ -31,7 +31,10 @@ package actor SessionCoordinator: AccessTokenSource {
 
     private struct Cached: Sendable {
         let response: TokenResponse
-        let receivedAt: Date
+        /// Seconds on the continuous clock (`Clock.uptime`), not a wall-clock instant: how long
+        /// ago the response arrived must not move when the user or an NTP step moves the date
+        /// (`spec/state-machine.md`, "The refresh skew").
+        let receivedAt: TimeInterval
     }
 
     /// A session the provider issued no refresh token for: the access token in memory and the
@@ -131,7 +134,7 @@ package actor SessionCoordinator: AccessTokenSource {
     }
 
     private func usable(_ cached: Cached) -> Bool {
-        clock.now().timeIntervalSince(cached.receivedAt) < RefreshSkew.usableFor(response: cached.response)
+        clock.uptime() - cached.receivedAt < RefreshSkew.usableFor(response: cached.response)
     }
 
     /// `authenticated → unauthenticated` for a session without a refresh token: nothing to
@@ -245,7 +248,7 @@ package actor SessionCoordinator: AccessTokenSource {
         claimsRestored = true
         claims = validated
         try await flow.completeLogin()
-        cachedAccessToken = Cached(response: response, receivedAt: clock.now())
+        cachedAccessToken = Cached(response: response, receivedAt: clock.uptime())
         return response
     }
 
@@ -372,7 +375,7 @@ package actor SessionCoordinator: AccessTokenSource {
                 if let rotated = issued.refreshToken { current = rotated } else { current = try await credentialStore.refreshToken() }
                 if let current { try await credentialStore.save(refreshToken: current, rawIdToken: idToken) }
             }
-            cachedAccessToken = Cached(response: issued, receivedAt: clock.now())
+            cachedAccessToken = Cached(response: issued, receivedAt: clock.uptime())
             await flow.setState(.authenticated)
             return issued
         } catch is WipedMeanwhile {

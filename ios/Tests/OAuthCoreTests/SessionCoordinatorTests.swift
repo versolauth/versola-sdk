@@ -107,6 +107,10 @@ final class SessionCoordinatorTests: XCTestCase {
         func peek() -> Date { date.withLock { $0 } }
         /// The continuous clock the budget and the cooldown read: it moves with the wall clock here.
         func peekUptime() -> TimeInterval { ticks.withLock { $0 } }
+        /// The user (or an NTP step) moves the wall clock; the continuous clock does not notice.
+        func stepWallClock(_ seconds: TimeInterval) {
+            date.withLock { $0 = $0.addingTimeInterval(seconds) }
+        }
         func advance(_ seconds: TimeInterval) {
             date.withLock { $0 = $0.addingTimeInterval(seconds) }
             ticks.withLock { $0 += seconds }
@@ -537,6 +541,31 @@ final class SessionCoordinatorTests: XCTestCase {
         try await f.coordinator.login(scopes: ["openid"])
         let state = await f.flow.states.current
         XCTAssertEqual(state, .authenticated)
+    }
+
+    /// `spec/state-machine.md`: how long ago the response arrived is measured on a monotonic
+    /// clock, so a wall-clock step neither expires a live token nor revives an expired one.
+    func testAWallClockStepForwardDoesNotMakeALiveAccessTokenLookExpired() async throws {
+        let f = try fixture(answers: [.success(response(refresh: "rt-1", expiresIn: 300))])
+        try await f.coordinator.login(scopes: ["openid"])
+
+        f.clock.stepWallClock(3600)
+        _ = try await f.coordinator.accessToken()
+
+        let calls = await f.tokens.calls
+        XCTAssertEqual(calls, [.exchange], "no refresh: five minutes of the token's life have not passed")
+    }
+
+    func testAWallClockStepBackDoesNotReviveAnExpiredAccessToken() async throws {
+        let f = try fixture(answers: [.success(response(refresh: "rt-1", expiresIn: 60)), .success(response(refresh: "rt-2"))])
+        try await f.coordinator.login(scopes: ["openid"])
+
+        f.clock.advance(61)
+        f.clock.stepWallClock(-7200)
+        _ = try await f.coordinator.accessToken()
+
+        let calls = await f.tokens.calls
+        XCTAssertEqual(calls.count, 2, "the token had really expired")
     }
 
     // MARK: - Refresh with no grant
