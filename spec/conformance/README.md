@@ -49,6 +49,7 @@ behaviour must be the same. Scenarios 21–23 exist for what only the edge flow 
 | 30 | Logout without `end_session_endpoint` | any | 46 |
 | 31 | Session without a refresh token ends in `Reauthenticate` | any | 46 |
 | 32 | Token attached only to protected origins | any | 46 |
+| 33 | DPoP end to end against a provider that requires it and a resource server that verifies it | dpop | 46 |
 
 ## Facades
 
@@ -56,9 +57,9 @@ A scenario carries `facade:` naming the facades it holds for: `versola` (the `Ve
 the default when the key is absent) and `oauth` (the generic facade of
 [`../oauth-sdk-api.md`](../oauth-sdk-api.md)). A scenario tagged with both runs under both; under
 `oauth` it runs once per provider in [`../providers.md`](../providers.md), and the `provider`
-actor stands for whichever OpenID Provider is staged. Scenarios 24 to 32 exist for what only the
+actor stands for whichever OpenID Provider is staged. Scenarios 24 to 33 exist for what only the
 generic facade does (explicit endpoints, PAR policy, providers without an `end_session_endpoint`
-or without refresh tokens, protected origins) and for ID-token validation, which both facades
+or without refresh tokens, protected origins, DPoP against a provider that requires it) and for ID-token validation, which both facades
 share.
 
 `applies_to` lists the platforms that meet every assertion of a scenario. A platform that lacks a

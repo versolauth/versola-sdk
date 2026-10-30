@@ -52,7 +52,7 @@ public final class OAuthClient: Sendable {
         presentationAnchor: @escaping @MainActor @Sendable () -> ASPresentationAnchor
     ) async throws -> OAuthClient {
         try await registry.resolve(configuration) {
-            try build(configuration: configuration, presentationAnchor: presentationAnchor, browser: nil, credentialStore: nil, pendingStore: nil, metadataCache: nil, jwksCache: nil)
+            try build(configuration: configuration, presentationAnchor: presentationAnchor, browser: nil, credentialStore: nil, pendingStore: nil, metadataCache: nil, jwksCache: nil, makeDpopKey: nil)
         }
     }
 
@@ -66,10 +66,15 @@ public final class OAuthClient: Sendable {
         /// In-memory caches for a driver whose every test stages the provider anew; the file
         /// caches would otherwise serve one test's discovery and keys to the next.
         metadataCache: ProviderMetadataCache? = nil,
-        jwksCache: JwksCache? = nil
+        jwksCache: JwksCache? = nil,
+        /// The DPoP key, built from the configuration's hardware requirement and the logger. A driver
+        /// on a host whose Keychain refuses an unsigned process (-34018) hands the key a store of its
+        /// own; what the key does with `requireHardware` is still the SDK's, only where it persists
+        /// and whether the Secure Enclave counts as present are the driver's.
+        dpopKey makeDpopKey: (@Sendable (_ requireHardware: Bool, _ logger: any OAuthLogger) -> SecureEnclaveDpopKey)? = nil
     ) async throws -> OAuthClient {
         try await registry.resolve(configuration) {
-            try build(configuration: configuration, presentationAnchor: nil, browser: browser, credentialStore: credentialStore, pendingStore: pendingStore, metadataCache: metadataCache, jwksCache: jwksCache)
+            try build(configuration: configuration, presentationAnchor: nil, browser: browser, credentialStore: credentialStore, pendingStore: pendingStore, metadataCache: metadataCache, jwksCache: jwksCache, makeDpopKey: makeDpopKey)
         }
     }
 
@@ -208,7 +213,8 @@ public final class OAuthClient: Sendable {
         credentialStore injectedCredentials: CredentialStore?,
         pendingStore injectedPending: PendingAuthorizationStore?,
         metadataCache injectedMetadataCache: ProviderMetadataCache?,
-        jwksCache injectedJwksCache: JwksCache?
+        jwksCache injectedJwksCache: JwksCache?,
+        makeDpopKey: (@Sendable (_ requireHardware: Bool, _ logger: any OAuthLogger) -> SecureEnclaveDpopKey)?
     ) throws -> OAuthClient {
         let logger = configuration.logger
         if let warning = configuration.redirectUriWarning { logger.warn(warning) }
@@ -231,7 +237,7 @@ public final class OAuthClient: Sendable {
 
         let dpopKey: SecureEnclaveDpopKey?
         if case .dpop(let required) = configuration.tokenBinding {
-            dpopKey = SecureEnclaveDpopKey(storageKey: configuration.storageKey, requireHardware: required, logger: logger)
+            dpopKey = makeDpopKey?(required, logger) ?? SecureEnclaveDpopKey(storageKey: configuration.storageKey, requireHardware: required, logger: logger)
         } else {
             dpopKey = nil
         }
