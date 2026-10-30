@@ -54,6 +54,18 @@ class RetryPolicyTest {
     }
 
     @Test
+    fun `a maxBackoff below the initialBackoff is refused`() {
+        // The second attempt would wait the cap, and the knob would read as something it is not.
+        assertRefuses { RetryPolicy(initialBackoff = 2.seconds, maxBackoff = 1.seconds) }
+        RetryPolicy(initialBackoff = 2.seconds, maxBackoff = 2.seconds)
+    }
+
+    @Test
+    fun `the initialBackoff has the same ceiling as the longest delay`() {
+        assertRefuses { RetryPolicy(initialBackoff = 31.seconds, maxBackoff = 30.seconds) }
+    }
+
+    @Test
     fun `a per-origin allowance above the total allowance is refused`() {
         // Two different promises, of which the smaller silently wins.
         assertRefuses { RetryPolicy(maxAttemptsPerOrigin = 4, maxTotalAttempts = 2) }

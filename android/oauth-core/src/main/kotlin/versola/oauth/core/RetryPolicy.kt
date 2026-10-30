@@ -45,6 +45,11 @@ public class RetryPolicy(
         bounded("initialBackoff", initialBackoff, Duration.ZERO, MAX_BACKOFF_CEILING)
         bounded("maxBackoff", maxBackoff, Duration.ZERO, MAX_BACKOFF_CEILING)
         bounded("totalBudget", totalBudget, Duration.ZERO, TOTAL_BUDGET_CEILING)
+        // A delay that starts above the cap it is capped by describes no schedule: the second attempt
+        // would wait the cap and the knob would read as something it is not. Refused, as on iOS.
+        if (maxBackoff < initialBackoff) {
+            throw invalid("maxBackoff ($maxBackoff) must not be below initialBackoff ($initialBackoff)")
+        }
         // An operation whose per-origin allowance exceeds its total allowance reads as two
         // different promises, and the smaller one silently wins. Say so at configuration
         // time instead, where it is one line to fix.
