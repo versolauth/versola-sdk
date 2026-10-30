@@ -44,7 +44,7 @@ dependencies {
     // The Android dispatcher the facade's callers run on; the core itself needs only -core.
     api("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
     // `/native/start`'s answer is parsed with the same reflection-free serializer as discovery.
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")

@@ -94,10 +94,17 @@ final class DpopProofFactoryTests: XCTestCase {
     }
 
     func testHtuKeepsAnExplicitPortAndDropsUserinfo() async throws {
-        let withPort = try await factory().proof(method: "GET", url: URL(string: "https://user:pw@Rs.Example.com:8443/x?q=1")!, nonce: nil, accessToken: nil)
-        let claims = JoseTestTokens.decode(withPort).claims
-        XCTAssertEqual(claims["htu"] as? String, "https://rs.example.com:8443/x")
-        XCTAssertFalse(withPort.contains("pw"))
+        // The password carries a `!`: a valid userinfo character that is outside the base64url
+        // alphabet, so it cannot occur by chance in the random members of the proof (the
+        // signature, the jwk coordinates, the jti). A needle made of letters would match
+        // them a few runs in a hundred.
+        let withPort = try await factory().proof(method: "GET", url: URL(string: "https://user:p!w@Rs.Example.com:8443/x?q=1")!, nonce: nil, accessToken: nil)
+        let decoded = JoseTestTokens.decode(withPort)
+        XCTAssertEqual(decoded.claims["htu"] as? String, "https://rs.example.com:8443/x")
+        XCTAssertFalse(withPort.contains("p!w"))
+        XCTAssertFalse(String(describing: decoded.header).contains("p!w"))
+        XCTAssertFalse(String(describing: decoded.claims).contains("p!w"))
+        XCTAssertFalse(String(describing: decoded.claims).contains("user"))
     }
 
     func testIatIsTheInjectedClockInWholeSecondsAndJtiIs128BitsOfTheInjectedRandomSource() async throws {

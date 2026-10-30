@@ -71,7 +71,7 @@ jobs:
       run:
         working-directory: android
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # The emulator needs hardware acceleration; GitHub's Linux runners expose /dev/kvm but
       # not to the runner user by default.
@@ -91,7 +91,7 @@ jobs:
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
             "platforms;android-36" "build-tools;36.0.0" > /dev/null
 
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v5
 
       - name: Instrumented tests on API ${{ matrix.api-level }}
         uses: reactivecircus/android-emulator-runner@v2
@@ -107,7 +107,7 @@ jobs:
 
       - name: Upload instrumented test reports
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: instrumented-reports-api-${{ matrix.api-level }}
           path: |
