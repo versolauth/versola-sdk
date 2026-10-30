@@ -202,11 +202,39 @@ public final class OAuthClient: Sendable {
         return true
     }
 
-    /// Scheme, host and `URL.path` must match the configured redirect; the query and fragment are
-    /// the response, not part of the address. `URL.path` drops a trailing slash, so `/oauth/`
-    /// matches `/oauth` (pinned in `RedirectMatchingTests`). Kept pure so the rule is tested directly.
+    /// The redirect is the configured address, nothing looser: the query and fragment are the
+    /// response, not part of the address. Scheme and host compare case-insensitively (RFC 3986
+    /// section 3.1 and 3.2.2), the port with its default filled in, and the path exactly as sent,
+    /// percent-encoding included: `URL.path` would decode `%2F` and drop a trailing slash, so
+    /// `/oauth/` and `/oauth%2Fx` must not match `/oauth` and `/oauth/x`. An empty http(s) path is
+    /// `/` (RFC 9110 section 4.2.3). Kept pure so the rule is tested directly.
     static func isRedirect(_ url: URL, to redirectUri: URL) -> Bool {
-        url.scheme == redirectUri.scheme && url.host == redirectUri.host && url.path == redirectUri.path
+        guard let actual = URLComponents(url: url, resolvingAgainstBaseURL: false),
+              let expected = URLComponents(url: redirectUri, resolvingAgainstBaseURL: false),
+              let actualScheme = actual.scheme?.lowercased(), actualScheme == expected.scheme?.lowercased()
+        else { return false }
+        // A private-use scheme has no host (`com.example.app:/path`), so the host is compared as
+        // optionals: nil matches nil and nothing else.
+        return actual.host?.lowercased() == expected.host?.lowercased()
+            && port(actual, scheme: actualScheme) == port(expected, scheme: actualScheme)
+            && path(actual, scheme: actualScheme) == path(expected, scheme: actualScheme)
+    }
+
+    private static func port(_ components: URLComponents, scheme: String) -> Int? {
+        components.port ?? defaultPort(for: scheme)
+    }
+
+    private static func defaultPort(for scheme: String) -> Int? {
+        switch scheme {
+        case "https": 443
+        case "http": 80
+        default: nil
+        }
+    }
+
+    private static func path(_ components: URLComponents, scheme: String) -> String {
+        let path = components.percentEncodedPath
+        return path.isEmpty && (scheme == "https" || scheme == "http") ? "/" : path
     }
 
     private func refuseWhileAuthorizing() async throws {

@@ -21,11 +21,35 @@ final class RedirectMatchingTests: XCTestCase {
         XCTAssertFalse(OAuthClient.isRedirect(URL(string: "https://app.example.com/other?code=c")!, to: redirect))
     }
 
-    func testATrailingSlashMatchesTodayBecauseFoundationDropsIt() {
-        // Not a design decision: `URL.path` returns `/oauth` for `/oauth/`, so the comparison
-        // cannot see the slash. The matching rule is looser than "path exact". Pinned so that
-        // tightening it (comparing the raw path) is a deliberate change with its own test.
-        XCTAssertTrue(OAuthClient.isRedirect(URL(string: "https://app.example.com/oauth/?code=c")!, to: redirect))
+    func testATrailingSlashIsADifferentPath() {
+        XCTAssertFalse(OAuthClient.isRedirect(URL(string: "https://app.example.com/oauth/?code=c")!, to: redirect))
+    }
+
+    func testAPercentEncodedSlashIsNotAPathSeparator() {
+        // `URL.path` decodes `%2F` to `/`, which would make these equal. The raw path must not.
+        let nested = URL(string: "https://app.example.com/oauth/x")!
+        XCTAssertFalse(OAuthClient.isRedirect(URL(string: "https://app.example.com/oauth%2Fx")!, to: nested))
+        XCTAssertFalse(OAuthClient.isRedirect(URL(string: "https://app.example.com/oauth%2Fx")!, to: redirect))
+    }
+
+    func testAnEmptyPathIsTheRootPath() {
+        // RFC 9110 section 4.2.3: `https://app.example.com` is `https://app.example.com/`.
+        let root = URL(string: "https://app.example.com/")!
+        XCTAssertTrue(OAuthClient.isRedirect(URL(string: "https://app.example.com?code=c")!, to: root))
+        XCTAssertFalse(OAuthClient.isRedirect(URL(string: "https://app.example.com?code=c")!, to: redirect))
+    }
+
+    func testAnExplicitDefaultPortMatchesNoPort() {
+        XCTAssertTrue(OAuthClient.isRedirect(URL(string: "https://app.example.com:443/oauth?code=c")!, to: redirect))
+    }
+
+    func testADifferentPortIsRefused() {
+        XCTAssertFalse(OAuthClient.isRedirect(URL(string: "https://app.example.com:8443/oauth?code=c")!, to: redirect))
+    }
+
+    func testSchemeAndHostCompareCaseInsensitively() {
+        // RFC 3986 section 3.1 and 3.2.2: a different case is the same address.
+        XCTAssertTrue(OAuthClient.isRedirect(URL(string: "HTTPS://APP.example.COM/oauth?code=c")!, to: redirect))
     }
 
     func testAnotherHostIsRefused() {
