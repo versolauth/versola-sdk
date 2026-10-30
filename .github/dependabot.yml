@@ -33,6 +33,22 @@ updates:
       gradle:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+  # The plugin's Android glue (flutter/versola_oauth/android). It is built through the example's
+  # composite build, which has no verification of its own, so this entry is the only thing that
+  # notices a stale coroutines or JUnit pin here. `io.versola:oauth-android` is the plugin's own
+  # release pin: tools/prepare-release.sh moves it with the version, and check-release-version.sh
+  # fails when it disagrees with pubspec.yaml, so a Dependabot bump of it would only break that.
+  - package-ecosystem: gradle
+    directory: /flutter/versola_oauth/android
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    ignore:
+      - dependency-name: io.versola:oauth-android
+    groups:
+      gradle:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: swift
     directory: /
     schedule:
@@ -56,6 +72,33 @@ updates:
       - dependency-name: pigeon
     groups:
       pub:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+  # The example app's own pub dependencies (cupertino_icons, the lints); the plugin is a path
+  # dependency there.
+  - package-ecosystem: pub
+    directory: /flutter/versola_oauth/example
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      pub:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+  # The provider containers of the conformance runs (conformance/providers/) and the Versola stack's
+  # Postgres (conformance/stack/; its own images are `:latest` and are not touched). A provider
+  # image is pinned to a release so that spec/providers.md can name what was tested: a bump here is
+  # a PR whose `providers` run is the evidence, and the matrix row changes with it.
+  - package-ecosystem: docker-compose
+    directories:
+      - /conformance/providers/keycloak
+      - /conformance/providers/hydra
+      - /conformance/stack
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    groups:
+      containers:
         patterns: ["*"]
         update-types: ["minor", "patch"]
   - package-ecosystem: github-actions

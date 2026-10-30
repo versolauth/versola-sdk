@@ -208,7 +208,9 @@ final class PushedAuthorizationStarterTests: XCTestCase {
             _ = try await starter(RecordingHTTP.json(201, created), .required).start(
                 request: request(), metadata: AuthzKit.metadata(parEndpoint: "not a url"), now: AuthzKit.now)
             XCTFail("expected a failure")
-        } catch OAuthError.configuration(.invalidConfiguration) {
+        } catch OAuthError.configuration(.discoveryMalformed) {
+            // The endpoint is checked where it is used, before the URL is built: the same
+            // Configuration category, naming the document as the culprit.
         } catch {
             XCTFail("unexpected \(error)")
         }

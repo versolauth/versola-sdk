@@ -1,4 +1,5 @@
 import Foundation
+import os
 import XCTest
 @testable import OAuthCore
 
@@ -234,5 +235,18 @@ struct FixedStarter: AuthorizationStarter {
             pending: pending,
             browserUri: URL(string: "https://id.example.com/authorize?client_id=c&request_uri=urn%3Ax&state=\(pending.state)")!
         )
+    }
+}
+
+/// A clock the test moves, wall and continuous together, handed to the code under test as a `Clock`.
+final class ManualClock: Sendable {
+    private let wall = OSAllocatedUnfairLock(initialState: Date(timeIntervalSince1970: 1_800_000_000))
+    private let uptime = OSAllocatedUnfairLock(initialState: 1000.0)
+
+    var clock: Clock { Clock(now: { self.wall.withLock { $0 } }, uptime: { self.uptime.withLock { $0 } }) }
+
+    func advance(_ seconds: TimeInterval) {
+        wall.withLock { $0 = $0.addingTimeInterval(seconds) }
+        uptime.withLock { $0 += seconds }
     }
 }

@@ -12,6 +12,10 @@
 # Ports match versola's develop.md so the e2e defaults (E2EConfig) and the harness arguments
 # agree: central 9001, auth 9003 (+9007 account API, +9008 mTLS), edge 9005.
 #
+# Every published port is bound to 127.0.0.1 (the credentials here are throwaway and the services
+# are development builds). The emulator still reaches them: `adb reverse` and 10.0.2.2, its alias
+# for the host's loopback, both connect to a loopback listener; a physical device uses `adb reverse`.
+#
 # Not yet wired: the TLS terminator between edge and auth (edge/dev/internal-tls/nginx.conf)
 # that versola's CI runs on the host, and RUN_MIGRATIONS ordering. Treat this file as the
 # starting point for the local stack, not as something that boots green today.
@@ -24,7 +28,7 @@ services:
       POSTGRES_PASSWORD: "1234"
       POSTGRES_DB: auth
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U dev -d auth"]
       interval: 5s
@@ -44,8 +48,8 @@ services:
     volumes:
       - ${VERSOLA_CHECKOUT:?set VERSOLA_CHECKOUT to a versola checkout with generated dev configs}/central/dev:/config:ro
     ports:
-      - "9001:9001"
-      - "9002:9002"
+      - "127.0.0.1:9001:9001"
+      - "127.0.0.1:9002:9002"
 
   auth:
     image: ghcr.io/versolauth/versola-auth:latest
@@ -62,10 +66,10 @@ services:
     volumes:
       - ${VERSOLA_CHECKOUT}/auth/dev:/config:ro
     ports:
-      - "9003:9003"
-      - "9004:9004"
-      - "9007:9007"
-      - "9008:9008"
+      - "127.0.0.1:9003:9003"
+      - "127.0.0.1:9004:9004"
+      - "127.0.0.1:9007:9007"
+      - "127.0.0.1:9008:9008"
 
   edge:
     image: ghcr.io/versolauth/versola-edge:latest
@@ -79,5 +83,5 @@ services:
     volumes:
       - ${VERSOLA_CHECKOUT}/edge/dev:/config:ro
     ports:
-      - "9005:9005"
-      - "9006:9006"
+      - "127.0.0.1:9005:9005"
+      - "127.0.0.1:9006:9006"

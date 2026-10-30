@@ -109,8 +109,9 @@ an existing one, extend it:
   the same class.
 - A second way to do what an option already does (a `configure()` parameter next to a
   `VersolaConfiguration` field, a second entry point that skips `login()`'s persistence order).
-- A public parameter whose only consumer is the conformance driver (a cleartext loopback issuer
-  allowance, `10.0.2.2` included, shipped in the release artifact).
+- A public parameter whose only consumer is the conformance driver, or a cleartext allowance beyond
+  the one documented rule (`http` to `localhost`, `127.0.0.1` and `[::1]` only; `security.md`):
+  `10.0.2.2` or any other host, or a switch for it, shipped in the release artifact.
 - The same concept shaped differently on Android, iOS and Dart for no platform reason (a sealed
   error on one platform, a string on another). A public type exposing a third-party type (OkHttp
   `Request`, Pigeon classes) puts that library's version on our ABI: `api(...)` in a

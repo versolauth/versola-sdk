@@ -22,9 +22,13 @@ services:
     environment:
       DSN: memory
     command: serve -c /etc/config/hydra/hydra.yml all --dev
+    # Loopback only: the throwaway credentials and `--dev` mode must not be reachable from the
+    # network the machine is on. The emulator still gets here: `adb reverse` and 10.0.2.2 (the
+    # emulator's alias for the host's loopback) both reach a 127.0.0.1 listener, and a simulator's
+    # localhost is the host's. A physical device needs `adb reverse`, not the host's LAN address.
     ports:
-      - "4444:4444"   # public
-      - "4445:4445"   # admin: the import below and nothing else
+      - "127.0.0.1:4444:4444"   # public
+      - "127.0.0.1:4445:4445"   # admin: the import below and nothing else
     volumes:
       - ./hydra.yml:/etc/config/hydra/hydra.yml:ro
     restart: unless-stopped
@@ -48,5 +52,5 @@ services:
     environment:
       HYDRA_ADMIN_URL: http://hydra:4445
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     restart: unless-stopped

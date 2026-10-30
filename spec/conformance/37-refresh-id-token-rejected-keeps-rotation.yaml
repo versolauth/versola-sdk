@@ -1,0 +1,28 @@
+id: 37-refresh-id-token-rejected-keeps-rotation
+title: A refresh whose ID token is rejected still keeps the refresh token the provider rotated
+issues: [46]
+applies_to: [ios]
+facade: [oauth]
+mode: any
+preconditions:
+  - The session is Authenticated against a provider that rotates the refresh token on every use, with a validated ID token held.
+  - A proxy in front of the provider can corrupt the signature of the id_token in the next token response.
+steps:
+  - actor: harness
+    action: Corrupt the id_token signature in the token endpoint's answers.
+  - actor: app
+    action: Call refresh().
+    expect: Configuration with detail IdTokenRejected(Signature).
+  - actor: harness
+    action: Remove the corruption.
+  - actor: app
+    action: Call refresh() again.
+    expect: Succeeds, spending the token the first refresh was answered with, not the one it replaced.
+assertions:
+  - The first refresh made exactly one token request, and the second carries a refresh_token different from the first's.
+  - The second refresh is not invalid_grant, the session is Authenticated throughout, and nothing was wiped (the DPoP key under DPoP, the pending slot).
+  - The claims after the rejected refresh are those held before it; the response's access token was not kept.
+  - A provider that does not rotate (Keycloak's default) passes without proving the point; a rotating one (Hydra) is what fails a platform that dropped the rotation.
+notes: >-
+  state-machine.md, "Authenticated -> Refreshing -> Authenticated", persistence order. Android
+  to be added to applies_to when its coordinator persists the rotation before validating the ID token.

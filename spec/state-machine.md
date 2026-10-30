@@ -109,7 +109,17 @@ error arrives is the only way to separate them, and it is required, not optional
 cancel should be retried silently, a user cancel must not be.
 
 The pending request is wiped on user cancel and **kept** on system cancel, so the flow can be
-resumed.
+resumed. Kept for a resume, not reserved: nothing awaits it, so a new `login()` is not made to
+wait out its ten minutes. It supersedes the leftover, and the old request's `state` is remembered
+so a redirect its tab still delivers is stepped over rather than failing the new login. The same
+holds for a cold-start resume that only waits for its redirect: `login()` and `stepUp()` end that
+wait first (as `logout()` does) and supersede the request.
+
+A redirect that reaches a live request with a `state` that is not its own stays
+`Configuration(StateMismatch)` and discards the request (scenario 15), wherever it came from: the
+spec does not distinguish a redirect delivered by the browser session from one handed over by the
+app (`handleRedirect`). A URL that is not the configured redirect URI at all is not a response
+and is ignored by the facade before it reaches the flow.
 
 iOS, a caller cancelled mid-browser (a SwiftUI `.task` torn down by navigation): the SDK's
 cancellation handler dismisses the `ASWebAuthenticationSession`, so nothing can redirect
@@ -133,13 +143,17 @@ waits for can no longer be spent. The request is discarded and the SDK restores
 `Authenticated`. Asked without the storage key (`hasGrant`), so a cold start does not become an
 unlock prompt under `OnAppUnlock`.
 
-A pending request that cannot be read yet (Android: the storage key is locked, or the Keystore
-failed transiently) has not said there is nothing in it. With no grant to decide the state the
-restore publishes `Locked`, never `Unauthenticated`; the operation that asked fails with the
-`Recoverable` storage error; the slot is not discarded; and the restore is **not** remembered, so
-the next read tries again. A collector of the state is not handed the error. When a later read
-finds the request, the cold-start resume is started then, not only at creation. With a grant the
-unreadable request is only residue and the state does not depend on it.
+A store that cannot be read yet (iOS: the device was never unlocked since boot, and the Keychain
+answers `errSecInteractionNotAllowed`; Android: the storage key is locked, or the Keystore failed
+transiently) has not said there is nothing in it. With no grant to decide the state the restore
+then publishes `Locked`, never `Unauthenticated`, fails the operation that asked with the
+`Recoverable` storage error (`UnlockRequired` on iOS), does not discard the slot, and is **not**
+remembered: the next call, once the app has asked the user to unlock, reads again. The grant is
+read before the pending request for this reason too: an unreadable pending slot must not decide
+what a returning user sees. When a later read finds the request, the cold-start resume is started
+then, not only at creation (Android). A collector of the state is not handed the error. With a
+grant the restore also **clears the pending slot on every cold start**, unread (it is residue,
+above); a slot that cannot be cleared yet fails the restore the same way and is retried.
 
 The cost is a re-authorization started over a live session — a step-up, an account switch — and
 then killed mid-browser: it resolves in favour of the session that already exists rather than
@@ -200,18 +214,32 @@ provider to. The generic facade (`oauth-sdk-api.md` section 8) sends none, persi
 Persistence, in order:
 
 1. the outgoing generation is copied into a `pending` slot before the request is sent
-2. the response is persisted before it is returned to any caller
-3. the `pending` slot is cleared after the new value is durably stored
+2. the response is persisted before it is returned to any caller: the rotated refresh token
+   first, **before the ID token the response carries is validated**
+3. the `pending` slot is cleared after the new value is durably stored, and before the ID token is
+   validated, since it named the generation that was just consumed
 
 A process killed between 1 and 3 recovers by replaying with the same idempotency key on next
 start; the server resolves which generation is live.
 
-The ID token travels with step 2 and obeys the same rule as the refresh token: a refresh
-response without `id_token` leaves the stored one in place (OpenID Connect Core 12.2 permits the
-omission, and the stored value is what `id_token_hint` and the claims of a cold start are read
-from), and one that carries a new `id_token` stores it whether or not the refresh token rotated.
-Nothing on the refresh path deletes a stored ID token; only a login that replaces the grant, or a
-wipe, does.
+The order of 2 and the validation is the point: the provider rotates the moment it answers, so
+the old refresh token is already spent and the new one is the only credential left. An ID token
+that cannot be judged or fails is rejected **on its own**; the rotation is not discarded with it,
+because the next refresh would then spend a dead token, get `invalid_grant` and wipe a healthy
+session. What the app sees is the validation's own outcome, and the grant is intact either way:
+
+| Validation outcome | Rotated refresh token | Access token, claims, stored ID token | Error | State |
+|---|---|---|---|---|
+| passes | stored | the new ones | none | `Authenticated` |
+| fails (`IdTokenRejected`: signature, `iss`, `aud`, `sub` changed, ...) | stored | not kept: the previous claims and stored ID token stand | `Configuration(IdTokenRejected)` | `Authenticated` |
+| the key set cannot be fetched, but one past its lifetime (at most a week) holds the key | stored | the new ones, judged against that set (`retry-policy.md`, "A stale key set for a refresh") | none | `Authenticated` |
+| cannot run (the key set cannot be fetched and no usable stale one is held, or it lacks the `kid`: `Network`, `Server`, `UnlockRequired`) | stored | not kept: the previous access token is whatever the cache held (expired, which is why a refresh ran), nothing new | the `Recoverable` cause | `Authenticated` (`Locked` for `UnlockRequired`) |
+
+The stored ID token (what `id_token_hint` and the claims of a cold start are read from) is
+replaced only by one that **passed**, never by an unchecked one. A refresh response without
+`id_token` leaves the stored one in place (OpenID Connect Core 12.2 permits the omission), and a
+validated one is stored whether or not the refresh token rotated. Nothing on the refresh path
+deletes a stored ID token; only a login that replaces the grant, or a wipe, does.
 
 Under DPoP the server renews the refresh token in place (`BoundRenewal`) and the stored value
 does not change — the response echoes the same `refresh_token`, which is stored again as it
@@ -242,6 +270,16 @@ Only on `invalid_grant`. Network failures, `use_dpop_nonce`, 429 and 5xx leave t
 
 Everything credential-shaped is wiped: refresh token, pending slot, nonce caches. The DPoP key
 follows the logout rule (below).
+
+A refresh asked for while **no grant is stored** is not this transition. The provider said
+nothing, so there is no `invalid_grant`: the call fails with `Reauthenticate(GrantRejected)`, no
+token request is made, `Refreshing` is never entered, and **nothing is wiped**. That teardown
+would clear the pending authorization of a sign-in in progress (an app that asks for a token
+before it has let the cold-start resume finish) and destroy the DPoP key that sign-in's
+`dpop_jkt` committed to, so the code exchange that followed would sign with a key matching
+nothing. The state stays `Authorizing` or `Unauthenticated` where it was; a session that believed
+it held a grant (the item was removed from under the app) settles `Unauthenticated`, its
+in-memory access token and claims dropped, the key and the pending request untouched.
 
 ### `Authenticated → Authenticated` — `invalid_dpop_proof`, then `Authenticated → Unauthenticated`
 
@@ -409,7 +447,7 @@ one grant to one device-installation; reusing it across users on a shared device
 | DPoP private key | Hardware keystore, non-exportable | yes | no (destroyed) |
 | DPoP nonce, per origin | Memory | no | no |
 | Clock skew offset | Memory | no | no |
-| Discovery metadata | Disk, unencrypted | yes | yes |
+| Discovery metadata, with the lifetime it was fetched with | Disk, unencrypted | yes, until the lifetime ends | yes |
 
 **Uninstall.** Android's credentials are files in the app's own data and go with the app. The
 iOS Keychain outlives it: a reinstall on the same device would otherwise open signed in as the
