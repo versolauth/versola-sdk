@@ -274,6 +274,18 @@ same access token: the usual cause is clock skew the SDK can now correct from th
 `Date` header. This is handled internally and never surfaced to the app, the same treatment as
 `use_dpop_nonce`.
 
+The offset is learned from the `Date` header of **every** response from a server the proofs are
+for, a success as much as a refusal, so the retry's `iat` is already corrected when it is minted.
+One offset per client, shared by every origin, the last response wins; in memory only; an absent or
+unparseable `Date` leaves what was learned in place. Two things are not learned from: a `Date` more
+than 30 days from the device clock (a device that far off could not complete a TLS handshake against
+most certificates, so the value is a stale cache or a broken intermediary), and a response with an
+`Age` header other than `0` (it was generated earlier and handed back by a cache or proxy, so its
+`Date` is when the origin made it, RFC 9111 section 5.1, not now). UserInfo follows the same rule
+as the token endpoint and the authenticated client: `invalid_dpop_proof` is retried **once**, in
+place, with the same access token and a fresh proof, spending no renewal and so rotating no
+refresh token, and a second one is `Reauthenticate(CredentialsInvalidated)`.
+
 A second failure means the key no longer matches the grant, not a timing problem. Nothing
 retries it again: the SDK wipes credential state exactly as `Refreshing → Unauthenticated` does
 and surfaces `Reauthenticate`.

@@ -6,6 +6,8 @@ import kotlinx.coroutines.runBlocking
 import versola.oauth.core.AccessToken
 import versola.oauth.core.AccessTokenSource
 import versola.oauth.core.DpopProofSource
+import versola.oauth.core.VersolaInternalApi
+import versola.oauth.core.dateForClockSkew
 import versola.oauth.core.VersolaError
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -31,6 +33,7 @@ import okhttp3.Response
  * the wiring that does not go through the facade — a conformance harness, an app assembling the
  * modules itself — and takes exactly the three things the behaviour needs.
  */
+@OptIn(VersolaInternalApi::class)
 public class VersolaInterceptor(
     private val tokens: AccessTokenSource,
     /** Which requests get the token; everything else passes through untouched. */
@@ -102,7 +105,7 @@ public class VersolaInterceptor(
             val response = chain.proceed(sign(request, token))
             dpop?.observe(
                 request.url.toString(),
-                response.header("Date"),
+                response.headers.dateForClockSkew(),
                 response.header("DPoP-Nonce"),
             )
             if (response.code != 401) return response

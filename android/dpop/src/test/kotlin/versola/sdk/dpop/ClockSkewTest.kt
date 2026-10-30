@@ -75,4 +75,34 @@ class ClockSkewTest {
 
         assertEquals(0L, skew.learnedOffsetMillis)
     }
+
+    @Test
+    fun `a Date more than 30 days from the device clock is ignored`() {
+        // A device that far off could not complete a TLS handshake against most certificates, so the
+        // value is a stale cache or a broken intermediary, and learning it would stamp every proof
+        // with a date nobody accepts.
+        val skew = ClockSkew { SERVER_MILLIS + 31L * 24 * 3600 * 1000 }
+        skew.learn(SERVER_DATE)
+        assertNull(skew.learnedOffsetMillis)
+
+        val behind = ClockSkew { SERVER_MILLIS - 31L * 24 * 3600 * 1000 }
+        behind.learn(SERVER_DATE)
+        assertNull(behind.learnedOffsetMillis)
+    }
+
+    @Test
+    fun `a Date just inside 30 days is learned, and one outside does not replace what was learned`() {
+        var device = SERVER_MILLIS + 300_000
+        val skew = ClockSkew { device }
+        skew.learn(SERVER_DATE)
+        assertEquals(-300_000L, skew.learnedOffsetMillis)
+
+        device = SERVER_MILLIS + 29L * 24 * 3600 * 1000
+        skew.learn(SERVER_DATE)
+        assertEquals(-29L * 24 * 3600 * 1000, skew.learnedOffsetMillis)
+
+        device = SERVER_MILLIS + 31L * 24 * 3600 * 1000
+        skew.learn(SERVER_DATE)
+        assertEquals("unchanged", -29L * 24 * 3600 * 1000, skew.learnedOffsetMillis)
+    }
 }

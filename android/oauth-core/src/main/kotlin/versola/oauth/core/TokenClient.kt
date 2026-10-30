@@ -305,7 +305,7 @@ public class TokenRequestExecutor(
                     // Under the origin the proof was for: that server issued the nonce and
                     // will check it, and its `Date` is the clock the proof's `iat` must
                     // satisfy (scenario 04).
-                    dpop?.observe(htu ?: url, response.header("Date"), nonce)
+                    dpop?.observe(htu ?: url, response.headers.dateForClockSkew(), nonce)
                     if (response.isSuccessful) {
                         Attempt.Issued(issued(payload, response.header("Date")))
                     } else {

@@ -3,6 +3,7 @@ package versola.sdk.dpop
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.time.format.DateTimeParseException
+import kotlin.math.abs
 
 /**
  * The offset between this device's clock and the server's, learned from the `Date` header.
@@ -28,7 +29,12 @@ public class ClockSkew(private val clock: () -> Long = System::currentTimeMillis
      */
     public fun learn(dateHeader: String?) {
         val serverTime = parse(dateHeader ?: return) ?: return
-        offsetMillis = serverTime - clock()
+        val offset = serverTime - clock()
+        // A `Date` more than 30 days from the device clock is ignored: a device that far off could
+        // not complete a TLS handshake against most certificates, so the value is a stale cache or
+        // a broken intermediary, and learning it would stamp every proof with a date nobody accepts.
+        if (abs(offset) > MAX_PLAUSIBLE_OFFSET_MILLIS) return
+        offsetMillis = offset
     }
 
     /** Device time corrected by whatever has been learned. What every `iat` is stamped from. */
@@ -46,3 +52,5 @@ public class ClockSkew(private val clock: () -> Long = System::currentTimeMillis
         null
     }
 }
+
+private const val MAX_PLAUSIBLE_OFFSET_MILLIS = 30L * 24 * 60 * 60 * 1000

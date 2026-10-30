@@ -13,6 +13,7 @@ import versola.oauth.core.TokenResponse
 import versola.oauth.core.VersolaConfiguration
 import versola.oauth.core.VersolaError
 import versola.oauth.core.acceptIssued
+import versola.oauth.core.dateForClockSkew
 import versola.oauth.core.discoveryJson
 import versola.oauth.core.originOf
 import versola.oauth.core.wwwAuthenticateError
@@ -232,7 +233,7 @@ public class HttpNativeAuthorizationStarter(
                 httpClient.newCall(request).execute().use { response ->
                     val payload = response.body.string()
                     val nonce = response.header("DPoP-Nonce")
-                    dpop.observe(url, response.header("Date"), nonce)
+                    dpop.observe(url, response.headers.dateForClockSkew(), nonce)
                     when {
                         response.isSuccessful -> Outcome.Started(parse(payload))
                         // Edge's own challenge: §9's 401 with the error in `WWW-Authenticate`,

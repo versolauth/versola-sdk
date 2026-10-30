@@ -1,5 +1,7 @@
 package versola.oauth.core
 
+import okhttp3.Headers
+
 /**
  * How an access token is presented: bound to a key the device holds (RFC 9449), or as a
  * bearer [redacted]
@@ -72,4 +74,17 @@ public interface DpopProofSource {
      * place to learn the offset.
      */
     public fun observe(url: String, dateHeader: String?, nonceHeader: String?)
+}
+
+/**
+ * The `Date` of a response, for [DpopProofSource.observe], unless it cannot be the server's clock
+ * now: a response with an `Age` other than `0` was generated earlier and handed back by a cache or
+ * a proxy (RFC 9111 section 5.1), so its `Date` is when the origin produced it, and learning it
+ * would move the offset by the age of the response. Null then, which `observe` reads as "says
+ * nothing about the clock either way" and leaves what was learned in place.
+ */
+@VersolaInternalApi
+public fun Headers.dateForClockSkew(): String? {
+    val age = this["Age"]?.trim()
+    return if (age != null && age != "0") null else this["Date"]
 }

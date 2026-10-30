@@ -86,6 +86,7 @@ public class HttpUserInfoClient(
             )
         }
         var nonceRetried = false
+        var proofRetried = false
         var refreshed = false
         while (true) {
             when (val outcome = attempt(url, accessToken)) {
@@ -96,6 +97,17 @@ public class HttpUserInfoClient(
                     if (refreshed) throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.SessionRejected)
                     refreshed = true
                     accessToken = tokens.renewAccessToken()
+                }
+                // RFC 9449 section 7: the one recoverable cause is clock skew, which `observe` has
+                // just corrected from this very response's `Date`, so the retry's `iat` is already
+                // right. In place, with the same token: a proof cannot be repaired by a renewal, and
+                // renewing would rotate the refresh token for a clock problem. A second refusal means
+                // the key does not match the grant (`spec/errors.md`, UserInfo).
+                Outcome.InvalidDpopProof -> {
+                    if (proofRetried) {
+                        throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.CredentialsInvalidated)
+                    }
+                    proofRetried = true
                 }
                 is Outcome.UseDpopNonce -> {
                     // `observe` already cached the nonce off this response, so the next proof
@@ -126,7 +138,7 @@ public class HttpUserInfoClient(
                 httpClient.newCall(builder.build()).execute().use { response ->
                     val payload = response.body.string()
                     val nonce = response.header("DPoP-Nonce")
-                    dpop?.observe(url, response.header("Date"), nonce)
+                    dpop?.observe(url, response.headers.dateForClockSkew(), nonce)
                     when {
                         response.isSuccessful -> Outcome.Body(
                             payload,
@@ -134,12 +146,10 @@ public class HttpUserInfoClient(
                                 ?.let { it.type == "application" && it.subtype == "jwt" } == true,
                         )
 
-                        response.code == 401 -> {
-                            if (bound && wwwAuthenticateError(response.headers("WWW-Authenticate")) == "use_dpop_nonce") {
-                                Outcome.UseDpopNonce(nonce)
-                            } else {
-                                Outcome.Rejected
-                            }
+                        response.code == 401 -> when (if (bound) wwwAuthenticateError(response.headers("WWW-Authenticate")) else null) {
+                            "use_dpop_nonce" -> Outcome.UseDpopNonce(nonce)
+                            "invalid_dpop_proof" -> Outcome.InvalidDpopProof
+                            else -> Outcome.Rejected
                         }
 
                         // A transient condition is the operation's retry budget (`Server`, with the
@@ -195,6 +205,7 @@ public class HttpUserInfoClient(
     private sealed interface Outcome {
         class Body(val payload: String, val signed: Boolean) : Outcome
         class UseDpopNonce(val nonce: String?) : Outcome
+        object InvalidDpopProof : Outcome
         object Rejected : Outcome
     }
 }
