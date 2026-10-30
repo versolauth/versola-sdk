@@ -236,7 +236,7 @@ from `ios/Tests/OAuthConformanceTests` must also be added to or removed from the
 target (the project lists the files by name; the Scenario files stay out), and the example's Gradle
 test pins and plugin versions follow `android/conformance-oauth` and `android/build.gradle.kts`
 (`develop.md`). The bridge scenarios are the native ones, test for test (27 on each platform for
-scenarios 24 to 32; six of scenario 33's nine, so 33 per platform against Keycloak), so the pass counts
+scenarios 24 to 32; eleven of scenario 33's fourteen, so 38 per platform against Keycloak), so the pass counts
 are comparable; the tests whose assertions differ from their native twin (24, 31's second test, 32 and
 33) carry `bridge` in their names, and the next paragraphs say how.
 
@@ -268,7 +268,8 @@ Scenario 33 is the same: Flutter has no authenticated client and mints no proof,
 proof, the resource's nonce challenges and the replay of a proof the SDK sent are the native
 drivers' alone, and `33-dpop-end-to-end.yaml` says so in its `notes`. The bridge asserts the rest
 with the token `accessToken()` returns (`tokenType` `DPoP`, which a Flutter app cannot present):
-the binding on the wire, the key kept across a refresh, the stolen-token refusals, `requireHardware`
+the binding on the wire, the key kept across a refresh, `userInfo()` and `logout()` under DPoP, the
+provider's nonce challenge and the `dpop_jkt` refusal, the stolen-token refusals, `requireHardware`
 (`dpopRequireHardware`) refused as `hardwareBindingUnavailable`, and a Bearer-configured client
 against the DPoP-requiring one.
 
@@ -291,7 +292,7 @@ The capabilities `spec/conformance/README.md` lists, and where each lives:
 | Capability | Mechanism |
 |---|---|
 | `drop-response` | A small TCP proxy in front of auth and edge (`stack/chaos`) that, on a control call from the driver, lets the next matching request through and discards the response. |
-| `force-dpop-nonce`, `always-demand-dpop-nonce` | The same proxy, answering a scripted `use_dpop_nonce` for the next N requests to an origin. For the generic facade, a resource that demands a nonce: `DpopResourceServer(nonce = …)`, which answers `use_dpop_nonce` to every proof without it, and with `offered` different from `nonce` keeps challenging a client that retries (scenario 33). |
+| `force-dpop-nonce`, `always-demand-dpop-nonce` | The same proxy, answering a scripted `use_dpop_nonce` for the next N requests to an origin. For the generic facade, a resource that demands a nonce (`DpopResourceServer(nonce = …)`, which answers `use_dpop_nonce` to every proof without it, and with `offered` different from `nonce` keeps challenging a client that retries), and, for the provider's token endpoint, the proxy answering a canned 400 `use_dpop_nonce` with a `DPoP-Nonce` header once or on every request (`ProviderProxy.intercept` / `VirtualNetwork.intercept`; scenario 33). |
 | `clock-skew` | `adb shell date` on the emulator before the scenario, restored after. For the generic facade's JVM driver, a `Date` header the proxy adds (the server's clock) and short-lived tokens (scenario 31); the device clock is not moved. |
 | `process-death` | `adb shell am kill` on the harness package at the named point; the test re-launches through `am instrument` with the scenario's second half. |
 | `omit-discovery-field` | The proxy rewriting `/.well-known/openid-configuration`. For the generic facade, `ProviderProxy.rewriteJson` in `android/conformance-oauth`. |

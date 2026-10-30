@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import os
 import XCTest
 @testable import OAuthClient
 @testable import OAuthCore
@@ -177,5 +178,125 @@ final class Scenario33DpopEndToEndBridgeTest: BridgeConformance {
         try ok(await bridge.dart.refresh())
         let state = try await bridge.dart.sessionState()
         XCTAssertEqual(state, .authenticated)
+    }
+
+    func test33BridgeUserInfoUnderDpopCarriesTheDpopSchemeAndAProofBoundToTheToken() async throws {
+        let bridge = try await bridge(clientId: Provider.dpopClientId, tokenBinding: .dpop(required: false))
+        let metadata = try await bridge.native.metadata()
+        try ok(await bridge.dart.login())
+        let jkt = DpopResourceServer.thumbprint(try sdkKey().publicKey)
+        let userinfoEndpoint = try XCTUnwrap(metadata.userinfoEndpoint)
+
+        let subject = try self.subject(await bridge.dart.userInfo())
+
+        let claimsMessage = try await bridge.dart.claims()
+        XCTAssertEqual(subject, try XCTUnwrap(claimsMessage).subject)
+        let sent = try XCTUnwrap(network.matching("GET", path(userinfoEndpoint)).first)
+        XCTAssertEqual(sent.status, 200)
+        let authorization = try XCTUnwrap(sent.header("Authorization"))
+        XCTAssertTrue(authorization.hasPrefix("DPoP "), authorization)
+        let claims = try XCTUnwrap(sent.proofClaims)
+        XCTAssertEqual(claims["htm"] as? String, "GET")
+        XCTAssertEqual(claims["htu"] as? String, userinfoEndpoint)
+        XCTAssertEqual(claims["ath"] as? String, DpopResourceServer.sha256Url(String(authorization.dropFirst(5))))
+        XCTAssertEqual(try self.jkt(of: sent.proofHeader), jkt)
+    }
+
+    func test33BridgeLogoutUnderDpopRevokesTheRefreshTokenAndTheProviderThenRefusesIt() async throws {
+        let bridge = try await bridge(clientId: Provider.dpopClientId, tokenBinding: .dpop(required: false))
+        let metadata = try await bridge.native.metadata()
+        try ok(await bridge.dart.login())
+        let sdkKey = try sdkKey()
+        let refreshToken = try XCTUnwrap(network.matching("POST", path(metadata.tokenEndpoint)).first?.responseJSON?["refresh_token"] as? String)
+
+        let outcome = try await bridge.dart.logout()
+
+        let state = try await bridge.dart.sessionState()
+        XCTAssertEqual(state, .unauthenticated)
+        let revoke = try XCTUnwrap(network.matching("POST", path(try XCTUnwrap(metadata.revocationEndpoint))).first)
+        XCTAssertNil(revoke.header("DPoP"))
+        XCTAssertEqual(revoke.status, 200)
+        XCTAssertTrue(outcome.tokenRevoked)
+        var request = URLRequest(url: URL(string: metadata.tokenEndpoint)!)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue(DpopResourceServer.forgeProof(sdkKey, method: "POST", url: metadata.tokenEndpoint, accessToken: nil), forHTTPHeaderField: "DPoP")
+        request.httpBody = Data("grant_type=refresh_token&refresh_token=\(refreshToken)&client_id=\(Provider.dpopClientId)".utf8)
+        let (data, response) = try await VirtualNetwork.session(record: false).data(for: request)
+        XCTAssertEqual((response as? HTTPURLResponse)?.statusCode, 400, String(decoding: data, as: UTF8.self))
+        XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("invalid_grant"))
+    }
+
+    private static func nonceChallenge(_ nonce: String) -> VirtualNetwork.StubAnswer {
+        VirtualNetwork.StubAnswer(
+            status: 400, headers: ["Content-Type": "application/json", "DPoP-Nonce": nonce],
+            body: Data(#"{"error":"use_dpop_nonce","error_description":"Authorization server requires nonce in DPoP proof"}"#.utf8)
+        )
+    }
+
+    func test33BridgeANonceChallengeFromTheProvidersTokenEndpointIsRetriedOnceWithTheNonceAndTheLoginCompletes() async throws {
+        let bridge = try await bridge(clientId: Provider.dpopClientId, tokenBinding: .dpop(required: false))
+        let metadata = try await bridge.native.metadata()
+        let tokenPath = path(metadata.tokenEndpoint)
+        let challenges = OSAllocatedUnfairLock(initialState: 0)
+        network.intercept { request -> VirtualNetwork.StubAnswer? in
+            guard request.url?.path.hasSuffix(tokenPath) == true else { return nil }
+            return challenges.withLock { count -> VirtualNetwork.StubAnswer? in count += 1; return count == 1 ? Self.nonceChallenge("provider-nonce-1") : nil }
+        }
+
+        try ok(await bridge.dart.login())
+
+        let state = try await bridge.dart.sessionState()
+        XCTAssertEqual(state, .authenticated)
+        let requests = network.matching("POST", tokenPath)
+        XCTAssertEqual(requests.count, 2, "exactly one retry: \(requests.map { "\($0.url) -> \($0.status)" })")
+        guard requests.count == 2 else { return }
+        XCTAssertEqual(requests[0].status, 400)
+        XCTAssertNil(requests[0].proofClaims?["nonce"])
+        XCTAssertEqual(requests[1].proofClaims?["nonce"] as? String, "provider-nonce-1")
+        XCTAssertNotEqual(requests[0].proofClaims?["jti"] as? String, requests[1].proofClaims?["jti"] as? String)
+        XCTAssertEqual(requests[1].status, 200)
+    }
+
+    func test33BridgeAProviderThatKeepsChallengingTheTokenRequestGetsOneRetryAndThenNonceLoop() async throws {
+        let bridge = try await bridge(clientId: Provider.dpopClientId, tokenBinding: .dpop(required: false))
+        let metadata = try await bridge.native.metadata()
+        let tokenPath = path(metadata.tokenEndpoint)
+        let issued = OSAllocatedUnfairLock(initialState: 0)
+        network.intercept { request -> VirtualNetwork.StubAnswer? in
+            guard request.url?.path.hasSuffix(tokenPath) == true else { return nil }
+            return Self.nonceChallenge("provider-nonce-\(issued.withLock { count -> Int in count += 1; return count })")
+        }
+
+        let error = try failure(await bridge.dart.login())
+
+        assertError(error, .recoverable, "nonceLoop")
+        XCTAssertEqual(network.matching("POST", tokenPath).count, 2, "one request and one retry, no more")
+        let state = try await bridge.dart.sessionState()
+        XCTAssertNotEqual(state, .authenticated)
+    }
+
+    func test33BridgeACodeBoundToTheSdksKeyIsNotRedeemedWithAProofFromAnotherKey() async throws {
+        let bridge = try await bridge(clientId: Provider.dpopClientId, tokenBinding: .dpop(required: false))
+        let metadata = try await bridge.native.metadata()
+        let tokenPath = path(metadata.tokenEndpoint)
+        let attacker = P256.Signing.PrivateKey()
+        let endpoint = metadata.tokenEndpoint
+        network.rewriteRequest(tokenPath) { request in
+            var forged = request
+            forged.setValue(DpopResourceServer.forgeProof(attacker, method: "POST", url: endpoint, accessToken: nil), forHTTPHeaderField: "DPoP")
+            return forged
+        }
+
+        let error = try failure(await bridge.dart.login())
+
+        assertError(error, .configuration, "tokenRequestRejected")
+        XCTAssertEqual(error.code, "invalid_request")
+        XCTAssertTrue(error.errorDescription?.contains("dpop_jkt") == true, "\(String(describing: error.errorDescription))")
+        let token = try XCTUnwrap(network.matching("POST", tokenPath).first)
+        XCTAssertEqual(token.status, 400, token.responseBody ?? "")
+        XCTAssertNil(token.responseJSON?["access_token"])
+        let state = try await bridge.dart.sessionState()
+        XCTAssertNotEqual(state, .authenticated)
     }
 }

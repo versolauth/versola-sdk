@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import os
 import XCTest
 @testable import OAuthClient
 @testable import OAuthCore
@@ -306,7 +307,156 @@ final class Scenario33DpopEndToEndTest: ProviderConformance {
         let state = await client.sessionState
         XCTAssertEqual(state, .authenticated)
     }
+
+    func test33UserInfoUnderDpopCarriesTheDpopSchemeAndAProofBoundToTheTokenAndTheProviderRefusesTheTokenWithoutTheKey() async throws {
+        let client = try await client(try dpopConfiguration())
+        let metadata = try await client.metadata()
+        try await client.login()
+        let jkt = DpopResourceServer.thumbprint(try sdkKey().publicKey)
+        let userinfoEndpoint = try XCTUnwrap(metadata.userinfoEndpoint)
+
+        let userInfo = try await client.userInfo()
+
+        let maybeClaims = await client.claims
+        XCTAssertEqual(userInfo.subject, try XCTUnwrap(maybeClaims).subject)
+        let sent = try XCTUnwrap(network.matching("GET", path(userinfoEndpoint)).first)
+        XCTAssertEqual(sent.status, 200)
+        let authorization = try XCTUnwrap(sent.header("Authorization"))
+        XCTAssertTrue(authorization.hasPrefix("DPoP "), authorization)
+        let accessToken = String(authorization.dropFirst(5))
+        let claims = try XCTUnwrap(sent.proofClaims)
+        XCTAssertEqual(claims["htm"] as? String, "GET")
+        XCTAssertEqual(claims["htu"] as? String, userinfoEndpoint)
+        XCTAssertEqual(claims["ath"] as? String, DpopResourceServer.sha256Url(accessToken))
+        XCTAssertEqual(try self.jkt(of: sent.proofHeader), jkt)
+
+        // The provider's own enforcement (Keycloak: UserInfo requires a valid proof matching the access token).
+        let sdkKey = try sdkKey()
+        let attacker = P256.Signing.PrivateKey()
+        func fetch(_ authorization: String, _ proof: String?) async throws -> Int {
+            var request = URLRequest(url: URL(string: userinfoEndpoint)!)
+            request.setValue(authorization, forHTTPHeaderField: "Authorization")
+            if let proof { request.setValue(proof, forHTTPHeaderField: "DPoP") }
+            return try await VirtualNetwork.session(record: false).data(for: request).1.statusCodeValue
+        }
+        let noProof = try await fetch("DPoP \(accessToken)", nil)
+        let bearer = try await fetch("Bearer \(accessToken)", nil)
+        let otherKey = try await fetch("DPoP \(accessToken)", DpopResourceServer.forgeProof(attacker, method: "GET", url: userinfoEndpoint, accessToken: accessToken))
+        let control = try await fetch("DPoP \(accessToken)", DpopResourceServer.forgeProof(sdkKey, method: "GET", url: userinfoEndpoint, accessToken: accessToken))
+        XCTAssertEqual(noProof, 401, "the token with no proof")
+        XCTAssertEqual(bearer, 401, "the token as a Bearer")
+        XCTAssertEqual(otherKey, 401, "a proof from another key")
+        XCTAssertEqual(control, 200, "the control: the SDK's key, every claim right")
+    }
+
+    func test33LogoutUnderDpopRevokesTheRefreshTokenAndTheProviderThenRefusesIt() async throws {
+        let client = try await client(try dpopConfiguration())
+        let metadata = try await client.metadata()
+        try await client.login()
+        let sdkKey = try sdkKey()
+        let refreshToken = try XCTUnwrap(network.matching("POST", path(metadata.tokenEndpoint)).first?.responseJSON?["refresh_token"] as? String)
+
+        let outcome = await client.logout()
+
+        let state = await client.sessionState
+        XCTAssertEqual(state, .unauthenticated)
+        let revoke = try XCTUnwrap(network.matching("POST", path(try XCTUnwrap(metadata.revocationEndpoint))).first)
+        // Revocation carries no proof by design (RFC 9449 binds the token endpoint and resources); the provider takes it anyway.
+        XCTAssertNil(revoke.header("DPoP"))
+        XCTAssertEqual(revoke.status, 200)
+        XCTAssertTrue(outcome.tokenRevoked)
+        XCTAssertEqual(outcome.sessionEnded, metadata.endSessionEndpoint != nil)
+        // Revoked at the provider: the token, presented with the key that bound it, buys nothing.
+        var request = URLRequest(url: URL(string: metadata.tokenEndpoint)!)
+        request.httpMethod = "POST"
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.setValue(DpopResourceServer.forgeProof(sdkKey, method: "POST", url: metadata.tokenEndpoint, accessToken: nil), forHTTPHeaderField: "DPoP")
+        request.httpBody = Data("grant_type=refresh_token&refresh_token=\(refreshToken)&client_id=\(Provider.dpopClientId)".utf8)
+        let (data, response) = try await VirtualNetwork.session(record: false).data(for: request)
+        XCTAssertEqual(response.statusCodeValue, 400, String(decoding: data, as: UTF8.self))
+        XCTAssertTrue(String(decoding: data, as: UTF8.self).contains("invalid_grant"))
+    }
+
+    private static func nonceChallenge(_ nonce: String) -> VirtualNetwork.StubAnswer {
+        VirtualNetwork.StubAnswer(
+            status: 400, headers: ["Content-Type": "application/json", "DPoP-Nonce": nonce],
+            body: Data(#"{"error":"use_dpop_nonce","error_description":"Authorization server requires nonce in DPoP proof"}"#.utf8)
+        )
+    }
+
+    func test33ANonceChallengeFromTheProvidersTokenEndpointIsRetriedOnceWithTheNonceAndTheLoginCompletes() async throws {
+        let client = try await client(try dpopConfiguration())
+        let metadata = try await client.metadata()
+        let tokenPath = path(metadata.tokenEndpoint)
+        let challenges = OSAllocatedUnfairLock(initialState: 0)
+        // force-dpop-nonce: the first request to the token endpoint is answered with the challenge, the provider never sees it.
+        network.intercept { request -> VirtualNetwork.StubAnswer? in
+            guard request.url?.path.hasSuffix(tokenPath) == true else { return nil }
+            return challenges.withLock { count -> VirtualNetwork.StubAnswer? in count += 1; return count == 1 ? Self.nonceChallenge("provider-nonce-1") : nil }
+        }
+
+        try await client.login()
+
+        let state = await client.sessionState
+        XCTAssertEqual(state, .authenticated)
+        let requests = network.matching("POST", tokenPath)
+        XCTAssertEqual(requests.count, 2, "exactly one retry: \(requests.map { "\($0.url) -> \($0.status)" })")
+        guard requests.count == 2 else { return }
+        XCTAssertEqual(requests[0].status, 400)
+        XCTAssertNil(requests[0].proofClaims?["nonce"])
+        XCTAssertEqual(requests[1].proofClaims?["nonce"] as? String, "provider-nonce-1")
+        XCTAssertNotEqual(requests[0].proofClaims?["jti"] as? String, requests[1].proofClaims?["jti"] as? String)
+        XCTAssertEqual(requests[1].status, 200)
+        // The provider never saw the challenged request: the harness answered it, the retry is the one Keycloak took.
+        XCTAssertEqual(challenges.withLock { $0 }, 2)
+    }
+
+    func test33AProviderThatKeepsChallengingTheTokenRequestGetsOneRetryAndThenNonceLoop() async throws {
+        let client = try await client(try dpopConfiguration())
+        let metadata = try await client.metadata()
+        let tokenPath = path(metadata.tokenEndpoint)
+        // always-demand-dpop-nonce: every request is challenged, retries included.
+        let issued = OSAllocatedUnfairLock(initialState: 0)
+        network.intercept { request -> VirtualNetwork.StubAnswer? in
+            guard request.url?.path.hasSuffix(tokenPath) == true else { return nil }
+            return Self.nonceChallenge("provider-nonce-\(issued.withLock { count -> Int in count += 1; return count })")
+        }
+
+        let error = await oauthError { try await client.login() }
+
+        guard case .recoverable(.nonceLoop)? = error else { return XCTFail("expected nonceLoop, got \(String(describing: error))") }
+        XCTAssertEqual(network.matching("POST", tokenPath).count, 2, "one request and one retry, no more")
+        let state = await client.sessionState
+        XCTAssertNotEqual(state, .authenticated)
+    }
+
+    func test33ACodeBoundToTheSdksKeyIsNotRedeemedWithAProofFromAnotherKey() async throws {
+        let client = try await client(try dpopConfiguration())
+        let metadata = try await client.metadata()
+        let tokenPath = path(metadata.tokenEndpoint)
+        let attacker = P256.Signing.PrivateKey()
+        let endpoint = metadata.tokenEndpoint
+        // The thief holds the code (not the SDK's key): the token request goes out with his proof instead of the SDK's.
+        network.rewriteRequest(tokenPath) { request in
+            var forged = request
+            forged.setValue(DpopResourceServer.forgeProof(attacker, method: "POST", url: endpoint, accessToken: nil), forHTTPHeaderField: "DPoP")
+            return forged
+        }
+
+        let error = await oauthError { try await client.login() }
+
+        // The refusal is typed, with the provider's code: this is the provider enforcing dpop_jkt, not the SDK failing on its own.
+        guard case .configuration(.tokenRequestRejected(let code, let description))? = error else { return XCTFail("expected tokenRequestRejected, got \(String(describing: error))") }
+        XCTAssertEqual(code, "invalid_request")
+        XCTAssertTrue(description?.contains("dpop_jkt") == true, "\(String(describing: description))")
+        let token = try XCTUnwrap(network.matching("POST", tokenPath).first)
+        XCTAssertEqual(token.status, 400, token.responseBody ?? "")
+        XCTAssertNil(token.responseJSON?["access_token"])
+        let state = await client.sessionState
+        XCTAssertNotEqual(state, .authenticated)
+    }
 }
+
 
 private extension URLResponse {
     var statusCodeValue: Int { (self as? HTTPURLResponse)?.statusCode ?? -1 }

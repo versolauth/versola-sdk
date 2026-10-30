@@ -346,4 +346,147 @@ class Scenario33DpopEndToEndTest : ProviderConformance() {
         client.refresh()
         assertEquals(SessionState.Authenticated, client.state())
     }
+    @Test
+    fun `userInfo under DPoP carries the DPoP scheme and a proof bound to the token, and the provider refuses the token without the key`() = runTest {
+        val client = client(dpopConfiguration(setOf(resource.origin)))
+        val metadata = client.metadata()
+        client.login()
+        val jkt = DpopResourceServer.thumbprint(keystore.soleKey().public as ECPublicKey)
+        val userinfoPath = metadata.userinfoEndpoint!!.substringAfter(proxy.origin)
+
+        val userInfo = client.userInfo()
+
+        assertEquals(checkNotNull(client.claims).subject, userInfo.subject)
+        val sent = transcript.matching("GET", userinfoPath).single()
+        assertEquals(200, sent.status)
+        val authorization = sent.header("Authorization")!!
+        assertTrue(authorization, authorization.startsWith("DPoP "))
+        val accessToken = authorization.removePrefix("DPoP ")
+        val claims = sent.proofClaims!!
+        assertEquals("GET", claims["htm"]!!.jsonPrimitive.content)
+        assertEquals(metadata.userinfoEndpoint, claims["htu"]!!.jsonPrimitive.content)
+        assertEquals(DpopResourceServer.sha256Url(accessToken), claims["ath"]!!.jsonPrimitive.content)
+        assertEquals(jkt, jktOf(sent.proofHeader))
+
+        // The provider's own enforcement (Keycloak: "UserInfo requires a valid DPoP proof matching the access token").
+        val http = OkHttpClient()
+        val sdkKey = keystore.soleKey()
+        val attacker = DpopResourceServer.newKeyPair()
+        fun userinfo(authorization: String, proof: String?): Int = http.newCall(
+            Request.Builder().url(metadata.userinfoEndpoint!!).header("Authorization", authorization).apply { proof?.let { header("DPoP", it) } }.build(),
+        ).execute().use { it.code }
+        assertEquals("the token with no proof", 401, userinfo("DPoP $accessToken", null))
+        assertEquals("the token as a Bearer", 401, userinfo("Bearer $accessToken", null))
+        assertEquals(
+            "a proof from another key", 401,
+            userinfo("DPoP $accessToken", DpopResourceServer.forgeProof(attacker, "GET", metadata.userinfoEndpoint!!, accessToken)),
+        )
+        assertEquals(
+            "the control: the SDK's key, every claim right", 200,
+            userinfo("DPoP $accessToken", DpopResourceServer.forgeProof(sdkKey, "GET", metadata.userinfoEndpoint!!, accessToken)),
+        )
+    }
+
+    @Test
+    fun `logout under DPoP revokes the refresh token and the provider then refuses it`() = runTest {
+        val client = client(dpopConfiguration(setOf(resource.origin)))
+        val metadata = client.metadata()
+        client.login()
+        val sdkKey = keystore.soleKey()
+        val refreshToken = transcript.matching("POST", tokenPath(metadata)).single().responseJson!!["refresh_token"]!!.jsonPrimitive.content
+
+        val outcome = client.logout()
+
+        assertEquals(SessionState.Unauthenticated, client.state())
+        val revoke = transcript.matching("POST", metadata.revocationEndpoint!!.substringAfter(proxy.origin)).single()
+        // Revocation carries no proof by design (RFC 9449 binds the token endpoint and resources); the provider takes it anyway.
+        assertNull(revoke.header("DPoP"))
+        assertEquals(200, revoke.status)
+        assertTrue("revocation was not taken: ${revoke.status} ${revoke.responseBody}", outcome.tokenRevoked)
+        assertEquals(outcome.sessionEnded, metadata.endSessionEndpoint != null)
+        // Revoked at the provider: the token, presented with the key that bound it, buys nothing.
+        val response = OkHttpClient().newCall(
+            Request.Builder().url(metadata.tokenEndpoint).header("DPoP", DpopResourceServer.forgeProof(sdkKey, "POST", metadata.tokenEndpoint, null)).post(
+                FormBody.Builder().add("grant_type", "refresh_token").add("refresh_token", refreshToken).add("client_id", Provider.DPOP_CLIENT_ID).build(),
+            ).build(),
+        ).execute()
+        val text = response.text()
+        assertEquals(text, 400, response.code)
+        assertTrue(text, text.contains("invalid_grant"))
+    }
+
+    private fun nonceChallenge(nonce: String) = mockwebserver3.MockResponse.Builder().code(400)
+        .setHeader("Content-Type", "application/json").setHeader("DPoP-Nonce", nonce)
+        .body("""{"error":"use_dpop_nonce","error_description":"Authorization server requires nonce in DPoP proof"}""").build()
+
+    @Test
+    fun `a nonce challenge from the provider's token endpoint is retried once with the nonce and the login completes`() = runTest {
+        val client = client(dpopConfiguration(setOf(resource.origin)))
+        val metadata = client.metadata()
+        val path = tokenPath(metadata)
+        val challenges = java.util.concurrent.atomic.AtomicInteger()
+        // force-dpop-nonce: the first request to the token endpoint is answered with the challenge, the provider never sees it.
+        proxy.intercept = { request -> if (request.url.encodedPath.endsWith(path) && challenges.getAndIncrement() == 0) nonceChallenge("provider-nonce-1") else null }
+
+        client.login()
+
+        assertEquals(SessionState.Authenticated, client.state())
+        val requests = transcript.matching("POST", path)
+        assertEquals("exactly one retry: $requests", 2, requests.size)
+        assertEquals(400, requests[0].status)
+        assertNull(requests[0].proofClaims!!["nonce"])
+        assertEquals("provider-nonce-1", requests[1].proofClaims!!["nonce"]!!.jsonPrimitive.content)
+        assertNotEquals(requests[0].proofClaims!!["jti"], requests[1].proofClaims!!["jti"])
+        assertEquals(200, requests[1].status)
+        // The provider never saw the challenged request: the harness answered it, the retry is the one Keycloak took.
+        assertEquals(2, challenges.get())
+    }
+
+    @Test
+    fun `a provider that keeps challenging the token request gets one retry and then NonceLoop`() = runTest {
+        val client = client(dpopConfiguration(setOf(resource.origin)))
+        val metadata = client.metadata()
+        val path = tokenPath(metadata)
+        // always-demand-dpop-nonce: every request is challenged, retries included.
+        proxy.intercept = { request -> if (request.url.encodedPath.endsWith(path)) nonceChallenge("provider-nonce-${System.nanoTime()}") else null }
+
+        val error = failsWith<VersolaError.Recoverable> { runBlocking { client.login() } }
+
+        assertTrue(error.toString(), error.reason is VersolaError.Recoverable.Cause.NonceLoop)
+        assertEquals("one request and one retry, no more", 2, transcript.matching("POST", path).size)
+        assertNotEquals(SessionState.Authenticated, client.state())
+    }
+
+    @Test
+    fun `a code bound to the SDK's key is not redeemed with a proof from another key`() = runTest {
+        val client = client(dpopConfiguration(setOf(resource.origin)))
+        val metadata = client.metadata()
+        val path = tokenPath(metadata)
+        val attacker = DpopResourceServer.newKeyPair()
+        val upstream = OkHttpClient()
+        // The thief holds the code (not the SDK's key): the token request goes out with his proof instead of the SDK's.
+        proxy.intercept = { request ->
+            if (!request.url.encodedPath.endsWith(path)) null else {
+                val forged = DpopResourceServer.forgeProof(attacker, "POST", metadata.tokenEndpoint, null)
+                val forwarded = Request.Builder().url(provider.origin + request.url.encodedPath)
+                    .header("Host", proxy.origin.substringAfter("://")).header("Content-Type", "application/x-www-form-urlencoded").header("DPoP", forged)
+                    .post(request.body!!.toByteArray().toRequestBody()).build()
+                upstream.newCall(forwarded).execute().use { response ->
+                    mockwebserver3.MockResponse.Builder().code(response.code).setHeader("Content-Type", "application/json").body(response.body.string()).build()
+                }
+            }
+        }
+
+        val error = runCatching { client.login() }.exceptionOrNull()
+
+        assertNotNull("the provider redeemed a dpop_jkt-bound code with another key's proof", error)
+        val token = transcript.matching("POST", path).first()
+        assertEquals(token.responseBody, 400, token.status)
+        assertFalse(token.responseJson!!.containsKey("access_token"))
+        assertNotEquals(SessionState.Authenticated, client.state())
+        // The refusal is typed, with the provider's code: this is the provider enforcing dpop_jkt, not the SDK failing on its own.
+        val rejected = (error as VersolaError.Configuration).detail as VersolaError.Configuration.Detail.TokenRequestRejected
+        assertEquals("invalid_request", rejected.code)
+        assertTrue(rejected.toString(), rejected.description.orEmpty().contains("dpop_jkt"))
+    }
 }

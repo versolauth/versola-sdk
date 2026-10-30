@@ -6,6 +6,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.FormBody
 import okhttp3.OkHttpClient
+import okhttp3.RequestBody.Companion.toRequestBody
 import okhttp3.Request
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -204,5 +205,119 @@ class Scenario33DpopEndToEndBridgeTest : BridgeConformance() {
         // Refused attempts did not spend it: the SDK, which holds the key, still refreshes.
         bridge.dart.refresh().assertOk()
         assertEquals(SessionStateMessage.AUTHENTICATED, bridge.dart.sessionState())
+    }
+
+    @Test
+    fun `bridge - userInfo under DPoP carries the DPoP scheme and a proof bound to the token`() {
+        val bridge = bridge(clientId = Provider.DPOP_CLIENT_ID, tokenBinding = TokenBinding.Dpop())
+        val metadata = bridge.observe("discovery") { metadata() }
+        bridge.dart.login().assertOk()
+        val jkt = DpopResourceServer.thumbprint(keystore.soleKey().public as ECPublicKey)
+
+        val subject = bridge.dart.userInfo().subject()
+
+        assertEquals(checkNotNull(bridge.dart.claims()).subject, subject)
+        val sent = transcript.matching("GET", metadata.userinfoEndpoint!!.substringAfter(proxy.origin)).single()
+        assertEquals(200, sent.status)
+        val authorization = sent.header("Authorization")!!
+        assertTrue(authorization, authorization.startsWith("DPoP "))
+        val claims = sent.proofClaims!!
+        assertEquals("GET", claims["htm"]!!.jsonPrimitive.content)
+        assertEquals(metadata.userinfoEndpoint, claims["htu"]!!.jsonPrimitive.content)
+        assertEquals(DpopResourceServer.sha256Url(authorization.removePrefix("DPoP ")), claims["ath"]!!.jsonPrimitive.content)
+        assertEquals(jkt, DpopResourceServer.thumbprint(jwkOf(sent.proofHeader)))
+    }
+
+    @Test
+    fun `bridge - logout under DPoP revokes the refresh token and the provider then refuses it`() {
+        val bridge = bridge(clientId = Provider.DPOP_CLIENT_ID, tokenBinding = TokenBinding.Dpop())
+        val metadata = bridge.observe("discovery") { metadata() }
+        bridge.dart.login().assertOk()
+        val sdkKey = keystore.soleKey()
+        val refreshToken = transcript.matching("POST", metadata.tokenEndpoint.substringAfter(proxy.origin)).single().responseJson!!["refresh_token"]!!.jsonPrimitive.content
+
+        val outcome = bridge.dart.logout()
+
+        assertEquals(SessionStateMessage.UNAUTHENTICATED, bridge.dart.sessionState())
+        val revoke = transcript.matching("POST", metadata.revocationEndpoint!!.substringAfter(proxy.origin)).single()
+        assertNull(revoke.header("DPoP"))
+        assertEquals(200, revoke.status)
+        assertTrue(outcome.tokenRevoked)
+        val response = app.newCall(
+            Request.Builder().url(metadata.tokenEndpoint).header("DPoP", DpopResourceServer.forgeProof(sdkKey, "POST", metadata.tokenEndpoint, null)).post(
+                FormBody.Builder().add("grant_type", "refresh_token").add("refresh_token", refreshToken).add("client_id", Provider.DPOP_CLIENT_ID).build(),
+            ).build(),
+        ).execute()
+        val text = response.text()
+        assertEquals(text, 400, response.code)
+        assertTrue(text, text.contains("invalid_grant"))
+    }
+
+    private fun nonceChallenge(nonce: String) = mockwebserver3.MockResponse.Builder().code(400)
+        .setHeader("Content-Type", "application/json").setHeader("DPoP-Nonce", nonce)
+        .body("""{"error":"use_dpop_nonce","error_description":"Authorization server requires nonce in DPoP proof"}""").build()
+
+    @Test
+    fun `bridge - a nonce challenge from the provider's token endpoint is retried once with the nonce and the login completes`() {
+        val bridge = bridge(clientId = Provider.DPOP_CLIENT_ID, tokenBinding = TokenBinding.Dpop())
+        val metadata = bridge.observe("discovery") { metadata() }
+        val path = metadata.tokenEndpoint.substringAfter(proxy.origin)
+        val challenges = java.util.concurrent.atomic.AtomicInteger()
+        proxy.intercept = { request -> if (request.url.encodedPath.endsWith(path) && challenges.getAndIncrement() == 0) nonceChallenge("provider-nonce-1") else null }
+
+        bridge.dart.login().assertOk()
+
+        assertEquals(SessionStateMessage.AUTHENTICATED, bridge.dart.sessionState())
+        val requests = transcript.matching("POST", path)
+        assertEquals("exactly one retry: $requests", 2, requests.size)
+        assertEquals(400, requests[0].status)
+        assertNull(requests[0].proofClaims!!["nonce"])
+        assertEquals("provider-nonce-1", requests[1].proofClaims!!["nonce"]!!.jsonPrimitive.content)
+        assertNotEquals(requests[0].proofClaims!!["jti"], requests[1].proofClaims!!["jti"])
+        assertEquals(200, requests[1].status)
+    }
+
+    @Test
+    fun `bridge - a provider that keeps challenging the token request gets one retry and then NonceLoop`() {
+        val bridge = bridge(clientId = Provider.DPOP_CLIENT_ID, tokenBinding = TokenBinding.Dpop())
+        val metadata = bridge.observe("discovery") { metadata() }
+        val path = metadata.tokenEndpoint.substringAfter(proxy.origin)
+        proxy.intercept = { request -> if (request.url.encodedPath.endsWith(path)) nonceChallenge("provider-nonce-${System.nanoTime()}") else null }
+
+        val error = bridge.dart.login().failure()
+
+        assertError(error, ErrorCategoryMessage.RECOVERABLE, "nonceLoop")
+        assertEquals("one request and one retry, no more", 2, transcript.matching("POST", path).size)
+        assertNotEquals(SessionStateMessage.AUTHENTICATED, bridge.dart.sessionState())
+    }
+
+    @Test
+    fun `bridge - a code bound to the SDK's key is not redeemed with a proof from another key`() {
+        val bridge = bridge(clientId = Provider.DPOP_CLIENT_ID, tokenBinding = TokenBinding.Dpop())
+        val metadata = bridge.observe("discovery") { metadata() }
+        val path = metadata.tokenEndpoint.substringAfter(proxy.origin)
+        val attacker = DpopResourceServer.newKeyPair()
+        val upstream = OkHttpClient()
+        proxy.intercept = { request ->
+            if (!request.url.encodedPath.endsWith(path)) null else {
+                val forwarded = Request.Builder().url(provider.origin + request.url.encodedPath)
+                    .header("Host", proxy.origin.substringAfter("://")).header("Content-Type", "application/x-www-form-urlencoded")
+                    .header("DPoP", DpopResourceServer.forgeProof(attacker, "POST", metadata.tokenEndpoint, null))
+                    .post(request.body!!.toByteArray().toRequestBody()).build()
+                upstream.newCall(forwarded).execute().use { response ->
+                    mockwebserver3.MockResponse.Builder().code(response.code).setHeader("Content-Type", "application/json").body(response.body.string()).build()
+                }
+            }
+        }
+
+        val error = bridge.dart.login().failure()
+
+        assertError(error, ErrorCategoryMessage.CONFIGURATION, "tokenRequestRejected")
+        assertEquals("invalid_request", error.code)
+        assertTrue(error.errorDescription.orEmpty(), error.errorDescription.orEmpty().contains("dpop_jkt"))
+        val token = transcript.matching("POST", path).first()
+        assertEquals(400, token.status)
+        assertFalse(token.responseJson!!.containsKey("access_token"))
+        assertNotEquals(SessionStateMessage.AUTHENTICATED, bridge.dart.sessionState())
     }
 }

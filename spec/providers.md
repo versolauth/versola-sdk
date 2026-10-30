@@ -168,16 +168,23 @@ Verified in B4 against `quay.io/keycloak/keycloak:26.4` from
   request is accepted. The refresh token is bound to the key too: a refresh grant with no proof,
   or with a proof from another key, is 400, and neither spends the token (the SDK's refresh with
   the right key still works afterwards). Observed on the success path (PAR, token, JWKS): Keycloak
-  26.4 sent no `DPoP-Nonce` header, so its nonce handling, if it has any, was not exercised; the
-  nonce assertions run at the harness's resource server (`DpopResourceServer`). Keycloak's own
-  UserInfo and logout endpoints enforce proofs for a bound token (documented [12]); the
-  scenario does not drive them.
+  26.4 sent no `DPoP-Nonce` header, and a proof carrying a nonce it never issued (the harness
+  answers the first token request with `use_dpop_nonce` and the retry goes to Keycloak) is accepted,
+  so Keycloak neither demands nor checks one; the SDK's retry is proven against the harness's
+  challenge and the resource server's (`DpopResourceServer`), not against a provider that issues
+  nonces. The authorization request's `dpop_jkt` is enforced: a token request whose proof is from
+  another key is 400 `invalid_request` "DPoP Proof public key thumbprint does not match dpop_jkt".
+  UserInfo needs a proof for a bound token (no proof, Bearer, or another key's proof is 401; the
+  SDK's key is 200). Revocation (`/revoke`) is taken without a proof for a DPoP-bound refresh
+  token (200), and the token is refused with `invalid_grant` afterwards; the SDK sends none, as
+  documented. Keycloak's non-browser logout with a refresh token, which the documentation says
+  needs a proof, is not what the SDK calls (it uses `/revoke` and the browser's end-session).
 
 ### Ory Hydra
 
 Verified in B4 against `oryd/hydra:v26.2.0` with `oryd/hydra-login-consent-node:v26.2.0` from
 `conformance/providers/hydra/` (scenarios 24 to 33, `android/conformance-oauth`: 25 of 27 tests
-green for 24 to 32, the two PAR tests skipped because no PAR endpoint is advertised; the nine tests
+green for 24 to 32, the two PAR tests skipped because no PAR endpoint is advertised; the fourteen tests
 of scenario 33 are skipped because no `dpop_signing_alg_values_supported` is advertised):
 
 - Stack as the quickstart's: `hydra serve all --dev` (plain HTTP, non-secure cookies) with
