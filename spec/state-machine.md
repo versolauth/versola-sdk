@@ -245,14 +245,24 @@ same access token: the usual cause is clock skew the SDK can now correct from th
 
 The offset is learned from the `Date` header of **every** response from a server the proofs are
 for, a success as much as a refusal, so the retry's `iat` is already corrected when it is minted
-and a device with a wrong clock usually pays no refusal at all after its first request. A `Date`
-that is absent, unreadable or more than 30 days from the device clock is ignored (a cached
-response or a broken intermediary says nothing true about the clock), leaving whatever was
-learned before. The offset is one per client, in memory only (see the persistence summary).
+and a device with a wrong clock usually pays no refusal at all after its first request.
 
-A second failure means the key no longer matches the grant, not a timing problem. Nothing
-retries it again: the SDK wipes credential state exactly as `Refreshing → Unauthenticated` does
-and surfaces `Reauthenticate`.
+Common to both SDKs: one offset per client, shared by every origin, **the last response wins**
+(a server whose own clock is wrong moves it until the next one that is right); in memory only
+(see the persistence summary); an absent or unparseable `Date` leaves what was learned in place.
+
+iOS only until Android follows (tracked as a follow-up to the Android batch; nothing below is
+claimed for Android yet):
+
+- A `Date` more than 30 days from the device clock is ignored: a device that far off could not
+  complete a TLS handshake against most certificates, so the value is a stale cache or a broken
+  intermediary.
+- A response with an `Age` header other than `0`, or one the URL cache rather than the network
+  produced, teaches nothing: its `Date` is when the origin generated it (RFC 9111 section 5.1),
+  not now, and would shift the offset by the age of the response. This matters most for the app's
+  `AuthenticatedSession` traffic, which goes through the app's own `URLSession` and its cache.
+- UserInfo retries `invalid_dpop_proof` once in place, as the token endpoint and the
+  authenticated session do (see `errors.md`). Android's UserInfo client does not yet.
 
 ### `Authenticated → StepUpRequired → Authorizing`
 
@@ -402,8 +412,19 @@ Keychain item of the client (refresh token, ID token, rotation slot, pending req
 before any of them is read. A launch that finds caches but no marker is an upgrade from a version
 that wrote none, and keeps its session. If the delete fails because the device is locked, the
 marker is not written and the operation that triggered it fails with `Recoverable(UnlockRequired)`;
-the next one tries again. A Keychain access group shared between apps is not subject to this
-(an item in a shared group outlives any one app on purpose); the generic facade configures none.
+the next one tries again.
+
+Where this does not act, by decision: **an app extension** (share, notification service, widget)
+has a container of its own that is empty on its first run, but it was not just installed and the
+Keychain items may be the host app's, shared through a keychain access group, so the guard is inert
+in an extension process (bundle path ending `.appex` or an `NSExtension` Info.plist key) and the host
+app's own first launch decides. **A configured Keychain access group** is shared on purpose and
+outlives any one app of the group, so the guard is not built for a client that configures one (the
+generic facade configures none). **An App Clip** is a separate app with its own container and its own
+default access group, so it is treated as an app: its container is evicted while its Keychain
+items are not. In every case the delete is scoped to the process's own default access group,
+learned from a throwaway item, never to the other groups the process is entitled to; if that group
+cannot be learned nothing is deleted.
 
 Discovery metadata is not credential material and is cached across logout deliberately: a
 re-login should not need a round trip to `/.well-known/openid-configuration`. The two native

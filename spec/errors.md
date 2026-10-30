@@ -116,7 +116,7 @@ From `versola.oauth.userinfo.model.UserInfoError`.
 | `InvalidToken` | `Recoverable` → refresh → retry, else `Reauthenticate` | |
 | `InsufficientScope` | `Configuration` | The token was not issued with the scopes this call needs. |
 | `Unauthorized` | `Reauthenticate` | |
-| `InvalidDpopProof` | handled internally, then `Reauthenticate` | Same one-retry rule as the token endpoint; nothing reaches the app until the retry also fails. Also covers the RFC 9449 §7.2 downgrade refusal: a `Bearer`-scheme request carrying a key-bound token. |
+| `InvalidDpopProof` | handled internally, then `Reauthenticate` | Same one-retry rule as the token endpoint; nothing reaches the app until the retry also fails (implemented on iOS; the Android UserInfo client does not retry yet). Also covers the RFC 9449 §7.2 downgrade refusal: a `Bearer`-scheme request carrying a key-bound token. |
 | `UseDpopNonce` | handled internally | Retry once against the **userinfo origin's** nonce cache. |
 
 ## Edge — `versola.io`

@@ -115,8 +115,16 @@ compiler, and SwiftPM takes it directly, so this check needs no Xcode project:
 swift build --sdk "$(xcrun --sdk iphonesimulator --show-sdk-path)" --triple arm64-apple-ios17.4-simulator -Xswiftc -application-extension
 ```
 
-The same SwiftPM cross-build runs the unit tests inside a simulator without `xcodebuild` (useful
-when Xcode cannot load the workspace): build with `--build-tests` and the same `--sdk`/`--triple`,
+Which runner proves what. `xcodebuild test` (what CI runs) is the reference run, and the only
+one that can host an app, so it is the one for the real Keychain and the browser leg. On Xcode 16.3
+it cannot load the workspace while an iOS 27 device is paired (`xcodebuild -list` aborts with
+`__SwiftDeferredNSArray intersectsSet:`); unplugging the device, or a newer Xcode, restores it. `swift test`
+on the host proves the rules against stubs and runs the whole conformance driver. The SwiftPM
+simulator run below proves the same unit tests on iOS code paths (UIKit, the Keychain API surface) without
+`xcodebuild`, but with no app host: it cannot prove the real Keychain, the Secure Enclave or an
+extension's behaviour.
+
+The same SwiftPM cross-build runs the unit tests inside a simulator without `xcodebuild`: build with `--build-tests` and the same `--sdk`/`--triple`,
 copy `.build/arm64-apple-ios-simulator/debug/VersolaPackageTests.xctest/Contents/MacOS/VersolaPackageTests`
 into a flat `VersolaPackageTests.xctest` bundle with a minimal `Info.plist`, and run it with
 `xcrun simctl spawn <udid> "$(xcrun --sdk iphonesimulator --show-sdk-platform-path)"/Developer/Library/Xcode/Agents/xctest`
