@@ -20,7 +20,8 @@ steps:
   - actor: app
     action: Make a request through the authenticated client to a protected origin that answers 503 with a Retry-After header.
 assertions:
-  - Each repeatable operation makes exactly maxAttemptsPerOrigin requests (three by default) for 500, 503 and 429 without Retry-After, with delays that grow, are capped at maxBackoff, and are not identical across two runs, and finishes within totalBudget.
+  - Discovery, the pushed authorization request, UserInfo and revocation make exactly maxAttemptsPerOrigin requests (three by default) for 500, 502, 503, 504 and 429 without Retry-After, with delays that grow, are capped at maxBackoff, and are not identical across two runs, and finish within totalBudget.
+  - A refresh by a facade that sends no Idempotency-Key makes exactly maxAttemptsPerOrigin requests for 503, 429 and 408, and exactly one request for 500, 502 and 504, with no delay; the stored refresh token and the rotation slot are unchanged after the one-request failures.
   - Each of them then fails with Recoverable, cause Server, whose status is the last status seen and whose attempts equals the request count. Nothing is reported as a transport failure.
   - A refresh that fails this way leaves the session Authenticated and the stored refresh token and pending rotation key unchanged; the next refresh carries the same Idempotency-Key.
   - The authorization_code exchange makes exactly one request. The login fails with Recoverable, cause Server, the pending request is wiped, and a second login() starts from the browser.

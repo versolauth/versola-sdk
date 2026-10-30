@@ -82,6 +82,15 @@ public class SessionCoordinator(
      */
     retryClock: () -> Long = { System.nanoTime() / NANOS_PER_MILLI },
     retryRandom: kotlin.random.Random = kotlin.random.Random.Default,
+    /**
+     * Whether a refresh may be repeated after a failure that may have come after the provider
+     * acted. The Versola facade sends an `Idempotency-Key`, so a repeat resolves to the same
+     * rotation and this is true. The generic facade sends none, and a repeat of a refresh the
+     * provider already rotated is a replay that a rotating provider can answer by revoking the
+     * family; with false, a refresh is repeated only when it provably was not processed
+     * ([ServerFault.wasNotProcessed]) and every other failure is surfaced after one request.
+     */
+    private val repeatsRefreshAfterAmbiguousFailure: Boolean = true,
 ) : AccessTokenSource {
 
     /**
@@ -549,7 +558,10 @@ public class SessionCoordinator(
                 credentialStore.savePendingRotation(key)
                 key
             }
-            val issued = retrying(tokenOrigin()) {
+            val issued = retrying(
+                tokenOrigin(),
+                mayRepeat = if (repeatsRefreshAfterAmbiguousFailure) { _ -> true } else ServerFault::wasNotProcessed,
+            ) {
                 // A fresh unwrap per attempt, not one unwrap shared across retries:
                 // `TokenClient.refresh` takes ownership of the bytes it is given and zeroes
                 // them once the request body is formed, so a second attempt handed the same

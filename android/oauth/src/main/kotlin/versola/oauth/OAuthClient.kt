@@ -417,6 +417,9 @@ public class OAuthClient private constructor(
                 ),
                 credentialStore = credentialStore,
                 retryPolicy = configuration.retryPolicy,
+                // No Idempotency-Key is sent (above): a refresh is repeated only when it provably
+                // was not processed, so a replay never spends a token the provider already rotated.
+                repeatsRefreshAfterAmbiguousFailure = false,
                 onCredentialsWiped = {
                     proofs?.nonces?.clear()
                     dpopKey?.destroy()

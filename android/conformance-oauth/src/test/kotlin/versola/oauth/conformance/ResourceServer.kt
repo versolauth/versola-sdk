@@ -13,7 +13,9 @@ import okhttp3.Request
  * precondition): `/api` answers 200 with the token's subject when the provider's UserInfo
  * endpoint accepts the bearer token, and 401 with a `Bearer` challenge otherwise, as a resource
  * server validating opaque tokens by introspection would. `/redirect` answers a 302 to another
- * origin, for the assertion that the authenticated client does not follow one (scenario 32).
+ * origin, for the assertion that the authenticated client does not follow one (scenario 32), and
+ * `/unavailable` a 503 with `Retry-After: 7`, for the one that it returns a status as the response
+ * it is (scenario 34).
  *
  * The token is checked at the provider's UserInfo endpoint through the proxy, because a
  * provider that derives its issuer from the request (Keycloak) issued the token for the proxy's
@@ -44,6 +46,8 @@ class ResourceServer(private val provider: Provider, private val proxy: Provider
         val subject = token?.let { subjectOf(it) }
         return when {
             subject == null -> MockResponse.Builder().code(401).setHeader("WWW-Authenticate", "Bearer realm=\"resource\"").build()
+            request.url.encodedPath == "/unavailable" ->
+                MockResponse.Builder().code(503).setHeader("Retry-After", "7").build()
             request.url.encodedPath == "/redirect" ->
                 MockResponse.Builder().code(302).setHeader("Location", "https://elsewhere.example.com/landing").build()
             else -> MockResponse.Builder().code(200).setHeader("Content-Type", "application/json").body("""{"sub":"$subject"}""").build()

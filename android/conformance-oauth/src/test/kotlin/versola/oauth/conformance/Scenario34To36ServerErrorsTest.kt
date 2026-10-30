@@ -10,6 +10,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
 import versola.oauth.OAuthClient
+import versola.oauth.core.RetryPolicy
 import versola.oauth.core.SessionState
 import versola.oauth.core.VersolaError
 import versola.oauth.core.VersolaError.Recoverable.Cause
@@ -19,11 +20,10 @@ import versola.oauth.core.VersolaError.Recoverable.Cause
  * generic facade against the staged provider, with the proxy answering one operation by method and
  * path (`respond-with-status`) while everything else is forwarded.
  *
- * Not covered at this tier, and proven against stubs only (the PR says so): the request through the
- * authenticated client answering 503 (`VersolaInterceptorTest`), the 501 case (`RetryPolicyTest`),
- * the thirty-second wait of scenario 36 (the cooldown's clock is monotonic and not injectable from
- * here; `RetryPolicyTest` and `SessionCoordinatorTest` move it), and the clock-skew form of an
- * HTTP-date (`ServerFaultTest`).
+ * Everything the scenarios assert for the generic facade is here, in real time against the
+ * provider: the 501 case, the authenticated client passing a 503 through, the HTTP-date against the
+ * response's own `Date` with the device clock an hour off, and the end of a cooldown (a one-second
+ * budget makes a two-second Retry-After one that does not fit, so no clock has to be injected).
  */
 class Scenario34To36ServerErrorsTest : ProviderConformance() {
 
@@ -65,10 +65,14 @@ class Scenario34To36ServerErrorsTest : ProviderConformance() {
     // ---- 34 ---------------------------------------------------------------------------------
 
     @Test
-    fun `34 a refresh answered 500, 503 or 429 is repeated three times and surfaced with its status, grant intact`() = runTest {
+    fun `34 a refresh is repeated three times when the provider did not take it up, and made once when it may have`() = runTest {
         val client = client()
         client.login()
-        for (status in listOf(500, 503, 429)) {
+        // The generic facade sends no Idempotency-Key, so only what provably was not processed is
+        // repeated (408, 429, 503; a 408 is left out here because OkHttp itself repeats one on the
+        // wire, which would make the request count the HTTP client's and not the SDK's); a 500, 502 or 504 may have come after the provider rotated the
+        // token, and a replay of it is what a rotating provider answers by revoking the family.
+        for ((status, expected) in listOf(503 to 3, 429 to 3, 500 to 1, 502 to 1, 504 to 1)) {
             val before = refreshRequests(client).size
             respondWith(status, matches = refreshGrant(client))
 
@@ -76,15 +80,44 @@ class Scenario34To36ServerErrorsTest : ProviderConformance() {
 
             val cause = serverCause(error)
             assertEquals(status, cause.status)
-            assertEquals(3, cause.attempts)
+            assertEquals("$status", expected, cause.attempts)
             assertNull(cause.retryAfterMillis)
-            assertEquals("$status", 3, refreshRequests(client).size - before)
+            assertEquals("$status", expected, refreshRequests(client).size - before)
             assertEquals(SessionState.Authenticated, client.state())
         }
         // The grant survived all of it: once the provider answers, the same session refreshes.
         proxy.clearRewrites()
         client.refresh()
         assertEquals(SessionState.Authenticated, client.state())
+    }
+
+    @Test
+    fun `34 a 501 is surfaced after one request with no delay`() = runTest {
+        val client = client()
+        client.login()
+        val before = refreshRequests(client).size
+        respondWith(501, matches = refreshGrant(client))
+
+        val error = failsWith<VersolaError.Recoverable> { runBlocking { client.refresh() } }
+
+        assertEquals(501, serverCause(error).status)
+        assertEquals(1, refreshRequests(client).size - before)
+        assertEquals(SessionState.Authenticated, client.state())
+    }
+
+    @Test
+    fun `34 a request through the authenticated client answering 503 is returned as the response, header intact, after one request`() = runTest {
+        val client = client()
+        client.login()
+
+        val response = client.call(okhttp3.Request.Builder().url(resource.url("/unavailable")).build())
+
+        assertEquals(503, response.code)
+        assertEquals("7", response.header("Retry-After"))
+        assertEquals(1, resource.requests.count { it.url.encodedPath == "/unavailable" })
+        // Nothing was refreshed, repeated or blocked on its account.
+        assertEquals(SessionState.Authenticated, client.state())
+        response.close()
     }
 
     @Test
@@ -195,6 +228,31 @@ class Scenario34To36ServerErrorsTest : ProviderConformance() {
     }
 
     @Test
+    fun `35 an HTTP-date Retry-After is measured against the response's Date even when the device clock disagrees by an hour`() = runBlocking {
+        val client = client()
+        client.login()
+        // The provider's clock is an hour ahead of the device's: against the device clock the date
+        // would be an hour away (a day-capped wait that does not fit the budget), against the
+        // response's own Date it is three seconds.
+        val serverNow = System.currentTimeMillis() + 3_600_000
+        val format = java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss 'GMT'", java.util.Locale.US)
+            .apply { timeZone = java.util.TimeZone.getTimeZone("GMT") }
+        respondWith(
+            503,
+            headers = mapOf("Date" to format.format(java.util.Date(serverNow)), "Retry-After" to format.format(java.util.Date(serverNow + 3_000))),
+            times = 1,
+            matches = refreshGrant(client),
+        )
+
+        client.refresh()
+
+        val attempts = refreshRequests(client)
+        assertEquals(2, attempts.size)
+        val gap = attempts[1].at - attempts[0].at
+        assertTrue("gap ${gap}ms", gap in 2_000..3_900)
+    }
+
+    @Test
     fun `35 a Retry-After past the budget, a day long, stops at once with the value`() = runTest {
         for ((header, expectedMillis) in listOf("30" to 30_000L, "86400" to 86_400_000L, "999999999" to 86_400_000L)) {
             OAuthClient.forgetAll()
@@ -241,6 +299,22 @@ class Scenario34To36ServerErrorsTest : ProviderConformance() {
 
         val error = failsWith<VersolaError.Recoverable> { runBlocking { client.refresh() } }
 
+        // A 500 is not repeated by a facade with no Idempotency-Key, and its header is not read.
+        val cause = serverCause(error)
+        assertNull(cause.retryAfterMillis)
+        assertEquals(1, cause.attempts)
+    }
+
+    @Test
+    fun `35 a Retry-After on a 502 from UserInfo is ignored and the ordinary backoff applies`() = runBlocking {
+        val client = client()
+        client.login()
+        val userinfo = client.metadata().userinfoEndpoint
+        assumeTrue("the provider advertises no userinfo_endpoint", userinfo != null)
+        respondWith(502, headers = mapOf("Retry-After" to "86400"), matches = path(userinfo!!.substringAfter(proxy.origin)))
+
+        val error = failsWith<VersolaError.Recoverable> { runBlocking { client.userInfo() } }
+
         val cause = serverCause(error)
         assertNull(cause.retryAfterMillis)
         assertEquals(3, cause.attempts)
@@ -280,10 +354,10 @@ class Scenario34To36ServerErrorsTest : ProviderConformance() {
     }
 
     @Test
-    fun `36 exhausting the budget on 500 without Retry-After starts no cooldown`() = runTest {
+    fun `36 exhausting the budget on 503 without Retry-After starts no cooldown`() = runTest {
         val client = client()
         client.login()
-        respondWith(500, matches = refreshGrant(client))
+        respondWith(503, matches = refreshGrant(client))
         failsWith<VersolaError.Recoverable> { runBlocking { client.refresh() } }
         val afterFirst = refreshRequests(client).size
 
@@ -292,5 +366,34 @@ class Scenario34To36ServerErrorsTest : ProviderConformance() {
         // A second set of three: the SDK invents no provider policy; the retry loop above it is the app's.
         assertEquals(3, afterFirst)
         assertEquals(6, refreshRequests(client).size)
+    }
+
+    @Test
+    fun `36 the cooldown ends when the Retry-After has passed, and the next refresh goes out`() = runBlocking {
+        // A one-second budget makes a two-second Retry-After one that does not fit, so the SDK stops
+        // and holds the origin; waiting it out in real time proves the cooldown's end without
+        // touching the SDK's clock.
+        val client = client(configuration(retryPolicy = RetryPolicy(totalBudget = kotlin.time.Duration.parse("1s"))))
+        client.login()
+        respondWith(429, headers = mapOf("Retry-After" to "2"), matches = refreshGrant(client))
+        val first = failsWith<VersolaError.Recoverable> { runBlocking { client.refresh() } }
+        assertEquals(2_000L, serverCause(first).retryAfterMillis)
+        val sent = refreshRequests(client).size
+
+        val refused = failsWith<VersolaError.Recoverable> { runBlocking { client.refresh() } }
+        val userinfo = failsWith<VersolaError.Recoverable> { runBlocking { client.userInfo() } }
+
+        for (error in listOf(refused, userinfo)) {
+            assertEquals(0, serverCause(error).attempts)
+            assertTrue(serverCause(error).retryAfterMillis!! in 1..2_000)
+        }
+        assertEquals(sent, refreshRequests(client).size)
+
+        proxy.clearRewrites()
+        Thread.sleep(2_300)
+        client.refresh()
+
+        assertEquals(sent + 1, refreshRequests(client).size)
+        assertEquals(SessionState.Authenticated, client.state())
     }
 }
