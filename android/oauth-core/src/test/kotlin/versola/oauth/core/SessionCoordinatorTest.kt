@@ -2010,7 +2010,9 @@ class SessionCoordinatorTest {
         assertNull(credentialStore.rawIdToken)
         assertNull(credentialStore.pendingRotationSlot)
         assertEquals(1, credentialStore.clears)
-        assertEquals(1, pendingStore.clears)
+        // Two, deliberately: the cold-start restore clears the pending slot unread when a grant is
+        // stored (the iOS rule, `spec/state-machine.md`), and the wipe clears it again.
+        assertEquals(2, pendingStore.clears)
         assertEquals(1, teardowns)
         assertNull(coordinator.currentAccessToken())
         assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())

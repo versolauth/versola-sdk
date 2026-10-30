@@ -25,17 +25,23 @@ private class RecordingStore(var stored: PendingAuthorizationRequest? = null) : 
     /** Thrown by [load] while set: what a store does when the slot is out of reach, not gone. */
     var loadFailure: VersolaError? = null
 
+    /** Thrown by [clear] while set: a slot that cannot be cleared yet. */
+    var clearFailure: VersolaError? = null
+    var loads = 0
+
     override suspend fun save(request: PendingAuthorizationRequest) {
         saves++
         stored = request
     }
 
     override suspend fun load(): PendingAuthorizationRequest? {
+        loads++
         loadFailure?.let { throw it }
         return stored
     }
 
     override suspend fun clear() {
+        clearFailure?.let { throw it }
         clears++
         stored = null
     }
@@ -363,13 +369,40 @@ class AuthorizationFlowTest {
     }
 
     @Test
-    fun `a stored grant decides the state even when the pending slot cannot be read`() = runTest {
+    fun `with a stored grant the restore clears the pending slot unread, whether or not it could be read`() = runTest {
+        // The slot is residue (a login killed after its token was stored): cleared on every cold
+        // start without being decrypted, the same rule as iOS (`spec/state-machine.md`).
         val store = RecordingStore(restoredRequest())
         store.loadFailure = VersolaError.Recoverable(VersolaError.Recoverable.Cause.UnlockRequired)
+        var resumeCues = 0
         val flow = flow(store, FakeBrowser({ BrowserOutcome.UserCancelled }, store), now = 1_000, hasStoredGrant = { true })
+        flow.onRestoredAuthorizing = { resumeCues++ }
 
         assertSame(SessionState.Authenticated, flow.sessionState.first())
-        assertEquals("the unreadable slot is residue and is left", 0, store.clears)
+
+        assertEquals("never read", 0, store.loads)
+        assertEquals(1, store.clears)
+        assertNull(store.stored)
+        assertEquals(0, resumeCues)
+    }
+
+    @Test
+    fun `with a stored grant a slot that cannot be cleared yet fails the restore and is retried on the next read`() = runTest {
+        val store = RecordingStore(restoredRequest())
+        store.clearFailure = VersolaError.Recoverable(VersolaError.Recoverable.Cause.UnlockRequired)
+        val flow = flow(store, FakeBrowser({ BrowserOutcome.UserCancelled }, store), now = 1_000, hasStoredGrant = { true })
+
+        // A collector of the state is not handed the error; an operation is.
+        assertSame(SessionState.Locked, flow.sessionState.first())
+        val refused = failure { flow.authorize(setOf("openid")) } as VersolaError.Recoverable
+        assertSame(VersolaError.Recoverable.Cause.UnlockRequired, refused.reason)
+        assertEquals(0, store.saves)
+        assertEquals("nothing was remembered", 0, store.clears)
+
+        store.clearFailure = null
+        assertSame(SessionState.Authenticated, flow.sessionState.first())
+        assertEquals(1, store.clears)
+        assertNull(store.stored)
     }
 
     @Test

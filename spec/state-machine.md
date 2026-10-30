@@ -156,8 +156,6 @@ what a returning user sees. When a later read finds the request, the cold-start 
 then, not only at creation (Android). A collector of the state is not handed the error. With a
 grant the restore also **clears the pending slot on every cold start**, unread (it is residue,
 above); a slot that cannot be cleared yet fails the restore the same way and is retried.
-(Android deviation: it reads the slot and clears it when there is one, and an unreadable slot,
-being residue, is left in place and does not fail the restore.)
 
 The cost is a re-authorization started over a live session — a step-up, an account switch — and
 then killed mid-browser: it resolves in favour of the session that already exists rather than

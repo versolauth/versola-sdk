@@ -607,34 +607,36 @@ public class AuthorizationFlow(
             // only residue and the state does not depend on it. Cancellation is not a
             // `Recoverable` and passes through.
             val granted = hasStoredGrant()
-            val pending = try {
-                pendingStore.load()
-            } catch (e: VersolaError.Recoverable) {
-                if (!granted) {
+            if (granted) {
+                // With a grant the slot is only residue — a login killed between persisting the
+                // token and clearing it, its code already redeemed — and the state does not depend
+                // on it, so it is cleared on every cold start **unread** (`spec/state-machine.md`,
+                // the same rule as iOS): nothing is decrypted that nothing needs, and an unreadable
+                // slot cannot hide behind not being read. A slot that cannot be cleared yet fails
+                // the restore the way an unreadable one does without a grant: `Locked`, the storage
+                // error to the operation that asked, nothing remembered, so the next call retries.
+                //
+                // The cost is a re-authorization started *over* a live session (a step-up, an
+                // account switch) and then killed mid-browser: it is resolved in favour of the
+                // session that already exists rather than resumed, since what is on disk cannot
+                // tell it from a login whose code was already redeemed.
+                try {
+                    pendingStore.clear()
+                } catch (e: VersolaError.Recoverable) {
                     state.value = SessionState.Locked
                     throw e
                 }
-                null
+                state.value = SessionState.Authenticated
+                restored = true
+                return
+            }
+            val pending = try {
+                pendingStore.load()
+            } catch (e: VersolaError.Recoverable) {
+                state.value = SessionState.Locked
+                throw e
             }
             state.value = when {
-                // A stored grant outranks whatever the browser leg left behind, and it is
-                // read first for both directions of that: without it a returning session
-                // reports `Unauthenticated` on every cold start until something happens to
-                // call refresh, and with a pending request beside it the request is the
-                // residue of a login killed between persisting the token and clearing the
-                // slot — a code already redeemed, so the redirect it still waits for can no
-                // longer be spent and resuming it would only fail as `invalid_grant`.
-                //
-                // The cost is a re-authorization started *over* a live session (a step-up,
-                // an account switch) and then killed mid-browser: it is resolved in favour
-                // of the session that already exists rather than resumed. Nothing is lost
-                // that the next 401 does not ask for again, and the alternative — believing
-                // a pending request that may or may not have been redeemed — has no way to
-                // tell the two apart.
-                granted -> {
-                    if (pending != null) pendingStore.clear()
-                    SessionState.Authenticated
-                }
                 pending == null -> SessionState.Unauthenticated
                 pending.isExpired(clock()) -> {
                     pendingStore.clear()
