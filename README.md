@@ -49,9 +49,12 @@ token.
 
 ### Install
 
-- **Android:** `implementation("io.versola:oauth-android:0.1.0")` from `mavenCentral()` (and
+The current version is on the [Releases](https://github.com/versolauth/versola-sdk/releases) page;
+write it where `<version>` stands.
+
+- **Android:** `implementation("io.versola:oauth-android:<version>")` from `mavenCentral()` (and
   `google()`).
-- **iOS:** Swift Package Manager, `.package(url: "https://github.com/versolauth/versola-sdk", from: "0.1.0")`,
+- **iOS:** Swift Package Manager, `.package(url: "https://github.com/versolauth/versola-sdk", from: "<version>")`,
   product `VersolaOAuth`.
 - **Flutter:** a git dependency in `pubspec.yaml` (below), with Swift Package Manager integration
   enabled for iOS.
@@ -62,7 +65,7 @@ dependencies:
     git:
       url: https://github.com/versolauth/versola-sdk.git
       path: flutter/versola_oauth
-      ref: 0.1.1
+      ref: <version>
 ```
 
 A Flutter app needs `compileSdk` 37 and `minSdk` 26 in `android/app/build.gradle.kts` and an iOS

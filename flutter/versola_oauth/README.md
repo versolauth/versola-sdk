@@ -15,7 +15,8 @@ frequently asked questions are in the
 
 ## Install
 
-Add the plugin to `pubspec.yaml` as a git dependency on the repository:
+Add the plugin to `pubspec.yaml` as a git dependency on the repository, with the current version from the
+[Releases](https://github.com/versolauth/versola-sdk/releases) page as `ref`:
 
 ```yaml
 dependencies:
@@ -23,7 +24,7 @@ dependencies:
     git:
       url: https://github.com/versolauth/versola-sdk.git
       path: flutter/versola_oauth
-      ref: 0.1.1
+      ref: <version>
 ```
 
 The app needs `compileSdk` 37 and `minSdk` 26 in `android/app/build.gradle.kts` and an iOS
