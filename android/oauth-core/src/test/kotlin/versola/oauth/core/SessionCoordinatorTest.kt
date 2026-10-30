@@ -2017,6 +2017,22 @@ class SessionCoordinatorTest {
     }
 
     @Test
+    fun `logout reports an end-session endpoint it refuses as sessionEnded false and still wipes`() = runTest {
+        val insecure = metadata.copy(endSessionEndpoint = "http://idp.example.com/logout", revocationEndpoint = null)
+        val pendingStore = RecordingPendingStore()
+        val browser = FixedRedirectBrowser(pendingStore)
+        val (coordinator, _, credentialStore) = coordinator(pendingStore, browser = browser, providerMetadata = insecure)
+        credentialStore.refreshToken = stored()
+
+        val outcome = coordinator.logout()
+
+        assertFalse(outcome.sessionEnded)
+        assertTrue("the browser never opened", browser.launched.isEmpty())
+        assertNull(credentialStore.refreshToken)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
     fun `logout wipes locally even when revocation fails`() = runTest {
         val (coordinator, tokenClient, credentialStore) = coordinator()
         credentialStore.refreshToken = stored()

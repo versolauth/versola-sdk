@@ -815,7 +815,17 @@ public class SessionCoordinator(
                     logger?.warn("logout: id_token_hint unavailable (${e.message}); ending the session without it")
                     null
                 }
-                serverSessionEnded = flow.endSession(hint)
+                // Best effort like the revocation above: an end-session endpoint the document gave that
+                // is not `https`, or a discovery that cannot be reached, is `sessionEnded = false` and a
+                // log line, not a `logout()` that throws after the wipe (`spec/oauth-sdk-api.md` section 5).
+                serverSessionEnded = try {
+                    flow.endSession(hint)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: VersolaError) {
+                    logger?.warn("logout: the provider's session could not be ended (${e.message}); it ends at its own expiry instead")
+                    false
+                }
             }
         } finally {
             withContext(NonCancellable) { wipe() }
