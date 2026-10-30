@@ -94,9 +94,17 @@ val oauth = OAuthClient.create(context, configuration)
   by the app with its intent filter as the Versola facade does today) and through
   `handleRedirect(url)` on iOS, which the app calls from its URL handler and which returns whether
   the URL was one the SDK was waiting for. The Flutter plugin wires both natively.
-- There is no `resumePendingAuthorization()`: a redirect delivered to a cold-started process
-  completes the pending request and publishes `Authenticated` or an error state transition on its
-  own. An app that wants to await it observes `sessionState`.
+- There is no `resumePendingAuthorization()` on Android: a redirect delivered to a cold-started
+  process completes the pending request and publishes `Authenticated` or an error state
+  transition on its own. `create()` starts that work on a scope the SDK owns, when the restored
+  state is `Authorizing`; it runs the tail of `login()` (redirect validation, code exchange,
+  ID-token validation, persistence, then `Authenticated`), with `max_age` taken from the restored
+  request. An app that wants to await it observes `sessionState`.
+- **Deviation, iOS:** the redirect cannot start the SDK by itself, because the app's URL handler
+  is the only thing the system calls. The app calls `resumePendingAuthorization()` on launch when
+  `sessionState` is `authorizing` and passes the URL to `handleRedirect(url)`; the call awaits the
+  redirect and finishes the sign-in with the same tail as `login()`. Observing `sessionState`
+  works as on Android.
 
 ## 5. Operations
 
@@ -188,7 +196,11 @@ presented as `Authorization: DPoP`; an integrator opts in when their resource se
 the behaviour is `errors.md`'s: one `use_dpop_nonce` retry per origin, one `invalid_dpop_proof`
 retry, clock-skew learned from the `Date` header, `ath` on resource requests. The key is
 non-exportable, not user-gated, and regenerated on every `login()`; `keyAttestation()` reports the
-tier read back.
+tier read back. The authorization request, pushed or not, carries `dpop_jkt` (RFC 9449 section
+10), the thumbprint of that key; a refresh is proved with the same key. A key whose
+tier is `Software` where hardware was required (`Dpop(requireHardware = true)` on Android,
+`dpop(required: true)` on iOS) is `Configuration(HardwareBindingUnavailable)` before any request to
+the authorization endpoint (`errors.md`). Scenario 33 holds all of this against a real provider.
 
 ## 10. The authenticated client
 
@@ -268,7 +280,7 @@ handled in app code after `logout()` has wiped locally; the SDK does not special
 | Sign-in | `suspend fun login(options)` | `func login(_ options:) async throws` | `Future<void> login([options])` |
 | Options | `LoginOptions` data class | `LoginOptions` struct | `LoginOptions` |
 | Sign-out | `suspend fun logout(options): LogoutOutcome` | `func logout(_:) async -> LogoutOutcome` | `Future<LogoutOutcome> logout([options])` |
-| Token | `suspend fun accessToken(): AccessToken` | `func accessToken() async throws -> AccessToken` | `Future<AccessToken> accessToken()` |
+| Token | `suspend fun accessToken(): AccessToken` (`isDpopBound`; the scheme is `DPoP` if set, else `Bearer`) | `func accessToken() async throws -> AccessToken` (`tokenType` is `Bearer` or `DPoP`, in that spelling whatever the provider's `token_type` said; a type other than DPoP is `Bearer`, as on Android) | `Future<AccessToken> accessToken()` |
 | Claims | `val claims: IdTokenClaims?` | `var claims: IdTokenClaims? { get async }` | `Future<IdTokenClaims?> claims()` (a method, not a getter: the claims stay native, so the answer is asynchronous, and a `Future` getter would make `client.claims != null` always true) |
 | UserInfo | `suspend fun userInfo(): UserInfo` | `func userInfo() async throws -> UserInfo` | `Future<UserInfo> userInfo()` |
 | Step-up | `suspend fun stepUp(challenge, options)` | `func stepUp(acrValues:maxAge:options:) async throws` (the challenge is the `stepUp` case's payload) | `Future<void> stepUp(challenge, [options])` |

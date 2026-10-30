@@ -14,12 +14,12 @@ fun sampleProperty(name: String, default: String): String =
 
 android {
     namespace = "versola.samples.oauth"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         applicationId = "versola.samples.oauth"
         minSdk = 26
-        targetSdk = 36
+        targetSdk = 37
         versionCode = 1
         versionName = "0.1"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
@@ -86,7 +86,7 @@ dependencies {
 
     androidTestImplementation("androidx.test:runner:1.7.0")
     androidTestImplementation("androidx.test.ext:junit:1.3.0")
-    androidTestImplementation("com.squareup.okhttp3:mockwebserver3:5.4.0")
-    androidTestImplementation("com.squareup.okhttp3:okhttp:5.4.0")
+    androidTestImplementation("com.squareup.okhttp3:mockwebserver3:5.5.1")
+    androidTestImplementation("com.squareup.okhttp3:okhttp:5.5.1")
     androidTestImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
 }

@@ -22,7 +22,10 @@ final class SessionCoordinatorTests: XCTestCase {
         func hasGrant() async throws -> Bool { refresh != nil }
         func refreshToken() async throws -> String? { refresh }
         func rawIdToken() async throws -> String? { idToken }
+        var saveFailure: OAuthError?
+        func failSave(_ error: OAuthError) { saveFailure = error }
         func save(refreshToken: String, rawIdToken: String?) async throws {
+            if let saveFailure { throw saveFailure }
             refresh = refreshToken
             idToken = rawIdToken
         }
@@ -73,10 +76,12 @@ final class SessionCoordinatorTests: XCTestCase {
 
     actor RecordingValidator: IdTokenValidator {
         var calls: [(nonce: String?, previous: String?)] = []
+        var maxAges: [Int?] = []
         var rejection: IdTokenRejection?
         func reject(_ reason: IdTokenRejection) { rejection = reason }
         func validate(idToken: String, expectedNonce: String?, accessToken: String?, maxAge: Int?, previous: IdTokenClaims?, serverTime: Date?) async throws -> IdTokenClaims {
             calls.append((expectedNonce, previous?.subject))
+            maxAges.append(maxAge)
             if let rejection { throw OAuthError.configuration(.idTokenRejected(rejection)) }
             return try IdTokenClaimsParser.parseStored(idToken)
         }
@@ -105,6 +110,7 @@ final class SessionCoordinatorTests: XCTestCase {
         let validator: RecordingValidator
         let logger: Warnings
         let clock: TickingClock
+        let pendingStore: MemoryPendingStore
     }
 
     private func idToken(subject: String = "alice", nonce: String = "n") -> String {
@@ -116,13 +122,14 @@ final class SessionCoordinatorTests: XCTestCase {
         TokenResponse(accessToken: "at-\(refresh ?? "none")-\(UUID().uuidString.prefix(4))", tokenType: "Bearer", expiresIn: expiresIn, refreshToken: refresh, idToken: idToken(subject: subject), scope: "openid")
     }
 
-    private func fixture(answers: [Result<TokenResponse, OAuthError>], policy: RefreshTokenPolicy = .optional, store: MemoryCredentials = MemoryCredentials(), retry: RetryPolicy? = nil) throws -> Fixture {
+    private func fixture(answers: [Result<TokenResponse, OAuthError>], policy: RefreshTokenPolicy = .optional, store: MemoryCredentials = MemoryCredentials(), retry: RetryPolicy? = nil, pending: PendingAuthorizationRequest? = nil, browser: ScriptedBrowser = ScriptedBrowser.answering()) throws -> Fixture {
         let clock = TickingClock(Date(timeIntervalSince1970: 1_700_000_000))
         let configuration = CoreConfiguration(issuer: Self.issuer, clientId: "mobile", redirectUri: URL(string: Self.redirect)!, postLogoutRedirectUri: URL(string: "https://app.example.com/signed-out"))
         let discovery = DiscoveryService(issuer: Self.issuer, client: StaticDiscoveryClient(metadata: AuthzKit.metadata()), cache: MemoryMetadataCache())
+        let pendingStore = MemoryPendingStore(pending)
         let flow = AuthorizationFlow(
-            configuration: configuration, discovery: discovery, pendingStore: MemoryPendingStore(),
-            browser: ScriptedBrowser.answering(), states: SessionStateHub(),
+            configuration: configuration, discovery: discovery, pendingStore: pendingStore,
+            browser: browser, states: SessionStateHub(),
             clock: Clock(now: { Date() }), hasStoredGrant: { try await store.hasGrant() }
         )
         let tokens = ScriptedTokenClient(answers, store: store)
@@ -133,7 +140,7 @@ final class SessionCoordinatorTests: XCTestCase {
             retryPolicy: try retry ?? RetryPolicy(maxAttemptsPerOrigin: 2, maxTotalAttempts: 2, initialBackoff: 0, backoffMultiplier: 1, maxBackoff: 0, totalBudget: 10),
             clock: Clock(now: { clock.peek() }), logger: logger, refreshTokens: policy, idTokenValidator: validator
         )
-        return Fixture(coordinator: coordinator, flow: flow, store: store, tokens: tokens, validator: validator, logger: logger, clock: clock)
+        return Fixture(coordinator: coordinator, flow: flow, store: store, tokens: tokens, validator: validator, logger: logger, clock: clock, pendingStore: pendingStore)
     }
 
     // MARK: - Login
@@ -156,6 +163,18 @@ final class SessionCoordinatorTests: XCTestCase {
         _ = try await f.coordinator.accessToken()
         let calls = await f.tokens.calls
         XCTAssertEqual(calls, [.exchange])
+    }
+
+    /// Ory Hydra answers `token_type: bearer`. What the integrator holds is the scheme to write
+    /// after `Authorization:`, in the spec's spelling (issue #77).
+    func testATokenTypeInTheProvidersSpellingIsHandedOutAsTheSchemeBearer() async throws {
+        let provider = TokenResponse(accessToken: "at-1", tokenType: "bearer", expiresIn: 300, refreshToken: "rt-1", idToken: idToken(), scope: "openid")
+        let f = try fixture(answers: [.success(provider)])
+
+        try await f.coordinator.login(scopes: ["openid"])
+
+        let token = try await f.coordinator.accessToken()
+        XCTAssertEqual(token.tokenType, "Bearer")
     }
 
     func testARejectedIdTokenPersistsNothingAndSettlesWhereItStarted() async throws {
@@ -222,6 +241,156 @@ final class SessionCoordinatorTests: XCTestCase {
         XCTAssertNil(stored)
         let claims = await f.coordinator.claims
         XCTAssertEqual(claims?.subject, "alice")
+    }
+
+    // MARK: - Resume: a redirect delivered to a cold-started process
+
+    /// What a previous process persisted before it was killed with the browser open. The flow's
+    /// clock here is the wall clock, so the request is aged from it.
+    private func restoredPending(maxAge: Int? = nil, age: TimeInterval = 60) -> PendingAuthorizationRequest {
+        AuthzKit.pending(state: "restored-state", createdAt: Date().addingTimeInterval(-age), maxAge: maxAge)
+    }
+
+    private func delivering(state: String = "restored-state", iss: String? = AuthzKit.issuer) -> ScriptedBrowser {
+        ScriptedBrowser(
+            onAuthorize: { _, _ in throw AssertionError("a cold-started process opens no browser") },
+            onAwait: { _ in .redirect(AuthzKit.redirect(answering: URL(string: "https://x.example.com/?state=\(state)")!, iss: iss)) }
+        )
+    }
+
+    private struct AssertionError: Error {
+        let message: String
+        init(_ message: String) { self.message = message }
+    }
+
+    private func resumeFails(_ f: Fixture, file: StaticString = #filePath, line: UInt = #line) async -> OAuthError? {
+        do {
+            try await f.coordinator.resumePendingLogin()
+            XCTFail("expected an error", file: file, line: line)
+            return nil
+        } catch {
+            return error as? OAuthError
+        }
+    }
+
+    func testARedirectDeliveredToAColdStartedProcessCompletesTheSignInFromTheRestoredRequest() async throws {
+        let f = try fixture(answers: [.success(response())], pending: restoredPending(maxAge: 300), browser: delivering())
+
+        // Authorizing on cold start, never unauthenticated (scenario 12).
+        try await f.flow.ensureRestored()
+        let restored = await f.flow.states.current
+        XCTAssertEqual(restored, .authorizing)
+        let resumed = try await f.coordinator.resumePendingLogin()
+
+        XCTAssertNotNil(resumed)
+        let state = await f.flow.states.current
+        XCTAssertEqual(state, .authenticated)
+        let stored = await f.store.refresh
+        XCTAssertEqual(stored, "rt-1")
+        let pending = await f.pendingStore.stored
+        XCTAssertNil(pending)
+        let claims = await f.coordinator.claims
+        XCTAssertEqual(claims?.subject, "alice")
+        let validations = await f.validator.calls
+        XCTAssertEqual(validations.map(\.nonce), ["nonce-1"], "the restored nonce, not a regenerated one")
+        let maxAges = await f.validator.maxAges
+        XCTAssertEqual(maxAges, [300], "max_age comes from the restored request: no caller is left to supply it")
+    }
+
+    func testAResumedSignInClearsThePendingRequestOnlyAfterTheGrantIsStored() async throws {
+        let store = MemoryCredentials()
+        await store.failSave(OAuthError.recoverable(.unlockRequired))
+        let f = try fixture(answers: [.success(response())], store: store, pending: restoredPending(), browser: delivering())
+
+        _ = await resumeFails(f)
+
+        // A kill (or a key that locks) between the exchange and the write finds the request
+        // still in place, not a session that looks as if it never started.
+        let pending = await f.pendingStore.stored
+        XCTAssertNotNil(pending)
+        let clears = await f.pendingStore.clearCount
+        XCTAssertEqual(clears, 0)
+        let stored = await store.refresh
+        XCTAssertNil(stored)
+    }
+
+    func testResumingWithNothingPendingIsANoOpWithNoTokenRequest() async throws {
+        let f = try fixture(answers: [], browser: delivering())
+
+        let resumed = try await f.coordinator.resumePendingLogin()
+
+        XCTAssertNil(resumed)
+        let calls = await f.tokens.calls
+        XCTAssertTrue(calls.isEmpty)
+        let state = await f.flow.states.current
+        XCTAssertEqual(state, .unauthenticated)
+    }
+
+    func testAResumedRedirectCarryingAnotherStateIsRefusedBeforeAnyTokenRequest() async throws {
+        let f = try fixture(answers: [.success(response())], pending: restoredPending(), browser: delivering(state: "forged"))
+
+        let error = await resumeFails(f)
+
+        XCTAssertEqual(error, .configuration(.stateMismatch))
+        let calls = await f.tokens.calls
+        XCTAssertTrue(calls.isEmpty)
+        let stored = await f.store.refresh
+        XCTAssertNil(stored)
+        let pending = await f.pendingStore.stored
+        XCTAssertNil(pending)
+        let state = await f.flow.states.current
+        XCTAssertEqual(state, .unauthenticated)
+    }
+
+    func testAResumedRedirectFromAnotherIssuerIsRefusedBeforeAnyTokenRequest() async throws {
+        let f = try fixture(answers: [.success(response())], pending: restoredPending(), browser: delivering(iss: "https://evil.example.com"))
+
+        let error = await resumeFails(f)
+
+        XCTAssertEqual(error, .configuration(.issuerMismatch(expected: Self.issuer, received: "https://evil.example.com")))
+        let calls = await f.tokens.calls
+        XCTAssertTrue(calls.isEmpty)
+    }
+
+    func testAResumedSignInWhoseIdTokenIsRefusedPersistsNothingAndClearsTheRequest() async throws {
+        let f = try fixture(answers: [.success(response())], pending: restoredPending(), browser: delivering())
+        await f.validator.reject(.nonce)
+
+        let error = await resumeFails(f)
+
+        XCTAssertEqual(error, .configuration(.idTokenRejected(.nonce)))
+        let stored = await f.store.refresh
+        XCTAssertNil(stored)
+        let claims = await f.coordinator.claims
+        XCTAssertNil(claims)
+        // The code is spent: a slot kept here could only be resumed into invalid_grant.
+        let pending = await f.pendingStore.stored
+        XCTAssertNil(pending)
+        let state = await f.flow.states.current
+        XCTAssertEqual(state, .unauthenticated)
+    }
+
+    func testAResumedSignInWithNoIdTokenIsRefusedWhenAValidatorIsPresent() async throws {
+        let bare = TokenResponse(accessToken: "at", tokenType: "Bearer", expiresIn: 300, refreshToken: "rt-1", idToken: nil, scope: "openid")
+        let f = try fixture(answers: [.success(bare)], pending: restoredPending(), browser: delivering())
+
+        let error = await resumeFails(f)
+
+        XCTAssertEqual(error, .configuration(.idTokenRejected(.malformed)))
+        let stored = await f.store.refresh
+        XCTAssertNil(stored)
+    }
+
+    func testAPendingRequestOlderThanTenMinutesIsNeverResumed() async throws {
+        let f = try fixture(answers: [.success(response())], pending: restoredPending(age: PendingAuthorizationRequest.maxAge + 5), browser: delivering())
+
+        let error = await resumeFails(f)
+
+        XCTAssertEqual(error, .recoverable(.pendingRequestExpired))
+        let calls = await f.tokens.calls
+        XCTAssertTrue(calls.isEmpty)
+        let pending = await f.pendingStore.stored
+        XCTAssertNil(pending)
     }
 
     // MARK: - Refresh

@@ -18,6 +18,8 @@ class ProviderConformance: XCTestCase {
     var browser: HttpLoginBrowser!
     let network = VirtualNetwork.shared
     let logger = RecordingLogger()
+    /// Where this test's DPoP key persists (scenario 33); one per test, so no key outlives its test.
+    let dpopKeyStore = InMemoryDpopKeyStore()
 
     override func setUp() async throws {
         guard let staged = try Provider.fromEnvironment() else {
@@ -58,7 +60,8 @@ class ProviderConformance: XCTestCase {
         redirectUri: String = Provider.redirectUri,
         scopes: Set<String>? = nil,
         protectedOrigins: Set<String> = [ResourceServer.origin],
-        pushedAuthorization: PushedAuthorization = .whenAdvertised
+        pushedAuthorization: PushedAuthorization = .whenAdvertised,
+        tokenBinding: TokenBinding = .bearer
     ) throws -> OAuthConfiguration {
         try OAuthConfiguration(
             issuer: endpoints == nil ? proxyIssuer : nil,
@@ -67,6 +70,7 @@ class ProviderConformance: XCTestCase {
             redirectUri: redirectUri,
             postLogoutRedirectUri: Provider.postLogoutRedirectUri,
             scopes: scopes ?? provider.scopes,
+            tokenBinding: tokenBinding,
             pushedAuthorization: pushedAuthorization,
             protectedOrigins: protectedOrigins,
             logger: logger,
@@ -75,10 +79,18 @@ class ProviderConformance: XCTestCase {
     }
 
     func client(_ configuration: OAuthConfiguration? = nil) async throws -> OAuthClient {
-        try await OAuthClient.create(
+        // A Mac host has no Secure Enclave this process may use and its Keychain refuses an unsigned
+        // one, and a simulator has no enclave at all: the key is the SDK's own `SecureEnclaveDpopKey`
+        // told there is none, so the tier is software on every machine the driver runs on and
+        // `requireHardware` has the same answer everywhere. The Secure Enclave tier is the device's.
+        let store = dpopKeyStore
+        return try await OAuthClient.create(
             configuration: try configuration ?? self.configuration(),
             browser: browser, credentialStore: InMemoryCredentialStore(), pendingStore: InMemoryPendingAuthorizationStore(),
-            metadataCache: MemoryMetadataCache(), jwksCache: MemoryJwksCache()
+            metadataCache: MemoryMetadataCache(), jwksCache: MemoryJwksCache(),
+            dpopKey: { requireHardware, logger in
+                SecureEnclaveDpopKey(store: store, requireHardware: requireHardware, logger: logger, secureEnclaveAvailable: false)
+            }
         )
     }
 

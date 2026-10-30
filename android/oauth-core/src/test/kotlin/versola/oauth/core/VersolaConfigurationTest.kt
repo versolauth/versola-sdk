@@ -10,7 +10,7 @@ import org.junit.Test
 class VersolaConfigurationTest {
 
     private fun configure(
-        issuer: String = "https://id.versola.kz",
+        issuer: String = "https://id.versola.io",
         clientId: String = "mobile-app",
         redirectUri: String = "https://app.example.com/oauth",
     ) = VersolaConfiguration.create(issuer, clientId, redirectUri)
@@ -72,7 +72,7 @@ class VersolaConfigurationTest {
 
     @Test
     fun `a non-https issuer is refused`() {
-        assertThrows(VersolaError.Configuration::class.java) { configure(issuer = "http://id.versola.kz") }
+        assertThrows(VersolaError.Configuration::class.java) { configure(issuer = "http://id.versola.io") }
     }
 
     @Test
@@ -85,8 +85,8 @@ class VersolaConfigurationTest {
     @Test
     fun `an issuer carrying a query or fragment is refused`() {
         // RFC 8414 §2: the well-known path is appended verbatim, so neither can be present.
-        assertThrows(VersolaError.Configuration::class.java) { configure(issuer = "https://id.versola.kz?x=1") }
-        assertThrows(VersolaError.Configuration::class.java) { configure(issuer = "https://id.versola.kz#x") }
+        assertThrows(VersolaError.Configuration::class.java) { configure(issuer = "https://id.versola.io?x=1") }
+        assertThrows(VersolaError.Configuration::class.java) { configure(issuer = "https://id.versola.io#x") }
     }
 
     @Test
@@ -98,7 +98,7 @@ class VersolaConfigurationTest {
     fun `a trailing slash on the issuer is normalised away`() {
         // Otherwise the well-known URL doubles the slash and the iss comparison fails against
         // a server that returns the canonical form.
-        assertEquals("https://id.versola.kz", configure(issuer = "https://id.versola.kz/").issuer)
+        assertEquals("https://id.versola.io", configure(issuer = "https://id.versola.io/").issuer)
     }
 
     @Test

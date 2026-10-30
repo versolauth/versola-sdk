@@ -20,7 +20,7 @@ import versola.oauth.core.VersolaError
  * process death while the tab is open the system restores it with the tab's result, and the
  * result is delivered to the dispatcher's buffer; finishing the authorization from there on a
  * cold start (scenario 12) is the facade's `awaitPendingRedirect()` call, which `OAuthClient`
- * does not wire yet (`spec/oauth-sdk-api.md` section 4).
+ * starts when it is created (`spec/oauth-sdk-api.md` section 4).
  *
  * Nothing credential-shaped passes through here: the extras are the authorization URI and the
  * redirect URI to intercept, both of which the browser sees anyway.

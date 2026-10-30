@@ -11,7 +11,7 @@ plugins {
 
 android {
     namespace = "versola.oauth.flutter"
-    compileSdk = 36
+    compileSdk = 37 // the repository's libraries compile against 37 (OkHttp 5.5.1); a dependent must too
 
     defaultConfig {
         // The SDK's floor (android/oauth): Keystore-wrapped stores and Auth Tab need API 26.

@@ -14,8 +14,8 @@ import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-private const val TOKEN_ENDPOINT = "https://id.versola.kz/token"
-private const val EDGE_RESOURCE = "https://versola.kz/resources/42/items"
+private const val TOKEN_ENDPOINT = "https://id.versola.io/token"
+private const val EDGE_RESOURCE = "https://versola.io/resources/42/items"
 
 class DpopProofFactoryTest {
 
@@ -74,9 +74,9 @@ class DpopProofFactoryTest {
         // claim, letting a proof minted for one validate a request for the other. The server
         // normalises from the raw path for exactly this reason.
         runTest {
-            val proof = factory().proof("GET", "https://versola.kz/resources/a%2Fb")
+            val proof = factory().proof("GET", "https://versola.io/resources/a%2Fb")
 
-            assertEquals("https://versola.kz/resources/a%2Fb", parse(proof).jwtClaimsSet.getStringClaim("htu"))
+            assertEquals("https://versola.io/resources/a%2Fb", parse(proof).jwtClaimsSet.getStringClaim("htu"))
         }
     }
 
@@ -161,9 +161,9 @@ class DpopProofFactoryTest {
         // A JSON filter in a query string is an ordinary REST idiom, and `{`, `}`, `|` and
         // `^` are characters OkHttp does not percent-encode there. java.net.URI refuses them;
         // the proof must not, and htu strips the query regardless.
-        val jwt = parse(factory().proof("GET", """https://versola.kz/resources/42/search?filter={"a":1}|x^y#frag"""))
+        val jwt = parse(factory().proof("GET", """https://versola.io/resources/42/search?filter={"a":1}|x^y#frag"""))
 
-        assertEquals("https://versola.kz/resources/42/search", jwt.jwtClaimsSet.getStringClaim("htu"))
+        assertEquals("https://versola.io/resources/42/search", jwt.jwtClaimsSet.getStringClaim("htu"))
     }
 
     @Test

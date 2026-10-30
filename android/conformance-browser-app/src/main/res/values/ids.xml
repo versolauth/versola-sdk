@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <item name="status" type="id" />
+    <item name="login" type="id" />
+    <item name="logout" type="id" />
+    <item name="token" type="id" />
+    <item name="loginEphemeral" type="id" />
+    <item name="refresh" type="id" />
+</resources>

@@ -74,13 +74,13 @@ tenant here, and "documented" there means documented in that file.
 
 | Capability | Keycloak 26.x | Ory Hydra (self-hosted and Ory Network) | Auth0 | Microsoft Entra ID | Okta | Amazon Cognito | Versola |
 |---|---|---|---|---|---|---|---|
-| Discovery URL shape | `{base}/realms/{realm}/.well-known/openid-configuration`; issuer `{base}/realms/{realm}` (documented [1]) | `{issuer}/.well-known/openid-configuration`; Ory Network `{slug}.projects.oryapis.com`; custom-domain shape not found (documented [23]) | `https://{domain}/.well-known/openid-configuration`; issuer `https://{domain}/` with trailing slash (documented [46]; slash reported [47]) | `https://login.microsoftonline.com/{tenant}/v2.0/.well-known/openid-configuration` (documented [73]) | Org AS `https://{org}/.well-known/openid-configuration`; custom AS under `/oauth2/{asId}/` (documented [93]) | `{issuer}/.well-known/openid-configuration`; OAuth endpoints on the separate user-pool domain (documented [112]) | `{issuer}/.well-known/openid-configuration` (documented, issue #1 section 2.1); issuer `https://id.versola.kz` in the README example |
+| Discovery URL shape | `{base}/realms/{realm}/.well-known/openid-configuration`; issuer `{base}/realms/{realm}` (documented [1]) | `{issuer}/.well-known/openid-configuration`; Ory Network `{slug}.projects.oryapis.com`; custom-domain shape not found (documented [23]) | `https://{domain}/.well-known/openid-configuration`; issuer `https://{domain}/` with trailing slash (documented [46]; slash reported [47]) | `https://login.microsoftonline.com/{tenant}/v2.0/.well-known/openid-configuration` (documented [73]) | Org AS `https://{org}/.well-known/openid-configuration`; custom AS under `/oauth2/{asId}/` (documented [93]) | `{issuer}/.well-known/openid-configuration`; OAuth endpoints on the separate user-pool domain (documented [112]) | `{issuer}/.well-known/openid-configuration` (documented, issue #1 section 2.1); issuer `https://id.versola.io` in the README example |
 | Public client + PKCE | Yes, client authentication off (documented [2, 3]) | Yes, `token_endpoint_auth_method` `none` (documented [24, 25]) | Yes, application type Native (documented [49, 50]) | Yes, mobile and desktop platform (documented [75, 76, 77]) | Yes, Native app, client auth None requires PKCE (reported [95]) | Yes, app client without secret (documented [113]) | Standard tenant only; `fapi2` tenant refuses public clients at `/token`, `/revoke`, `/par`, `/introspect` (documented) |
 | S256 enforced | Per-client method setting and `pkce-enforcer` executor; option list from 21.0.2 (documented [2, 4]; list reported [5]) | `S256` only; enforcement is server-wide config, default not found (documented [24, 27]) | `S256` only, challenge required (reported [52]); a discovery sample also lists `plain` (reported [53], conflicts) | `plain` and `S256` both accepted, not enforced for native (documented [75]) | "Always S256" (reported [95]); `plain` rejected: not found | `S256` only, PKCE itself optional (documented [114, 115]) | Mandatory, `S256`: `AuthorizeRequestParser` refuses a request without a code challenge (documented, issue #1 section 2) |
 | Client secret for native apps | Not required (documented [3]) | Not required; CLI default is `client_secret_basic`, set `none` explicitly (documented [26]) | Not needed for Native; whether one is allowed: not found (documented [50]) | Must not be used by public clients (documented [75]); `none` absent from discovery's auth methods | Auth None is the default; whether a secret is allowed: not found (reported [95]) | Client must have no secret; fixed at creation (documented [113]) | None for a public client on a `standard` tenant; `fapi2` takes confidential clients only (documented) |
 | RFC 9207 `iss` | Supported since 23.0; per-client opt-out reported; `authorization_response_iss_parameter_supported: true` and `iss` on the redirect (verified, B4) | Not advertised by v26.2.0 OSS: no `authorization_response_iss_parameter_supported`, no `iss` on the redirect (verified, B4) | Tenant setting "Include Issuer in Authorization Responses"; default not found (documented [54]) | Not found | Not found | Not found | Always on the redirect, success and error; discovery advertises `authorization_response_iss_parameter_supported: true` (documented) |
 | PAR | Supported, feature `par:v1` on by default; `…/protocol/openid-connect/ext/par/request` advertised, public client accepted (verified, B4) | Not advertised by v26.2.0 OSS (verified, B4) | `/oauth/par`; tenant toggle off by default, Enterprise plan plus add-on; public apps reportedly unsupported (documented [56, 57]; limitation reported) | Not found | `/par` exists and discovery lists it; use by public clients not found (reported [98]) | Not found | `/par` exists and is advertised; required for `fapi2`; per-client `requirePushedAuthorizationRequests`; discovery says `request_uri_parameter_supported: false` (documented) |
-| DPoP | Supported since 26.4, per-client "Require DPoP bound tokens"; `dpop_signing_alg_values_supported` advertised (ES/RS/PS 256–512, EdDSA) (verified, B4; DPoP flow not driven) | Not advertised by v26.2.0 OSS (verified, B4) | Supported for public clients, server nonce required; algorithms beyond ES256 examples not found; plan not confirmed (documented [58]) | Not found at the v2.0 token endpoint; only `Bearer` (documented [75]); MSAL PoP needs a broker (reported [80]) | Per-app setting, nonce flow; ES256 in the reported algorithm list; native clients not found (reported [99, 100]) | Not found | `ES256` and `PS256` advertised; client needs `dpopBoundAccessTokens = true` (and `accessTokenTtl >= 3600s`); nonce when the tenant sets `requireDpopNonce` (default false) (documented) |
+| DPoP | Supported since 26.4, per-client "Require DPoP bound tokens"; `dpop_signing_alg_values_supported` advertised (ES/RS/PS 256–512, EdDSA) (verified, B4; the DPoP flow is driven end to end by scenario 33) | Not advertised by v26.2.0 OSS (verified, B4) | Supported for public clients, server nonce required; algorithms beyond ES256 examples not found; plan not confirmed (documented [58]) | Not found at the v2.0 token endpoint; only `Bearer` (documented [75]); MSAL PoP needs a broker (reported [80]) | Per-app setting, nonce flow; ES256 in the reported algorithm list; native clients not found (reported [99, 100]) | Not found | `ES256` and `PS256` advertised; client needs `dpopBoundAccessTokens = true` (and `accessTokenTtl >= 3600s`); nonce when the tenant sets `requireDpopNonce` (default false) (documented) |
 | Refresh token for public clients, and scope | Returned by default from most flows; `offline_access` yields an offline token (documented [3, 15]) | `offline_access` (or `offline`) and the consent app must grant it; issued for `openid profile offline_access`, not for `openid profile` (verified, B4; documented [24, 32]) | `offline_access` plus "Allow Offline Access" on the application and the API (documented [55]) | `offline_access` required (documented [82]) | `offline_access` on `/authorize`; mobile apps default to persistent tokens (reported [101]) | Always issued for the code grant; `offline_access` has no effect (documented [114, 116]) | Scope needed: not found. Expiry fixed at the code exchange, default 180 days, never extended (documented) |
 | Refresh rotation and reuse detection | Realm "Revoke Refresh Token" (`revokeRefreshToken`, `refreshTokenMaxReuse`); default not stated; with it on, reuse is 400 `invalid_grant` and revokes the session (verified, B4) | Always single-use; reuse revokes the consent chain; grace period default 0 s, at most 5 min (documented [24, 31, 32]) | Opt-in per app; reuse invalidates the family; overlap window default 0 (reported [60, 62]) | New token each use, old one not revoked; no reuse detection documented (documented [83]) | `ROTATE` or `STATIC`, grace 30 s (0 to 60); reuse invalidates the latest token (reported [101]) | Optional per app client, grace up to 60 s; reuse detection after grace not found (documented [114, 116]) | DPoP: renewed in place, same token echoed, no rotation. Bearer: rotation, replay revokes the family; `Idempotency-Key` honoured (documented; scenarios 09, 10, 11) |
 | Revocation endpoint (RFC 7009) | `/revoke`; a public client sends `client_id` only (verified, B4) | `/oauth2/revoke`; a public client sends `client_id` only, 200, and the revoked refresh token is then 400 `invalid_grant` (verified, B4) | `/oauth/revoke` with `client_id` and `token` (documented [51]) | No RFC 7009 endpoint documented (documented [83]; Q&A unverified [85]) | `/revoke`, public clients send `client_id` only (reported [103]) | `/oauth2/revoke`, `client_id` required for public clients, refresh tokens only (documented [118]) | `/revoke` exists and reads no proof; public-client call on a `standard` tenant not found (documented) |
@@ -122,7 +122,7 @@ tenant and credentials and run on demand. All of it feeds scenario 24 and the re
 ### Keycloak
 
 Verified in B4 against `quay.io/keycloak/keycloak:26.4` from
-`conformance/providers/keycloak/` (scenarios 24 to 32 green, `android/conformance-oauth`):
+`conformance/providers/keycloak/` (scenarios 24 to 33 green, `android/conformance-oauth`):
 
 - Image pinned to `26.4`; `start-dev --import-realm` with `realm.json` mounted at
   `/opt/keycloak/data/import`, `KC_BOOTSTRAP_ADMIN_USERNAME` / `_PASSWORD` for the first admin,
@@ -130,7 +130,8 @@ Verified in B4 against `quay.io/keycloak/keycloak:26.4` from
   runs at start and leaves an existing realm alone (`down` before re-importing).
 - Realm-import fields that work: `publicClient: true`, `standardFlowEnabled`, `redirectUris`,
   `attributes."pkce.code.challenge.method": "S256"`, `attributes."post.logout.redirect.uris"`,
-  `attributes."use.refresh.tokens": "false"` and `attributes."access.token.lifespan"` (per client),
+  `attributes."use.refresh.tokens": "false"`, `attributes."access.token.lifespan"` and
+  `attributes."dpop.bound.access.tokens": "true"` ("Require DPoP bound tokens", per client),
   realm `revokeRefreshToken: true` with `refreshTokenMaxReuse: 0`, `sslRequired: "none"`. There
   is no `openid` client scope to list (it is implicit; listing it logs a warning and is ignored).
 - Live discovery: `authorization_response_iss_parameter_supported: true`,
@@ -160,12 +161,31 @@ Verified in B4 against `quay.io/keycloak/keycloak:26.4` from
   redirect_uri", before any browser.
 - The token response carries no `Date` header, so the SDK's server-time skew path does not
   engage against Keycloak; the ID token's `iat`/`exp` are checked against the device clock.
+- DPoP (scenario 33, client `conformance-app-dpop` with `dpop.bound.access.tokens`): the token
+  request needs a proof, and without one (a Bearer-configured SDK) is 400 with no token. A proof
+  from the right key gives `token_type: DPoP` and a JWT access token (RS256, `iss` the request's
+  origin, `exp`) whose `cnf.jkt` is the proof key's RFC 7638 thumbprint; `dpop_jkt` on the PAR
+  request is accepted. The refresh token is bound to the key too: a refresh grant with no proof,
+  or with a proof from another key, is 400, and neither spends the token (the SDK's refresh with
+  the right key still works afterwards). Observed on the success path (PAR, token, JWKS): Keycloak
+  26.4 sent no `DPoP-Nonce` header, and a proof carrying a nonce it never issued (the harness
+  answers the first token request with `use_dpop_nonce` and the retry goes to Keycloak) is accepted,
+  so Keycloak neither demands nor checks one; the SDK's retry is proven against the harness's
+  challenge and the resource server's (`DpopResourceServer`), not against a provider that issues
+  nonces. The authorization request's `dpop_jkt` is enforced: a token request whose proof is from
+  another key is 400 `invalid_request` "DPoP Proof public key thumbprint does not match dpop_jkt".
+  UserInfo needs a proof for a bound token (no proof, Bearer, or another key's proof is 401; the
+  SDK's key is 200). Revocation (`/revoke`) is taken without a proof for a DPoP-bound refresh
+  token (200), and the token is refused with `invalid_grant` afterwards; the SDK sends none, as
+  documented. Keycloak's non-browser logout with a refresh token, which the documentation says
+  needs a proof, is not what the SDK calls (it uses `/revoke` and the browser's end-session).
 
 ### Ory Hydra
 
 Verified in B4 against `oryd/hydra:v26.2.0` with `oryd/hydra-login-consent-node:v26.2.0` from
-`conformance/providers/hydra/` (scenarios 24 to 32, `android/conformance-oauth`: 25 of 27 tests
-green, the two PAR tests skipped because no PAR endpoint is advertised):
+`conformance/providers/hydra/` (scenarios 24 to 33, `android/conformance-oauth`: 25 of 27 tests
+green for 24 to 32, the two PAR tests skipped because no PAR endpoint is advertised; the fourteen tests
+of scenario 33 are skipped because no `dpop_signing_alg_values_supported` is advertised):
 
 - Stack as the quickstart's: `hydra serve all --dev` (plain HTTP, non-secure cookies) with
   `DSN=memory` (no migration step, nothing survives a restart), the admin API on 4445 for the

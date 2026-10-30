@@ -20,11 +20,15 @@ package struct AuthorizationGrant: Sendable, CustomStringConvertible {
     package let state: String
     /// RFC 9207 `iss` off the redirect, already matched; a back channel may require it.
     package let iss: String?
+    /// The `max_age` the request carried, restored from the pending request. A login finished in
+    /// another process than the one that asked has no caller to remember it, and the ID token's
+    /// `auth_time` check must not depend on there being one.
+    package let maxAge: Int?
 
     package init(
         code: String, codeVerifier: String, redirectUri: String, resources: [String] = [],
         extensions: [String: String] = [:], nonce: String = "", scopes: [String] = [],
-        state: String = "", iss: String? = nil
+        state: String = "", iss: String? = nil, maxAge: Int? = nil
     ) {
         self.code = code
         self.codeVerifier = codeVerifier
@@ -34,6 +38,7 @@ package struct AuthorizationGrant: Sendable, CustomStringConvertible {
         self.nonce = nonce
         self.scopes = scopes
         self.state = state
+        self.maxAge = maxAge
         self.iss = iss
     }
 

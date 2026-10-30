@@ -12,7 +12,7 @@ import org.junit.Test
 class AuthorizationRequestTest {
 
     private val configuration = VersolaConfiguration.create(
-        issuer = "https://id.versola.kz",
+        issuer = "https://id.versola.io",
         clientId = "mobile-app",
         redirectUri = "https://app.example.com/oauth",
     )
@@ -27,7 +27,7 @@ class AuthorizationRequestTest {
     fun `carries what the authorization endpoint requires`() {
         val request = AuthorizationRequest.create(configuration, setOf("openid", "profile"))
 
-        val parameters = query(request.toUri("https://id.versola.kz/authorize"))
+        val parameters = query(request.toUri("https://id.versola.io/authorize"))
 
         assertEquals("code", parameters["response_type"])
         assertEquals("mobile-app", parameters["client_id"])
@@ -44,7 +44,7 @@ class AuthorizationRequestTest {
         // these two ever disagree the server answers invalid_grant and nothing says why.
         val request = AuthorizationRequest.create(configuration, setOf("openid"))
 
-        val challenge = query(request.toUri("https://id.versola.kz/authorize"))["code_challenge"]
+        val challenge = query(request.toUri("https://id.versola.io/authorize"))["code_challenge"]
 
         assertEquals(request.codeVerifier.challengeS256(), challenge)
     }
@@ -68,7 +68,7 @@ class AuthorizationRequestTest {
             acrValues = listOf("urn:mace:incommon:iap:silver", "phr"),
         )
 
-        val uri = request.toUri("https://id.versola.kz/authorize")
+        val uri = request.toUri("https://id.versola.io/authorize")
 
         assertTrue(uri.contains("scope=openid%20profile"))
         assertFalse(uri.contains('+'))
@@ -78,7 +78,7 @@ class AuthorizationRequestTest {
     fun `optional parameters are omitted rather than sent empty`() {
         val request = AuthorizationRequest.create(configuration, setOf("openid"))
 
-        val parameters = query(request.toUri("https://id.versola.kz/authorize"))
+        val parameters = query(request.toUri("https://id.versola.io/authorize"))
 
         assertNull(parameters["acr_values"])
         assertNull(parameters["max_age"])
@@ -93,7 +93,7 @@ class AuthorizationRequestTest {
         val thumbprint = "0ZcOCORZNYy-DWpqq30jZyJGHTN0d2HglBV3uiguA4I"
         val request = AuthorizationRequest.create(configuration, setOf("openid"), dpopJkt = thumbprint)
 
-        val uri = request.toUri("https://id.versola.kz/authorize")
+        val uri = request.toUri("https://id.versola.io/authorize")
 
         assertEquals(thumbprint, query(uri)["dpop_jkt"])
         assertTrue(uri.contains("dpop_jkt=$thumbprint"))
@@ -108,7 +108,7 @@ class AuthorizationRequestTest {
             maxAge = 300,
         )
 
-        val parameters = query(request.toUri("https://id.versola.kz/authorize"))
+        val parameters = query(request.toUri("https://id.versola.io/authorize"))
 
         assertEquals("phr", parameters["acr_values"])
         assertEquals("300", parameters["max_age"])
@@ -118,7 +118,7 @@ class AuthorizationRequestTest {
     fun `an authorization endpoint that already has a query keeps it`() {
         val request = AuthorizationRequest.create(configuration, setOf("openid"))
 
-        val uri = request.toUri("https://id.versola.kz/authorize?tenant=acme")
+        val uri = request.toUri("https://id.versola.io/authorize?tenant=acme")
 
         assertTrue(uri.contains("?tenant=acme&response_type=code"))
     }
@@ -172,7 +172,7 @@ class AuthorizationRequestTest {
             ),
         )
 
-        val uri = request.toUri("https://id.versola.kz/authorize")
+        val uri = request.toUri("https://id.versola.io/authorize")
 
         assertEquals(
             listOf(
@@ -197,7 +197,7 @@ class AuthorizationRequestTest {
             parameters = AuthorizationParameters(uiLocales = listOf("kk-KZ", "ru", "en")),
         )
 
-        val uri = request.toUri("https://id.versola.kz/authorize")
+        val uri = request.toUri("https://id.versola.io/authorize")
 
         assertTrue(uri.contains("ui_locales=kk-KZ%20ru%20en"))
         assertFalse(uri.contains('+'))
@@ -213,7 +213,7 @@ class AuthorizationRequestTest {
             ),
         )
 
-        val uri = request.toUri("https://id.versola.kz/authorize")
+        val uri = request.toUri("https://id.versola.io/authorize")
 
         val resources = URI(uri).rawQuery.split('&')
             .filter { it.startsWith("resource=") }
@@ -233,7 +233,7 @@ class AuthorizationRequestTest {
             ),
         )
 
-        val uri = request.toUri("https://id.versola.kz/authorize")
+        val uri = request.toUri("https://id.versola.io/authorize")
 
         assertEquals(listOf("resource", "zeta", "alpha"), names(uri).takeLast(3))
         assertTrue(uri.contains("zeta=a%20b%26c"))
@@ -244,7 +244,7 @@ class AuthorizationRequestTest {
     fun `no login parameters leaves the query exactly as it was`() {
         val request = AuthorizationRequest.create(configuration, setOf("openid"))
 
-        val parameters = query(request.toUri("https://id.versola.kz/authorize"))
+        val parameters = query(request.toUri("https://id.versola.io/authorize"))
 
         for (name in listOf("prompt", "login_hint", "ui_locales", "resource")) assertNull(name, parameters[name])
     }
@@ -307,7 +307,7 @@ class AuthorizationRequestTest {
         val grant = AuthorizationResponseValidator.validate(
             redirect = "https://app.example.com/oauth?code=c&state=${pending.state}",
             pending = pending,
-            issuer = "https://id.versola.kz",
+            issuer = "https://id.versola.io",
             issParameterSupported = false,
         )
 

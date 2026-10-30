@@ -99,8 +99,14 @@ cd example && flutter build ios --no-codesign   # and on iOS
   `pigeon` and anything else); `pubspec.lock` is gitignored (`.gitignore`), so the constraints are
   what makes a build repeatable. A new dependency needs approval, with licence and
   maintenance noted (`security.md`).
-- Dependabot watches `pub` under `/flutter/*`; minors arrive grouped, majors separately
+- Dependabot watches `pub` under `/flutter/versola_oauth` (with `pigeon` ignored: a bump comes with
+  the regeneration) and the example's Gradle build; minors arrive grouped, majors separately
   (`ci-release.md`).
+- `flutter.yml` runs the commands above on every PR that touches the plugin or the facades it
+  calls: format, analyze, `flutter test`, the regenerate-and-diff check for the Pigeon files, the
+  Kotlin and Swift glue tests and both example builds. The example's AGP and Kotlin plugin versions
+  equal `android/build.gradle.kts` (an included build cannot load two); when Dependabot bumps the
+  latter, that workflow fails on the PR until `example/android/settings.gradle.kts` follows.
 - Publishing to pub.dev from the monorepo subdirectory is dormant: the `pub-dev` job in
   `release.yml` is `if: false` until credentials exist. Do not run `flutter pub publish`, do not
   remove the dormancy, and do not add a `publish_to` that would enable it by accident.
