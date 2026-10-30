@@ -417,6 +417,7 @@ final class OAuthClientTests: XCTestCase {
         let (client, cold) = try await coldStartedClient(redirect: "\(Self.redirect)?code=the-code&state=cold-state&iss=\(Self.issuer)")
         let before = await client.sessionState
         XCTAssertEqual(before, .authorizing)
+        for _ in 0..<200_000 where cold.awaited == 0 { await Task.yield() }
 
         // The redirect never comes. Logout (with the provider's end-session step, which needs the
         // flow's gate) must return rather than wait out the request's ten minutes.
@@ -435,10 +436,171 @@ final class OAuthClientTests: XCTestCase {
 
     func testForgettingAllClientsEndsTheResumesTheyStarted() async throws {
         let (_, cold) = try await coldStartedClient(redirect: "\(Self.redirect)?code=the-code&state=cold-state&iss=\(Self.issuer)")
+        // Cancelled before it ever reached the browser, a resume never waits and `cancelled` stays 0:
+        // the test must start from a resume that is waiting (a race this test had on its own).
+        for _ in 0..<200_000 where cold.awaited == 0 { await Task.yield() }
 
         await OAuthClient.forgetAll()
 
         XCTAssertEqual(cold.cancelled, 1, "a waiting resume must not outlive the client that was forgotten")
+    }
+
+    /// The first sheet is torn down by the system while the app is in the background; the second
+    /// answers like the ordinary fake.
+    actor SystemCancelsOnce: BrowserAuthorizationSession {
+        private let answering: FakeBrowser
+        private var cancelled = false
+        init(_ answering: FakeBrowser) { self.answering = answering }
+        func authorize(_ uri: URL, options: BrowserSessionOptions) async throws -> BrowserOutcome {
+            if !cancelled {
+                cancelled = true
+                return .systemCancelled
+            }
+            return try await answering.authorize(uri, options: options)
+        }
+        func awaitPendingRedirect() async throws -> BrowserOutcome { throw CancellationError() }
+    }
+
+    /// A system cancel keeps the pending request for a resume the app may never start. A new
+    /// `login()` does not wait out its ten minutes: it supersedes it.
+    func testLoginAfterASystemCancelSupersedesTheLeftoverRequestInsteadOfBeingRefusedForTenMinutes() async throws {
+        let client = try await OAuthClient.create(configuration: try configuration(), browser: SystemCancelsOnce(browser), credentialStore: InMemoryCredentialStore(), pendingStore: InMemoryPendingAuthorizationStore())
+
+        do {
+            try await client.login()
+            XCTFail("expected systemCancelled")
+        } catch {
+            XCTAssertEqual(error as? OAuthError, .recoverable(.systemCancelled))
+        }
+        let between = await client.sessionState
+        XCTAssertEqual(between, .authorizing, "kept for a resume")
+
+        try await client.login()
+
+        let after = await client.sessionState
+        XCTAssertEqual(after, .authenticated)
+        let opened = await browser.opened
+        XCTAssertEqual(opened.count, 1, "the second sheet opened and signed in")
+    }
+
+    // MARK: - login() over the resume a cold start began
+
+    /// The browser of a process that was cold-started mid-browser and whose user then tapped
+    /// "Sign in" instead of waiting for the old sheet's redirect: the resume `create` started
+    /// waits for a redirect that will not come, and the live sheet answers like the ordinary fake.
+    /// With `staleRedirectFirst` the live sheet's first answer is the old request's redirect, the
+    /// one its abandoned tab would still deliver.
+    final class ResumeWaitingThenLiveBrowser: BrowserAuthorizationSession, Sendable {
+        private let live: FakeBrowser
+        private let staleRedirectFirst: URL?
+        private let state = OSAllocatedUnfairLock(initialState: (awaited: 0, cancelled: 0, afterStale: BrowserOutcome?.none))
+        private let gate = AsyncStream.makeStream(of: Void.self)
+        init(_ live: FakeBrowser, staleRedirectFirst: URL? = nil) {
+            self.live = live
+            self.staleRedirectFirst = staleRedirectFirst
+        }
+        var awaited: Int { state.withLock { $0.awaited } }
+        var cancelled: Int { state.withLock { $0.cancelled } }
+        func authorize(_ uri: URL, options: BrowserSessionOptions) async throws -> BrowserOutcome {
+            let answer = try await live.authorize(uri, options: options)
+            guard let stale = staleRedirectFirst else { return answer }
+            state.withLock { $0.afterStale = answer }
+            return .redirect(stale)
+        }
+        func awaitPendingRedirect() async throws -> BrowserOutcome {
+            if let next = state.withLock({ s -> BrowserOutcome? in defer { s.afterStale = nil }; return s.afterStale }) { return next }
+            state.withLock { $0.awaited += 1 }
+            for await _ in gate.stream { break }
+            state.withLock { $0.cancelled += 1 }
+            throw CancellationError()
+        }
+    }
+
+    private func awaitingColdStart(staleRedirectFirst: URL? = nil) async throws -> (OAuthClient, ResumeWaitingThenLiveBrowser) {
+        let pendingStore = InMemoryPendingAuthorizationStore()
+        try await pendingStore.save(PendingAuthorizationRequest(
+            state: "cold-state", nonce: "cold-nonce", codeVerifier: String(repeating: "v", count: 43),
+            scopes: ["openid"], redirectUri: Self.redirect, createdAt: Date().addingTimeInterval(-30)
+        ))
+        let cold = ResumeWaitingThenLiveBrowser(browser, staleRedirectFirst: staleRedirectFirst)
+        let client = try await OAuthClient.create(configuration: try configuration(), browser: cold, credentialStore: InMemoryCredentialStore(), pendingStore: pendingStore)
+        // The resume `create` started is waiting for its redirect.
+        for _ in 0..<200_000 where cold.awaited == 0 { await Task.yield() }
+        XCTAssertEqual(cold.awaited, 1, "the cold-start resume is waiting for a redirect")
+        return (client, cold)
+    }
+
+    /// The redirect of a cold-started resume may never come (the user abandoned that sheet and
+    /// came back to the app itself). `login()` ends that wait and supersedes the request instead
+    /// of being refused for the rest of its ten minutes.
+    func testLoginAfterAColdStartPreEmptsTheResumeThatOnlyWaitsForItsRedirect() async throws {
+        let (client, cold) = try await awaitingColdStart()
+        let before = await client.sessionState
+        XCTAssertEqual(before, .authorizing)
+
+        try await client.login()
+
+        let after = await client.sessionState
+        XCTAssertEqual(after, .authenticated)
+        XCTAssertEqual(cold.cancelled, 1, "the waiting resume was ended, not left holding the gate")
+        XCTAssertEqual(tokenRequests(), 1, "one exchange: the new login's")
+        let opened = await browser.opened
+        XCTAssertEqual(opened.count, 1)
+    }
+
+    func testStepUpAfterAColdStartPreEmptsTheWaitingResumeToo() async throws {
+        let (client, cold) = try await awaitingColdStart()
+
+        try await client.stepUp(acrValues: ["urn:example:acr"], maxAge: nil)
+
+        XCTAssertEqual(cold.cancelled, 1)
+        let after = await client.sessionState
+        XCTAssertEqual(after, .authenticated)
+    }
+
+    func testARedirectTheSupersededColdStartRequestStillDeliversIsSteppedOverNotAMismatch() async throws {
+        let late = URL(string: "\(Self.redirect)?code=the-old-code&state=cold-state&iss=\(Self.issuer)")!
+        let (client, _) = try await awaitingColdStart(staleRedirectFirst: late)
+
+        try await client.login()
+
+        let after = await client.sessionState
+        XCTAssertEqual(after, .authenticated, "the old request's redirect did not fail the new login as a state mismatch")
+        XCTAssertEqual(tokenRequests(), 1)
+    }
+
+    /// The other half: a browser that is really open (not a resume waiting for a redirect) still
+    /// refuses a second `login()`.
+    func testALoginWhoseSheetIsOpenStillRefusesASecondLogin() async throws {
+        let gated = GatedFakeBrowser(browser)
+        let client = try await OAuthClient.create(configuration: try configuration(), browser: gated, credentialStore: InMemoryCredentialStore(), pendingStore: InMemoryPendingAuthorizationStore())
+        let first = Task { try await client.login() }
+        for _ in 0..<200_000 where await gated.opened == 0 { await Task.yield() }
+
+        do {
+            try await client.login()
+            XCTFail("a second login was admitted over an open sheet")
+        } catch let error as OAuthError {
+            guard case .configuration(.invalidConfiguration) = error else { return XCTFail("\(error)") }
+        }
+
+        await gated.open()
+        try await first.value
+    }
+
+    /// Holds the sheet open until the test lets it answer.
+    actor GatedFakeBrowser: BrowserAuthorizationSession {
+        private let live: FakeBrowser
+        private(set) var opened = 0
+        private var waiting: CheckedContinuation<Void, Never>?
+        init(_ live: FakeBrowser) { self.live = live }
+        func authorize(_ uri: URL, options: BrowserSessionOptions) async throws -> BrowserOutcome {
+            opened += 1
+            await withCheckedContinuation { waiting = $0 }
+            return try await live.authorize(uri, options: options)
+        }
+        func awaitPendingRedirect() async throws -> BrowserOutcome { throw CancellationError() }
+        func open() { waiting?.resume(); waiting = nil }
     }
 
     func testResumePendingAuthorizationRefusesARedirectWithAnotherStateBeforeAnyTokenRequest() async throws {

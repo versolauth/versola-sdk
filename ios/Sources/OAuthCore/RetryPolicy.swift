@@ -248,6 +248,12 @@ package actor RetryBudget {
         if pauseDepth == 0 { pausedFor += clock.uptime() - pauseStartedAt }
     }
 
+    /// What is left of the wall-clock budget, the user's time in the browser not counted: the
+    /// most one more request of this operation may take (`spec/retry-policy.md`, `totalBudget`).
+    package func remaining() -> TimeInterval {
+        max(0, policy.totalBudget - elapsed())
+    }
+
     private func elapsed() -> TimeInterval {
         let now = clock.uptime()
         let pausedNow = pauseDepth > 0 ? now - pauseStartedAt : 0

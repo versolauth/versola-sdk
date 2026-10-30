@@ -56,7 +56,7 @@ construction, never behind a login screen.
 | `endpoints` | `ProviderEndpoints` | none | for a provider without discovery: `authorizationEndpoint`, `tokenEndpoint`, `issuer`, optional `jwksUri`, `userinfoEndpoint`, `revocationEndpoint`, `endSessionEndpoint`, `pushedAuthorizationRequestEndpoint`, `idTokenSigningAlgValuesSupported`; all `https`; mutually exclusive with discovery, and the SDK then treats unlisted capabilities as absent |
 | `clientId` | string | required | non-blank |
 | `redirectUri` | URI | required | absolute, no fragment; `https` (verified link, preferred), loopback, or a private-use scheme (accepted with a logged warning on every `create()`); cleartext `http` to a non-loopback host refused |
-| `postLogoutRedirectUri` | URI | none | same rules as `redirectUri`; when absent `post_logout_redirect_uri` is not sent. Android, under Auth Tab: the tab intercepts this URI, so an `https` host must be a verified App Link of the app like `redirectUri`'s, or the tab closes unverified and `logout()` reports `sessionEnded = false` (a Custom Tab would have shown the page instead) |
+| `postLogoutRedirectUri` | URI | none | same rules as `redirectUri`; when absent `post_logout_redirect_uri` is not sent, and the end-session page is still opened: the provider's session ends, nothing can come back, `sessionEnded` is `false` and the user dismisses the page (iOS has to give `ASWebAuthenticationSession` a callback, so it matches the login `redirectUri`, which the provider is not told of). Android, under Auth Tab: the tab intercepts this URI, so an `https` host must be a verified App Link of the app like `redirectUri`'s, or the tab closes unverified and `logout()` reports `sessionEnded = false` (a Custom Tab would have shown the page instead) |
 | `scopes` | set of strings | `{"openid"}` | the default scope set for `login()`; `openid` is added if missing (this is an OIDC SDK); nothing else is added silently, including `offline_access` (see section 8) |
 | `tokenBinding` | `Bearer` or `Dpop(required: Boolean = false)` | `Bearer` | section 9 |
 | `pushedAuthorization` | `Never`, `WhenAdvertised`, `Required` | `WhenAdvertised` | section 7 |
@@ -66,7 +66,7 @@ construction, never behind a login screen.
 | `unlockPolicy` | `UnlockPolicy` | `None` | `state-machine.md`'s `Locked` state is reachable only under `OnAppUnlock` |
 | `clockSkewTolerance` | duration | 60 s | tolerance for `exp`, `iat`, `nbf` in ID-token validation; maximum 5 minutes |
 | `logger` | `Logger` | platform default | section 12 |
-| `httpClient` | platform HTTP client | platform default | OkHttp `OkHttpClient` / `URLSession` configuration; redirects are switched off on the SDK's own requests whatever the client does |
+| `httpClient` | platform HTTP client | platform default | OkHttp `OkHttpClient` / `URLSession` configuration; redirects are switched off on the SDK's own requests whatever the client does. Also on the SDK's own requests, whatever the client's settings say: no cached answer is ever served (a forced refetch of a key set or discovery document reaches the provider; iOS `URLCache` is bypassed), a response body over 1 MiB is refused (`Configuration`, no retry) while it streams in, and a request's deadline is bounded by the operation's retry budget (`retry-policy.md`) |
 
 Explicit endpoints are the escape hatch for providers that do not publish discovery or publish it
 at a non-standard path. They are not a way to override a discovered value: a configuration with both
@@ -87,14 +87,14 @@ val oauth = OAuthClient.create(context, configuration)
   grant yields `Authenticated`; a pending authorization request younger than ten minutes yields
   `Authorizing`; otherwise `Unauthenticated`. Discovery runs lazily on the first operation that
   needs it and is cached on disk and in memory; the cache is refetched when it is older than its
-  lifetime (the provider's `Cache-Control: max-age` or `Expires` held between 5 minutes and 24 hours,
-  24 hours when it says nothing; in a running process too, not only at start) or when a request fails
-  in a way a changed endpoint could explain. An expired document whose refetch fails is still served,
-  and the next try waits a minute. Every endpoint the document announces
-  must be `https` (checked when the document is read for `authorization_endpoint`, `token_endpoint`
-  and `jwks_uri`, where it is used for the rest) (cleartext only on `localhost`, `127.0.0.1` or `[::1]`) and may sit on another
-  origin than the issuer; otherwise `Configuration(DiscoveryMalformed)`, and a cached copy that
-  fails the same check is discarded.
+  lifetime (the provider's `Cache-Control: max-age` held between 5 minutes and 24 hours, 24 hours
+  when it says nothing; in a running process too, not only at start) or when a request fails in a
+  way a changed endpoint could explain. An expired document whose refetch fails is still served,
+  and the next try waits a minute. The `authorization_endpoint`, `token_endpoint` and `jwks_uri` must be `https` (cleartext only on
+  `localhost`, `127.0.0.1` or `[::1]`) and may sit on another origin than the issuer; otherwise
+  `Configuration(DiscoveryMalformed)`, and a cached copy that fails the same check is discarded. The
+  optional endpoints (UserInfo, revocation, end session, PAR) are held to the same rule where they are
+  used, so a document's unused `http://` endpoint does not fail the whole provider.
 - `sessionState` is the source of truth. Every operation below publishes through it, including an
   authorization that finishes in a process other than the one that started it.
 - The redirect reaches the SDK without app code on Android (the SDK's redirect activity, declared
@@ -124,14 +124,17 @@ val oauth = OAuthClient.create(context, configuration)
 - `logout()` ends a resume that is still waiting for its redirect, then proceeds: the resume
   holds the authorization lock that the end-session step needs, and the pending request is
   abandoned by the local wipe.
+- `login()` and `stepUp()` end a resume that is still waiting for its redirect, as `logout()` does,
+  and then proceed: after a cold start the redirect may never come (the user abandoned the old
+  sheet and came back to the app itself), and the request nobody awaits is superseded by the new
+  one (section 5). A resume that already has its redirect and is redeeming the code is not
+  interrupted: `login()` is refused for that.
 - **Order.** While the state is `Authorizing` no grant is stored. An app that calls an
   authenticated operation (`accessToken()`, `refresh()`, `userInfo()`, a request through the
   authenticated client or session) before the resume has left `Authorizing` gets the
-  no-grant `Reauthenticate` error, and on iOS today that error wipes local
-  state, including the pending request and the DPoP key the code exchange is bound to
-  (`dpop_jkt`), so the sign-in can no longer finish. Observe `sessionState` until it has left
-  `Authorizing` before touching those operations. A known gap, tracked separately: a missing
-  grant should not wipe anything.
+  no-grant `Reauthenticate(GrantRejected)` error. Nothing is wiped for it, so the pending
+  sign-in and the DPoP key its `dpop_jkt` committed to survive and the sign-in can still finish
+  (`state-machine.md`, `Refreshing → Unauthenticated`); the state stays `Authorizing`.
 
 ## 5. Operations
 
@@ -152,16 +155,14 @@ val oauth = OAuthClient.create(context, configuration)
 grant; on cancel or failure the existing session stays (`state-machine.md`, settle on
 `Authenticated`). `login()` while an authorization is **in flight** is refused with
 `Configuration(InvalidConfiguration("an authorization is already in progress"))`; the app observes
-the state before asking. In flight means this process is carrying one out: another `login()` or
-`stepUp()` has its browser up with a live awaiter, or a validated redirect's code exchange has not
-finished. Two things the `Authorizing` state can read are **not** in flight, and `login()` goes
-ahead over them: a pending request that nobody awaits (a cancelled caller kept it for a resume the
-app has not asked for, a system cancel did, or a cold start restored it and nothing was started),
-which it **supersedes**; and a resume that is only *waiting* for its redirect (the cold-start
-resume of a login whose browser is gone), which it **pre-empts**, as `logout()` does
-(`state-machine.md`, "A resume that only waits gives way"). In both it remembers the old request's
-`state` so that a redirect the old tab still delivers is stepped over instead of failing the new
-login as a mismatch. There is no cancel call: the operations that need the gate take it.
+the state before asking. In flight means this process is carrying one out: the browser is up, or a validated redirect's
+code exchange has not finished (the end-session page is open too). A **resume that only waits for
+its redirect** is not in flight: `login()` and `stepUp()` end the wait and take its place. A
+pending request that nobody awaits is not in flight either, even though the state reads
+`Authorizing` (a system cancel kept it for a resume the app has not asked for, a cancelled caller
+did, or a cold start restored it and nothing was started): `login()` **supersedes** it, and
+remembers its `state` so that a redirect the old tab still delivers is stepped over instead of
+failing the new login as a mismatch.
 
 ## 6. `login()` options
 
@@ -217,9 +218,11 @@ is the precise error scenario 17 cannot give without PAR.
   provider that already rotated answers `invalid_grant`, which is `Reauthenticate(GrantRejected)`.
   Scenarios 09 and 13 therefore hold for the Versola facade only.
 - An `id_token` on a refresh response is validated with the same rules as at login, except that
-  `nonce` is not required and `auth_time` must not move backwards (OIDC Core 12.2). Unlike at
-  login, the rotated refresh token is persisted first and the ID token judged after (section 11):
-  the provider has already spent the old one, so the grant must not depend on the ID token.
+  `nonce` is not required and `auth_time` must not move backwards (OIDC Core 12.2). The rotated
+  refresh token is stored **before** that validation and survives its failure; a rejected ID token
+  is `Configuration(IdTokenRejected)` and an unreachable key set a `Recoverable`, and neither keeps
+  the response's access token or claims, nor ends the session (`state-machine.md`, "The refresh
+  skew" and the persistence order after it).
 
 ## 9. Token binding
 
@@ -297,15 +300,13 @@ token handed to app code is one the app can log.
 
 ## 11. ID-token and UserInfo validation
 
-Mandatory on every platform, before the token response is persisted at login (OIDC Core 3.1.3.7).
-On a refresh the order is the other way round for the refresh token alone (section 8): the rotated
-token is stored first, and the ID token, its claims and that response's access token are kept only
-if the checks below pass:
+Mandatory on every platform, before the token response is persisted (OIDC Core 3.1.3.7; on a refresh the rotated refresh token goes first, section 8):
 
-1. Signature with a key from `jwks_uri` (cached for what the provider's `Cache-Control: max-age`
-   or `Expires` says, as for discovery, in memory and on disk, so a withdrawn key stops being
-   trusted within a day; an expired set whose refetch fails is not served, the validation is
-   `Recoverable`; refetched once on an unknown `kid`), algorithm in
+1. Signature with a key from `jwks_uri` (cached for the same lifetime as the discovery document, so
+   a withdrawn key stops being trusted within a day even in a long-running process, and an expired
+   set is not served when its refetch fails, except to the check of a refresh's ID token, up to a
+   week past its lifetime (`retry-policy.md`, "A stale key set for a refresh"); refetched once on
+   an unknown `kid`), algorithm in
    the closed set `RS256`, `PS256`, `ES256`, `ES384`, `ES512`, `RS384`, `RS512`, `PS384`, `PS512`,
    and in `id_token_signing_alg_values_supported` when advertised; `none` and HMAC algorithms are
    refused (a public client has no secret to verify with).
@@ -341,7 +342,9 @@ the same key set; a response whose `sub` differs is `Configuration(UserInfoRejec
    sends `client_id` only). Best effort; a failure is logged and `tokenRevoked = false`.
 2. End the server session through the system browser at `end_session_endpoint` when advertised
    (RP-Initiated Logout 1.0): `id_token_hint`, `client_id`, `post_logout_redirect_uri` when
-   configured, `state`. Best effort; dismissed or failed is `sessionEnded = false`.
+   configured, `state`. Best effort; dismissed or failed is `sessionEnded = false`. The page is
+   opened whether or not a `postLogoutRedirectUri` is configured: skipping it would leave the
+   provider's single sign-on session alive and tell no one.
 3. Wipe everything credential-shaped: refresh token, raw ID token, pending request, rotation slot,
    nonce caches, DPoP key. Unconditional; `Unauthenticated` is published even if 1 or 2 failed.
 
@@ -387,7 +390,7 @@ As `state-machine.md`'s persistence summary, minus the edge-mode rows, plus:
 
 | Item | Storage | Survives process death | Survives logout |
 |---|---|---|---|
-| JWKS | Disk, unencrypted | yes | yes |
+| JWKS, with the lifetime it was fetched with | Disk, unencrypted | yes, until the lifetime ends | yes |
 | Configuration hash (storage key) | Disk | yes | yes |
 
 Granted scopes are not persisted: `stepUp()` re-requests the configured scopes, or the ones its
@@ -406,9 +409,7 @@ refresh token issued, `offline_access` advertised but not configured, a response
 
 1. `IdTokenRejected` as `Configuration` (section 11) versus a fifth category; the spec's
    four-category rule argues for `Configuration`.
-2. `login()` while an authorization is in flight refused (section 5) versus cancelling the
-   outstanding request. Refusal stays only for an authorization truly carried out; a request nobody
-   awaits is superseded and a resume that only waits is pre-empted, so no cancel call is needed.
+2. `login()` while an authorization is in flight refused (section 5) versus cancelling the outstanding request. A request nobody awaits, or a resume that only waits for its redirect, is superseded.
 3. `stepUp()` takes the configured scopes by default (section 5); the Versola facade requires
    them as a parameter. The two differ in signature, not in what is sent.
 4. The discovery and key-set cache lifetime bounds (5 minutes to 24 hours, 24 hours without `Cache-Control`) and the 30-second refresh skew: fixed, not configurable.

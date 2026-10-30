@@ -222,4 +222,131 @@ final class DiscoveryTests: XCTestCase {
         let metadata = try await service.metadata()
         XCTAssertEqual(metadata, fixed)
     }
+
+    // MARK: - Endpoints must be https
+
+    private func metadata(_ overrides: (inout ProviderMetadata) -> Void) -> ProviderMetadata {
+        var value = AuthzKit.metadata()
+        value.jwksUri = "https://id.example.com/jwks"
+        overrides(&value)
+        return value
+    }
+
+    private func assertRefused(_ name: String, _ document: ProviderMetadata, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertThrowsError(try document.validate(configuredIssuer: AuthzKit.issuer), name, file: file, line: line) { error in
+            guard case .configuration(.discoveryMalformed(let detail)) = error as? OAuthError else {
+                return XCTFail("\(name): \(error)", file: file, line: line)
+            }
+            XCTAssertTrue(detail.contains(name), "the detail names the member: \(detail)", file: file, line: line)
+        }
+    }
+
+    /// A document whose `token_endpoint` is `http://` would have the refresh token POSTed in the
+    /// clear: the three endpoints every session needs are refused where the document is read.
+    func testTheEndpointsEverySessionNeedsMustBeHttpsWhenTheDocumentIsRead() {
+        assertRefused("token_endpoint", metadata { $0.tokenEndpoint = "http://id.example.com/token" })
+        assertRefused("authorization_endpoint", metadata { $0.authorizationEndpoint = "http://id.example.com/authorize" })
+        assertRefused("jwks_uri", metadata { $0.jwksUri = "http://id.example.com/jwks" })
+    }
+
+    /// An `http://` sign-out or revocation endpoint this app never uses must not make the whole
+    /// provider unusable: those are refused where they are used (and logout is best effort).
+    func testAnInsecureEndpointThatIsOnlyUsedLaterDoesNotSpoilTheDocument() throws {
+        let document = metadata {
+            $0.userinfoEndpoint = "http://id.example.com/userinfo"
+            $0.revocationEndpoint = "http://id.example.com/revoke"
+            $0.endSessionEndpoint = "http://id.example.com/logout"
+            $0.pushedAuthorizationRequestEndpoint = "http://id.example.com/par"
+        }
+        XCTAssertNoThrow(try document.validate(configuredIssuer: AuthzKit.issuer))
+    }
+
+    func testTheInsecureOptionalEndpointsAreRefusedAtTheirPlaceOfUse() async throws {
+        let insecure = metadata {
+            $0.userinfoEndpoint = "http://id.example.com/userinfo"
+            $0.revocationEndpoint = "http://id.example.com/revoke"
+            $0.endSessionEndpoint = "http://id.example.com/logout"
+            $0.pushedAuthorizationRequestEndpoint = "http://id.example.com/par"
+        }
+        let http = RecordingHTTP.json(200, "{}")
+        func malformed(_ name: String, file: StaticString = #filePath, line: UInt = #line, _ body: () async throws -> Void) async {
+            do {
+                try await body()
+                XCTFail("\(name) was used", file: file, line: line)
+            } catch let OAuthError.configuration(.discoveryMalformed(detail)) {
+                XCTAssertTrue(detail.contains(name), detail, file: file, line: line)
+            } catch {
+                XCTFail("\(name): \(error)", file: file, line: line)
+            }
+        }
+
+        let tokens = try HTTPTokenClient(configuration: AuthzKit.configuration, metadata: { insecure }, httpClient: http)
+        await malformed("revocation_endpoint") { try await tokens.revoke(refreshToken: "rt") }
+
+        let par = PushedAuthorizationStarter(configuration: AuthzKit.configuration, httpClient: http, policy: .whenAdvertised)
+        let request = AuthorizationRequest.create(configuration: AuthzKit.configuration, scopes: ["openid"])
+        await malformed("pushed_authorization_request_endpoint") { _ = try await par.start(request: request, metadata: insecure, now: AuthzKit.now) }
+
+        let userinfo = HTTPUserInfoClient(
+            userinfoEndpoint: { insecure.userinfoEndpoint }, httpClient: http, dpop: nil,
+            verifier: JwsVerifier(jwksUri: { nil }, allowedAlgorithms: { [] }, jwks: JwksClient(httpClient: http))
+        )
+        await malformed("userinfo_endpoint") { _ = try await userinfo.fetch(tokens: FixedTokenSource(), expectedSubject: "alice") }
+
+        let flow = AuthorizationFlow(
+            configuration: AuthzKit.configuration, discovery: DiscoveryService(issuer: AuthzKit.issuer, client: StaticDiscoveryClient(metadata: insecure), cache: MemoryMetadataCache()),
+            pendingStore: MemoryPendingStore(), browser: ScriptedBrowser.answering(), states: SessionStateHub()
+        )
+        await malformed("end_session_endpoint") { _ = try await flow.endSession(idTokenHint: "hint") }
+        let sent = await http.requests
+        XCTAssertTrue(sent.isEmpty, "nothing was sent to an insecure endpoint")
+    }
+
+    private struct FixedTokenSource: AccessTokenSource {
+        func accessToken() async throws -> AccessToken { AccessToken(value: "at", tokenType: "Bearer") }
+        func renewAccessToken() async throws -> AccessToken { AccessToken(value: "at", tokenType: "Bearer") }
+    }
+
+    func testAnEndpointThatIsNotAnAbsoluteUrlWithAHostIsRefused() {
+        assertRefused("token_endpoint", metadata { $0.tokenEndpoint = "/token" })
+        assertRefused("token_endpoint", metadata { $0.tokenEndpoint = "https:token" })
+        assertRefused("jwks_uri", metadata { $0.jwksUri = "ftp://id.example.com/jwks" })
+        assertRefused("token_endpoint", metadata { $0.tokenEndpoint = "javascript:alert(1)" })
+    }
+
+    func testCleartextIsAcceptedOnLoopbackOnlyAsTheIssuerIs() throws {
+        for host in ["localhost:8080", "127.0.0.1:8080", "[::1]:8080"] {
+            let local = metadata {
+                $0.issuer = "https://id.example.com"
+                $0.tokenEndpoint = "http://\(host)/token"
+                $0.jwksUri = "http://\(host)/jwks"
+            }
+            XCTAssertNoThrow(try local.validate(configuredIssuer: AuthzKit.issuer), host)
+        }
+        assertRefused("token_endpoint", metadata { $0.tokenEndpoint = "http://localhost.example.com/token" })
+        assertRefused("token_endpoint", metadata { $0.tokenEndpoint = "http://10.0.2.2:8080/token" })
+    }
+
+    /// Cross-origin endpoints are legitimate (a provider whose JWKS or logout is on a CDN or
+    /// another host); the rule is the scheme, not the origin.
+    func testEndpointsOnOtherHttpsOriginsAreAccepted() throws {
+        let document = metadata {
+            $0.tokenEndpoint = "https://token.other.example.net/oauth/token"
+            $0.jwksUri = "https://keys.cdn.example.org/jwks"
+            $0.endSessionEndpoint = "https://sso.example.com/logout"
+        }
+        XCTAssertNoThrow(try document.validate(configuredIssuer: AuthzKit.issuer))
+    }
+
+    func testAnEmptyOptionalEndpointIsAbsentNotInvalid() throws {
+        let document = metadata { $0.endSessionEndpoint = ""; $0.revocationEndpoint = "" }
+        XCTAssertNoThrow(try document.validate(configuredIssuer: AuthzKit.issuer))
+    }
+
+    func testADocumentWithAnInsecureEndpointIsNotServedFromTheCacheEither() async throws {
+        let poisoned = metadata { $0.tokenEndpoint = "http://id.example.com/token" }
+        let http = RecordingHTTP.json(200, document)
+        let served = try await service(http, cache: MemoryMetadataCache(poisoned)).metadata()
+        XCTAssertEqual(served.tokenEndpoint, "https://id.example.com/token", "treated as absent, refetched")
+    }
 }

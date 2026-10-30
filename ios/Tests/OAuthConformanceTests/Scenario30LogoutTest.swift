@@ -84,4 +84,26 @@ final class Scenario30LogoutTest: ProviderConformance {
         XCTAssertTrue(outcome.tokenRevoked)
         await assertWiped(client)
     }
+
+    /// With no `postLogoutRedirectUri` configured the end-session page is still opened: skipping it
+    /// left the provider's single sign-on session alive with no word to the app. Nothing can come
+    /// back, so the outcome says the session was not acknowledged, and the wipe is unchanged.
+    func test30WithoutAPostLogoutRedirectUriTheEndSessionPageIsStillOpenedAndSessionEndedIsFalse() async throws {
+        let client = try await client(try configuration(postLogoutRedirectUri: nil))
+        try await client.login()
+        let metadata = try await client.metadata()
+        guard let endSession = metadata.endSessionEndpoint else { throw XCTSkip("the provider advertises no end_session_endpoint") }
+
+        let outcome = await client.logout()
+
+        XCTAssertEqual(browser.opened.count, 2, "the end-session page was opened")
+        let page = try XCTUnwrap(browser.opened.last)
+        XCTAssertTrue(page.absoluteString.hasPrefix(endSession + "?"))
+        XCTAssertEqual(query(page)["client_id"], Provider.clientId)
+        XCTAssertNil(query(page)["post_logout_redirect_uri"])
+        XCTAssertNotNil(query(page)["id_token_hint"])
+        XCTAssertFalse(outcome.sessionEnded)
+        XCTAssertTrue(outcome.tokenRevoked)
+        await assertWiped(client)
+    }
 }

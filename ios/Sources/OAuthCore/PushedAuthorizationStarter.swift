@@ -66,6 +66,7 @@ package struct PushedAuthorizationStarter: AuthorizationStarter {
 
     /// One POST; returns the `request_uri`, or throws before anything is persisted or opened.
     private func push(to endpoint: String, request: AuthorizationRequest) async throws -> String {
+        try ProviderMetadata.requireSecure("pushed_authorization_request_endpoint", endpoint)
         guard let url = URL(string: endpoint), url.scheme != nil else {
             throw OAuthError.configuration(.invalidConfiguration(
                 detail: "pushed_authorization_request_endpoint is not a URL"

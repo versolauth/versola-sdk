@@ -21,9 +21,15 @@ final class SessionCoordinatorTests: XCTestCase {
         var rotationAtRequest: [String?] = []
         func hasGrant() async throws -> Bool { refresh != nil }
         func refreshToken() async throws -> String? { refresh }
-        func rawIdToken() async throws -> String? { idToken }
+        /// A read of the ID token that fails, as a Keychain that locked mid-refresh does.
+        var idTokenReadFailure: OAuthError?
+        func failIdTokenReads(_ error: OAuthError?) { idTokenReadFailure = error }
+        func rawIdToken() async throws -> String? {
+            if let idTokenReadFailure { throw idTokenReadFailure }
+            return idToken
+        }
         var saveFailure: OAuthError?
-        func failSave(_ error: OAuthError) { saveFailure = error }
+        func failSave(_ error: OAuthError?) { saveFailure = error }
         func save(refreshToken: String, rawIdToken: String?) async throws {
             if let saveFailure { throw saveFailure }
             refresh = refreshToken
@@ -88,6 +94,7 @@ final class SessionCoordinatorTests: XCTestCase {
         var maxAges: [Int?] = []
         var rejection: IdTokenRejection?
         func reject(_ reason: IdTokenRejection) { rejection = reason }
+        func allow() { rejection = nil }
         func validate(idToken: String, expectedNonce: String?, accessToken: String?, maxAge: Int?, previous: IdTokenClaims?, serverTime: Date?) async throws -> IdTokenClaims {
             calls.append((expectedNonce, previous?.subject))
             maxAges.append(maxAge)
@@ -111,6 +118,10 @@ final class SessionCoordinatorTests: XCTestCase {
         func peek() -> Date { date.withLock { $0 } }
         /// The continuous clock the budget and the cooldown read: it moves with the wall clock here.
         func peekUptime() -> TimeInterval { ticks.withLock { $0 } }
+        /// The user (or an NTP step) moves the wall clock; the continuous clock does not notice.
+        func stepWallClock(_ seconds: TimeInterval) {
+            date.withLock { $0 = $0.addingTimeInterval(seconds) }
+        }
         func advance(_ seconds: TimeInterval) {
             date.withLock { $0 = $0.addingTimeInterval(seconds) }
             ticks.withLock { $0 += seconds }
@@ -580,6 +591,332 @@ final class SessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(state, .locked)
         let stored = await f.store.refresh
         XCTAssertEqual(stored, "rt-1")
+    }
+
+    func testALoginWhoseTokenCannotBeStoredLeavesTheRequestButNoLongerBlocksANewLogin() async throws {
+        let f = try fixture(answers: [.success(response()), .success(response())])
+        await f.store.failSave(.recoverable(.unlockRequired))
+
+        do {
+            try await f.coordinator.login(scopes: ["openid"])
+            XCTFail("no error")
+        } catch let error as OAuthError {
+            XCTAssertEqual(error, .recoverable(.unlockRequired))
+        }
+
+        let inFlight = await f.flow.authorizationInFlight
+        XCTAssertFalse(inFlight, "nothing is redeeming the request any more")
+        let pending = await f.pendingStore.stored
+        XCTAssertNotNil(pending, "kept until a token is durably stored, as the persistence order has it")
+
+        await f.store.failSave(nil)
+        try await f.coordinator.login(scopes: ["openid"])
+        let state = await f.flow.states.current
+        XCTAssertEqual(state, .authenticated)
+    }
+
+    /// `spec/state-machine.md`: how long ago the response arrived is measured on a monotonic
+    /// clock, so a wall-clock step neither expires a live token nor revives an expired one.
+    func testAWallClockStepForwardDoesNotMakeALiveAccessTokenLookExpired() async throws {
+        let f = try fixture(answers: [.success(response(refresh: "rt-1", expiresIn: 300))])
+        try await f.coordinator.login(scopes: ["openid"])
+
+        f.clock.stepWallClock(3600)
+        _ = try await f.coordinator.accessToken()
+
+        let calls = await f.tokens.calls
+        XCTAssertEqual(calls, [.exchange], "no refresh: five minutes of the token's life have not passed")
+    }
+
+    func testAWallClockStepBackDoesNotReviveAnExpiredAccessToken() async throws {
+        let f = try fixture(answers: [.success(response(refresh: "rt-1", expiresIn: 60)), .success(response(refresh: "rt-2"))])
+        try await f.coordinator.login(scopes: ["openid"])
+
+        f.clock.advance(61)
+        f.clock.stepWallClock(-7200)
+        _ = try await f.coordinator.accessToken()
+
+        let calls = await f.tokens.calls
+        XCTAssertEqual(calls.count, 2, "the token had really expired")
+    }
+
+    // MARK: - Refresh with no grant
+
+    private func pendingRequest() -> PendingAuthorizationRequest {
+        PendingAuthorizationRequest(state: "state-1", nonce: "nonce-1", codeVerifier: "verifier-1", scopes: ["openid"], redirectUri: Self.redirect, createdAt: Date(), issRequired: false)
+    }
+
+    /// Bootstrap code that asks for a token before `resumePendingAuthorization()` has run must
+    /// not lose the sign-in the user is in the middle of.
+    func testAnAccessTokenAskedForWithNoGrantLeavesAPendingAuthorizationAndTheKeyAlone() async throws {
+        let wipes = Box(0)
+        let f = try fixture(answers: [], pending: pendingRequest(), onCredentialsWiped: { await wipes.set(wipes.value + 1) })
+        try await f.flow.ensureRestored()
+        let restored = await f.flow.states.current
+        XCTAssertEqual(restored, .authorizing)
+
+        do {
+            _ = try await f.coordinator.accessToken()
+            XCTFail("no error")
+        } catch let error as OAuthError {
+            XCTAssertEqual(error, .reauthenticate(.grantRejected))
+        }
+
+        let pending = await f.pendingStore.stored
+        XCTAssertEqual(pending?.state, "state-1", "the pending request is the sign-in in progress")
+        let wiped = await wipes.value
+        XCTAssertEqual(wiped, 0, "the DPoP key the pending request committed to is not destroyed")
+        let state = await f.flow.states.current
+        XCTAssertEqual(state, .authorizing, "the state is the one the pending request restored")
+        let calls = await f.tokens.calls
+        XCTAssertTrue(calls.isEmpty, "no token request without a token to spend")
+    }
+
+    func testAGrantThatVanishedFromTheStoreEndsTheSessionWithoutTearingDownTheKeyOrThePendingRequest() async throws {
+        let wipes = Box(0)
+        let f = try fixture(answers: [.success(response(refresh: "rt-1", expiresIn: 60))], onCredentialsWiped: { await wipes.set(wipes.value + 1) })
+        try await f.coordinator.login(scopes: ["openid"])
+        try await f.store.clear()
+        f.clock.advance(61)
+
+        do {
+            _ = try await f.coordinator.accessToken()
+            XCTFail("no error")
+        } catch let error as OAuthError {
+            XCTAssertEqual(error, .reauthenticate(.grantRejected))
+        }
+
+        let state = await f.flow.states.current
+        XCTAssertEqual(state, .unauthenticated, "nothing is held any more, and the state says so")
+        let wiped = await wipes.value
+        XCTAssertEqual(wiped, 0)
+        let claims = await f.coordinator.claims
+        XCTAssertNil(claims)
+    }
+
+    func testARejectedGrantStillWipesTheKeyAsLogoutDoes() async throws {
+        let wipes = Box(0)
+        let f = try fixture(answers: [.success(response(refresh: "rt-1", expiresIn: 60)), .failure(.reauthenticate(.grantRejected))], onCredentialsWiped: { await wipes.set(wipes.value + 1) })
+        try await f.coordinator.login(scopes: ["openid"])
+        f.clock.advance(61)
+
+        _ = try? await f.coordinator.accessToken()
+
+        let wiped = await wipes.value
+        XCTAssertEqual(wiped, 1, "invalid_grant is the provider saying the grant is gone: a different case from never having one")
+    }
+
+    // MARK: - Refresh: the ID token is judged after the rotation is kept
+
+    /// The provider rotated the moment it answered; whatever the ID token turns out to be, the
+    /// old refresh token is spent and the new one is the only credential left.
+    private func loggedInWithShortToken() async throws -> Fixture {
+        let f = try fixture(answers: [.success(response(refresh: "rt-1", expiresIn: 60)), .success(response(refresh: "rt-2", expiresIn: 60)), .success(response(refresh: "rt-3"))])
+        try await f.coordinator.login(scopes: ["openid"])
+        f.clock.advance(61)
+        return f
+    }
+
+    func testARefreshWhoseIdTokenIsRejectedStillKeepsTheRotatedRefreshToken() async throws {
+        let f = try await loggedInWithShortToken()
+        let before = await f.store.idToken
+        await f.validator.reject(.signature)
+
+        do {
+            _ = try await f.coordinator.accessToken()
+            XCTFail("no error")
+        } catch let error as OAuthError {
+            XCTAssertEqual(error, .configuration(.idTokenRejected(.signature)))
+        }
+
+        let stored = await f.store.refresh
+        XCTAssertEqual(stored, "rt-2", "the old token is spent at the provider; the new one must survive the rejection")
+        let slot = await f.store.rotation
+        XCTAssertNil(slot, "the slot named the generation that was consumed")
+        let idToken = await f.store.idToken
+        XCTAssertEqual(idToken, before, "the rejected ID token replaces nothing")
+        let claims = await f.coordinator.claims
+        XCTAssertEqual(claims?.subject, "alice")
+        let state = await f.flow.states.current
+        XCTAssertEqual(state, .authenticated, "a configuration fault is not a sign-out")
+        let calls = await f.tokens.calls
+        XCTAssertEqual(calls.count, 2)
+
+        // The next refresh spends the rotated token, not the spent one.
+        await f.validator.allow()
+        _ = try await f.coordinator.refresh()
+        let after = await f.tokens.calls
+        guard case .refresh(let spent, _) = after[2] else { return XCTFail("\(after)") }
+        XCTAssertEqual(spent, "rt-2")
+        let storedAfter = await f.store.refresh
+        XCTAssertEqual(storedAfter, "rt-3")
+    }
+
+    func testARefreshWhoseIdTokenChangesTheSubjectKeepsTheRotationAndRejectsTheToken() async throws {
+        let f = try fixture(answers: [.success(response(refresh: "rt-1", expiresIn: 60)), .success(response(refresh: "rt-2", subject: "mallory"))], validatorOverride: SubjectContinuityValidator())
+        try await f.coordinator.login(scopes: ["openid"])
+        f.clock.advance(61)
+
+        do {
+            _ = try await f.coordinator.accessToken()
+            XCTFail("no error")
+        } catch let error as OAuthError {
+            XCTAssertEqual(error, .configuration(.idTokenRejected(.malformed)))
+        }
+
+        let stored = await f.store.refresh
+        XCTAssertEqual(stored, "rt-2")
+        let claims = await f.coordinator.claims
+        XCTAssertEqual(claims?.subject, "alice")
+    }
+
+    func testAKeySetFetchFailingAfterTheRotationIsRecoverableAndDropsNothing() async throws {
+        let network = OAuthError.recoverable(.network(detail: "jwks request failed", attempts: 3, elapsedMillis: 0))
+        let f = try fixture(answers: [.success(response(refresh: "rt-1", expiresIn: 60)), .success(response(refresh: "rt-2")), .success(response(refresh: "rt-3"))], validatorOverride: FailingOnceValidator(failure: network, afterSuccesses: 1))
+        try await f.coordinator.login(scopes: ["openid"])
+        f.clock.advance(61)
+
+        do {
+            _ = try await f.coordinator.accessToken()
+            XCTFail("no error")
+        } catch let error as OAuthError {
+            XCTAssertEqual(error, network)
+        }
+
+        let stored = await f.store.refresh
+        XCTAssertEqual(stored, "rt-2")
+        let slot = await f.store.rotation
+        XCTAssertNil(slot)
+        let state = await f.flow.states.current
+        XCTAssertEqual(state, .authenticated)
+
+        // The retry is an ordinary refresh with the rotated token and succeeds.
+        let token = try await f.coordinator.accessToken()
+        XCTAssertTrue(token.value.hasPrefix("at-rt-3"))
+        let calls = await f.tokens.calls
+        guard case .refresh(let spent, _) = calls[2] else { return XCTFail("\(calls)") }
+        XCTAssertEqual(spent, "rt-2")
+    }
+
+    func testTheRotatedRefreshTokenIsDurableBeforeTheIdTokenIsValidated() async throws {
+        let store = MemoryCredentials()
+        let observed = Box<[String?]>([])
+        let f = try fixture(answers: [.success(response(refresh: "rt-1", expiresIn: 60)), .success(response(refresh: "rt-2"))], store: store, validatorOverride: StoreWatchingValidator(store: store, seen: observed))
+        try await f.coordinator.login(scopes: ["openid"])
+        f.clock.advance(61)
+
+        _ = try await f.coordinator.accessToken()
+
+        // The login's validation saw rt-1 stored (it ran before the save), the refresh's saw rt-2.
+        let seen = await observed.value
+        XCTAssertEqual(seen.last, "rt-2", "validation of a refresh's ID token starts with the rotation already stored")
+    }
+
+    /// Writing the rotation must not depend on reading anything: a store that locks between the
+    /// answer and the write would otherwise lose the rotation and replay a spent token.
+    func testTheRotationIsWrittenWithoutReadingTheStoredIdToken() async throws {
+        let f = try await loggedInWithShortToken()
+        await f.store.failIdTokenReads(.recoverable(.unlockRequired))
+
+        _ = try? await f.coordinator.accessToken()
+
+        let stored = await f.store.refresh
+        XCTAssertEqual(stored, "rt-2")
+        let slot = await f.store.rotation
+        XCTAssertNil(slot)
+    }
+
+    /// A stale key set is for the refresh's ID token alone (`JwksStaleness`): the login's check
+    /// must not see it allowed.
+    func testOnlyTheIdTokenOfARefreshMayBeJudgedAgainstAStaleKeySet() async throws {
+        let seen = Box<[Bool]>([])
+        let f = try fixture(answers: [.success(response(refresh: "rt-1", expiresIn: 60)), .success(response(refresh: "rt-2"))], validatorOverride: StalenessProbeValidator(seen: seen))
+        try await f.coordinator.login(scopes: ["openid"])
+        f.clock.advance(61)
+        _ = try await f.coordinator.accessToken()
+
+        let allowed = await seen.value
+        XCTAssertEqual(allowed, [false, true], "login, then refresh")
+    }
+
+    private struct StalenessProbeValidator: IdTokenValidator {
+        let seen: Box<[Bool]>
+        func validate(idToken: String, expectedNonce: String?, accessToken: String?, maxAge: Int?, previous: IdTokenClaims?, serverTime: Date?) async throws -> IdTokenClaims {
+            var all = await seen.value
+            all.append(JwksStaleness.allowed)
+            await seen.set(all)
+            return try IdTokenClaimsParser.parseStored(idToken)
+        }
+    }
+
+    func testARefreshAnsweredWithoutAnIdTokenKeepsTheStoredOne() async throws {
+        let silent = TokenResponse(accessToken: "at-2", tokenType: "Bearer", expiresIn: 300, refreshToken: "rt-2", idToken: nil, scope: "openid")
+        let f = try fixture(answers: [.success(response(refresh: "rt-1", expiresIn: 60)), .success(silent)])
+        try await f.coordinator.login(scopes: ["openid"])
+        let before = await f.store.idToken
+        f.clock.advance(61)
+
+        _ = try await f.coordinator.accessToken()
+
+        let stored = await f.store.refresh
+        XCTAssertEqual(stored, "rt-2")
+        let idToken = await f.store.idToken
+        XCTAssertNotNil(before)
+        XCTAssertEqual(idToken, before, "logout()'s id_token_hint and the claims after a cold start need it")
+    }
+
+    func testARefreshThatDoesNotRotateStillStoresItsNewIdToken() async throws {
+        let renewed = TokenResponse(accessToken: "at-renewed", tokenType: "Bearer", expiresIn: 300, refreshToken: nil, idToken: idToken(nonce: "renewed"), scope: "openid")
+        let f = try fixture(answers: [.success(response(refresh: "rt-1", expiresIn: 60)), .success(renewed)])
+        try await f.coordinator.login(scopes: ["openid"])
+        f.clock.advance(61)
+
+        _ = try await f.coordinator.accessToken()
+
+        let stored = await f.store.refresh
+        XCTAssertEqual(stored, "rt-1", "nothing rotated")
+        let idToken = await f.store.idToken
+        XCTAssertEqual(idToken, renewed.idToken)
+    }
+
+    /// The real validator's rule that a refresh may not change the subject, as a stand-in.
+    private struct SubjectContinuityValidator: IdTokenValidator {
+        func validate(idToken: String, expectedNonce: String?, accessToken: String?, maxAge: Int?, previous: IdTokenClaims?, serverTime: Date?) async throws -> IdTokenClaims {
+            let claims = try IdTokenClaimsParser.parseStored(idToken)
+            if let previous, previous.subject != claims.subject { throw OAuthError.configuration(.idTokenRejected(.malformed)) }
+            return claims
+        }
+    }
+
+    /// Passes `afterSuccesses` validations, fails the next one with `failure`, then passes again.
+    private actor FailingOnceValidator: IdTokenValidator {
+        let failure: OAuthError
+        var remaining: Int
+        init(failure: OAuthError, afterSuccesses: Int) {
+            self.failure = failure
+            remaining = afterSuccesses
+        }
+        func validate(idToken: String, expectedNonce: String?, accessToken: String?, maxAge: Int?, previous: IdTokenClaims?, serverTime: Date?) async throws -> IdTokenClaims {
+            if remaining == 0 {
+                remaining = -1
+                throw failure
+            }
+            if remaining > 0 { remaining -= 1 }
+            return try IdTokenClaimsParser.parseStored(idToken)
+        }
+    }
+
+    /// Records the refresh token the store holds each time a validation begins.
+    private struct StoreWatchingValidator: IdTokenValidator {
+        let store: MemoryCredentials
+        let seen: Box<[String?]>
+        func validate(idToken: String, expectedNonce: String?, accessToken: String?, maxAge: Int?, previous: IdTokenClaims?, serverTime: Date?) async throws -> IdTokenClaims {
+            let stored = await store.refresh
+            var all = await seen.value
+            all.append(stored)
+            await seen.set(all)
+            return try IdTokenClaimsParser.parseStored(idToken)
+        }
     }
 
     // MARK: - Logout and restore

@@ -13,18 +13,20 @@ final class AuthorizationFlowTests: XCTestCase {
         metadata: ProviderMetadata = AuthzKit.metadata(),
         store: MemoryPendingStore = MemoryPendingStore(),
         hasStoredGrant: Bool = false,
+        grantProbe: (@Sendable () async throws -> Bool)? = nil,
         tokenBinding: TokenBinding = .bearer,
         dpopKey: DpopProofSource? = nil,
         starter: AuthorizationStarter? = nil,
-        now: Date = AuthzKit.now
+        now: Date = AuthzKit.now,
+        configuration: CoreConfiguration = AuthzKit.configuration
     ) -> Fixture {
         let hub = SessionStateHub()
         let discovery = DiscoveryService(
             issuer: AuthzKit.issuer, client: StaticDiscoveryClient(metadata: metadata), cache: MemoryMetadataCache())
         let flow = AuthorizationFlow(
-            configuration: AuthzKit.configuration, discovery: discovery, pendingStore: store, browser: browser,
+            configuration: configuration, discovery: discovery, pendingStore: store, browser: browser,
             states: hub, tokenBinding: tokenBinding, dpopKey: dpopKey, clock: Clock(now: { now }),
-            hasStoredGrant: { hasStoredGrant }, starter: starter
+            hasStoredGrant: grantProbe ?? { hasStoredGrant }, starter: starter
         )
         return Fixture(flow: flow, store: store, hub: hub)
     }
@@ -342,6 +344,123 @@ final class AuthorizationFlowTests: XCTestCase {
         XCTAssertEqual(grant.state, AuthorizationResponseValidator.stateOf(opened[0]))
     }
 
+    /// The state of the authorization a URL opened, for scripting the redirect of an older one.
+    private func redirect(forState state: String) -> BrowserOutcome {
+        .redirect(AuthzKit.redirect(answering: URL(string: "https://x.example.com/?state=\(state)")!))
+    }
+
+    func testALoginAfterASystemCancelSupersedesTheLeftoverRequestInsteadOfBeingRefused() async throws {
+        let first = Box<String?>(nil)
+        let browser = ScriptedBrowser(
+            onAuthorize: { uri, _ in
+                if let previous = await first.value {
+                    // The abandoned tab redirects before the new one does.
+                    _ = previous
+                    return .redirect(AuthzKit.redirect(answering: uri, state: previous))
+                }
+                await first.set(AuthorizationResponseValidator.stateOf(uri))
+                return .systemCancelled
+            },
+            onAwait: { opened in .redirect(AuthzKit.redirect(answering: opened.last!)) }
+        )
+        let f = fixture(browser: browser)
+        do {
+            _ = try await f.flow.authorize(scopes: ["openid"])
+            XCTFail("expected systemCancelled")
+        } catch {
+            XCTAssertEqual(error as? OAuthError, .recoverable(.systemCancelled))
+        }
+        let leftover = await f.flow.authorizationInFlight
+        let state = await f.hub.current
+        XCTAssertFalse(leftover, "nobody awaits the leftover request: it does not block a new login")
+        XCTAssertEqual(state, .authorizing, "and it stays resumable until something replaces it")
+
+        let grant = try await f.flow.authorize(scopes: ["openid"])
+
+        let opened = await browser.opened
+        XCTAssertEqual(opened.count, 2)
+        XCTAssertEqual(grant.state, AuthorizationResponseValidator.stateOf(opened[1]), "the new request won; the old tab's redirect was stepped over")
+        let saves = await f.store.saveCount
+        XCTAssertEqual(saves, 2)
+    }
+
+    func testALoginIsRefusedWhileTheGrantItProducedIsBeingRedeemed() async throws {
+        let f = fixture(browser: ScriptedBrowser.answering())
+        _ = try await f.flow.authorize(scopes: ["openid"])
+        let inFlight = await f.flow.authorizationInFlight
+        XCTAssertTrue(inFlight, "between the redirect and completeLogin() the code exchange is the authorization")
+
+        do {
+            _ = try await f.flow.authorize(scopes: ["openid"])
+            XCTFail("a second login would have its slot cleared by the first one's completion")
+        } catch let error as OAuthError {
+            guard case .configuration(.invalidConfiguration) = error else { return XCTFail("\(error)") }
+        }
+
+        try await f.flow.completeLogin()
+        let after = await f.flow.authorizationInFlight
+        XCTAssertFalse(after)
+        _ = try await f.flow.authorize(scopes: ["openid"])
+    }
+
+    /// A resume that has only a redirect left to wait for is not an authorization in flight (the
+    /// facade ends it for a new login), yet it still holds the gate: the flow itself must not let
+    /// a second authorization share the browser with it.
+    func testAResumeWaitingForItsRedirectIsNotInFlightButStillRefusesAnAuthorizationAtTheFlow() async throws {
+        let browser = ScriptedBrowser { uri, _ in .redirect(AuthzKit.redirect(answering: uri)) }
+        let f = fixture(browser: browser, store: MemoryPendingStore(AuthzKit.pending(createdAt: AuthzKit.now - 60)))
+        let resume = Task { try await f.flow.resumePendingAuthorization() }
+        await AuthzKit.waitUntil("the resume waits for its redirect") { await browser.awaitCalls == 1 }
+
+        let waiting = await f.flow.isAwaitingRedirect
+        let inFlight = await f.flow.authorizationInFlight
+        XCTAssertTrue(waiting)
+        XCTAssertFalse(inFlight)
+        do {
+            _ = try await f.flow.authorize(scopes: ["openid"])
+            XCTFail("a second holder of the gate")
+        } catch let error as OAuthError {
+            guard case .configuration(.invalidConfiguration) = error else { return XCTFail("\(error)") }
+        }
+
+        resume.cancel()
+        _ = try? await resume.value
+        let after = await f.flow.isAwaitingRedirect
+        XCTAssertFalse(after)
+        let grant = try await f.flow.authorize(scopes: ["openid"])
+        XCTAssertNotNil(grant, "once the wait is ended the gate is free and the leftover is superseded")
+    }
+
+    func testAnAbandonedExchangeFreesTheFlowToo() async throws {
+        let f = fixture(browser: ScriptedBrowser.answering())
+        _ = try await f.flow.authorize(scopes: ["openid"])
+        await f.flow.abandonLogin()
+        let inFlight = await f.flow.authorizationInFlight
+        XCTAssertFalse(inFlight)
+    }
+
+    /// The race: `authorize` has returned the grant (the gate is free) and `completeLogin()` has
+    /// not run yet, so the request is still in the store. A resume admitted here used to wait out
+    /// the request's ten minutes for a redirect that was already consumed, holding the gate.
+    func testResumeWhileTheLoginInThisProcessIsRedeemingItsCodeFindsNothingToWaitFor() async throws {
+        let browser = ScriptedBrowser(
+            onAuthorize: { uri, _ in .redirect(AuthzKit.redirect(answering: uri)) },
+            onAwait: { _ in throw TransportFailure() }
+        )
+        let f = fixture(browser: browser)
+        _ = try await f.flow.authorize(scopes: ["openid"])
+
+        let resumed = try await f.flow.resumePendingAuthorization()
+
+        XCTAssertNil(resumed)
+        let waits = await browser.awaitCalls
+        XCTAssertEqual(waits, 0)
+        let inFlight = await f.flow.authorizationInFlight
+        XCTAssertTrue(inFlight, "the login's own completion is still pending")
+        let state = await f.hub.current
+        XCTAssertEqual(state, .authorizing)
+    }
+
     func testAnEndSessionWaitingBehindTheBrowserThatIsCancelledLeavesTheQueue() async throws {
         // `endSession` and `resumePendingAuthorization` still queue behind an open browser; a
         // waiter cancelled while queued leaves without opening anything.
@@ -391,6 +510,81 @@ final class AuthorizationFlowTests: XCTestCase {
         let stored = await store.stored
         XCTAssertEqual(state, .authenticated)
         XCTAssertNil(stored)
+    }
+
+    /// A store behind a key that is not available: every read fails the way a locked Keychain does.
+    private actor LockedPendingStore: PendingAuthorizationStore {
+        var loads = 0
+        var clears = 0
+        func save(_ request: PendingAuthorizationRequest) async throws { throw OAuthError.recoverable(.unlockRequired) }
+        func load() async throws -> PendingAuthorizationRequest? {
+            loads += 1
+            throw OAuthError.recoverable(.unlockRequired)
+        }
+        func clear() async throws { clears += 1 }
+    }
+
+    func testTheStoredGrantIsReadBeforeThePendingRequestSoALockedPendingSlotCannotHideIt() async throws {
+        let store = LockedPendingStore()
+        let hub = SessionStateHub()
+        let discovery = DiscoveryService(issuer: AuthzKit.issuer, client: StaticDiscoveryClient(metadata: AuthzKit.metadata()), cache: MemoryMetadataCache())
+        let flow = AuthorizationFlow(configuration: AuthzKit.configuration, discovery: discovery, pendingStore: store, browser: ScriptedBrowser.answering(), states: hub, clock: Clock(now: { AuthzKit.now }), hasStoredGrant: { true })
+
+        try await flow.ensureRestored()
+
+        let state = await hub.current
+        XCTAssertEqual(state, .authenticated, "a returning user is not made to wait on, or be hidden by, the slot of a login that never finished")
+        let loads = await store.loads
+        XCTAssertEqual(loads, 0, "with a grant the pending request is discarded unread")
+    }
+
+    func testAGrantProbeThatNeedsTheUnlockPublishesLockedAndRestoresAfterwards() async throws {
+        let locked = Box(true)
+        let f = fixture(browser: ScriptedBrowser.answering(), grantProbe: {
+            if await locked.value { throw OAuthError.recoverable(.unlockRequired) }
+            return true
+        })
+
+        do {
+            try await f.flow.ensureRestored()
+            XCTFail("the failure was swallowed")
+        } catch {
+            XCTAssertEqual(error as? OAuthError, .recoverable(.unlockRequired))
+        }
+        let during = await f.hub.current
+        XCTAssertEqual(during, .locked, "not a false unauthenticated: credentials may well be there")
+
+        await locked.set(false)
+        try await f.flow.ensureRestored()
+        let after = await f.hub.current
+        XCTAssertEqual(after, .authenticated, "the failed restore is retried, not remembered")
+    }
+
+    func testAPendingSlotThatNeedsTheUnlockPublishesLockedNotUnauthenticated() async throws {
+        let hub = SessionStateHub()
+        let discovery = DiscoveryService(issuer: AuthzKit.issuer, client: StaticDiscoveryClient(metadata: AuthzKit.metadata()), cache: MemoryMetadataCache())
+        let flow = AuthorizationFlow(configuration: AuthzKit.configuration, discovery: discovery, pendingStore: LockedPendingStore(), browser: ScriptedBrowser.answering(), states: hub, clock: Clock(now: { AuthzKit.now }), hasStoredGrant: { false })
+
+        do {
+            try await flow.ensureRestored()
+            XCTFail("the failure was swallowed")
+        } catch {
+            XCTAssertEqual(error as? OAuthError, .recoverable(.unlockRequired))
+        }
+        let state = await hub.current
+        XCTAssertEqual(state, .locked)
+    }
+
+    func testAnUnreadableStoreOtherThanLockedIsThrownAndPublishesNothing() async throws {
+        let f = fixture(browser: ScriptedBrowser.answering(), grantProbe: { throw OAuthError.configuration(.invalidConfiguration(detail: "keychain error -1")) })
+        do {
+            try await f.flow.ensureRestored()
+            XCTFail("the failure was swallowed")
+        } catch {
+            XCTAssertEqual(error as? OAuthError, .configuration(.invalidConfiguration(detail: "keychain error -1")))
+        }
+        let state = await f.hub.current
+        XCTAssertEqual(state, .unauthenticated, "the hub's initial value stands; the failure is the caller's to see")
     }
 
     func testRestoreWithNothingStoredPublishesUnauthenticatedAndRunsOnce() async throws {
@@ -515,10 +709,34 @@ final class AuthorizationFlowTests: XCTestCase {
         XCTAssertTrue(uri.absoluteString.hasPrefix("https://id.example.com/logout?"))
         XCTAssertEqual(query["id_token_hint"], "id-token-hint-value")
         XCTAssertEqual(query["post_logout_redirect_uri"], AuthzKit.postLogout)
+        XCTAssertEqual(query["client_id"], "client-123", "RP-Initiated Logout 1.0: names the client when the hint alone could be missing or expired")
         XCTAssertGreaterThanOrEqual(query["state"]?.count ?? 0, 43)
         let options = await browser.options[0]
         XCTAssertFalse(options.ephemeral)
         XCTAssertEqual(options.redirectURI, URL(string: AuthzKit.postLogout))
+    }
+
+    /// With no `postLogoutRedirectUri` configured the provider is told of none, but the page is
+    /// still opened: skipping it left the provider's single sign-on session alive on a shared
+    /// device with `sessionEnded = false` and no word to anyone. The session still needs a callback
+    /// to be created; the login redirect is the one the app already has.
+    func testEndSessionWithoutAPostLogoutRedirectUriStillOpensThePageAndSendsNoRedirect() async throws {
+        let configuration = CoreConfiguration(issuer: AuthzKit.issuer, clientId: "client-123", redirectUri: URL(string: AuthzKit.redirect)!)
+        let browser = ScriptedBrowser { _, _ in .userCancelled }
+        let f = fixture(browser: browser, configuration: configuration)
+
+        let ended = try await f.flow.endSession(idTokenHint: "hint")
+
+        XCTAssertFalse(ended, "nothing acknowledged: the redirect cannot come back")
+        let opened = await browser.opened
+        XCTAssertEqual(opened.count, 1, "the end-session page was opened")
+        let query = AuthorizationResponseValidator.parseQuery(opened[0])
+        XCTAssertNil(query["post_logout_redirect_uri"])
+        XCTAssertEqual(query["client_id"], "client-123")
+        XCTAssertEqual(query["id_token_hint"], "hint")
+        let options = await browser.options[0]
+        XCTAssertEqual(options.redirectURI, URL(string: AuthzKit.redirect))
+        XCTAssertFalse(options.ephemeral)
     }
 
     func testEndSessionIsFalseForAWrongOrMissingState() async throws {

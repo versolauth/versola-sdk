@@ -111,7 +111,17 @@ error arrives is the only way to separate them, and it is required, not optional
 cancel should be retried silently, a user cancel must not be.
 
 The pending request is wiped on user cancel and **kept** on system cancel, so the flow can be
-resumed.
+resumed. Kept for a resume, not reserved: nothing awaits it, so a new `login()` is not made to
+wait out its ten minutes. It supersedes the leftover, and the old request's `state` is remembered
+so a redirect its tab still delivers is stepped over rather than failing the new login. The same
+holds for a cold-start resume that only waits for its redirect: `login()` and `stepUp()` end that
+wait first (as `logout()` does) and supersede the request.
+
+A redirect that reaches a live request with a `state` that is not its own stays
+`Configuration(StateMismatch)` and discards the request (scenario 15), wherever it came from: the
+spec does not distinguish a redirect delivered by the browser session from one handed over by the
+app (`handleRedirect`). A URL that is not the configured redirect URI at all is not a response
+and is ignored by the facade before it reaches the flow.
 
 **A resume that only waits gives way.** A pending request whose browser is gone — the app was killed
 while it was open and the user came back to the app itself, not through the redirect — is awaited
@@ -152,6 +162,13 @@ persisting the token and clearing the slot — its code was already redeemed, so
 waits for can no longer be spent. The request is discarded and the SDK restores
 `Authenticated`. Asked without the storage key (`hasGrant`), so a cold start does not become an
 unlock prompt under `OnAppUnlock`.
+
+A store that cannot be read yet (the device was never unlocked since boot; iOS answers
+`errSecInteractionNotAllowed`) has not said there is nothing in it. The restore then publishes
+`Locked`, never `Unauthenticated`, fails the operation that asked with
+`Recoverable(UnlockRequired)`, and is **not** remembered: the next call, once the app has asked
+the user to unlock, reads again. The grant is read before the pending request for this reason
+too: an unreadable pending slot must not decide what a returning user sees. With a grant the restore also **clears the pending slot on every cold start**, unread (it is residue, above); a slot that cannot be cleared yet fails the restore the same way and is retried.
 
 The cost is a re-authorization started over a live session — a step-up, an account switch — and
 then killed mid-browser: it resolves in favour of the session that already exists rather than
@@ -212,31 +229,32 @@ provider to. The generic facade (`oauth-sdk-api.md` section 8) sends none, persi
 Persistence, in order:
 
 1. the outgoing generation is copied into a `pending` slot before the request is sent
-2. the response is persisted before it is returned to any caller
-3. the `pending` slot is cleared after the new value is durably stored, in the same write as 2
-   where the store can make one (a kill between two writes would leave the new token beside the
-   previous generation's idempotency key)
+2. the response is persisted before it is returned to any caller: the rotated refresh token
+   first, **before the ID token the response carries is validated**
+3. the `pending` slot is cleared after the new value is durably stored, and before the ID token is
+   validated, since it named the generation that was just consumed
 
 A process killed between 1 and 3 recovers by replaying with the same idempotency key on next
 start; the server resolves which generation is live.
 
-The ID token travels with step 2 and obeys the same rule as the refresh token: a refresh
-response without `id_token` leaves the stored one in place (OpenID Connect Core 12.2 permits the
-omission, and the stored value is what `id_token_hint` and the claims of a cold start are read
-from), and one that carries a new `id_token` stores it whether or not the refresh token rotated.
-Nothing on the refresh path deletes a stored ID token; only a login that replaces the grant, or a
-wipe, does.
+The order of 2 and the validation is the point: the provider rotates the moment it answers, so
+the old refresh token is already spent and the new one is the only credential left. An ID token
+that cannot be judged or fails is rejected **on its own**; the rotation is not discarded with it,
+because the next refresh would then spend a dead token, get `invalid_grant` and wipe a healthy
+session. What the app sees is the validation's own outcome, and the grant is intact either way:
 
-**An ID token on a refresh response** (the generic facade, and the Versola facade once it validates
-them) is judged *after* step 2, never before: by then the provider has rotated, so the new
-refresh token is the only live one and dropping it would turn a JWKS fetch failure, an unknown
-`kid` or a changed `sub` into `invalid_grant` on the next refresh and a wipe. What the ID token
-vouches for waits for its validation: the raw ID token (stored only once validated, so it is
-never replayed as `id_token_hint` unchecked), the claims and the access token of that response
-are kept only if it passes. A rejection leaves the session `Authenticated` on the rotated
-token and fails the call as `Configuration(IdTokenRejected)`; a key set that cannot be reached
-fails it as `Recoverable`, and the next refresh simply runs again. A caller cancelled during
-the validation has already kept the rotated token.
+| Validation outcome | Rotated refresh token | Access token, claims, stored ID token | Error | State |
+|---|---|---|---|---|
+| passes | stored | the new ones | none | `Authenticated` |
+| fails (`IdTokenRejected`: signature, `iss`, `aud`, `sub` changed, ...) | stored | not kept: the previous claims and stored ID token stand | `Configuration(IdTokenRejected)` | `Authenticated` |
+| the key set cannot be fetched, but one past its lifetime (at most a week) holds the key | stored | the new ones, judged against that set (`retry-policy.md`, "A stale key set for a refresh") | none | `Authenticated` |
+| cannot run (the key set cannot be fetched and no usable stale one is held, or it lacks the `kid`: `Network`, `Server`, `UnlockRequired`) | stored | not kept: the previous access token is whatever the cache held (expired, which is why a refresh ran), nothing new | the `Recoverable` cause | `Authenticated` (`Locked` for `UnlockRequired`) |
+
+The stored ID token (what `id_token_hint` and the claims of a cold start are read from) is
+replaced only by one that **passed**, never by an unchecked one. A refresh response without
+`id_token` leaves the stored one in place (OpenID Connect Core 12.2 permits the omission), and a
+validated one is stored whether or not the refresh token rotated. Nothing on the refresh path
+deletes a stored ID token; only a login that replaces the grant, or a wipe, does.
 
 Under DPoP the server renews the refresh token in place (`BoundRenewal`) and the stored value
 does not change — the response echoes the same `refresh_token`, which is stored again as it
@@ -443,8 +461,8 @@ one grant to one device-installation; reusing it across users on a shared device
 | DPoP private key | Hardware keystore, non-exportable | yes | no (destroyed) |
 | DPoP nonce, per origin | Memory | no | no |
 | Clock skew offset | Memory | no | no |
-| Discovery metadata | Disk, unencrypted | yes, until its lifetime ends (`Cache-Control`, 5 min to 24 h, 24 h if absent) | yes |
-| JWK Set (generic facade) | Disk, unencrypted | yes, the same | yes |
+| Discovery metadata, with the lifetime it was fetched with | Disk, unencrypted | yes, until the lifetime ends | yes |
+| JWK Set (generic facade), with the lifetime it was fetched with | Disk, unencrypted | yes, until the lifetime ends (a week more for a refresh's ID token only) | yes |
 
 **Uninstall.** Android's credentials are files in the app's own data and go with the app. The
 iOS Keychain outlives it: a reinstall on the same device would otherwise open signed in as the
@@ -475,7 +493,8 @@ when its lifetime has ended (the provider's `Cache-Control: max-age` or `Expires
 minutes and 24 hours, 24 hours when it says nothing), in memory and on disk; if the provider cannot
 be reached then, the old document is served once more and the next try waits a minute (it is not
 what anything is verified against, and a `logout()` offline must still finish). The JWK Set is cached the same way but fails closed: an expired set that cannot be
-refetched is not served, because a withdrawn signing key is what it would still vouch for. The two native
+refetched is not served, because a withdrawn signing key is what it would still vouch for (the one
+exception is a refresh's ID token, up to a week past expiry: `retry-policy.md`, "A stale key set for a refresh"). The two native
 endpoints are kept for the same reason: a refresh in a later process signs for them and has no
 `/native/start` of its own to learn them from. Without the file the SDK falls back to
 discovery's `mtls_endpoint_aliases`, then to the plain endpoints — inferences, where the file

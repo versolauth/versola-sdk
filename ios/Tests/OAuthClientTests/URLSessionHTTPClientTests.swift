@@ -1,5 +1,6 @@
 import XCTest
 @testable import OAuthClient
+@testable import OAuthCore
 
 final class URLSessionHTTPClientTests: XCTestCase {
     private let url = URL(string: "https://auth.example.com/token?code=abc")!
@@ -102,5 +103,113 @@ final class URLSessionHTTPClientTests: XCTestCase {
         } catch {
             XCTFail("expected CancellationError, got \(error)")
         }
+    }
+
+    // MARK: - Cache
+
+    /// A key set or a discovery document refetched on purpose (a `kid` it lacks, a rotated endpoint)
+    /// must come from the provider, not from the `URLCache` of the app's session.
+    func testRequestsIgnoreTheLocalCache() async throws {
+        StubURLProtocol.install { _ in .response(status: 200, body: Data("{}".utf8)) }
+        let client = URLSessionHTTPClient(session: StubURLProtocol.session())
+
+        _ = try await client.send(HTTPRequest(method: .get, url: url))
+
+        let sent = try XCTUnwrap(StubURLProtocol.requests.first)
+        XCTAssertEqual(sent.cachePolicy, .reloadIgnoringLocalCacheData)
+    }
+
+    // MARK: - Size
+
+    func testABodyAtTheLimitIsReturnedAndOneByteOverIsRefusedAsConfiguration() async throws {
+        let limit = HTTPRequest.defaultMaxResponseBytes
+        StubURLProtocol.install { _ in .response(status: 200, body: Data(repeating: 0x20, count: limit)) }
+        let client = URLSessionHTTPClient(session: StubURLProtocol.session())
+        let ok = try await client.send(HTTPRequest(method: .get, url: url))
+        XCTAssertEqual(ok.body.count, limit)
+
+        StubURLProtocol.install { _ in .response(status: 200, body: Data(repeating: 0x20, count: limit + 1)) }
+        do {
+            _ = try await client.send(HTTPRequest(method: .get, url: url))
+            XCTFail("a body over the limit was returned")
+        } catch let error as OAuthError {
+            guard case .configuration(.invalidConfiguration(let detail)) = error else { return XCTFail("\(error)") }
+            XCTAssertTrue(detail.contains("larger than"))
+            XCTAssertFalse(detail.contains("code=abc"), "no URL in the detail")
+        }
+    }
+
+    func testADeclaredLengthOverTheLimitIsRefusedBeforeTheBodyIsRead() async throws {
+        StubURLProtocol.install { _ in .response(status: 200, headers: ["Content-Length": "\(50 << 20)"], body: Data("{}".utf8)) }
+        let client = URLSessionHTTPClient(session: StubURLProtocol.session())
+        do {
+            _ = try await client.send(HTTPRequest(method: .get, url: url))
+            XCTFail("returned")
+        } catch let error as OAuthError {
+            guard case .configuration(.invalidConfiguration) = error else { return XCTFail("\(error)") }
+        }
+    }
+
+    func testARequestMayAskForMoreRoomThanTheDefault() async throws {
+        StubURLProtocol.install { _ in .response(status: 200, body: Data(repeating: 0x20, count: 2048)) }
+        let client = URLSessionHTTPClient(session: StubURLProtocol.session())
+        do {
+            _ = try await client.send(HTTPRequest(method: .get, url: url, maxResponseBytes: 1024))
+            XCTFail("returned")
+        } catch let error as OAuthError {
+            guard case .configuration = error else { return XCTFail("\(error)") }
+        }
+    }
+
+    // MARK: - Timeout
+
+    private func hungClient(sessionTimeout: TimeInterval = 60, floor: TimeInterval = 0.05) -> URLSessionHTTPClient {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [StubURLProtocol.self]
+        configuration.timeoutIntervalForRequest = sessionTimeout
+        return URLSessionHTTPClient(session: URLSession(configuration: configuration), minimumAttemptTimeout: floor)
+    }
+
+    private func assertTimesOut(_ client: URLSessionHTTPClient, file: StaticString = #filePath, line: UInt = #line) async {
+        let started = ContinuousClock.now
+        do {
+            _ = try await client.send(HTTPRequest(method: .get, url: url))
+            XCTFail("a request to a hung provider returned", file: file, line: line)
+        } catch let OAuthError.recoverable(.network(detail, _, _)) {
+            XCTAssertTrue(detail.contains("URLError"), file: file, line: line)
+        } catch {
+            XCTFail("expected recoverable network, got \(error)", file: file, line: line)
+        }
+        XCTAssertLessThan(ContinuousClock.now - started, .seconds(10), "bounded by the deadline, not by the session's default", file: file, line: line)
+    }
+
+    /// `spec/retry-policy.md`: `totalBudget` is the ceiling for one operation. A request to a
+    /// provider that has stopped answering may not sit on the session's own 60 s (or, for a
+    /// resource-style stall, longer) inside a 20 s budget.
+    func testAnAttemptInsideAnOperationIsBoundedByWhatIsLeftOfItsBudget() async throws {
+        StubURLProtocol.install { _ in .hang }
+        let budget = try RetryPolicy(maxAttemptsPerOrigin: 1, maxTotalAttempts: 1, initialBackoff: 0, backoffMultiplier: 1, maxBackoff: 0, totalBudget: 0.1).newBudget()
+
+        await OperationBudget.$current.withValue(budget) {
+            await assertTimesOut(hungClient(sessionTimeout: 60))
+        }
+    }
+
+    func testAnAttemptOutsideAnOperationStillEndsAtTheSessionsOwnTimeout() async throws {
+        StubURLProtocol.install { _ in .hang }
+        await assertTimesOut(hungClient(sessionTimeout: 0.1))
+    }
+
+    func testTheBudgetNeverStarvesAnAttemptBelowTheFloor() async throws {
+        // A budget nearly spent still gives a request that has not been tried a real chance:
+        // the code exchange cannot be repeated and the user's time in the browser is already gone.
+        let budget = try RetryPolicy(maxAttemptsPerOrigin: 1, maxTotalAttempts: 1, initialBackoff: 0, backoffMultiplier: 1, maxBackoff: 0, totalBudget: 0.001).newBudget()
+        StubURLProtocol.install { _ in .response(status: 200, body: Data("{}".utf8)) }
+        let client = URLSessionHTTPClient(session: StubURLProtocol.session(), minimumAttemptTimeout: 5)
+
+        let response = try await OperationBudget.$current.withValue(budget) {
+            try await client.send(HTTPRequest(method: .get, url: url))
+        }
+        XCTAssertEqual(response.statusCode, 200)
     }
 }
