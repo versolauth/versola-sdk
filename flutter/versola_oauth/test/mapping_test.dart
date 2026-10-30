@@ -28,6 +28,47 @@ void main() {
             ),
       );
 
+      final server = errorFromMessage(
+        ErrorMessage(
+          category: ErrorCategoryMessage.recoverable,
+          kind: 'server',
+          message: 'recoverable: server',
+          status: 429,
+          retryAfterMillis: 30000,
+          attempts: 1,
+        ),
+      );
+      expect(
+        server,
+        isA<RecoverableError>()
+            .having((e) => e.cause, 'cause', RecoverableCause.server)
+            .having((e) => e.status, 'status', 429)
+            .having(
+              (e) => e.retryAfter,
+              'retryAfter',
+              const Duration(seconds: 30),
+            )
+            .having((e) => e.attempts, 'attempts', 1),
+      );
+
+      // No Retry-After is null, not a zero: an app that waits zero is hammering.
+      final plain = errorFromMessage(
+        ErrorMessage(
+          category: ErrorCategoryMessage.recoverable,
+          kind: 'server',
+          message: 'recoverable: server',
+          status: 500,
+        ),
+      );
+      expect(
+        plain,
+        isA<RecoverableError>().having(
+          (e) => e.retryAfter,
+          'retryAfter',
+          isNull,
+        ),
+      );
+
       final reauth = errorFromMessage(
         ErrorMessage(
           category: ErrorCategoryMessage.reauthenticate,

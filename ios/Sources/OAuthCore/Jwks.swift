@@ -46,8 +46,9 @@ package actor JwksClient {
 
     /// - Parameter forceRefresh: skip memory and the cache and fetch. Without it the key set
     ///   comes from memory, then the cache, then the network.
-    /// - Throws: `OAuthError.recoverable(.network)` when the provider cannot be reached or
-    ///   answers an error; `OAuthError.configuration(.discoveryMalformed)` when the answer is
+    /// - Throws: `OAuthError.recoverable(.network)` when the provider cannot be reached and
+    ///   `.recoverable(.server)` when it answers a status that is not the key set (repeated under
+    ///   the operation's budget when transient, never otherwise); `OAuthError.configuration(.discoveryMalformed)` when the answer is
     ///   not a JWK Set.
     package func keys(uri: String, forceRefresh: Bool) async throws -> Loaded {
         if !forceRefresh {
@@ -84,13 +85,19 @@ package actor JwksClient {
         guard let url = URL(string: uri), url.scheme != nil else {
             throw OAuthError.configuration(.discoveryMalformed(detail: "jwks_uri is not a URL"))
         }
-        let response: HTTPResponse
-        do {
-            response = try await httpClient.send(HTTPRequest(method: .get, url: url, headers: ["Accept": "application/json"]))
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch {
-            throw OAuthError.recoverable(.network(detail: "jwks request failed", attempts: 1, elapsedMillis: 0))
+        let httpClient = self.httpClient
+        // A read-only request, repeated under the operation's budget (`spec/retry-policy.md`).
+        let response: HTTPResponse = try await OperationBudget.run(origin: DpopOrigin.of(url)) {
+            let response: HTTPResponse
+            do {
+                response = try await httpClient.send(HTTPRequest(method: .get, url: url, headers: ["Accept": "application/json"]))
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                throw OAuthError.recoverable(.network(detail: "jwks request failed", attempts: 1, elapsedMillis: 0))
+            }
+            if let failure = ServerFailure.error(for: response) { throw failure }
+            return response
         }
         switch response.statusCode {
         case 200:
@@ -102,7 +109,9 @@ package actor JwksClient {
         case 300...399:
             throw OAuthError.configuration(.discoveryMalformed(detail: "jwks_uri answered HTTP \(response.statusCode); redirects are not followed"))
         default:
-            throw OAuthError.recoverable(.network(detail: "jwks_uri returned HTTP \(response.statusCode)", attempts: 1, elapsedMillis: 0))
+            // A 408, 429 or 5xx never gets here (it is `server`, above). What does is a status the
+            // key set has no use for (a 404, a 204): reported with its status, never repeated.
+            throw ServerFailure.unexpected(response.statusCode)
         }
     }
 

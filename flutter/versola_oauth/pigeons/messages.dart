@@ -157,6 +157,8 @@ class ErrorMessage {
     this.maxAge,
     this.attempts,
     this.elapsedMillis,
+    this.status,
+    this.retryAfterMillis,
     this.origin,
     this.expected,
     this.received,
@@ -176,6 +178,10 @@ class ErrorMessage {
   int? maxAge;
   int? attempts;
   int? elapsedMillis;
+
+  /// The HTTP status of a `server` cause, and its parsed `Retry-After` in milliseconds.
+  int? status;
+  int? retryAfterMillis;
   String? origin;
   String? expected;
   String? received;

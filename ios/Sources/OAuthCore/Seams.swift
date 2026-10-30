@@ -155,8 +155,26 @@ package protocol IdTokenValidator: Sendable {
 /// Time and randomness are injected so tests need no sleeps and no luck (`testing.md`).
 package struct Clock: Sendable {
     package var now: @Sendable () -> Date
-    package init(now: @escaping @Sendable () -> Date) { self.now = now }
+    /// Seconds on a clock that only moves forward and keeps running while the device sleeps (a
+    /// wall-clock step, an NTP correction or the user changing the date cannot move it): what a
+    /// deadline such as the `Retry-After` cooldown, and the elapsed time of a retry budget, are
+    /// measured on. `ProcessInfo.systemUptime` would stop during sleep.
+    package var uptime: @Sendable () -> TimeInterval
+    package init(now: @escaping @Sendable () -> Date, uptime: @escaping @Sendable () -> TimeInterval = { ContinuousUptime.seconds() }) {
+        self.now = now
+        self.uptime = uptime
+    }
     package static let system = Clock(now: { Date() })
+}
+
+/// `ContinuousClock`: monotonic, and it counts the time the device spends asleep.
+package enum ContinuousUptime {
+    private static let origin = ContinuousClock.now
+
+    package static func seconds() -> TimeInterval {
+        let elapsed = origin.duration(to: ContinuousClock.now).components
+        return TimeInterval(elapsed.seconds) + TimeInterval(elapsed.attoseconds) / 1e18
+    }
 }
 
 package protocol RandomSource: Sendable {

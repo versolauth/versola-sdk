@@ -116,8 +116,8 @@ cd example/android && ./gradlew :versola_oauth:testDebugUnitTest                
 ```
 
 The example's Android build includes `android/` as a composite build and substitutes the
-`io.versola:oauth-android` artefact, which is not published yet, with the `:oauth` project; it
-needs the same `JAVA_HOME` (21) and `ANDROID_HOME` as the Android build. The iOS half depends on
+published `io.versola:oauth-android` artefact with the `:oauth` project, so the example always
+builds the code in the checkout; it needs the same `JAVA_HOME` (21) and `ANDROID_HOME` as the Android build. The iOS half depends on
 the repository package by path (Swift Package Manager only; the SDK is not on CocoaPods).
 
 The bridge conformance tests are the example app's native tests (below, "Provider containers"):

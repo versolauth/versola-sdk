@@ -16,7 +16,7 @@ steps:
   - actor: harness
     action: Repeat with Retry-After 0, with 30, with 86400, and with each of -1, 1.5, an empty value, "soon", two Retry-After headers, and an HTTP-date in the past.
   - actor: harness
-    action: Repeat with 500 and a Retry-After 5.
+    action: Repeat with 500 and a Retry-After 5, and answer UserInfo with 502 and a Retry-After 86400.
   - actor: app
     action: Call accessToken() in each case and record the gap between the requests the proxy saw.
 assertions:
@@ -26,7 +26,7 @@ assertions:
   - With Retry-After 30 the SDK sends no second request and does not sleep, because 30 s exceeds totalBudget. It fails at once with Recoverable, cause Server, status as answered, retryAfter 30 s. The wait was not shortened to fit.
   - With Retry-After 86400 the same, with retryAfter saturating at one day (86400 s), and without overflow.
   - With each malformed value the request is retried under the ordinary backoff, as if the header were absent; none of them fails the request or raises Configuration.
-  - A Retry-After on a 500 is ignored, and the delays are the policy's own.
+  - A Retry-After on a 500 or a 502 is ignored. A refresh answered 500 by a facade with no Idempotency-Key is not repeated at all; UserInfo answered 502 is repeated with the policy's own delays.
   - On every path the number of requests is at most maxAttemptsPerOrigin and the operation ends within totalBudget.
 notes: >
   Clamping a long Retry-After to the budget and retrying early (the first sketch in #22) sends a

@@ -61,7 +61,8 @@ class ProviderConformance: XCTestCase {
         scopes: Set<String>? = nil,
         protectedOrigins: Set<String> = [ResourceServer.origin],
         pushedAuthorization: PushedAuthorization = .whenAdvertised,
-        tokenBinding: TokenBinding = .bearer
+        tokenBinding: TokenBinding = .bearer,
+        retryPolicy: RetryPolicy = .default
     ) throws -> OAuthConfiguration {
         try OAuthConfiguration(
             issuer: endpoints == nil ? proxyIssuer : nil,
@@ -73,12 +74,15 @@ class ProviderConformance: XCTestCase {
             tokenBinding: tokenBinding,
             pushedAuthorization: pushedAuthorization,
             protectedOrigins: protectedOrigins,
+            retryPolicy: retryPolicy,
             logger: logger,
             urlSession: VirtualNetwork.session(record: true)
         )
     }
 
-    func client(_ configuration: OAuthConfiguration? = nil) async throws -> OAuthClient {
+    /// - Parameters:
+    ///   - credentials: the store the client keeps its grant in; pass the same one to a second client of the same configuration to stand for a cold start of the app.
+    func client(_ configuration: OAuthConfiguration? = nil, credentials: InMemoryCredentialStore = InMemoryCredentialStore()) async throws -> OAuthClient {
         // A Mac host has no Secure Enclave this process may use and its Keychain refuses an unsigned
         // one, and a simulator has no enclave at all: the key is the SDK's own `SecureEnclaveDpopKey`
         // told there is none, so the tier is software on every machine the driver runs on and
@@ -86,7 +90,7 @@ class ProviderConformance: XCTestCase {
         let store = dpopKeyStore
         return try await OAuthClient.create(
             configuration: try configuration ?? self.configuration(),
-            browser: browser, credentialStore: InMemoryCredentialStore(), pendingStore: InMemoryPendingAuthorizationStore(),
+            browser: browser, credentialStore: credentials, pendingStore: InMemoryPendingAuthorizationStore(),
             metadataCache: MemoryMetadataCache(), jwksCache: MemoryJwksCache(),
             dpopKey: { requireHardware, logger in
                 SecureEnclaveDpopKey(store: store, requireHardware: requireHardware, logger: logger, secureEnclaveAvailable: false)

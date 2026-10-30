@@ -60,6 +60,33 @@ final class URLSessionHTTPClientTests: XCTestCase {
         }
     }
 
+    /// Whether the request ever connected is a typed fact recorded where the `URLError` is in hand
+    /// (`ConnectionFlag`, read by `RefreshReplay`), not something read back out of the text.
+    func testTheClientRecordsWhetherTheRequestEverConnected() {
+        let never: [URLError.Code] = [
+            .cannotFindHost, .cannotConnectToHost, .dnsLookupFailed, .notConnectedToInternet,
+            .secureConnectionFailed, .serverCertificateHasBadDate, .serverCertificateUntrusted,
+            .serverCertificateHasUnknownRoot, .serverCertificateNotYetValid, .clientCertificateRejected,
+            .clientCertificateRequired,
+        ]
+        let maybe: [URLError.Code] = [.timedOut, .networkConnectionLost, .badServerResponse, .cannotParseResponse, .resourceUnavailable, .unknown]
+        func recorded(_ code: URLError.Code) -> Bool {
+            let flag = ConnectionFlag()
+            ConnectionFlag.$current.withValue(flag) {
+                _ = URLSessionHTTPClient.networkError(URLError(code, userInfo: [NSURLErrorFailingURLStringErrorKey: "https://auth.example.com/cb?code=abc"]), elapsed: .zero)
+            }
+            return flag.neverConnected
+        }
+        for code in never { XCTAssertTrue(recorded(code), "\(code.rawValue)") }
+        for code in maybe { XCTAssertFalse(recorded(code), "\(code.rawValue)") }
+        // Outside a refresh nothing is listening, and nothing fails.
+        _ = URLSessionHTTPClient.networkError(URLError(.cannotFindHost), elapsed: .zero)
+        // A failure that is not a URLError says nothing.
+        let flag = ConnectionFlag()
+        ConnectionFlag.$current.withValue(flag) { _ = URLSessionHTTPClient.networkError(nil, detail: "x", elapsed: .zero) }
+        XCTAssertFalse(flag.neverConnected)
+    }
+
     func testURLsInAnErrorTextAreStripped() {
         let stripped = URLSessionHTTPClient.stripURLs("could not connect to https://auth.example.com/cb?code=abc now")
         XCTAssertEqual(stripped, "could not connect to <url> now")

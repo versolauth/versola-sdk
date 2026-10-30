@@ -114,9 +114,9 @@ final class TokenClientTests: XCTestCase {
             (400, [:], #"{"error":"invalid_client","error_description":"unknown"}"#, { if case .configuration(.tokenRequestRejected(code: "invalid_client", description: "unknown")) = $0 { return true }; return false }),
             (400, [:], "<html>", { if case .configuration(.tokenRequestRejected(let code, _)) = $0 { return code.contains("no OAuth error") }; return false }),
             (302, ["Location": "https://elsewhere.example.com"], "", { if case .configuration(.tokenRequestRejected(let code, _)) = $0 { return code.contains("redirects are not followed") }; return false }),
-            (500, [:], "<html>", { if case .recoverable(.network) = $0 { return true }; return false }),
-            (429, [:], "", { if case .recoverable(.network) = $0 { return true }; return false }),
-            (408, [:], "", { if case .recoverable(.network) = $0 { return true }; return false }),
+            (500, [:], "<html>", { if case .recoverable(.server(500, nil, 1, _)) = $0 { return true }; return false }),
+            (429, [:], "", { if case .recoverable(.server(429, nil, 1, _)) = $0 { return true }; return false }),
+            (408, [:], "", { if case .recoverable(.server(408, nil, 1, _)) = $0 { return true }; return false }),
         ]
         for (status, headers, body, matches) in cases {
             let http = RecordingHTTP { _ in HTTPResponse(statusCode: status, headers: headers, body: Data(body.utf8)) }
@@ -278,7 +278,7 @@ final class TokenClientTests: XCTestCase {
             try await client(RecordingHTTP.json(503, "")).revoke(refreshToken: "rt")
             XCTFail("no error")
         } catch let error as OAuthError {
-            guard case .recoverable(.network) = error else { return XCTFail("\(error)") }
+            guard case .recoverable(.server(503, nil, _, _)) = error else { return XCTFail("\(error)") }
         }
         do {
             try await client(RecordingHTTP.json(401, #"{"error":"invalid_client"}"#)).revoke(refreshToken: "rt")

@@ -20,13 +20,15 @@ steps:
   - actor: app
     action: Make a request through the authenticated client to a protected origin that answers 503 with a Retry-After header.
 assertions:
-  - Each repeatable operation makes exactly maxAttemptsPerOrigin requests (three by default) for 500, 503 and 429 without Retry-After, with delays that grow, are capped at maxBackoff, and are not identical across two runs, and finishes within totalBudget.
+  - Discovery, the pushed authorization request, UserInfo and revocation make exactly maxAttemptsPerOrigin requests (three by default) for 500, 502, 503, 504 and 429 without Retry-After, with delays that grow, are capped at maxBackoff, and are not identical across two runs, and finish within totalBudget.
+  - A refresh by a facade that sends no Idempotency-Key makes exactly maxAttemptsPerOrigin requests for 503, 429 and 408, and exactly one request for 500, 502 and 504, with no delay; the stored refresh token and the rotation slot are unchanged after the one-request failures.
   - Each of them then fails with Recoverable, cause Server, whose status is the last status seen and whose attempts equals the request count. Nothing is reported as a transport failure.
   - A refresh that fails this way leaves the session Authenticated and the stored refresh token and pending rotation key unchanged; the next refresh carries the same Idempotency-Key.
   - The authorization_code exchange makes exactly one request. The login fails with Recoverable, cause Server, the pending request is wiped, and a second login() starts from the browser.
   - A 501 is surfaced after one request, with no delay. A 400 with an OAuth error body is the error of errors.md after one request.
   - The request through the authenticated client is returned to the app as the 503 it is, with its Retry-After header intact, after one request.
-  - When login() reaches the code exchange, the discovery document and the JWKS have already been fetched by then, and the exchange issues no request other than its own and any DPoP nonce retry.
+  - A key-set fetch that fails after the code exchange, during ID-token validation, is repeated under the budget like any other operation, and the login then succeeds; the cached key set is used when there is one.
+  - Every attempt of a repeated DPoP-bound request carries a proof of its own, with a jti that differs from the earlier attempts.
 notes: >
   The operation table of spec/retry-policy.md is the rule; this scenario is its test. Before it,
   only refresh was repeated and the other operations made one request, which is why the counts

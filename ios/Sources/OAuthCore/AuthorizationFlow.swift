@@ -244,7 +244,8 @@ package actor AuthorizationFlow {
             let options = BrowserSessionOptions(ephemeral: ephemeralBrowser, redirectURI: configuration.redirectUri)
             let outcome: BrowserOutcome
             do {
-                let first = try await browser.authorize(uri, options: options)
+                // The user's time in the browser is not the SDK's retrying (`OperationBudget.paused`).
+                let first = try await OperationBudget.paused { try await browser.authorize(uri, options: options) }
                 outcome = try await belongingTo(pending, first: first)
             } catch is CancellationError {
                 // The caller was cancelled, and on this platform that closed the sheet: the
@@ -316,7 +317,7 @@ package actor AuthorizationFlow {
         let nanoseconds = UInt64(max(seconds, 0) * 1_000_000_000)
         return try await withThrowingTaskGroup(of: BrowserOutcome?.self) { group in
             group.addTask {
-                let first = try await self.browser.awaitPendingRedirect()
+                let first = try await OperationBudget.paused { try await self.browser.awaitPendingRedirect() }
                 return try await self.belongingTo(pending, first: first)
             }
             group.addTask {
@@ -358,7 +359,7 @@ package actor AuthorizationFlow {
 
             let outcome: BrowserOutcome
             do {
-                outcome = try await browser.authorize(uri, options: BrowserSessionOptions(redirectURI: postLogoutRedirectUri))
+                outcome = try await OperationBudget.paused { try await browser.authorize(uri, options: BrowserSessionOptions(redirectURI: postLogoutRedirectUri)) }
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -384,7 +385,7 @@ package actor AuthorizationFlow {
         -> BrowserOutcome {
         var outcome = first
         while isAbandoned(outcome, pending: pending) {
-            outcome = try await browser.awaitPendingRedirect()
+            outcome = try await OperationBudget.paused { try await browser.awaitPendingRedirect() }
         }
         return outcome
     }

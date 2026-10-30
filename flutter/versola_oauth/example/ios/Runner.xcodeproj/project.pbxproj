@@ -27,6 +27,7 @@
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
 		B8CBD674B2F5FFDE06937245 /* Scenario28ExplicitEndpointsBridgeTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AB16DA4EDBC0983F2487C3A /* Scenario28ExplicitEndpointsBridgeTest.swift */; };
 		D5258433EE4B3B9AFE3F68B4 /* Scenario30LogoutBridgeTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EA446F67A8305CB4B88150A /* Scenario30LogoutBridgeTest.swift */; };
+		A34B36C0DE0000000000A001 /* Scenario34To36ServerErrorsBridgeTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = A34B36C0DE0000000000A002 /* Scenario34To36ServerErrorsBridgeTest.swift */; };
 		D61AF574AAC2411084506C7F /* HttpLoginBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 706C56C76CB1223D5C5AD1C2 /* HttpLoginBrowser.swift */; };
 		DEFE7660D05B4304D257BEB3 /* DartSide.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48A81FF259F892167D1E257B /* DartSide.swift */; };
 		F12174F74A3BEFF851CC767A /* WireMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 754C936DE782684D453635C0 /* WireMappingTests.swift */; };
@@ -72,6 +73,7 @@
 		3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = AppFrameworkInfo.plist; path = Flutter/AppFrameworkInfo.plist; sourceTree = "<group>"; };
 		48A81FF259F892167D1E257B /* DartSide.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DartSide.swift; sourceTree = "<group>"; };
 		6EA446F67A8305CB4B88150A /* Scenario30LogoutBridgeTest.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Scenario30LogoutBridgeTest.swift; sourceTree = "<group>"; };
+		A34B36C0DE0000000000A002 /* Scenario34To36ServerErrorsBridgeTest.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Scenario34To36ServerErrorsBridgeTest.swift; sourceTree = "<group>"; };
 		706C56C76CB1223D5C5AD1C2 /* HttpLoginBrowser.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HttpLoginBrowser.swift; sourceTree = "<group>"; };
 		7433BED56CD359631522AC39 /* Provider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Provider.swift; sourceTree = "<group>"; };
 		74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Runner-Bridging-Header.h"; sourceTree = "<group>"; };
@@ -124,6 +126,7 @@
 				8AB16DA4EDBC0983F2487C3A /* Scenario28ExplicitEndpointsBridgeTest.swift */,
 				FE23D7255FC32DB60DA3D190 /* Scenario29PushedAuthorizationBridgeTest.swift */,
 				6EA446F67A8305CB4B88150A /* Scenario30LogoutBridgeTest.swift */,
+				A34B36C0DE0000000000A002 /* Scenario34To36ServerErrorsBridgeTest.swift */,
 				275BA734B9CCDA166354D5E1 /* Scenario31SessionWithoutRefreshTokenBridgeTest.swift */,
 				E37E358528E3D67559A851EE /* Scenario32ProtectedOriginsBridgeTest.swift */,
 				5C8E2A6D0B4F7193D2E4A8F1 /* Scenario33DpopEndToEndBridgeTest.swift */,
@@ -359,6 +362,7 @@
 				B8CBD674B2F5FFDE06937245 /* Scenario28ExplicitEndpointsBridgeTest.swift in Sources */,
 				2E10A5FD372B573B79A49CCE /* Scenario29PushedAuthorizationBridgeTest.swift in Sources */,
 				D5258433EE4B3B9AFE3F68B4 /* Scenario30LogoutBridgeTest.swift in Sources */,
+				A34B36C0DE0000000000A001 /* Scenario34To36ServerErrorsBridgeTest.swift in Sources */,
 				FAB39D0B915799A950375003 /* Scenario31SessionWithoutRefreshTokenBridgeTest.swift in Sources */,
 				FB7081247B93450CC09231F5 /* Scenario32ProtectedOriginsBridgeTest.swift in Sources */,
 				5C8E2A6D0B4F7193D2E4A8F2 /* Scenario33DpopEndToEndBridgeTest.swift in Sources */,

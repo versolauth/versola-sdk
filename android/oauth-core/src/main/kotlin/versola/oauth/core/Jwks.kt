@@ -245,7 +245,7 @@ public class JwksClient(
         Loaded(parsed, fetched = true)
     }
 
-    private suspend fun fetch(uri: String): String = withContext(Dispatchers.IO) {
+    private suspend fun fetch(uri: String): String = retrying(originOf(uri)) { withContext(Dispatchers.IO) {
         val request = Request.Builder().url(uri).header("Accept", "application/json").build()
         try {
             httpClient.newCall(request).execute().use { response ->
@@ -258,9 +258,7 @@ public class JwksClient(
                             "jwks_uri answered HTTP ${response.code}; redirects are not followed",
                         ),
                     )
-                    else -> throw VersolaError.Recoverable(
-                        VersolaError.Recoverable.Cause.Network("jwks_uri returned HTTP ${response.code}"),
-                    )
+                    else -> throw ServerFault.failure(response.code, response.headers)
                 }
             }
         } catch (e: IOException) {
@@ -269,5 +267,5 @@ public class JwksClient(
                 e,
             )
         }
-    }
+    } }
 }

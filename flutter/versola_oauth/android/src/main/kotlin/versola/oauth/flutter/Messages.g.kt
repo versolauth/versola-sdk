@@ -627,6 +627,9 @@ data class ErrorMessage (
   val maxAge: Long? = null,
   val attempts: Long? = null,
   val elapsedMillis: Long? = null,
+  /** The HTTP status of a `server` cause, and its parsed `Retry-After` in milliseconds. */
+  val status: Long? = null,
+  val retryAfterMillis: Long? = null,
   val origin: String? = null,
   val expected: String? = null,
   val received: String? = null,
@@ -647,13 +650,15 @@ data class ErrorMessage (
       val maxAge = pigeonVar_list[7] as Long?
       val attempts = pigeonVar_list[8] as Long?
       val elapsedMillis = pigeonVar_list[9] as Long?
-      val origin = pigeonVar_list[10] as String?
-      val expected = pigeonVar_list[11] as String?
-      val received = pigeonVar_list[12] as String?
-      val field = pigeonVar_list[13] as String?
-      val capability = pigeonVar_list[14] as String?
-      val idTokenRejection = pigeonVar_list[15] as String?
-      return ErrorMessage(category, kind, message, code, errorDescription, detail, acrValues, maxAge, attempts, elapsedMillis, origin, expected, received, field, capability, idTokenRejection)
+      val status = pigeonVar_list[10] as Long?
+      val retryAfterMillis = pigeonVar_list[11] as Long?
+      val origin = pigeonVar_list[12] as String?
+      val expected = pigeonVar_list[13] as String?
+      val received = pigeonVar_list[14] as String?
+      val field = pigeonVar_list[15] as String?
+      val capability = pigeonVar_list[16] as String?
+      val idTokenRejection = pigeonVar_list[17] as String?
+      return ErrorMessage(category, kind, message, code, errorDescription, detail, acrValues, maxAge, attempts, elapsedMillis, status, retryAfterMillis, origin, expected, received, field, capability, idTokenRejection)
     }
   }
   fun toList(): List<Any?> {
@@ -668,6 +673,8 @@ data class ErrorMessage (
       maxAge,
       attempts,
       elapsedMillis,
+      status,
+      retryAfterMillis,
       origin,
       expected,
       received,
@@ -684,7 +691,7 @@ data class ErrorMessage (
       return true
     }
     val other = other as ErrorMessage
-    return MessagesPigeonUtils.deepEquals(this.category, other.category) && MessagesPigeonUtils.deepEquals(this.kind, other.kind) && MessagesPigeonUtils.deepEquals(this.message, other.message) && MessagesPigeonUtils.deepEquals(this.code, other.code) && MessagesPigeonUtils.deepEquals(this.errorDescription, other.errorDescription) && MessagesPigeonUtils.deepEquals(this.detail, other.detail) && MessagesPigeonUtils.deepEquals(this.acrValues, other.acrValues) && MessagesPigeonUtils.deepEquals(this.maxAge, other.maxAge) && MessagesPigeonUtils.deepEquals(this.attempts, other.attempts) && MessagesPigeonUtils.deepEquals(this.elapsedMillis, other.elapsedMillis) && MessagesPigeonUtils.deepEquals(this.origin, other.origin) && MessagesPigeonUtils.deepEquals(this.expected, other.expected) && MessagesPigeonUtils.deepEquals(this.received, other.received) && MessagesPigeonUtils.deepEquals(this.field, other.field) && MessagesPigeonUtils.deepEquals(this.capability, other.capability) && MessagesPigeonUtils.deepEquals(this.idTokenRejection, other.idTokenRejection)
+    return MessagesPigeonUtils.deepEquals(this.category, other.category) && MessagesPigeonUtils.deepEquals(this.kind, other.kind) && MessagesPigeonUtils.deepEquals(this.message, other.message) && MessagesPigeonUtils.deepEquals(this.code, other.code) && MessagesPigeonUtils.deepEquals(this.errorDescription, other.errorDescription) && MessagesPigeonUtils.deepEquals(this.detail, other.detail) && MessagesPigeonUtils.deepEquals(this.acrValues, other.acrValues) && MessagesPigeonUtils.deepEquals(this.maxAge, other.maxAge) && MessagesPigeonUtils.deepEquals(this.attempts, other.attempts) && MessagesPigeonUtils.deepEquals(this.elapsedMillis, other.elapsedMillis) && MessagesPigeonUtils.deepEquals(this.status, other.status) && MessagesPigeonUtils.deepEquals(this.retryAfterMillis, other.retryAfterMillis) && MessagesPigeonUtils.deepEquals(this.origin, other.origin) && MessagesPigeonUtils.deepEquals(this.expected, other.expected) && MessagesPigeonUtils.deepEquals(this.received, other.received) && MessagesPigeonUtils.deepEquals(this.field, other.field) && MessagesPigeonUtils.deepEquals(this.capability, other.capability) && MessagesPigeonUtils.deepEquals(this.idTokenRejection, other.idTokenRejection)
   }
 
   override fun hashCode(): Int {
@@ -699,6 +706,8 @@ data class ErrorMessage (
     result = 31 * result + MessagesPigeonUtils.deepHash(this.maxAge)
     result = 31 * result + MessagesPigeonUtils.deepHash(this.attempts)
     result = 31 * result + MessagesPigeonUtils.deepHash(this.elapsedMillis)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.status)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.retryAfterMillis)
     result = 31 * result + MessagesPigeonUtils.deepHash(this.origin)
     result = 31 * result + MessagesPigeonUtils.deepHash(this.expected)
     result = 31 * result + MessagesPigeonUtils.deepHash(this.received)
@@ -708,7 +717,7 @@ data class ErrorMessage (
     return result
   }
   override fun toString(): String {
-    return "ErrorMessage(category=$category, kind=$kind, message=$message, code=$code, errorDescription=$errorDescription, detail=$detail, acrValues=$acrValues, maxAge=$maxAge, attempts=$attempts, elapsedMillis=$elapsedMillis, origin=$origin, expected=$expected, received=$received, field=$field, capability=$capability, idTokenRejection=$idTokenRejection)"
+    return "ErrorMessage(category=$category, kind=$kind, message=$message, code=$code, errorDescription=$errorDescription, detail=$detail, acrValues=$acrValues, maxAge=$maxAge, attempts=$attempts, elapsedMillis=$elapsedMillis, status=$status, retryAfterMillis=$retryAfterMillis, origin=$origin, expected=$expected, received=$received, field=$field, capability=$capability, idTokenRejection=$idTokenRejection)"
   }
 }
 

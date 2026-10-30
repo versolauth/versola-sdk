@@ -21,9 +21,8 @@ numbers as the server's [policy](https://github.com/versolauth/versola/blob/main
 
 ## Supported versions
 
-Only the latest release of each package receives security fixes. Nothing is published yet, so
-today that means the tip of `main`. Once releases exist, a fix ships as a new release of the
-affected package; there are no backports.
+Only the latest release of each package receives security fixes. A fix ships as a new release of
+the affected package; there are no backports.
 
 ## Scope
 
