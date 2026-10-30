@@ -11,6 +11,9 @@ paths: [".github/**", "conformance/**", "tools/**"]
 | `android.yml` `build` | push to `main` and PRs touching `android/**` | `./gradlew assemble`, `test` (unit, Robolectric on API 36), `lint`, `apiCheck` on JDK 21 with `platforms;android-36` | anything on a device or against a server |
 | `android.yml` `instrumented` | `:storage` and `:dpop` on an emulator, API 36 (`google_apis`) | the platform half: real Keystore, GCM wrapping, key tiers | the browser leg, the server |
 | `ios.yml` | push to `main` and PRs touching `ios/**`, `Package.swift` | `swift package resolve` from a clean checkout, `xcodebuild build` and `test` of scheme `Versola-Package` on a simulator | Secure Enclave, a real Keychain group, `-strict-concurrency=complete` until it is added to the step |
+| `flutter.yml` `dart` | push to `main` and PRs touching `flutter/**`, the generic facades the plugin calls, `Package.swift` | `dart format`, `flutter analyze` (plugin and example), `flutter test` against a mocked channel, and that regenerating the Pigeon bridge reproduces the three generated files | the bridge on a device, the native SDKs' behaviour |
+| `flutter.yml` `android` | same filter | the plugin compiles against the repository's `:oauth` through the example's composite build, the Kotlin glue's unit tests, `flutter build apk --debug` | a sign-in on a device, the bridge conformance driver (it is skipped without `OAUTH_CONFORMANCE_ISSUER`) |
+| `flutter.yml` `ios` | same filter, macOS | the plugin compiles against the root package by path, `flutter build ios --no-codesign`, the Swift glue's tests on a simulator (the example app launches as the test host) | the Secure Enclave, a Universal Link delivered to a terminated app |
 | `spec.yml` | every PR and push to `main` | `tools/validate-scenarios.py` (schema, `id` = file name, index rows) and markdownlint over `**/*.md` | that a scenario's states exist on every platform |
 | `conformance.yml` `scenarios` | on demand (nightly once the checkout token exists) | scenarios against a staged `auth` + `central` + `edge` from `versolauth/versola`, driven from an emulator | everything the driver does not yet run (`conformance/README.md`, order of work) |
 | `conformance.yml` `providers` | PRs touching the generic facade, the modules under it or the drivers, nightly, on demand | scenarios 24 to 32 of the generic facade against Keycloak and Ory Hydra in Docker (`android/conformance-oauth`), one matrix row each | the device tier, the iOS driver (local only: the macOS runners have no Docker daemon) and what `conformance/README.md` ("Providers") lists as not proven |
@@ -85,8 +88,10 @@ paths: [".github/**", "conformance/**", "tools/**"]
 
 ## Dependabot
 
-`.github/dependabot.yml` covers `gradle` (`/android`), `swift` (`/`), `pub`
-(`/flutter/*`) and `github-actions`. Minor and patch updates are grouped into one PR per ecosystem
+`.github/dependabot.yml` covers `gradle` (`/android`, and the Flutter example's own build at
+`/flutter/versola_oauth/example/android`, which ignores the two plugins that must equal
+`android/build.gradle.kts`), `swift` (`/`), `pub` (`/flutter/versola_oauth`, with `pigeon` ignored:
+its bump comes with the regeneration) and `github-actions`. Minor and patch updates are grouped into one PR per ecosystem
 per week; majors are separate so a breaking major blocks only itself. A Dependabot PR is reviewed
 like any other dependency change: licence, maintenance, what the release notes say. Known holds are
 documented where they live (OkHttp 5.4.0 pinned below 5.5.0, `android/okhttp/build.gradle.kts`).

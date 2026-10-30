@@ -15,6 +15,24 @@ updates:
       gradle:
         patterns: ["*"]
         update-types: ["minor", "patch"]
+  # The Flutter example's own Gradle build (flutter/versola_oauth/example/android): its test
+  # dependencies are a copy of android/conformance-oauth's, and its plugin versions must equal
+  # android/build.gradle.kts, because the example includes the repository's Android build and an
+  # included build cannot load a second version of either plugin. The two plugins are therefore
+  # ignored here: the bump of android/build.gradle.kts is the one that moves them, and
+  # flutter.yml fails on that PR until the example's settings.gradle.kts follows.
+  - package-ecosystem: gradle
+    directory: /flutter/versola_oauth/example/android
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+    ignore:
+      - dependency-name: com.android.application
+      - dependency-name: org.jetbrains.kotlin.android
+    groups:
+      gradle:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
   - package-ecosystem: swift
     directory: /
     schedule:
