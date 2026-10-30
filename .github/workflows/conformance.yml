@@ -186,11 +186,31 @@ jobs:
             sleep 5
           done
           EOF
-          # adb is not on PATH yet (the emulator action adds it), hence the full path.
+          # adb is not on PATH yet (the emulator action adds it), hence the full path. The loop
+          # records the device state whenever it changes, follows the logcat while the device is
+          # up, and, when a device that was up goes offline while its emulator process is still
+          # running, asks adb to reconnect it once: whether the guest answers afterwards says if
+          # the emulator or only the adb transport was lost.
           cat > "$RUNNER_TEMP/logcat.sh" <<'EOF'
+          adb="$ANDROID_HOME/platform-tools/adb"
+          last=""; seen=0; offline=0
           while :; do
-            echo "--- logcat attached $(date -u +%T)" >> "$RUNNER_TEMP/diag/logcat.txt"
-            "$ANDROID_HOME/platform-tools/adb" -s emulator-5554 logcat -v threadtime >> "$RUNNER_TEMP/diag/logcat.txt" 2>&1
+            state=$("$adb" -s emulator-5554 get-state 2>&1)
+            if [ "$state" != "$last" ]; then echo "$(date -u +%T) $state" >> "$RUNNER_TEMP/diag/adbstate.log"; last="$state"; fi
+            case "$state" in
+              device)
+                seen=1; offline=0
+                echo "--- logcat attached $(date -u +%T)" >> "$RUNNER_TEMP/diag/logcat.txt"
+                "$adb" -s emulator-5554 logcat -v threadtime >> "$RUNNER_TEMP/diag/logcat.txt" 2>&1 ;;
+              *offline*)
+                offline=$((offline + 1))
+                if [ "$seen" = 1 ] && [ "$offline" = 3 ]; then
+                  "$adb" reconnect offline >> "$RUNNER_TEMP/diag/adbstate.log" 2>&1
+                  sleep 3
+                  echo "$(date -u +%T) after reconnect: $("$adb" devices | tail -n +2 | head -1) boot_completed=$(timeout 5 "$adb" -s emulator-5554 shell getprop sys.boot_completed 2>&1)" >> "$RUNNER_TEMP/diag/adbstate.log"
+                fi ;;
+              *) seen=0; offline=0 ;;
+            esac
             sleep 2
           done
           EOF
@@ -262,6 +282,7 @@ jobs:
           echo "### docker stats"; docker stats --no-stream || true
           echo "### samples, last 60 lines"; tail -60 "$RUNNER_TEMP/diag/samples.log" || true
           cp -r /tmp/android-runner "$RUNNER_TEMP/diag/android-runner" 2>/dev/null || true
+          cp /tmp/adb*.log "$RUNNER_TEMP/diag/" 2>/dev/null || true
           gzip -f "$RUNNER_TEMP/diag/logcat.txt" 2>/dev/null || true
 
       - name: Provider logs
