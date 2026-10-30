@@ -9,6 +9,8 @@ import org.junit.Assert.fail
 import org.junit.Test
 import versola.oauth.core.VersolaLogger
 
+private val NEVER_ABSENT: (ProviderException) -> Boolean = { false }
+
 /**
  * Key generation needs a Keystore, which no JVM has; what can be proved here is the decision
  * about which failures of the StrongBox attempt lead to a TEE attempt. The Keystore itself
@@ -34,7 +36,7 @@ class StrongBoxFallbackTest {
     fun `StrongBox that works is used and the TEE is not asked`() {
         val asked = mutableListOf<Boolean>()
 
-        val result = withStrongBoxFallback(logger) { strongBox -> asked += strongBox; "key" }
+        val result = withStrongBoxFallback(logger, isAbsent = NEVER_ABSENT) { strongBox -> asked += strongBox; "key" }
 
         assertEquals("key", result)
         assertEquals(listOf(true), asked)
@@ -45,7 +47,7 @@ class StrongBoxFallbackTest {
     fun `a transient provider fault from StrongBox is retried once and StrongBox is kept`() {
         val asked = mutableListOf<Boolean>()
 
-        val result = withStrongBoxFallback(logger) { strongBox ->
+        val result = withStrongBoxFallback(logger, isAbsent = NEVER_ABSENT) { strongBox ->
             asked += strongBox
             if (asked.size == 1) throw ProviderException("Failed to generate key pair.") else "strongbox key"
         }
@@ -59,7 +61,7 @@ class StrongBoxFallbackTest {
     fun `a provider fault that persists falls back to the TEE after the retry`() {
         val asked = mutableListOf<Boolean>()
 
-        val result = withStrongBoxFallback(logger) { strongBox ->
+        val result = withStrongBoxFallback(logger, isAbsent = NEVER_ABSENT) { strongBox ->
             asked += strongBox
             if (strongBox) throw ProviderException("Failed to generate key pair.") else "tee key"
         }
@@ -90,7 +92,7 @@ class StrongBoxFallbackTest {
         val failure = ProviderException("the TEE failed too")
 
         try {
-            withStrongBoxFallback(logger) { strongBox ->
+            withStrongBoxFallback(logger, isAbsent = NEVER_ABSENT) { strongBox ->
                 if (strongBox) throw ProviderException("no StrongBox") else throw failure
             }
             fail("the second failure must propagate")
@@ -104,7 +106,7 @@ class StrongBoxFallbackTest {
         val asked = mutableListOf<Boolean>()
 
         try {
-            withStrongBoxFallback(logger) { strongBox ->
+            withStrongBoxFallback(logger, isAbsent = NEVER_ABSENT) { strongBox ->
                 asked += strongBox
                 throw InvalidKeyException("something else")
             }
@@ -118,7 +120,7 @@ class StrongBoxFallbackTest {
 
     @Test
     fun `without a logger the fallback is silent`() {
-        val result = withStrongBoxFallback(null) { strongBox ->
+        val result = withStrongBoxFallback(null, isAbsent = NEVER_ABSENT) { strongBox ->
             if (strongBox) throw ProviderException("no StrongBox") else "tee key"
         }
 

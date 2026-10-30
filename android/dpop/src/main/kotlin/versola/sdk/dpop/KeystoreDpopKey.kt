@@ -119,7 +119,7 @@ public class KeystoreDpopKey(
         // asking for it on a device without the chip throws rather than degrading, and a
         // compile-time decision would either exclude API 26–27 or never use StrongBox at all.
         val pair = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            withStrongBoxFallback(logger) { strongBox -> generate(strongBox) }
+            withStrongBoxFallback(logger, isAbsent = { it is StrongBoxUnavailableException }) { strongBox -> generate(strongBox) }
         } else {
             generate(strongBox = false)
         }
@@ -219,7 +219,7 @@ public class KeystoreDpopKey(
  */
 internal fun <T> withStrongBoxFallback(
     logger: VersolaLogger?,
-    isAbsent: (ProviderException) -> Boolean = { it is StrongBoxUnavailableException },
+    isAbsent: (ProviderException) -> Boolean,
     generate: (strongBox: Boolean) -> T,
 ): T =
     try {
