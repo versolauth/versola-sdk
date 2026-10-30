@@ -10,8 +10,8 @@ right and this file is stale.
 |---|---|---|
 | JDK | 17 | Gradle, the Android modules (`sourceCompatibility` is 17) |
 | Android SDK | platform 36, build-tools 36.0.0 | `compileSdk` 36 in every module; `minSdk` is 26 |
-| Android Gradle Plugin | 9.4.1 | pinned in `android/build.gradle.kts` |
-| Kotlin | 2.4.20 | pinned in `android/build.gradle.kts`; `explicitApi()` is on |
+| Android Gradle Plugin | 9.5.0 | pinned in `android/build.gradle.kts` |
+| Kotlin | 2.4.21 | pinned in `android/build.gradle.kts`; `explicitApi()` is on |
 | Gradle | 9.7.1 | through the wrapper, never a system Gradle |
 | Xcode | 16.3 or newer, with an iOS simulator | `Package.swift` (swift-tools 6.0, Swift 6 language mode) |
 | Flutter | 3.47.8 (Dart 3.13.7) | pinned in `flutter/.fvmrc`, run through [fvm](https://fvm.app) (`brew install fvm`, then `fvm install` in `flutter/`) |
