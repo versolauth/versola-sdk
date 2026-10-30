@@ -60,6 +60,19 @@ public class DataStoreCredentialStore(
         write(refreshToken, rawIdToken, clearPendingRotation = true)
     }
 
+    override suspend fun saveIdToken(rawIdToken: String) {
+        val wrapped = keyProvider.wrap(rawIdToken.toByteArray(Charsets.UTF_8))
+        dataStore.updateData { current ->
+            // No grant held: nothing for an ID token to travel with, and writing one alone would
+            // leave a hint for a session that is not there.
+            if (current.refreshToken == null) current else CredentialBlob(
+                refreshToken = current.refreshToken,
+                rawIdToken = wrapped,
+                pendingRotation = current.pendingRotation,
+            )
+        }
+    }
+
     private suspend fun write(refreshToken: ByteArray, rawIdToken: String?, clearPendingRotation: Boolean) {
         // `keyProvider.wrap` can throw — a locked key above all — and `save`'s contract is
         // that it takes ownership of `refreshToken` regardless of outcome. Zeroing has to run

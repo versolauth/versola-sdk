@@ -49,6 +49,17 @@ public interface CredentialStore {
     }
 
     /**
+     * Stores [rawIdToken] beside the refresh token already held, which stays as it is. For a refresh
+     * whose response carried a new ID token and no new refresh token (the provider kept the old one):
+     * the ID token travels with the refresh regardless of rotation. A store that can write the one
+     * field overrides this; the default writes the held token back beside it, which is correct but
+     * unwraps and rewraps it. Does nothing when no grant is held.
+     */
+    public suspend fun saveIdToken(rawIdToken: String) {
+        useRefreshToken { save(it.copyOf(), rawIdToken) }
+    }
+
+    /**
      * Runs [block] against the unwrapped refresh token and zeroes the buffer afterwards,
      * whether [block] returned or threw. Returns null when no grant is stored — a block that
      * itself returns null cannot be told apart from that, so callers wanting the distinction

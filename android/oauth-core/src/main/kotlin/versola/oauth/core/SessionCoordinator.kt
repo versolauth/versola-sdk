@@ -616,12 +616,11 @@ public class SessionCoordinator(
             val validator = idTokenValidator
             val rawIdToken = issued.idToken
             val validating = validator != null && rawIdToken != null
-            // The raw ID token is stored only once it has been validated (what is on disk is
-            // read back as claims without being re-verified, and replayed as `id_token_hint`),
-            // so this write carries none and a copy of the token is held for the one that does.
+            // The raw ID token is stored only once it has been validated (what is on disk is read
+            // back as claims without being re-verified, and replayed as `id_token_hint`), so this
+            // write carries none; the one that does comes after, whether or not the token rotated.
             val rotated = issued.refreshToken
-            val rotatedForIdToken = if (validating) rotated?.copyOf() else null
-            try {
+            run {
                 withContext(NonCancellable) {
                     refreshFlight.mutex.withLock {
                         // The grant was wiped while this request was out — a `logout()`, or another
@@ -669,22 +668,13 @@ public class SessionCoordinator(
                     withContext(NonCancellable) {
                         refreshFlight.mutex.withLock {
                             if (epoch.get() != startedIn) throw WipedMeanwhile()
-                            if (rotatedForIdToken != null) {
-                                credentialStore.save(rotatedForIdToken, rawIdToken)
-                            } else {
-                                // No new refresh token (the provider kept the old one): the ID token
-                                // that passed is still stored (`spec/state-machine.md`, the ID token
-                                // travels with step 2), by writing the stored token back beside it.
-                                credentialStore.useRefreshToken { credentialStore.save(it.copyOf(), rawIdToken) }
-                            }
+                            credentialStore.saveIdToken(rawIdToken)
                             claims = refreshedClaims
                             cachedAccessToken = Cached(issued, elapsedMillis())
                             flow.setState(SessionState.Authenticated)
                         }
                     }
                 }
-            } finally {
-                rotatedForIdToken?.fill(0)
             }
             warnIfNoExpiry(issued)
             issued

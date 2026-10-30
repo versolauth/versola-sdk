@@ -181,6 +181,26 @@ class DataStoreCredentialStoreTest {
     }
 
     @Test
+    fun `an ID token alone is stored beside the held refresh token, which stays as it is`() = runTest {
+        store.save(refreshToken.toByteArray(), "old-id")
+        store.savePendingRotation("k")
+
+        store.saveIdToken("new-id")
+
+        assertEquals("new-id", store.rawIdToken())
+        assertEquals(refreshToken, store.useRefreshToken { String(it) })
+        assertEquals("k", store.pendingRotation())
+    }
+
+    @Test
+    fun `an ID token is not stored when no grant is held`() = runTest {
+        store.saveIdToken("orphan")
+
+        assertNull(store.rawIdToken())
+        assertFalse(store.hasGrant())
+    }
+
+    @Test
     fun `clear leaves nothing behind`() = runTest {
         store.save(refreshToken.toByteArray(), idToken)
         store.savePendingRotation("idem-key-1")

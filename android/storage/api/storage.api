@@ -8,6 +8,7 @@ public final class versola/sdk/storage/DataStoreCredentialStore : versola/oauth/
 	public fun rawIdToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun replaceRefreshToken ([BLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun save ([BLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun saveIdToken (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun savePendingRotation (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun useRefreshToken (Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }

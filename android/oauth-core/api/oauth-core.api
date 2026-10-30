@@ -133,6 +133,7 @@ public abstract interface class versola/oauth/core/CredentialStore {
 	public static synthetic fun replaceRefreshToken$default (Lversola/oauth/core/CredentialStore;[BLjava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public abstract fun save ([BLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun save$default (Lversola/oauth/core/CredentialStore;[BLjava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public fun saveIdToken (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun savePendingRotation (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun useRefreshToken (Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
@@ -141,6 +142,7 @@ public final class versola/oauth/core/CredentialStore$DefaultImpls {
 	public static fun replaceRefreshToken (Lversola/oauth/core/CredentialStore;[BLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun replaceRefreshToken$default (Lversola/oauth/core/CredentialStore;[BLjava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public static synthetic fun save$default (Lversola/oauth/core/CredentialStore;[BLjava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static fun saveIdToken (Lversola/oauth/core/CredentialStore;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public abstract interface class versola/oauth/core/DiscoveryClient {
