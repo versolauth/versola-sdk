@@ -38,6 +38,9 @@ package actor AuthorizationFlow {
     private var expiredOnRestore = false
 
     private var gateHeld = false
+    /// The `state` of the request whose validated grant was handed to the coordinator and has not
+    /// been completed, abandoned or wiped yet: the code exchange, which runs outside the gate.
+    private var redeeming: String?
     private var gateQueue: [(id: UUID, continuation: CheckedContinuation<Void, Error>)] = []
 
     /// `state` values of authorizations whose caller was cancelled while their tab was open: the
@@ -152,14 +155,22 @@ package actor AuthorizationFlow {
     /// killed between redeeming the code and persisting the token still finds an `authorizing`
     /// session to resume.
     package func completeLogin() async throws {
+        redeeming = nil
         try await pendingStore.clear()
         await states.set(.authenticated)
+    }
+
+    /// The coordinator could not persist what the exchange returned and gives the request up
+    /// without touching it: it is no longer being redeemed, so it no longer blocks a new login.
+    package func redemptionFailed() {
+        redeeming = nil
     }
 
     /// The exchange failed, or the caller walked away from it: the code is spent and the slot
     /// can never complete, so it goes, and the session settles where the authorization was
     /// entered from rather than on a state the grant on disk contradicts.
     package func abandonLogin() async {
+        redeeming = nil
         do {
             try await pendingStore.clear()
         } catch {
@@ -170,6 +181,13 @@ package actor AuthorizationFlow {
         await states.set(await settledState())
     }
 
+    /// Whether an authorization is being carried out by this process right now: the browser is
+    /// up, a resume awaits its redirect, or a validated grant's code exchange has not finished.
+    /// What a new `login()` is refused for. A pending request that nobody awaits (a system
+    /// cancel left it, `resumePendingAuthorization()` has not been called) is not in flight: it
+    /// is superseded, not protected.
+    package var authorizationInFlight: Bool { gateHeld || redeeming != nil }
+
     /// `authenticated -> stepUpRequired`; nothing else moves, the grant is intact.
     package func enterStepUpRequired() async {
         if await states.current == .authenticated { await states.set(.stepUpRequired) }
@@ -179,6 +197,7 @@ package actor AuthorizationFlow {
     /// so a login abandoned mid-browser cannot survive a sign-out and resume into the next
     /// user's session.
     package func completeLogout() async {
+        redeeming = nil
         do {
             try await pendingStore.clear()
         } catch {
@@ -251,6 +270,10 @@ package actor AuthorizationFlow {
                 )
                 uri = try request.toUri(authorizationEndpoint: metadata.authorizationEndpoint)
             }
+            // A request nobody awaits (a system cancel kept it, a resume was never started) is
+            // replaced by this one. Its tab, if it still exists, can redirect later: its `state`
+            // is remembered so that redirect is stepped over instead of failing this call.
+            if let leftover = try? await pendingStore.load() { rememberAbandoned(leftover.state) }
             // Before the state changes and before the browser opens: the order is the point.
             try await pendingStore.save(pending)
             await states.set(.authorizing)
@@ -309,6 +332,10 @@ package actor AuthorizationFlow {
                 }
                 return nil
             }
+            // The login of this process that got its redirect and is redeeming the code: it
+            // completes itself. Waiting for a second redirect here would hold the gate for the
+            // rest of the request's ten minutes.
+            if pending.state == redeeming { return nil }
             let now = clock.now()
             if pending.isExpired(at: now) {
                 await abandonLogin()
@@ -432,14 +459,17 @@ package actor AuthorizationFlow {
             throw OAuthError.recoverable(.systemCancelled)
         case .redirect(let url):
             do {
-                return try AuthorizationResponseValidator.validate(
+                let grant = try AuthorizationResponseValidator.validate(
                     redirect: url,
                     pending: pending,
                     issuer: configuration.issuer,
                     issParameterSupported: metadata.authorizationResponseIssParameterSupported
                 )
                 // Deliberately still `authorizing` with the request still stored: the machine
-                // reaches `authenticated` only once a refresh token is durably held.
+                // reaches `authenticated` only once a refresh token is durably held. Until the
+                // coordinator says so, this request is being redeemed and is nobody's leftover.
+                redeeming = pending.state
+                return grant
             } catch {
                 // A rejected response is unsafe to continue from, whichever way it was rejected.
                 await abandonLogin()
@@ -487,7 +517,7 @@ package actor AuthorizationFlow {
     /// read `unauthenticated` and open two sheets (`spec/oauth-sdk-api.md` section 5).
     private func exclusivelyOrRefuse<T: Sendable>(_ body: () async throws -> T) async throws -> T {
         try Task.checkCancellation()
-        if gateHeld {
+        if authorizationInFlight {
             throw OAuthError.configuration(.invalidConfiguration(detail: "an authorization is already in progress; observe sessionStates() before asking again"))
         }
         gateHeld = true

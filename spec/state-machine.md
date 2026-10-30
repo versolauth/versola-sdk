@@ -109,7 +109,15 @@ error arrives is the only way to separate them, and it is required, not optional
 cancel should be retried silently, a user cancel must not be.
 
 The pending request is wiped on user cancel and **kept** on system cancel, so the flow can be
-resumed.
+resumed. Kept for a resume, not reserved: nothing awaits it, so a new `login()` is not made to
+wait out its ten minutes. It supersedes the leftover, and the old request's `state` is remembered
+so a redirect its tab still delivers is stepped over rather than failing the new login.
+
+A redirect that reaches a live request with a `state` that is not its own stays
+`Configuration(StateMismatch)` and discards the request (scenario 15), wherever it came from: the
+spec does not distinguish a redirect delivered by the browser session from one handed over by the
+app (`handleRedirect`). A URL that is not the configured redirect URI at all is not a response
+and is ignored by the facade before it reaches the flow.
 
 iOS, a caller cancelled mid-browser (a SwiftUI `.task` torn down by navigation): the SDK's
 cancellation handler dismisses the `ASWebAuthenticationSession`, so nothing can redirect

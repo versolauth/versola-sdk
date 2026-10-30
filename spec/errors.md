@@ -202,7 +202,7 @@ validates ID tokens (architecture review F5).
 | UserInfo `sub` differs from the ID token's, or a signed UserInfo response does not verify | `Configuration` | `UserInfoRejected` | OIDC Core 5.3.2. |
 | A capability the configuration requires is not advertised (`TokenBinding.Dpop(required)`, `pushedAuthorization = Required`, `require_pushed_authorization_requests` with `Never`, `userInfo()` without an endpoint, `code_challenge_methods_supported` present without `S256`) | `Configuration` | `ProviderUnsupported(capability)` | Raised at the first operation that needs the capability, never by a silent downgrade. An absent `code_challenge_methods_supported` is unknown, not a refusal. |
 | Access token expired and the provider issued no refresh token | `Reauthenticate` | `SessionExpired` | No token request is made. Scenario 31. |
-| `login()` called while `Authorizing` | `Configuration` | `InvalidConfiguration` | The app observes `sessionState` before asking. |
+| `login()` called while an authorization is in flight in this process (browser up, redirect awaited, code being exchanged) | `Configuration` | `InvalidConfiguration` | The app observes `sessionState` before asking. A pending request nobody awaits is superseded, not refused (`oauth-sdk-api.md` section 5). |
 | A resource server answers 401 with `error="insufficient_user_authentication"` (RFC 9470) | `StepUp(acrValues, maxAge)` | | Same as edge's row; any resource server in `protectedOrigins`. |
 | A resource server answers 401 otherwise | refresh once, replay once, then `Reauthenticate`, reason `SessionRejected` | | As edge's bare 401. |
 

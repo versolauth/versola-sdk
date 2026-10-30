@@ -219,6 +219,18 @@ package actor SessionCoordinator: AccessTokenSource {
             }
         }
         let (response, validated) = try await exchange.value
+        do {
+            return try await persistLogin(response, validated: validated)
+        } catch {
+            // The token could not be kept (a locked store, say). The request stays stored, as
+            // the persistence order requires, but nothing is redeeming it any more: it is a
+            // leftover a new `login()` supersedes, not a login still in progress.
+            await flow.redemptionFailed()
+            throw error
+        }
+    }
+
+    private func persistLogin(_ response: TokenResponse, validated: IdTokenClaims?) async throws -> TokenResponse {
         if let refreshToken = response.refreshToken {
             try await credentialStore.save(refreshToken: refreshToken, rawIdToken: response.idToken)
             memorySession = nil

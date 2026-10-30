@@ -229,6 +229,44 @@ final class OAuthClientTests: XCTestCase {
         XCTAssertEqual(StubURLProtocol.requests.filter { $0.url?.path == "/token" }.count, 1)
     }
 
+    /// The first sheet is torn down by the system while the app is in the background; the second
+    /// answers like the ordinary fake.
+    actor SystemCancelsOnce: BrowserAuthorizationSession {
+        private let answering: FakeBrowser
+        private var cancelled = false
+        init(_ answering: FakeBrowser) { self.answering = answering }
+        func authorize(_ uri: URL, options: BrowserSessionOptions) async throws -> BrowserOutcome {
+            if !cancelled {
+                cancelled = true
+                return .systemCancelled
+            }
+            return try await answering.authorize(uri, options: options)
+        }
+        func awaitPendingRedirect() async throws -> BrowserOutcome { throw CancellationError() }
+    }
+
+    /// A system cancel keeps the pending request for a resume the app may never start. A new
+    /// `login()` does not wait out its ten minutes: it supersedes it.
+    func testLoginAfterASystemCancelSupersedesTheLeftoverRequestInsteadOfBeingRefusedForTenMinutes() async throws {
+        let client = try await OAuthClient.create(configuration: try configuration(), browser: SystemCancelsOnce(browser), credentialStore: InMemoryCredentialStore(), pendingStore: InMemoryPendingAuthorizationStore())
+
+        do {
+            try await client.login()
+            XCTFail("expected systemCancelled")
+        } catch {
+            XCTAssertEqual(error as? OAuthError, .recoverable(.systemCancelled))
+        }
+        let between = await client.sessionState
+        XCTAssertEqual(between, .authorizing, "kept for a resume")
+
+        try await client.login()
+
+        let after = await client.sessionState
+        XCTAssertEqual(after, .authenticated)
+        let opened = await browser.opened
+        XCTAssertEqual(opened.count, 1, "the second sheet opened and signed in")
+    }
+
     func testResumePendingAuthorizationRefusesARedirectWithAnotherStateBeforeAnyTokenRequest() async throws {
         let (client, _) = try await coldStartedClient(redirect: "\(Self.redirect)?code=the-code&state=forged&iss=\(Self.issuer)")
 

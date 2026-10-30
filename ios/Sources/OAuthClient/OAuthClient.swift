@@ -273,7 +273,7 @@ public final class OAuthClient: Sendable {
 
     private func refuseWhileAuthorizing() async throws {
         try await flow.ensureRestored()
-        if await flow.states.current == .authorizing {
+        if await flow.authorizationInFlight {
             throw OAuthError.configuration(.invalidConfiguration(detail: "an authorization is already in progress; observe sessionStates() before asking again"))
         }
     }

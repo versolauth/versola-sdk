@@ -123,9 +123,16 @@ val oauth = OAuthClient.create(context, configuration)
 
 `login()` while `Authenticated` starts a new authorization and, on success, replaces the stored
 grant; on cancel or failure the existing session stays (`state-machine.md`, settle on
-`Authenticated`). `login()` while `Authorizing` is refused with
+`Authenticated`). `login()` while an authorization is **in flight** is refused with
 `Configuration(InvalidConfiguration("an authorization is already in progress"))`; the app observes
-the state before asking.
+the state before asking. In flight means this process is carrying one out: the browser is up, a
+resume is awaiting its redirect, or a validated redirect's code exchange has not finished. A
+pending request that nobody awaits is not in flight even though the state reads `Authorizing`
+(a system cancel kept it for a resume the app has not asked for, or a cold start restored it and
+nothing was started): `login()` **supersedes** it, as it supersedes the slot of a cancelled
+caller, and remembers its `state` so that a redirect the old tab still delivers is stepped over
+instead of failing the new login as a mismatch. Platform note: Android refuses on the state alone
+today, so a request left behind there blocks `login()` until it expires (ten minutes).
 
 ## 6. `login()` options
 
@@ -327,7 +334,7 @@ refresh token issued, `offline_access` advertised but not configured, a response
 
 1. `IdTokenRejected` as `Configuration` (section 11) versus a fifth category; the spec's
    four-category rule argues for `Configuration`.
-2. `login()` while `Authorizing` refused (section 5) versus cancelling the outstanding request.
+2. `login()` while an authorization is in flight refused (section 5) versus cancelling the outstanding request. A request nobody awaits is superseded.
 3. `stepUp()` takes the configured scopes by default (section 5); the Versola facade requires
    them as a parameter. The two differ in signature, not in what is sent.
 4. The 24-hour discovery cache age and the 30-second refresh skew: both fixed, not configurable.

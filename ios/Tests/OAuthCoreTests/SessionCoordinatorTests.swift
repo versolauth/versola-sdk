@@ -23,7 +23,7 @@ final class SessionCoordinatorTests: XCTestCase {
         func refreshToken() async throws -> String? { refresh }
         func rawIdToken() async throws -> String? { idToken }
         var saveFailure: OAuthError?
-        func failSave(_ error: OAuthError) { saveFailure = error }
+        func failSave(_ error: OAuthError?) { saveFailure = error }
         func save(refreshToken: String, rawIdToken: String?) async throws {
             if let saveFailure { throw saveFailure }
             refresh = refreshToken
@@ -515,6 +515,28 @@ final class SessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(state, .locked)
         let stored = await f.store.refresh
         XCTAssertEqual(stored, "rt-1")
+    }
+
+    func testALoginWhoseTokenCannotBeStoredLeavesTheRequestButNoLongerBlocksANewLogin() async throws {
+        let f = try fixture(answers: [.success(response()), .success(response())])
+        await f.store.failSave(.recoverable(.unlockRequired))
+
+        do {
+            try await f.coordinator.login(scopes: ["openid"])
+            XCTFail("no error")
+        } catch let error as OAuthError {
+            XCTAssertEqual(error, .recoverable(.unlockRequired))
+        }
+
+        let inFlight = await f.flow.authorizationInFlight
+        XCTAssertFalse(inFlight, "nothing is redeeming the request any more")
+        let pending = await f.pendingStore.stored
+        XCTAssertNotNil(pending, "kept until a token is durably stored, as the persistence order has it")
+
+        await f.store.failSave(nil)
+        try await f.coordinator.login(scopes: ["openid"])
+        let state = await f.flow.states.current
+        XCTAssertEqual(state, .authenticated)
     }
 
     // MARK: - Refresh with no grant
