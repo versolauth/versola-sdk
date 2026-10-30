@@ -126,6 +126,13 @@ after the request left the device the code may already be spent, so the exchange
 by an operation that tolerates it). A request outside any operation (a flight started from a timer
 the app owns has its own budget; a bare call has none) gets the client's own timeout.
 
+**Android deviation.** Android does not derive a per-request deadline from the budget: a request is
+bounded by the timeouts of the `OkHttpClient` it was given (its connect, read and write timeouts, 10
+seconds each by default, and no whole-call timeout), so a nearly spent budget does not shorten it
+and there is no 5-second floor to keep. The rule about the code exchange holds all the same: a
+timeout after the request left the device may have spent the code, so it is surfaced as
+`Recoverable(Network)` and never repeated.
+
 ### A stale key set for a refresh
 
 The ID token on a refresh response is judged after the rotated refresh token is stored
