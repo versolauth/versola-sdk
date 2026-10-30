@@ -222,4 +222,77 @@ final class DiscoveryTests: XCTestCase {
         let metadata = try await service.metadata()
         XCTAssertEqual(metadata, fixed)
     }
+
+    // MARK: - Endpoints must be https
+
+    private func metadata(_ overrides: (inout ProviderMetadata) -> Void) -> ProviderMetadata {
+        var value = AuthzKit.metadata()
+        value.jwksUri = "https://id.example.com/jwks"
+        overrides(&value)
+        return value
+    }
+
+    private func assertRefused(_ name: String, _ document: ProviderMetadata, file: StaticString = #filePath, line: UInt = #line) {
+        XCTAssertThrowsError(try document.validate(configuredIssuer: AuthzKit.issuer), name, file: file, line: line) { error in
+            guard case .configuration(.discoveryMalformed(let detail)) = error as? OAuthError else {
+                return XCTFail("\(name): \(error)", file: file, line: line)
+            }
+            XCTAssertTrue(detail.contains(name), "the detail names the member: \(detail)", file: file, line: line)
+        }
+    }
+
+    /// A document whose `token_endpoint` is `http://` would have the refresh token POSTed in the
+    /// clear: it is refused where the document is read, not where it is used.
+    func testEveryDiscoveredEndpointMustBeHttps() {
+        assertRefused("token_endpoint", metadata { $0.tokenEndpoint = "http://id.example.com/token" })
+        assertRefused("authorization_endpoint", metadata { $0.authorizationEndpoint = "http://id.example.com/authorize" })
+        assertRefused("userinfo_endpoint", metadata { $0.userinfoEndpoint = "http://id.example.com/userinfo" })
+        assertRefused("revocation_endpoint", metadata { $0.revocationEndpoint = "http://id.example.com/revoke" })
+        assertRefused("end_session_endpoint", metadata { $0.endSessionEndpoint = "http://id.example.com/logout" })
+        assertRefused("jwks_uri", metadata { $0.jwksUri = "http://id.example.com/jwks" })
+        assertRefused("pushed_authorization_request_endpoint", metadata { $0.pushedAuthorizationRequestEndpoint = "http://id.example.com/par" })
+    }
+
+    func testAnEndpointThatIsNotAnAbsoluteUrlWithAHostIsRefused() {
+        assertRefused("token_endpoint", metadata { $0.tokenEndpoint = "/token" })
+        assertRefused("token_endpoint", metadata { $0.tokenEndpoint = "https:token" })
+        assertRefused("jwks_uri", metadata { $0.jwksUri = "ftp://id.example.com/jwks" })
+        assertRefused("token_endpoint", metadata { $0.tokenEndpoint = "javascript:alert(1)" })
+    }
+
+    func testCleartextIsAcceptedOnLoopbackOnlyAsTheIssuerIs() throws {
+        for host in ["localhost:8080", "127.0.0.1:8080", "[::1]:8080"] {
+            let local = metadata {
+                $0.issuer = "https://id.example.com"
+                $0.tokenEndpoint = "http://\(host)/token"
+                $0.jwksUri = "http://\(host)/jwks"
+            }
+            XCTAssertNoThrow(try local.validate(configuredIssuer: AuthzKit.issuer), host)
+        }
+        assertRefused("token_endpoint", metadata { $0.tokenEndpoint = "http://localhost.example.com/token" })
+        assertRefused("token_endpoint", metadata { $0.tokenEndpoint = "http://10.0.2.2:8080/token" })
+    }
+
+    /// Cross-origin endpoints are legitimate (a provider whose JWKS or logout is on a CDN or
+    /// another host); the rule is the scheme, not the origin.
+    func testEndpointsOnOtherHttpsOriginsAreAccepted() throws {
+        let document = metadata {
+            $0.tokenEndpoint = "https://token.other.example.net/oauth/token"
+            $0.jwksUri = "https://keys.cdn.example.org/jwks"
+            $0.endSessionEndpoint = "https://sso.example.com/logout"
+        }
+        XCTAssertNoThrow(try document.validate(configuredIssuer: AuthzKit.issuer))
+    }
+
+    func testAnEmptyOptionalEndpointIsAbsentNotInvalid() throws {
+        let document = metadata { $0.endSessionEndpoint = ""; $0.revocationEndpoint = "" }
+        XCTAssertNoThrow(try document.validate(configuredIssuer: AuthzKit.issuer))
+    }
+
+    func testADocumentWithAnInsecureEndpointIsNotServedFromTheCacheEither() async throws {
+        let poisoned = metadata { $0.tokenEndpoint = "http://id.example.com/token" }
+        let http = RecordingHTTP.json(200, document)
+        let served = try await service(http, cache: MemoryMetadataCache(poisoned)).metadata()
+        XCTAssertEqual(served.tokenEndpoint, "https://id.example.com/token", "treated as absent, refetched")
+    }
 }

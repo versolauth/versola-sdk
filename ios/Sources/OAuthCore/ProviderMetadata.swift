@@ -104,6 +104,33 @@ public struct ProviderMetadata: Sendable, Equatable, Codable {
         }
         if authorizationEndpoint.isEmpty { throw OAuthError.configuration(.discoveryFieldMissing(field: "authorization_endpoint")) }
         if tokenEndpoint.isEmpty { throw OAuthError.configuration(.discoveryFieldMissing(field: "token_endpoint")) }
+        // Every endpoint the SDK would send something to or read keys from. A document served over
+        // https can still name `http://` for the token endpoint, and the refresh token would then
+        // be POSTed in the clear: refused here, where the document is read. Other origins are
+        // allowed (a CDN for `jwks_uri`, another host for sign-out); the rule is the scheme.
+        let endpoints: [(String, String?)] = [
+            ("authorization_endpoint", authorizationEndpoint), ("token_endpoint", tokenEndpoint),
+            ("userinfo_endpoint", userinfoEndpoint), ("revocation_endpoint", revocationEndpoint),
+            ("end_session_endpoint", endSessionEndpoint), ("jwks_uri", jwksUri),
+            ("pushed_authorization_request_endpoint", pushedAuthorizationRequestEndpoint),
+        ]
+        for (name, value) in endpoints {
+            guard let value, !value.isEmpty else { continue }
+            if !Self.isSecureEndpoint(value) {
+                throw OAuthError.configuration(.discoveryMalformed(detail: "\(name) must be an absolute https URL (http only on loopback)"))
+            }
+        }
+    }
+
+    /// An absolute `https` URL with a host, or `http` to a loopback host: the rule the issuer is
+    /// held to (`spec/oauth-sdk-api.md` section 3), so a development stack on `localhost` works.
+    private static func isSecureEndpoint(_ endpoint: String) -> Bool {
+        guard let components = URLComponents(string: endpoint), let scheme = components.scheme?.lowercased(),
+              var host = components.host?.lowercased(), !host.isEmpty
+        else { return false }
+        if host.hasPrefix("[") && host.hasSuffix("]") { host = String(host.dropFirst().dropLast()) }
+        if scheme == "https" { return true }
+        return scheme == "http" && ["127.0.0.1", "localhost", "::1"].contains(host)
     }
 
     private func trimSlash(_ s: String) -> String { s.hasSuffix("/") ? String(s.dropLast()) : s }

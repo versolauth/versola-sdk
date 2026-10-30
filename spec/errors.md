@@ -187,6 +187,7 @@ Not every error comes from a server.
 | `BackChannel.Edge` without `edgeBaseUrl`, with `TokenBinding.Bearer`, or with a non-`https` redirect URI | `Configuration` | Refused at `configure()`. Edge's native endpoints are edge's, accept no bearer presentation, and front clients registered with `https` redirect URIs only. |
 | A grant started through one back channel redeemed through the other | `Configuration` | Wiring. Refused before the code is spent. |
 | Discovery document missing a required field | `Configuration` | A missing `dpop_signing_alg_values_supported` is **not** this: it means bearer mode, logged, not failed. |
+| Discovery document names an endpoint that is not `https` (`authorization_endpoint`, `token_endpoint`, `userinfo_endpoint`, `revocation_endpoint`, `end_session_endpoint`, `jwks_uri`, `pushed_authorization_request_endpoint`), or one that is not an absolute URL with a host | `Configuration`, detail `DiscoveryMalformed` | Refused where the document is read, so a refresh token is never POSTed in the clear because a document said so. `http` is accepted on a loopback host only, as for the issuer (`oauth-sdk-api.md` section 3). An endpoint on another https origin than the issuer is allowed: the rule is the scheme, not the origin. |
 | Pending authorization request older than 10 minutes | `Recoverable`, cause `Expired` | Discarded on restore. |
 
 ## Generic facade additions
