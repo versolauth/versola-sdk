@@ -515,7 +515,7 @@ public class SessionCoordinator(
             flow.setState(SessionState.Refreshing)
 
             val result = try {
-                Result.success(performRefresh(startedIn))
+                Result.success(performRefresh(startedIn, priorState))
             } catch (e: CancellationException) {
                 withContext(NonCancellable) {
                     // `Refreshing` was pushed by this flight and nothing resolved it, so it
@@ -564,7 +564,7 @@ public class SessionCoordinator(
         flight.complete(outcome)
     }
 
-    private suspend fun performRefresh(startedIn: Long): TokenResponse {
+    private suspend fun performRefresh(startedIn: Long, priorState: SessionState): TokenResponse {
         val response = try {
             // Step 1. Recorded once, from one unwrap that spends nothing — hashing does not
             // take ownership of what it reads, so this unwrap is independent of the one(s)
@@ -575,7 +575,7 @@ public class SessionCoordinator(
             // from it (step 2 never ran), so replaying with it is correct rather than merely
             // convenient.
             val idempotencyKey = credentialStore.pendingRotation() ?: run {
-                val key = credentialStore.useRefreshToken { idempotencyKeyFor(it) } ?: noGrantStored()
+                val key = credentialStore.useRefreshToken { idempotencyKeyFor(it) } ?: throw NoGrantStored()
                 credentialStore.savePendingRotation(key)
                 key
             }
@@ -590,7 +590,7 @@ public class SessionCoordinator(
                 // re-unwraps the still-untouched ciphertext each time, which is also exactly
                 // the "unwrapped for the duration of one token request and no longer" rule
                 // `spec/state-machine.md`'s `Locked` section states for every other caller.
-                credentialStore.useRefreshToken { tokenClient.refresh(it, idempotencyKey) } ?: noGrantStored()
+                credentialStore.useRefreshToken { tokenClient.refresh(it, idempotencyKey) } ?: throw NoGrantStored()
             }
             // Step 2 comes before the ID token is judged, and for a reason the validator cannot
             // give: by now the provider has rotated, so the response's refresh token is the only
@@ -671,6 +671,19 @@ public class SessionCoordinator(
             // Not a failure of the refresh and nothing to wipe: the caller that asked is told
             // the grant is gone, which is what it will find.
             throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.GrantRejected)
+        } catch (e: NoGrantStored) {
+            // No refresh token was there to spend, so there is nothing to wipe either, and wiping
+            // anyway destroys what is *not* the grant's: the pending authorization of a login in
+            // flight (an app that asks for a token before it has looked at `sessionState`) and the
+            // DPoP key its `dpop_jkt` already committed that authorization to, after which the
+            // code exchange signs with a key the code is not bound to. The state goes back to
+            // where there is something to wait for, or to signed out; the caller is told the
+            // session is not there, as before.
+            publishIfCurrent(
+                startedIn,
+                if (priorState == SessionState.Authorizing) SessionState.Authorizing else SessionState.Unauthenticated,
+            )
+            throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.GrantRejected)
         } catch (e: CancellationException) {
             // Not an outcome of the refresh, and not this function's to settle: [refresh]
             // retires the abandoned flight and reverts the state where a successor can see
@@ -719,14 +732,12 @@ public class SessionCoordinator(
     private class WipedMeanwhile : RuntimeException()
 
     /**
-     * There was no refresh token to spend — `credentialStore.useRefreshToken` answered null,
-     * which happens only when the session was already signed out in substance, whatever state
-     * the caller last observed. Modelled as the same `Reauthenticate(GrantRejected)` the token
-     * endpoint's own `invalid_grant` produces, so the one `catch` above wipes and settles
-     * `Unauthenticated` for this case exactly as it does for that one.
+     * There was no refresh token to spend — `credentialStore.useRefreshToken` answered null, which
+     * happens only when the session was already signed out in substance, whatever state the
+     * caller last observed. Distinct from the token endpoint's own `invalid_grant`: that one ends a
+     * grant that existed and wipes it, this one has nothing to wipe (see [performRefresh]).
      */
-    private fun noGrantStored(): Nothing =
-        throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.GrantRejected)
+    private class NoGrantStored : RuntimeException()
 
     /**
      * `Authenticated → LoggingOut → Unauthenticated` (#10, scenario 18), in the order

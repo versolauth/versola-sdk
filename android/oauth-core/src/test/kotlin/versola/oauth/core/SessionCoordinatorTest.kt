@@ -1571,10 +1571,40 @@ class SessionCoordinatorTest {
         val (coordinator, tokenClient, credentialStore) = coordinator()
         // No refreshToken seeded.
 
-        failure { coordinator.refresh() }
+        val error = failure { coordinator.refresh() }
 
+        assertEquals(VersolaError.Reauthenticate.Reason.GrantRejected, (error as VersolaError.Reauthenticate).reason)
         assertEquals(0, tokenClient.refreshCalls.size)
         assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+        // Nothing was stored, so nothing is wiped: the key a login may be about to bind to stays.
+        assertEquals(0, credentialStore.clears)
+        assertEquals(0, teardowns)
+    }
+
+    @Test
+    fun `an authenticated call with no grant does not destroy a login in flight or the key it is bound to`() = runTest {
+        // A bootstrap that calls `accessToken()` while the browser is open, or before the app has
+        // looked at `sessionState`: there is no grant yet, and what exists is a pending request and
+        // a DPoP key whose thumbprint `dpop_jkt` already committed the authorization to.
+        val pendingStore = RecordingPendingStore()
+        val (coordinator, tokenClient, credentialStore) = coordinator(pendingStore)
+        val pending = PendingAuthorizationRequest(
+            state = "s", nonce = "n", codeVerifier = "v", scopes = listOf("openid"),
+            redirectUri = "https://app.example.com/oauth", acrValues = emptyList(), maxAge = null,
+            createdAtEpochMillis = System.currentTimeMillis(),
+        )
+        pendingStore.stored = pending
+        assertEquals(SessionState.Authorizing, coordinator.sessionState.first())
+
+        val error = failure { coordinator.accessToken() }
+
+        assertTrue(error is VersolaError.Reauthenticate)
+        assertSame("the pending request survives", pending, pendingStore.stored)
+        assertEquals(0, pendingStore.clears)
+        assertEquals("the DPoP key is not torn down", 0, teardowns)
+        assertEquals(0, credentialStore.clears)
+        assertEquals(0, tokenClient.refreshCalls.size)
+        assertEquals(SessionState.Authorizing, coordinator.sessionState.first())
     }
 
     // ---- cold start ------------------------------------------------------------------------

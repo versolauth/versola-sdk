@@ -251,6 +251,13 @@ Only on `invalid_grant`. Network failures, `use_dpop_nonce`, 429 and 5xx leave t
 Everything credential-shaped is wiped: refresh token, pending slot, nonce caches. The DPoP key
 follows the logout rule (below).
 
+A refresh that finds **no refresh token stored** at all (a token asked for before any login
+finished, or after a sign-out) is not this transition: there is no grant to end, so nothing is
+wiped. The call fails with `Reauthenticate(GrantRejected)`, and the state returns to where it was
+entered from, `Authorizing` or `Unauthenticated`. In particular a pending authorization request and
+the DPoP key its `dpop_jkt` committed to survive: wiping them would let an app that asks for a token
+while the browser is open lose the sign-in in progress.
+
 ### `Authenticated → Authenticated` — `invalid_dpop_proof`, then `Authenticated → Unauthenticated`
 
 A 401 with `invalid_dpop_proof` (token endpoint, UserInfo or edge — see
