@@ -113,12 +113,27 @@ internal class Harness {
 
     /** Types alice's credentials from the realm into the form and submits it. */
     fun submitCredentials(username: String = "alice", password: String = "alice-password") {
-        // Real key events rather than ACTION_SET_TEXT: the form validates what the page saw.
-        device.findObject(By.res("username")).click()
-        shell("input text $username")
-        device.findObject(By.res("password")).click()
-        shell("input text $password")
+        typeInto("username", username)
+        typeInto("password", password)
         shell("input keyevent 66")
+    }
+
+    /**
+     * Real key events rather than ACTION_SET_TEXT: the form validates what the page saw. Each step
+     * is awaited, because `input text` does not wait for anything: on a slow emulator the keys
+     * reached a field that had not taken focus yet, or were still arriving when Enter went in, and
+     * the provider answered "Invalid username or password" to a garbled value. The field has focus
+     * before the first key, and holds every character before the next step. A password field shows
+     * bullets, so its length is what is compared.
+     */
+    private fun typeInto(field: String, value: String) {
+        device.findObject(By.res(field)).click()
+        await("the $field field to take focus", UI_TIMEOUT_MILLIS) { device.findObject(By.res(field).focused(true)) }
+        shell("input text $value")
+        await("the $field field to hold what was typed", UI_TIMEOUT_MILLIS) {
+            val text = device.findObject(By.res(field))?.text.orEmpty()
+            true.takeIf { if (field == "password") text.length == value.length else text == value }
+        }
     }
 
     /** Signs in at the form and waits for the browser to hand control back to the app. */
