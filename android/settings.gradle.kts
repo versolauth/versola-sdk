@@ -47,3 +47,9 @@ include(":samples:oauth")
 // the scenarios tagged `facade: [oauth]`. Skipped unless OAUTH_CONFORMANCE_ISSUER is set, so the
 // build job's `test` stays a unit run. Nothing is published from it.
 include(":conformance-oauth")
+// The browser-leg device tier (develop.md): a debug-only host app over the generic facade, and the
+// instrumentation package that drives it and Chrome with UI Automator against a Keycloak
+// container. Separate packages so a test can kill the app's process (scenario 12) and keep
+// running. Skipped without the provider environment; nothing is published from either.
+include(":conformance-browser-app")
+include(":conformance-browser")

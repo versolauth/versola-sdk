@@ -28,6 +28,12 @@ public class AuthorizationGrant @VersolaInternalApi public constructor(
      * grant's audience is already fixed.
      */
     public val resources: List<String> = emptyList(),
+    /**
+     * The `max_age` the request carried, restored from the pending request. A login finished in
+     * another process than the one that asked has no caller to remember it, and the ID token's
+     * `auth_time` check (OpenID Connect Core 3.1.3.7 step 11) must not depend on there being one.
+     */
+    @VersolaInternalApi public val maxAge: Long? = null,
 ) {
 
     /** Credential material on both counts. */
@@ -101,6 +107,7 @@ public object AuthorizationResponseValidator {
             iss = iss,
             extension = pending.extension,
             resources = pending.resources,
+            maxAge = pending.maxAge,
         )
     }
 

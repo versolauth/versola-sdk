@@ -1,0 +1,200 @@
+name: flutter
+
+# The versola_oauth plugin (flutter/versola_oauth, issue #46 B6). Nothing else ran Flutter before
+# this file: android.yml and ios.yml filter on their own trees, so a change to the plugin, the
+# Pigeon contract or the facades the plugin calls was reviewed by reading. What each job proves is
+# in .claude/rules/ci-release.md.
+#
+# The path filter lists what the plugin is built from, not the whole of android/ and ios/: the
+# plugin calls the public API of the generic facade (android/oauth and the modules under it,
+# ios/Sources/OAuthCore and OAuthClient), so a change there can break it, while the Versola
+# facade's modules cannot. A macOS minute costs ten times a Linux one, which is the other reason
+# not to run the iOS job on every Android change.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "flutter/**"
+      - "android/oauth/**"
+      - "android/oauth-core/**"
+      - "android/okhttp/**"
+      - "android/browser/**"
+      - "android/dpop/**"
+      - "android/storage/**"
+      - "android/build.gradle.kts"
+      - "android/settings.gradle.kts"
+      - "android/gradle.properties"
+      - "ios/Sources/OAuthCore/**"
+      - "ios/Sources/OAuthClient/**"
+      - "Package.swift"
+      - ".github/workflows/flutter.yml"
+  pull_request:
+    # The same list as above: spelled out twice because the filter is per event, and a YAML
+    # anchor would save four lines at the price of a feature not every tool reading this file
+    # understands.
+    paths:
+      - "flutter/**"
+      - "android/oauth/**"
+      - "android/oauth-core/**"
+      - "android/okhttp/**"
+      - "android/browser/**"
+      - "android/dpop/**"
+      - "android/storage/**"
+      - "android/build.gradle.kts"
+      - "android/settings.gradle.kts"
+      - "android/gradle.properties"
+      - "ios/Sources/OAuthCore/**"
+      - "ios/Sources/OAuthClient/**"
+      - "Package.swift"
+      - ".github/workflows/flutter.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  # Everything that needs only the Dart SDK: format, analysis, the unit tests against a mocked
+  # channel, and the one check that keeps the generated bridge honest.
+  dart:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: flutter/versola_oauth
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Read the pinned Flutter version
+        id: flutter
+        working-directory: flutter
+        run: |
+          version="$(jq -r .flutter .fvmrc)"
+          # The value reaches `with:` below and nothing else; refuse anything that is not a
+          # plain version so a change to .fvmrc cannot select an arbitrary ref.
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected Flutter version: $version" >&2; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # flutter/.fvmrc is the one place the version is chosen (develop.md); fvm itself is not
+      # installed here, the action fetches the same release.
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ steps.flutter.outputs.version }}
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+      - run: flutter pub get
+        working-directory: flutter/versola_oauth/example
+
+      - name: Format
+        run: dart format --output=none --set-exit-if-changed .
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Analyze the example
+        run: flutter analyze
+        working-directory: flutter/versola_oauth/example
+
+      # The mapping and the error categories against a mocked channel. It does not prove the
+      # bridge or the native SDKs (testing.md); the glue jobs below prove the native halves.
+      - name: Unit tests
+        run: flutter test
+
+      # The three generated files are never hand-edited and the Pigeon version is part of the
+      # contract (flutter.md). Regenerating from pigeons/messages.dart must reproduce them byte
+      # for byte, which also catches a Dependabot bump of pigeon that was not regenerated.
+      - name: Generated bridge is up to date
+        run: |
+          dart run pigeon --input pigeons/messages.dart
+          dart format .
+          git diff --exit-code -- . || { echo "::error::regenerate with: dart run pigeon --input pigeons/messages.dart && dart format ." ; exit 1; }
+
+  # The Android half: the plugin compiles against the repository's own generic facade through the
+  # example's composite build (kz.versola:oauth-android is not published, so :oauth is substituted),
+  # the Kotlin glue's unit tests run, and the example APK builds.
+  android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Read the pinned Flutter version
+        id: flutter
+        working-directory: flutter
+        run: |
+          version="$(jq -r .flutter .fvmrc)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected Flutter version: $version" >&2; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ steps.flutter.outputs.version }}
+          channel: stable
+          cache: true
+
+      # JDK 21 for Gradle, bytecode stays Java 17 (android.yml says why).
+      - uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3 # v4.9.1
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install Android SDK platform
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36" "build-tools;36.0.0" > /dev/null
+
+      - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+
+      - run: flutter pub get
+        working-directory: flutter/versola_oauth/example
+
+      # The build also generates the Gradle wrapper and local.properties the next step needs
+      # (both are gitignored), so it comes first.
+      - name: Build the example APK
+        run: flutter build apk --debug
+        working-directory: flutter/versola_oauth/example
+
+      - name: Kotlin glue unit tests
+        run: ./gradlew testDebugUnitTest
+        working-directory: flutter/versola_oauth/example/android
+
+  # The iOS half: the plugin compiles against the repository package by path (SwiftPM only), the
+  # example builds, and the Swift glue's tests run on a simulator. macOS only: Xcode.
+  ios:
+    runs-on: macos-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Read the pinned Flutter version
+        id: flutter
+        working-directory: flutter
+        run: |
+          version="$(jq -r .flutter .fvmrc)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected Flutter version: $version" >&2; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ steps.flutter.outputs.version }}
+          channel: stable
+          cache: true
+
+      - run: flutter pub get
+        working-directory: flutter/versola_oauth/example
+
+      - name: Build the example
+        run: flutter build ios --no-codesign --debug
+        working-directory: flutter/versola_oauth/example
+
+      # The same simulator-name drift as ios.yml: the name is whatever the runner image's Xcode
+      # ships, it moved from "iPhone 16" to "iPhone 17", and both files change together when it
+      # does. -only-testing keeps this to the plugin's own tests; the example's Runner target is
+      # the test host, so the app and its Dart create() start on the simulator too, which is how
+      # a platform-thread violation in the plugin surfaced (flutter.md, Bridge).
+      - name: Swift glue unit tests
+        run: >
+          xcodebuild test -workspace Runner.xcworkspace -scheme Runner
+          -destination "platform=iOS Simulator,name=iPhone 17"
+          -only-testing:RunnerTests CODE_SIGNING_ALLOWED=NO
+        working-directory: flutter/versola_oauth/example/ios

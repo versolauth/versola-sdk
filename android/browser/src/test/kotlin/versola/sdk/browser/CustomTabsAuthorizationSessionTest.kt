@@ -22,7 +22,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ActivityController
 
-private const val AUTHORIZE = "https://id.versola.kz/authorize?response_type=code&state=s"
+private const val AUTHORIZE = "https://id.versola.io/authorize?response_type=code&state=s"
 
 @RunWith(RobolectricTestRunner::class)
 class CustomTabsAuthorizationSessionTest {
@@ -48,7 +48,7 @@ class CustomTabsAuthorizationSessionTest {
                 name = "$packageName.BrowserActivity"
             }
         }
-        val browsable = Intent(Intent.ACTION_VIEW, Uri.parse("https://id.versola.kz/authorize"))
+        val browsable = Intent(Intent.ACTION_VIEW, Uri.parse("https://id.versola.io/authorize"))
             .addCategory(Intent.CATEGORY_BROWSABLE)
         packageManager.addResolveInfoForIntent(browsable, resolveInfo)
     }

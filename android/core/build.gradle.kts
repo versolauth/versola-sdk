@@ -10,7 +10,7 @@ plugins {
 
 android {
     namespace = "versola.sdk.core"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 26
@@ -48,7 +48,7 @@ dependencies {
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
-    testImplementation("com.squareup.okhttp3:mockwebserver3:5.4.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver3:5.5.1")
 }
 
 apiValidation {

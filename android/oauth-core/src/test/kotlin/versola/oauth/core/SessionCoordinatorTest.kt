@@ -22,7 +22,7 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-private const val ISSUER = "https://id.versola.kz"
+private const val ISSUER = "https://id.versola.io"
 
 /** One slot, exactly like the real store: a second save replaces rather than accumulates. */
 private class RecordingPendingStore : PendingAuthorizationStore {
@@ -67,8 +67,11 @@ private class FixedRedirectBrowser(private val store: RecordingPendingStore) : B
     private fun stateOf(uri: String): String =
         Regex("[?&]state=([^&]+)").find(uri)!!.groupValues[1]
 
+    /** What a process started by the redirect finds waiting: scripted per test. */
+    var pendingRedirect: (suspend () -> BrowserOutcome)? = null
+
     override suspend fun awaitPendingRedirect(): BrowserOutcome =
-        throw UnsupportedOperationException("not exercised by these tests")
+        pendingRedirect?.invoke() ?: throw UnsupportedOperationException("not exercised by these tests")
 }
 
 private class StaticDiscoveryClient(private val metadata: ProviderMetadata) : DiscoveryClient {
@@ -275,9 +278,10 @@ class SessionCoordinatorTest {
         credentialStore: FakeCredentialStore = FakeCredentialStore(),
         validator: IdTokenValidator? = null,
         logger: VersolaLogger? = null,
+        browser: BrowserAuthorizationSession = FixedRedirectBrowser(pendingStore),
     ) = Triple(
         SessionCoordinator(
-            authFlow(pendingStore, credentialStore, FixedRedirectBrowser(pendingStore)),
+            authFlow(pendingStore, credentialStore, browser),
             tokenClient,
             credentialStore,
             RetryPolicy.Conservative,
@@ -498,6 +502,182 @@ class SessionCoordinatorTest {
         assertFalse(outcome.sessionEnded)
         assertTrue(tokenClient.revokeCalls.isEmpty())
         assertNull(credentialStore.refreshToken)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    // ---- resumePendingLogin(): a redirect delivered to a cold-started process --------------
+
+    /** What a previous process persisted before it was killed with the browser open. */
+    private fun restoredPending(
+        maxAge: Long? = null,
+        ageMillis: Long = 60_000,
+    ) = PendingAuthorizationRequest(
+        state = "restored-state",
+        nonce = "restored-nonce",
+        codeVerifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+        scopes = listOf("openid"),
+        redirectUri = "https://app.example.com/oauth",
+        acrValues = emptyList(),
+        maxAge = maxAge,
+        createdAtEpochMillis = System.currentTimeMillis() - ageMillis,
+    )
+
+    private fun redirect(state: String = "restored-state", iss: String? = ISSUER) = BrowserOutcome.Redirect(
+        "https://app.example.com/oauth?code=the-code&state=$state" + (iss?.let { "&iss=$it" } ?: ""),
+    )
+
+    private class ColdStart(val pending: RecordingPendingStore, val browser: FixedRedirectBrowser)
+
+    private fun coldStart(
+        pending: PendingAuthorizationRequest? = restoredPending(),
+        outcome: BrowserOutcome = redirect(),
+    ): ColdStart {
+        val store = RecordingPendingStore().apply { stored = pending }
+        val browser = FixedRedirectBrowser(store).apply { pendingRedirect = { outcome } }
+        return ColdStart(store, browser)
+    }
+
+    @Test
+    fun `a redirect delivered to a cold-started process completes the sign-in from the restored request`() = runTest {
+        val start = coldStart(restoredPending(maxAge = 300))
+        val validator = RecordingValidator()
+        val (coordinator, tokenClient, credentialStore) = generic(start.pending, validator = validator, browser = start.browser)
+        tokenClient.exchangeResult = { issued(accessToken = "at", refreshToken = "rt", idToken = "h.p.s") }
+
+        // The app observes Authorizing on cold start, never Unauthenticated (scenario 12).
+        assertEquals(SessionState.Authorizing, coordinator.sessionState.first())
+        val response = coordinator.resumePendingLogin()
+
+        assertEquals("at", checkNotNull(response).accessToken)
+        val grant = tokenClient.exchangeCalls.single()
+        assertEquals("restored-nonce", grant.nonce)
+        // The restored `max_age` reaches the ID-token check: no caller is left to supply it, and
+        // a login finished here must not be exempt from what one finished in the old process faced.
+        assertEquals("restored-nonce", validator.calls.single()[1])
+        assertEquals(300L, validator.calls.single()[3])
+        assertEquals("rt", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        assertNull(start.pending.stored)
+        assertEquals("alice", coordinator.claims?.subject)
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a resumed sign-in clears the pending request only after the grant is stored`() = runTest {
+        val start = coldStart()
+        val (coordinator, tokenClient, credentialStore) = generic(start.pending, validator = RecordingValidator(), browser = start.browser)
+        tokenClient.exchangeResult = { issued(refreshToken = "rt", idToken = "h.p.s") }
+        credentialStore.saveFailure = { VersolaError.Recoverable(VersolaError.Recoverable.Cause.UnlockRequired) }
+
+        failure { coordinator.resumePendingLogin() }
+
+        // A process killed (or a key locked) between the exchange and the write finds the
+        // request still in place, not a session that looks as if it never started.
+        assertNotNull(start.pending.stored)
+        assertNull(credentialStore.refreshToken)
+        assertEquals(0, start.pending.clears)
+    }
+
+    @Test
+    fun `resuming with nothing pending is a no-op, with no token request`() = runTest {
+        val start = coldStart(pending = null)
+        val (coordinator, tokenClient, _) = generic(start.pending, validator = RecordingValidator(), browser = start.browser)
+
+        assertNull(coordinator.resumePendingLogin())
+
+        assertTrue(tokenClient.exchangeCalls.isEmpty())
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a resumed redirect carrying another state is refused before any token request`() = runTest {
+        val start = coldStart(outcome = redirect(state = "forged"))
+        val (coordinator, tokenClient, credentialStore) = generic(start.pending, validator = RecordingValidator(), browser = start.browser)
+
+        val error = failure { coordinator.resumePendingLogin() } as VersolaError.Configuration
+
+        assertEquals(VersolaError.Configuration.Detail.StateMismatch, error.detail)
+        assertTrue(tokenClient.exchangeCalls.isEmpty())
+        assertNull(credentialStore.refreshToken)
+        assertNull(start.pending.stored)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a resumed redirect carrying another issuer is refused before any token request`() = runTest {
+        val start = coldStart(outcome = redirect(iss = "https://evil.example.com"))
+        val (coordinator, tokenClient, credentialStore) = generic(start.pending, validator = RecordingValidator(), browser = start.browser)
+
+        val error = failure { coordinator.resumePendingLogin() } as VersolaError.Configuration
+
+        assertTrue(error.detail is VersolaError.Configuration.Detail.IssuerMismatch)
+        assertTrue(tokenClient.exchangeCalls.isEmpty())
+        assertNull(credentialStore.refreshToken)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a resumed redirect without the issuer is refused when the provider advertises it`() = runTest {
+        val start = coldStart(outcome = redirect(iss = null))
+        val (coordinator, tokenClient, _) = generic(start.pending, validator = RecordingValidator(), browser = start.browser)
+
+        val error = failure { coordinator.resumePendingLogin() } as VersolaError.Configuration
+
+        assertTrue(error.detail is VersolaError.Configuration.Detail.IssuerMismatch)
+        assertTrue(tokenClient.exchangeCalls.isEmpty())
+    }
+
+    @Test
+    fun `a resumed sign-in whose ID token is refused persists nothing and clears the request`() = runTest {
+        val start = coldStart()
+        val validator = RecordingValidator().apply { refusal = IdTokenRejection.Nonce }
+        val (coordinator, tokenClient, credentialStore) = generic(start.pending, validator = validator, browser = start.browser)
+        tokenClient.exchangeResult = { issued(refreshToken = "rt", idToken = "h.p.s") }
+
+        val error = failure { coordinator.resumePendingLogin() } as VersolaError.Configuration
+
+        assertEquals(IdTokenRejection.Nonce, (error.detail as VersolaError.Configuration.Detail.IdTokenRejected).reason)
+        assertNull(credentialStore.refreshToken)
+        assertNull(coordinator.claims)
+        // The code is spent: a slot kept here could only be resumed into `invalid_grant`.
+        assertNull(start.pending.stored)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a resumed sign-in with no ID token is refused when a validator is present`() = runTest {
+        val start = coldStart()
+        val (coordinator, tokenClient, credentialStore) = generic(start.pending, validator = RecordingValidator(), browser = start.browser)
+        tokenClient.exchangeResult = { issued(refreshToken = "rt", idToken = null) }
+
+        val error = failure { coordinator.resumePendingLogin() } as VersolaError.Configuration
+
+        assertEquals(IdTokenRejection.Malformed, (error.detail as VersolaError.Configuration.Detail.IdTokenRejected).reason)
+        assertNull(credentialStore.refreshToken)
+    }
+
+    @Test
+    fun `a pending request older than ten minutes is discarded on cold start and never resumed`() = runTest {
+        val start = coldStart(restoredPending(ageMillis = PendingAuthorizationRequest.MAX_AGE_MILLIS + 1_000))
+        val (coordinator, tokenClient, _) = generic(start.pending, validator = RecordingValidator(), browser = start.browser)
+
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+        val error = failure { coordinator.resumePendingLogin() } as VersolaError.Recoverable
+
+        assertEquals(VersolaError.Recoverable.Cause.PendingRequestExpired, error.reason)
+        assertTrue(tokenClient.exchangeCalls.isEmpty())
+        assertNull(start.pending.stored)
+    }
+
+    @Test
+    fun `a resumed browser that reports the user cancelled wipes the request`() = runTest {
+        val start = coldStart(outcome = BrowserOutcome.UserCancelled)
+        val (coordinator, tokenClient, _) = generic(start.pending, validator = RecordingValidator(), browser = start.browser)
+
+        val error = failure { coordinator.resumePendingLogin() } as VersolaError.Recoverable
+
+        assertEquals(VersolaError.Recoverable.Cause.UserCancelled, error.reason)
+        assertTrue(tokenClient.exchangeCalls.isEmpty())
+        assertNull(start.pending.stored)
         assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
     }
 

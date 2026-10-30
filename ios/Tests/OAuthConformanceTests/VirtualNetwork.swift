@@ -42,6 +42,7 @@ final class VirtualNetwork: Sendable {
         var intercept: (@Sendable (URLRequest) -> StubAnswer?)?
         var rewrites: [(String, @Sendable (String) async -> String)] = []
         var addedHeaders: [(String, [String: String])] = []
+        var requestRewrites: [(String, @Sendable (URLRequest) -> URLRequest)] = []
         var resources: [String: @Sendable (URLRequest) async -> StubAnswer] = [:]
         var requests: [URLRequest] = []
         var transcript: [TranscriptEntry] = []
@@ -86,7 +87,10 @@ final class VirtualNetwork: Sendable {
         }
     }
     func addHeaders(_ pathSuffix: String, _ headers: [String: String]) { state.withLock { $0.addedHeaders.append((pathSuffix, headers)) } }
-    func clearRewrites() { state.withLock { $0.rewrites = []; $0.addedHeaders = []; $0.intercept = nil } }
+    /// Rewrites the request the proxy forwards to the provider for a path suffix (what the SDK sent is still
+    /// what the transcript records): a thief's token request, say, with a proof that is not the SDK's.
+    func rewriteRequest(_ pathSuffix: String, _ transform: @escaping @Sendable (URLRequest) -> URLRequest) { state.withLock { $0.requestRewrites.append((pathSuffix, transform)) } }
+    func clearRewrites() { state.withLock { $0.rewrites = []; $0.addedHeaders = []; $0.requestRewrites = []; $0.intercept = nil } }
     func resource(_ origin: String, _ handler: @escaping @Sendable (URLRequest) async -> StubAnswer) { state.withLock { $0.resources[origin] = handler } }
 
     var requests: [URLRequest] { state.withLock { $0.requests } }
@@ -149,6 +153,7 @@ final class VirtualNetwork: Sendable {
             forwarded.setValue(value, forHTTPHeaderField: name)
         }
         forwarded.setValue("localhost:14444", forHTTPHeaderField: "Host")
+        for (suffix, transform) in snapshot.requestRewrites where url.path.hasSuffix(suffix) { forwarded = transform(forwarded) }
         let (data, response) = try await upstream.data(for: forwarded)
         let http = response as! HTTPURLResponse
         var text = String(decoding: data, as: UTF8.self)

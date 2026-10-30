@@ -144,7 +144,23 @@ package actor SessionCoordinator: AccessTokenSource {
             logger?.warn("the provider advertises offline_access and the configured scopes omit it; a refresh token may not be issued")
         }
         let grant = try await flow.authorize(scopes: requested, acrValues: acrValues, maxAge: maxAge, parameters: parameters, ephemeralBrowser: ephemeralBrowser)
+        return try await finishLogin(grant, maxAge: maxAge)
+    }
 
+    /// Finishes a login that outlived the process that started it (scenario 12): the redirect is
+    /// awaited and validated against the restored request, then the exchange, ID-token check,
+    /// persistence and `authenticated` are the steps `login` ends with. `max_age` comes from the
+    /// restored request, since no caller is left to supply it. Nil when nothing was pending.
+    @discardableResult
+    package func resumePendingLogin() async throws -> TokenResponse? {
+        guard let grant = try await flow.resumePendingAuthorization() else { return nil }
+        return try await finishLogin(grant, maxAge: grant.maxAge)
+    }
+
+    /// The tail of a login, everything after the redirect has been validated. Shared by `login`
+    /// and `resumePendingLogin` so a sign-in finished in a cold-started process passes through
+    /// exactly the checks and the persistence order of one finished in the process that began it.
+    private func finishLogin(_ grant: AuthorizationGrant, maxAge: Int?) async throws -> TokenResponse {
         // The exchange and the persistence run in their own task: a caller cancelled after
         // the server spent the code must not strand a token that came back.
         let flow = self.flow

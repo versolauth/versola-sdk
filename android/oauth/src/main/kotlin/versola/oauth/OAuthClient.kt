@@ -3,9 +3,13 @@ package versola.oauth
 import android.content.Context
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
@@ -71,7 +75,9 @@ public class OAuthClient private constructor(
     /**
      * The state machine of `spec/state-machine.md`, observable. Cold, and its first emission is
      * the restored state: an app killed mid-browser observes `Authorizing` on cold start, never
-     * a placeholder (scenario 12).
+     * a placeholder (scenario 12). A sign-in whose redirect reaches a cold-started process is
+     * finished by the SDK itself, and the result arrives here as `Authenticated` or as the
+     * state the failure settles on; the app has nothing to call.
      */
     public val sessionState: Flow<SessionState> get() = flow.sessionState
 
@@ -161,6 +167,33 @@ public class OAuthClient private constructor(
     }
 
     /**
+     * Finishes a sign-in that outlived the process that began it (scenario 12). Started by
+     * [create], not by the app: a process the OS starts for the redirect has no caller to ask,
+     * and `spec/oauth-sdk-api.md` section 4 has the session complete on its own.
+     *
+     * Acts only when the restored state is `Authorizing`, so a client with nothing pending
+     * costs one read of the store. The wait for the redirect is bounded by what is left of the
+     * request's ten minutes ([AuthorizationFlow.resumePendingAuthorization]), and the work
+     * after it is [SessionCoordinator.resumePendingLogin], the tail of `login()` itself:
+     * validation, exchange, ID-token check, persistence, then `Authenticated`. A failure has
+     * already settled the state, so it is logged and not rethrown into a scope nobody awaits.
+     */
+    private fun resumeInBackground(scope: CoroutineScope) {
+        scope.launch {
+            try {
+                if (flow.sessionState.first() != SessionState.Authorizing) return@launch
+                coordinator.resumePendingLogin()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // The class name, and the typed error's own text, which carries no secret; an
+                // exception message from a parser or a provider could.
+                configuration.logger.warn("resuming the pending authorization failed: ${if (e is VersolaError) e.toString() else e.javaClass.simpleName}")
+            }
+        }
+    }
+
+    /**
      * `spec/oauth-sdk-api.md` section 5: a `login()` while one is outstanding, in this process
      * or a previous one, is refused rather than queued behind the open browser or allowed to
      * supersede a request the redirect may still complete. The restored state is read first,
@@ -226,6 +259,15 @@ public class OAuthClient private constructor(
         private val clients = ConcurrentHashMap<String, OAuthClient>()
 
         /**
+         * Where a cold-started process finishes the sign-in its redirect answers. The process,
+         * not a caller, owns that work: the OS started this process for the redirect and no
+         * `login()` is waiting on it. Never cancelled, and a failure in one client's resume
+         * does not reach another's (`SupervisorJob`). A test substitutes its own scope.
+         */
+        @Volatile
+        internal var resumeScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+        /**
          * Validates the configuration and wires the default implementations. No network I/O
          * and no key generation happen here: discovery runs on the first operation that needs
          * it, the DPoP key is generated on first use.
@@ -264,6 +306,7 @@ public class OAuthClient private constructor(
                 }
                 build(context.applicationContext, configuration, browser, keyProvider).also {
                     clients[configuration.storageKey] = it
+                    it.resumeInBackground(resumeScope)
                 }
             }
         }

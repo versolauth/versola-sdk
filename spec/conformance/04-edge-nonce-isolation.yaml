@@ -22,5 +22,5 @@ steps:
 assertions:
   - The retried edge request's proof carries edge's nonce, not auth's.
   - The subsequent token request's proof carries auth's cached nonce, unchanged by the edge exchange.
-  - The nonce cache is keyed by scheme and host, so id.versola.kz and versola.kz hold independent entries.
+  - The nonce cache is keyed by scheme and host, so id.versola.io and versola.io hold independent entries.
   - No token request is triggered by the edge 401, because a nonce challenge is not an expiry.

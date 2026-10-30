@@ -228,8 +228,8 @@ public class VersolaInterceptor(
 /**
  * Whether [this] addresses the deployment's edge, by origin and by path prefix.
  *
- * The prefix matters: an integrator whose edge is `https://versola.kz` and whose own API is
- * `https://versola.kz/internal` gets a token on the first and not the second. Compared on
+ * The prefix matters: an integrator whose edge is `https://versola.io` and whose own API is
+ * `https://versola.io/internal` gets a token on the first and not the second. Compared on
  * whole path segments, so `/resources` does not claim `/resources-admin`.
  */
 internal fun HttpUrl.isUnder(base: HttpUrl): Boolean {

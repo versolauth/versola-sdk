@@ -19,6 +19,7 @@ import versola.oauth.flutter.SessionStateOk
 import versola.oauth.flutter.SessionStateResult
 import versola.oauth.flutter.ConfigurationMessage
 import versola.oauth.flutter.IdTokenClaimsMessage
+import versola.oauth.flutter.KeyAttestationResult
 import versola.oauth.flutter.LoginOptionsMessage
 import versola.oauth.flutter.LogoutOptionsMessage
 import versola.oauth.flutter.LogoutOutcomeMessage
@@ -103,6 +104,9 @@ class DartSide(private val messenger: FakeBinaryMessenger) {
         is ClaimsOk -> r.claims
         is ClaimsFailure -> throw HostApiFailed("claims", r.error)
     }
+
+    /** The key tier as the wire spells it (`software`, `trustedEnvironment`, ...), null under Bearer; the failure the host answered otherwise. */
+    fun keyAttestation(): KeyAttestationResult = remember("keyAttestation", call("keyAttestation", handle) as KeyAttestationResult)
 
     fun userInfo(): UserInfoResult = remember("userInfo", call("userInfo", handle) as UserInfoResult)
 

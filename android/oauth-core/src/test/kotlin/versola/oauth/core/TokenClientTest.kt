@@ -220,6 +220,15 @@ class TokenClientTest {
     }
 
     @Test
+    fun `a blank refresh token is treated as omitted, never stored as an empty credential`() = runTest {
+        server.enqueue(issued(refreshToken = ""))
+
+        val response = client().exchange(grant())
+
+        assertNull(response.refreshToken)
+    }
+
+    @Test
     fun `a response that omits the refresh token is not an empty one`() = runTest {
         server.enqueue(issued(refreshToken = null, scope = null))
 

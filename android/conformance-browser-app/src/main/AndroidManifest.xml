@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!--
+      Cleartext because the provider is a container on the developer's machine reached over
+      `adb reverse` as http://localhost. The SDK itself allows cleartext to loopback only; this
+      is the app's own network policy, which an app that ships never relaxes. Debuggable so the
+      tests can read the app's state with `run-as` if they need to.
+    -->
+    <application
+        android:name=".HostApplication"
+        android:icon="@android:drawable/sym_def_app_icon"
+        android:label="Versola browser leg"
+        android:theme="@android:style/Theme.Material.Light.NoActionBar"
+        android:debuggable="true"
+        android:usesCleartextTraffic="true"
+        tools:ignore="HardcodedDebugMode">
+
+        <activity
+            android:name=".HostActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <!--
+          The redirect URI as a private-use scheme: the merge snippet from the KDoc of
+          VersolaRedirectActivity, with a scheme in place of an App Link. Used by the Custom
+          Tabs leg and by a cold start; an Auth Tab intercepts the scheme itself. The two paths
+          are the login redirect and the post-logout redirect.
+        -->
+        <activity
+            android:name="versola.sdk.browser.VersolaRedirectActivity"
+            android:exported="true"
+            tools:node="merge">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="com.example.versola.devicetier" />
+                <data android:host="app" />
+                <data android:path="/oauth" />
+                <data android:path="/signed-out" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
