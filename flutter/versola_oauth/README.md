@@ -33,6 +33,8 @@ dependencies:
 
 The app needs `compileSdk` 37 and `minSdk` 26 in `android/app/build.gradle.kts` and an iOS
 deployment target of 17.4; a lower value fails the build with a message that names the minimum.
+The 37 is OkHttp's: its AAR declares it, and the SDK's own AARs ask for less, so the number follows
+the OkHttp release the SDK depends on, not a choice of ours.
 
 ## Usage
 
