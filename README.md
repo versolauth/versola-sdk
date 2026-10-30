@@ -8,7 +8,7 @@ for iOS, with a Flutter (Dart) binding, and works with any standards-conforming 
 as Keycloak or Ory Hydra. If you use AppAuth today, it is an alternative that also does token
 refresh coordination, secure storage and ID-token signature validation for you.
 
-Documentation: <https://docs.versola.kz> (the SDK section is being added to this site).
+Documentation: <https://docs.versola.io> (the SDK section is being added to this site).
 
 ## Quick facts
 
@@ -240,7 +240,7 @@ Apache-2.0. See [LICENSE](LICENSE).
 
 ## Documentation
 
-- The SDK documentation will be hosted at <https://docs.versola.kz>: platform guides, provider
+- The SDK documentation will be hosted at <https://docs.versola.io>: platform guides, provider
   guides (Keycloak, Ory Hydra) and the AppAuth migration guide.
 - [`spec/`](spec/): the specification the three implementations follow
   ([API](spec/oauth-sdk-api.md), [state machine](spec/state-machine.md),
