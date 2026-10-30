@@ -25,10 +25,10 @@ import versola.oauth.flutter.SessionStateMessage
  * Request counts are the SDK's own transcript, as in the native test. The bridge carries the retry
  * policy (`RetryPolicyMessage`), which the cooldown-expiry case uses.
  *
- * **Native only, not here:** the authenticated client passing a 503 through (scenario 34's last
- * case). Flutter has no authenticated client (`spec/oauth-sdk-api.md` section 10: `accessToken()`
- * only), so a Flutter app's call to its own API never goes through the SDK and the SDK cannot
- * repeat, block or convert it; `Scenario34To36ServerErrorsTest` proves it for the native facades.
+ * **Elsewhere:** the authenticated client passing a 503 through (scenario 34's last case) is
+ * `Scenario32ProtectedOriginsBridgeTest`'s 503 test, which sends the request through the bridge's
+ * `httpRequest` (Flutter's `OAuthClient.httpClient()`); `Scenario34To36ServerErrorsTest` proves it
+ * for the native facades.
  */
 class Scenario34To36ServerErrorsBridgeTest : BridgeConformance() {
 

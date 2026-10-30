@@ -18,7 +18,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
+import versola.oauth.conformance.DpopRefusal
 import versola.oauth.conformance.DpopResourceServer
+import versola.oauth.conformance.DpopVerdict
 import versola.oauth.conformance.Provider
 import versola.oauth.conformance.text
 import versola.oauth.core.TokenBinding
@@ -35,11 +37,14 @@ import java.security.interfaces.ECPublicKey
  * own on the JVM's stand-in Keystore, so the tier is **software** and nothing here says anything
  * about StrongBox or the TEE.
  *
- * Flutter has no authenticated client and mints no proof (`spec/oauth-sdk-api.md` section 10), so
- * what a native test proved through the interceptor (the call's own proof, the resource's nonce
- * challenge, the replay of a proof the SDK sent) is the native facades'. The bridge makes the
- * stolen-token requests with the token `accessToken()` hands over, which is what a Flutter app
- * holds and cannot present itself.
+ * Flutter mints no proof itself, but it has the authenticated client (`OAuthClient.httpClient()`,
+ * `spec/oauth-sdk-api.md` section 10): the tests named `httpRequest` below send the request the way
+ * the Dart client does and the plugin runs it with `OAuthClient.call`, so the call's own proof, the
+ * resource's nonce challenge and the nonce loop are asserted through the bridge, on the wire and
+ * at the resource server, with no token ever handed to Dart. Only the replay of a proof the SDK
+ * sent needs the harness to reach the SDK's request and stays the native driver's. The
+ * stolen-token requests are made with the token `accessToken()` hands over, which is what a
+ * Flutter app holds and cannot present itself.
  */
 class Scenario33DpopEndToEndBridgeTest : BridgeConformance() {
 
@@ -56,10 +61,11 @@ class Scenario33DpopEndToEndBridgeTest : BridgeConformance() {
     @After
     fun stopResources() = resources.forEach { it.stop() }
 
-    private fun dpopServer(): DpopResourceServer = DpopResourceServer(provider, proxy).also {
-        it.start()
-        resources += it
-    }
+    private fun dpopServer(nonce: String? = null, offered: String? = nonce): DpopResourceServer =
+        DpopResourceServer(provider, proxy, nonce, offered = offered).also {
+            it.start()
+            resources += it
+        }
 
     private fun jwkOf(proof: JsonObject?): JsonObject = checkNotNull(proof)["jwk"]!!.jsonObject
 
@@ -319,5 +325,93 @@ class Scenario33DpopEndToEndBridgeTest : BridgeConformance() {
         assertEquals(400, token.status)
         assertFalse(token.responseJson!!.containsKey("access_token"))
         assertNotEquals(SessionStateMessage.AUTHENTICATED, bridge.dart.sessionState())
+    }
+
+    @Test
+    fun `bridge - httpRequest sends the DPoP scheme and a proof bound to the token, which the resource server accepts`() {
+        val rs = dpopServer()
+        val bridge = bridge(clientId = Provider.DPOP_CLIENT_ID, protectedOrigins = setOf(rs.origin), tokenBinding = TokenBinding.Dpop())
+        bridge.dart.login().assertOk()
+        val jkt = DpopResourceServer.thumbprint(keystore.soleKey().public as ECPublicKey)
+        val subject = checkNotNull(bridge.dart.claims()).subject
+
+        val response = bridge.dart.httpRequest(rs.url("/api/items?page=2")).response()
+
+        assertEquals(String(response.body), 200, response.status)
+        val sent = transcript.entries.single { it.url.startsWith(rs.origin) }
+        val authorization = sent.header("Authorization")!!
+        assertTrue(authorization, authorization.startsWith("DPoP "))
+        val accessToken = authorization.removePrefix("DPoP ")
+        assertEquals(1, sent.headerCount("DPoP"))
+        val claims = sent.proofClaims!!
+        assertEquals("GET", claims["htm"]!!.jsonPrimitive.content)
+        assertEquals("the URL without its query", rs.url("/api/items"), claims["htu"]!!.jsonPrimitive.content)
+        assertEquals(DpopResourceServer.sha256Url(accessToken), claims["ath"]!!.jsonPrimitive.content)
+        assertEquals(jkt, DpopResourceServer.thumbprint(jwkOf(sent.proofHeader)))
+        assertEquals(listOf<DpopVerdict>(DpopVerdict.Accepted(jkt, subject)), rs.verdicts("/api/items"))
+        assertEquals(1, rs.attempts.size)
+        // The token itself never crossed: the app did not ask for it, and the response carries none.
+        assertFalse(String(response.body).contains(accessToken))
+        assertTrue(bridge.dart.receivedAccessTokenReplies.isEmpty())
+
+        // An origin that is not protected gets neither the token nor a proof, whatever the app put in the headers.
+        bridge.dart.httpRequest(proxy.origin + "/elsewhere", headers = listOf("DPoP" to "app-own")).response()
+        val elsewhere = transcript.entries.single { it.url == proxy.origin + "/elsewhere" }
+        assertNull(elsewhere.header("Authorization"))
+        assertEquals("app-own", elsewhere.header("DPoP"))
+    }
+
+    @Test
+    fun `bridge - an Authorization and a DPoP header the app set on the DPoP-protected origin are replaced, the resource sees exactly one of each`() {
+        val rs = dpopServer()
+        val bridge = bridge(clientId = Provider.DPOP_CLIENT_ID, protectedOrigins = setOf(rs.origin), tokenBinding = TokenBinding.Dpop())
+        bridge.dart.login().assertOk()
+
+        val response = bridge.dart.httpRequest(
+            rs.url("/api"), headers = listOf("Authorization" to "Bearer app-supplied", "DPoP" to "app-forged", "dpop" to "app-forged-too"),
+        ).response()
+
+        assertEquals(String(response.body), 200, response.status)
+        val sent = transcript.entries.single { it.url.startsWith(rs.origin) }
+        assertEquals(1, sent.headerCount("Authorization"))
+        assertTrue(sent.header("Authorization")!!.startsWith("DPoP "))
+        assertEquals(1, sent.headerCount("DPoP"))
+        assertEquals(listOf<DpopRefusal>(), rs.attempts.map { it.verdict }.filterIsInstance<DpopVerdict.Refused>().map { it.reason })
+    }
+
+    @Test
+    fun `bridge - httpRequest answers the resource's nonce challenge once with the nonce and remembers it for the origin`() {
+        val rs = dpopServer(nonce = "resource-nonce-1")
+        val bridge = bridge(clientId = Provider.DPOP_CLIENT_ID, protectedOrigins = setOf(rs.origin), tokenBinding = TokenBinding.Dpop())
+        bridge.dart.login().assertOk()
+
+        val first = bridge.dart.httpRequest(rs.url("/api")).response()
+
+        assertEquals(200, first.status)
+        val sent = transcript.entries.filter { it.url.startsWith(rs.origin) }
+        assertEquals("exactly one retry: $sent", 2, sent.size)
+        assertEquals(401, sent[0].status)
+        assertEquals("resource-nonce-1", sent[0].responseHeader("DPoP-Nonce"))
+        assertNull(sent[0].proofClaims!!["nonce"])
+        assertEquals("resource-nonce-1", sent[1].proofClaims!!["nonce"]!!.jsonPrimitive.content)
+        assertNotEquals("a fresh proof, not the first one resent", sent[0].proofClaims!!["jti"], sent[1].proofClaims!!["jti"])
+
+        // The nonce is per origin and kept: the next call needs no challenge.
+        bridge.dart.httpRequest(rs.url("/api")).response()
+        val afterwards = transcript.entries.filter { it.url.startsWith(rs.origin) }
+        assertEquals(3, afterwards.size)
+        assertEquals("resource-nonce-1", afterwards[2].proofClaims!!["nonce"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun `bridge - a resource that keeps challenging gets one retry and then NonceLoop through httpRequest`() {
+        val rs = dpopServer(nonce = "demanded", offered = "offered")
+        val bridge = bridge(clientId = Provider.DPOP_CLIENT_ID, protectedOrigins = setOf(rs.origin), tokenBinding = TokenBinding.Dpop())
+        bridge.dart.login().assertOk()
+
+        val error = bridge.dart.httpRequest(rs.url("/api")).failure()
+
+        assertError(error, ErrorCategoryMessage.RECOVERABLE, "nonceLoop")
+        assertEquals("one request and one retry, no more: ${rs.attempts.map { it.verdict }}", 2, rs.attempts.size)
     }
 }

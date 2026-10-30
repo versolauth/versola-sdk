@@ -31,6 +31,10 @@ import versola.oauth.flutter.ConfigurationMessage
 import versola.oauth.flutter.CreateFailure
 import versola.oauth.flutter.CreateResult
 import versola.oauth.flutter.EndpointsMessage
+import versola.oauth.flutter.HttpFailure
+import versola.oauth.flutter.HttpOk
+import versola.oauth.flutter.HttpResponseMessage
+import versola.oauth.flutter.HttpResult
 import versola.oauth.flutter.ErrorCategoryMessage
 import versola.oauth.flutter.ErrorMessage
 import versola.oauth.flutter.PushedAuthorizationMessage
@@ -64,10 +68,10 @@ import versola.oauth.flutter.VoidResult
  * configuration, and the test fails at its first line.
  *
  * What the bridge does not carry stays on the native instance, used only to *observe* (the
- * discovery document, the configuration's retry policy): `metadata()` and the authenticated HTTP
- * client are not Flutter API (`spec/oauth-sdk-api.md` section 10: Flutter has `accessToken()`
- * only), so a scenario's authenticated calls are made here the way a Flutter app makes them, with
- * the token the bridge hands over.
+ * discovery document, the configuration's retry policy): `metadata()` is not Flutter API. A
+ * scenario's authenticated calls are made through `DartSide.httpRequest`, which is what the Dart
+ * `OAuthClient.httpClient()` sends (`spec/oauth-sdk-api.md` section 10), or, where a test is about the
+ * escape hatch, the way an app that attaches the token itself makes them (`appCall`).
  */
 abstract class BridgeConformance : ProviderConformance() {
 
@@ -257,6 +261,20 @@ abstract class BridgeConformance : ProviderConformance() {
         assertEquals(body, 200, response.code)
         assertTrue(body.contains(subject))
     }
+
+    /** The response an `httpRequest` answered with, or fails naming the error it answered instead. */
+    protected fun HttpResult.response(): HttpResponseMessage = when (this) {
+        is HttpOk -> response
+        is HttpFailure -> throw AssertionError("expected HttpOk, got ${error.category}/${error.kind}: ${error.message}")
+        else -> throw AssertionError("expected HttpOk, got $this")
+    }
+
+    /** The typed SDK error an `httpRequest` answered with, or fails when it answered a response. */
+    protected fun HttpResult.failure(): ErrorMessage =
+        (this as? HttpFailure)?.error ?: throw AssertionError("expected HttpFailure, got $this")
+
+    /** Every value of [name] in the response, in the order the server sent them. */
+    protected fun HttpResponseMessage.headerValues(name: String): List<String> = headers.filter { it.name.equals(name, ignoreCase = true) }.map { it.value }
 
     /** The query of a URI as a decoded map. */
     protected fun String.queryMap(): Map<String, String> = substringAfter('?', "").split('&').filter { it.contains('=') }.associate {

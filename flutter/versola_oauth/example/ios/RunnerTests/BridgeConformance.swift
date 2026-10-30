@@ -23,10 +23,10 @@ import XCTest
 /// its first line.
 ///
 /// What the bridge does not carry stays on the native instance, used only to *observe* (the
-/// discovery document, the configuration's retry policy): `metadata()` and the authenticated
-/// session are not Flutter API (`spec/oauth-sdk-api.md` section 10: Flutter has `accessToken()`
-/// only), so a scenario's authenticated calls are made here the way a Flutter app makes them,
-/// with the token the bridge hands over.
+/// discovery document, the configuration's retry policy): `metadata()` is not Flutter API. A
+/// scenario's authenticated calls are made through `DartSide.httpRequest`, which is what the Dart
+/// `OAuthClient.httpClient()` sends (`spec/oauth-sdk-api.md` section 10), or, where a test is about the
+/// escape hatch, the way an app that attaches the token itself makes them (`appCall`).
 class BridgeConformance: ProviderConformance {
     let messenger = FakeMessenger()
     private var darts: [DartSide] = []
@@ -184,6 +184,24 @@ class BridgeConformance: ProviderConformance {
         if let ok = result as? UserInfoOk { return ok.userInfo.subject }
         let error = (result as? UserInfoFailure)?.error
         throw BridgeFailure("expected UserInfoOk, got \(String(describing: error?.category))/\(error?.kind ?? "?")")
+    }
+
+    /// The response an `httpRequest` answered with, or throws naming the error it answered instead.
+    func response(_ result: HttpResult) throws -> HttpResponseMessage {
+        if let ok = result as? HttpOk { return ok.response }
+        if let failure = result as? HttpFailure { throw BridgeFailure("expected HttpOk, got \(failure.error.category)/\(failure.error.kind): \(failure.error.message)") }
+        throw BridgeFailure("expected HttpOk, got \(result)")
+    }
+
+    /// The typed SDK error an `httpRequest` answered with, or throws when it answered a response.
+    func failure(_ result: HttpResult) throws -> ErrorMessage {
+        guard let failure = result as? HttpFailure else { throw BridgeFailure("expected HttpFailure, got \(result)") }
+        return failure.error
+    }
+
+    /// Every value of `name` in the response (one, on iOS: `URLSession` folds a repeated header).
+    func headerValues(_ response: HttpResponseMessage, _ name: String) -> [String] {
+        response.headers.filter { $0.name.caseInsensitiveCompare(name) == .orderedSame }.map(\.value)
     }
 
     /// `error` is the category and case the native error `spec/errors.md` names, as the wire spells them.

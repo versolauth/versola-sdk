@@ -338,6 +338,73 @@ class KeyAttestationFailure extends KeyAttestationResult {
   ErrorMessage error;
 }
 
+/// One header line, name and value as they are on the wire. A list of these rather than a map:
+/// a name that appears twice (`WWW-Authenticate`, `Set-Cookie`) keeps both values and their order
+/// across the bridge. The name's case is whatever the sender used; matching is the receiver's
+/// case-insensitive business.
+class HttpHeaderMessage {
+  HttpHeaderMessage({required this.name, required this.value});
+  String name;
+  String value;
+}
+
+/// An HTTP request the native authenticated client executes (`spec/oauth-sdk-api.md` section
+/// 10). The body is bytes and is buffered whole: the bridge does not stream. `origins` is the
+/// protected-origin set for this call, or null for the configuration's `protectedOrigins`.
+class HttpRequestMessage {
+  HttpRequestMessage({
+    required this.method,
+    required this.url,
+    required this.headers,
+    this.body,
+    this.origins,
+  });
+  String method;
+  String url;
+  List<HttpHeaderMessage> headers;
+  Uint8List? body;
+  List<String>? origins;
+}
+
+/// The response as the server sent it: status, headers (every value of a repeated name, where
+/// the platform reports them apart) and the whole body. A 3xx, a 429 and a 5xx are responses.
+class HttpResponseMessage {
+  HttpResponseMessage({
+    required this.status,
+    this.reasonPhrase,
+    required this.headers,
+    required this.body,
+  });
+  int status;
+  String? reasonPhrase;
+  List<HttpHeaderMessage> headers;
+  Uint8List body;
+}
+
+sealed class HttpResult {}
+
+class HttpOk extends HttpResult {
+  HttpOk({required this.response});
+  HttpResponseMessage response;
+}
+
+/// The SDK refused or could not finish the call: a step-up challenge, a session the provider
+/// refused, a nonce that kept changing, a `Configuration` problem (an invalid origin set, a
+/// request that is not a valid HTTP request). The typed taxonomy, as everywhere else.
+class HttpFailure extends HttpResult {
+  HttpFailure({required this.error});
+  ErrorMessage error;
+}
+
+/// The request never produced an HTTP response (no route, DNS, TLS, a connection reset, the
+/// native client's own timeout). Not an SDK error and not a category of `spec/errors.md`: the
+/// Dart client turns it into `package:http`'s `ClientException`. `exception` is the native
+/// exception's class name and nothing else; its message can carry the URL.
+class HttpTransportFailure extends HttpResult {
+  HttpTransportFailure({required this.exception});
+  String exception;
+}
+
 /// Dart → native. Every method but `create` takes the `handle` `create` returned: one native
 /// client per configuration per process, as the native facades promise.
 @HostApi()
@@ -379,6 +446,12 @@ abstract class OAuthHostApi {
 
   @async
   KeyAttestationResult keyAttestation(String handle);
+
+  /// Executes one request with the native authenticated client (`OAuthClient.call` on Android,
+  /// `authenticatedSession` on iOS): the token and the DPoP proof are attached, refreshed and
+  /// replayed natively and never cross; only the request and the response do.
+  @async
+  HttpResult httpRequest(String handle, HttpRequestMessage request);
 }
 
 /// Native → Dart: the state machine, fed by the native `Flow` / `AsyncStream`; the native

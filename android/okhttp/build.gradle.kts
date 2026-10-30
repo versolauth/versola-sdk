@@ -12,6 +12,10 @@ android {
 
     defaultConfig {
         minSdk = 26
+        // What an app must compile against, which is not what this module builds with (see :dpop).
+        // The module links no platform API, so it asks for nothing itself; the app's own check applies
+        // OkHttp's value (37 today).
+        aarMetadata { minCompileSdk = 1 }
         // No targetSdk on a library module: AGP requires libraries with a
         // targetSdk value to match consumers' compileSdk, which only tightens
         // things pointlessly here. Target 36 (#1 SS4) is the app's decision.

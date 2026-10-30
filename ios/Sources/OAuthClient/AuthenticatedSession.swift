@@ -1,4 +1,5 @@
 import Foundation
+import os
 
 
 /// Which requests get a token. A token sent to a host the app did not name is a leak, so the
@@ -59,7 +60,8 @@ public final class AuthenticatedSession: Sendable {
     ///   when a refreshed token is refused too, and the coordinator's own errors from the token.
     public func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         guard let url = request.url, scope.includes(url) else {
-            return try await send(request)
+            let (data, response, _) = try await send(request)
+            return (data, response)
         }
         let origin = DpopOrigin.of(url)
         var token = try await tokens.accessToken()
@@ -68,7 +70,12 @@ public final class AuthenticatedSession: Sendable {
         var refreshed = false
 
         while true {
-            let (data, response) = try await send(try await sign(request, url: url, token: token, origin: origin))
+            let (data, response, fromCache) = try await send(try await sign(request, url: url, token: token, origin: origin))
+            // The server's clock, off every answer the network gave: a response the URL cache
+            // served carries the `Date` of when it was stored, which is not now.
+            if let dpop {
+                await dpop.observe(serverDate: fromCache ? nil : response.value(forHTTPHeaderField: "Date"), age: response.value(forHTTPHeaderField: "Age"))
+            }
             if let dpop, let nonce = response.value(forHTTPHeaderField: "DPoP-Nonce"), !nonce.isEmpty {
                 await dpop.observe(nonce: nonce, origin: origin)
             }
@@ -91,7 +98,8 @@ public final class AuthenticatedSession: Sendable {
                 nonceRetried = true
 
             case "invalid_dpop_proof":
-                // The one recoverable cause is clock skew, learned off this response. A second
+                // The one recoverable cause is clock skew, learned off this response's `Date`
+                // (above), so the retry's proof is minted from the server's clock. A second
                 // refusal means the key does not match the grant, and a refresh reuses the
                 // same key, so no refresh repairs it.
                 if proofRetried { throw OAuthError.reauthenticate(.credentialsInvalidated) }
@@ -151,10 +159,13 @@ public final class AuthenticatedSession: Sendable {
         return signed
     }
 
-    private func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
-        let (data, response) = try await session.data(for: request, delegate: NoRedirectDelegate())
+    /// The answer, and whether the URL cache rather than the network produced it. Redirects are
+    /// refused as everywhere in the SDK; the fetch type comes from the task's metrics.
+    private func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse, fromCache: Bool) {
+        let delegate = CacheAwareNoRedirectDelegate()
+        let (data, response) = try await session.data(for: request, delegate: delegate)
         guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
-        return (data, http)
+        return (data, http, delegate.servedFromCache)
     }
 
 
@@ -163,6 +174,26 @@ public final class AuthenticatedSession: Sendable {
         components.query = nil
         components.fragment = nil
         return components.url ?? url
+    }
+}
+
+/// `NoRedirectDelegate`, plus whether the response came out of the URL cache
+/// (`URLSessionTaskMetrics.resourceFetchType`), which `AuthenticatedSession` needs so that a
+/// stored response's `Date` is not taken for the server's clock.
+private final class CacheAwareNoRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+    private let cached = OSAllocatedUnfairLock(initialState: false)
+
+    var servedFromCache: Bool { cached.withLock { $0 } }
+
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest
+    ) async -> URLRequest? {
+        nil
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didFinishCollecting metrics: URLSessionTaskMetrics) {
+        cached.withLock { $0 = metrics.transactionMetrics.last?.resourceFetchType == .localCache }
     }
 }
 

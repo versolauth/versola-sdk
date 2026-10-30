@@ -198,6 +198,13 @@ Persistence, in order:
 A process killed between 1 and 3 recovers by replaying with the same idempotency key on next
 start; the server resolves which generation is live.
 
+The ID token travels with step 2 and obeys the same rule as the refresh token: a refresh
+response without `id_token` leaves the stored one in place (OpenID Connect Core 12.2 permits the
+omission, and the stored value is what `id_token_hint` and the claims of a cold start are read
+from), and one that carries a new `id_token` stores it whether or not the refresh token rotated.
+Nothing on the refresh path deletes a stored ID token; only a login that replaces the grant, or a
+wipe, does.
+
 Under DPoP the server renews the refresh token in place (`BoundRenewal`) and the stored value
 does not change — the response echoes the same `refresh_token`, which is stored again as it
 was — so steps 1 and 3 are inert. The machinery exists for bearer mode.
@@ -214,6 +221,10 @@ long as its access token. When the token is observed expired (by the refresh ske
 there is nothing to spend: the SDK wipes the ID token and claims, publishes `Unauthenticated`,
 and the operation fails with `Reauthenticate(SessionExpired)`. No token request is made and the
 browser is not opened. Scenario 31.
+
+A login that issues no refresh token over a stored grant removes that grant, but keeps the DPoP
+key: the login's own exchange was signed with it, so the new access token is bound to it, and the
+key is destroyed only by the teardown of a logout or of a rejected grant.
 
 ### `Refreshing → Unauthenticated`
 
@@ -232,9 +243,26 @@ same access token: the usual cause is clock skew the SDK can now correct from th
 `Date` header. This is handled internally and never surfaced to the app, the same treatment as
 `use_dpop_nonce`.
 
-A second failure means the key no longer matches the grant, not a timing problem. Nothing
-retries it again: the SDK wipes credential state exactly as `Refreshing → Unauthenticated` does
-and surfaces `Reauthenticate`.
+The offset is learned from the `Date` header of **every** response from a server the proofs are
+for, a success as much as a refusal, so the retry's `iat` is already corrected when it is minted
+and a device with a wrong clock usually pays no refusal at all after its first request.
+
+Common to both SDKs: one offset per client, shared by every origin, **the last response wins**
+(a server whose own clock is wrong moves it until the next one that is right); in memory only
+(see the persistence summary); an absent or unparseable `Date` leaves what was learned in place.
+
+iOS only until Android follows (tracked as a follow-up to the Android batch; nothing below is
+claimed for Android yet):
+
+- A `Date` more than 30 days from the device clock is ignored: a device that far off could not
+  complete a TLS handshake against most certificates, so the value is a stale cache or a broken
+  intermediary.
+- A response with an `Age` header other than `0`, or one the URL cache rather than the network
+  produced, teaches nothing: its `Date` is when the origin generated it (RFC 9111 section 5.1),
+  not now, and would shift the offset by the age of the response. This matters most for the app's
+  `AuthenticatedSession` traffic, which goes through the app's own `URLSession` and its cache.
+- UserInfo retries `invalid_dpop_proof` once in place, as the token endpoint and the
+  authenticated session do (see `errors.md`). Android's UserInfo client does not yet.
 
 ### `Authenticated → StepUpRequired → Authorizing`
 
@@ -277,7 +305,7 @@ Gating is a **time-bound** authorization of the key, not an auth-per-use binding
 | Platform | Mechanism |
 |---|---|
 | Android | `setUserAuthenticationParameters(300, AUTH_BIOMETRIC_STRONG or AUTH_DEVICE_CREDENTIAL)`, or `setUserAuthenticationValidityDurationSeconds(300)` below API 30 |
-| iOS | `LAContext.touchIDAuthenticationAllowableReuseDuration = 300` |
+| iOS | the device unlock itself: the items are `WhenUnlockedThisDeviceOnly` (see the iOS deviation below) |
 
 300 seconds is iOS's own ceiling for that window. Android permits a longer one; matching the
 stricter platform keeps this one machine rather than two. Any matching OS authentication inside
@@ -293,6 +321,24 @@ Because nothing is cached, this can occur mid-session rather than once per launc
 by refresh cadence — at most one prompt per access-token lifetime, never one per API call — and
 that bound is what is paid for never holding the credential in memory. Neither platform offers
 both at once.
+
+**iOS deviation.** The iOS SDK does not gate the storage on `LAContext` user presence with a
+300-second reuse window. `UnlockPolicy.OnAppUnlock` puts the credential items in the
+`kSecAttrAccessibleWhenUnlockedThisDeviceOnly` class instead (the default, `None`, is
+`AfterFirstUnlockThisDeviceOnly`): they are readable while the device is unlocked and refused
+with `errSecInteractionNotAllowed` while it is locked, which is `Locked` and
+`Recoverable(UnlockRequired)` here, with the grant intact. The device unlock is the
+authentication, so a session raises no prompt of the SDK's own, and a refresh from a background
+task on a locked device waits for the next unlock.
+
+The window design is not implemented because it needs what this specification does not define
+and a test tier the repository does not have. The SDK cannot present the prompt, so the app would
+have to hand it the `LAContext` that satisfied the item's access control, which is a new public
+parameter of `UnlockPolicy`; and its behaviour depends on biometric enrolment, which only a
+physical phone can exercise. Two rows of this specification therefore do not apply on iOS: the
+300-second window, and `Locked → Unauthenticated` on a biometric enrolment change (a
+`WhenUnlocked` item survives it). A deployment that needs a stronger gate than the device lock
+needs a new `UnlockPolicy` case with its own definition, not a reading of this one.
 
 The prompt must be bound to the crypto operation (`BiometricPrompt.CryptoObject`, `LAContext`
 reuse) rather than gating on a boolean returned by a biometric API. A boolean gates nothing: a
@@ -356,6 +402,29 @@ one grant to one device-installation; reusing it across users on a shared device
 | DPoP nonce, per origin | Memory | no | no |
 | Clock skew offset | Memory | no | no |
 | Discovery metadata | Disk, unencrypted | yes | yes |
+
+**Uninstall.** Android's credentials are files in the app's own data and go with the app. The
+iOS Keychain outlives it: a reinstall on the same device would otherwise open signed in as the
+previous install's user. The iOS SDK therefore writes a marker file beside its caches
+(Application Support, excluded from backup, so it goes with the app and is not restored by an
+iCloud backup) and, on the first launch that finds neither a marker nor any cache, deletes every
+Keychain item of the client (refresh token, ID token, rotation slot, pending request, DPoP key)
+before any of them is read. A launch that finds caches but no marker is an upgrade from a version
+that wrote none, and keeps its session. If the delete fails because the device is locked, the
+marker is not written and the operation that triggered it fails with `Recoverable(UnlockRequired)`;
+the next one tries again.
+
+Where this does not act, by decision: **an app extension** (share, notification service, widget)
+has a container of its own that is empty on its first run, but it was not just installed and the
+Keychain items may be the host app's, shared through a keychain access group, so the guard is inert
+in an extension process (bundle path ending `.appex` or an `NSExtension` Info.plist key) and the host
+app's own first launch decides. **A configured Keychain access group** is shared on purpose and
+outlives any one app of the group, so the guard is not built for a client that configures one (the
+generic facade configures none). **An App Clip** is a separate app with its own container and its own
+default access group, so it is treated as an app: its container is evicted while its Keychain
+items are not. In every case the delete is scoped to the process's own default access group,
+learned from a throwaway item, never to the other groups the process is entitled to; if that group
+cannot be learned nothing is deleted.
 
 Discovery metadata is not credential material and is cached across logout deliberately: a
 re-login should not need a round trip to `/.well-known/openid-configuration`. The two native

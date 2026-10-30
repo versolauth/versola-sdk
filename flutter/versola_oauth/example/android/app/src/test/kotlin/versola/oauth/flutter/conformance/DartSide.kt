@@ -18,6 +18,12 @@ import versola.oauth.flutter.SessionStateFailure
 import versola.oauth.flutter.SessionStateOk
 import versola.oauth.flutter.SessionStateResult
 import versola.oauth.flutter.ConfigurationMessage
+import versola.oauth.flutter.HttpFailure
+import versola.oauth.flutter.HttpHeaderMessage
+import versola.oauth.flutter.HttpOk
+import versola.oauth.flutter.HttpRequestMessage
+import versola.oauth.flutter.HttpResponseMessage
+import versola.oauth.flutter.HttpResult
 import versola.oauth.flutter.IdTokenClaimsMessage
 import versola.oauth.flutter.KeyAttestationResult
 import versola.oauth.flutter.LoginOptionsMessage
@@ -109,6 +115,21 @@ class DartSide(private val messenger: FakeBinaryMessenger) {
     fun keyAttestation(): KeyAttestationResult = remember("keyAttestation", call("keyAttestation", handle) as KeyAttestationResult)
 
     fun userInfo(): UserInfoResult = remember("userInfo", call("userInfo", handle) as UserInfoResult)
+
+    /**
+     * `OAuthClient.httpClient().send(...)` as the Dart client sends it: one `httpRequest` call with the
+     * request's method, URL, header pairs and bytes. `origins` null is the configuration's.
+     */
+    fun httpRequest(
+        url: String,
+        method: String = "GET",
+        headers: List<Pair<String, String>> = emptyList(),
+        body: ByteArray? = null,
+        origins: List<String>? = null,
+    ): HttpResult = remember(
+        "httpRequest",
+        call("httpRequest", handle, HttpRequestMessage(method, url, headers.map { HttpHeaderMessage(it.first, it.second) }, body, origins)) as HttpResult,
+    )
 
     /**
      * `SessionStateEvents.sessionStates()`: listens as Dart's `receiveBroadcastStream` does (a

@@ -226,6 +226,24 @@ extension VersolaOAuthPlugin: OAuthHostApi {
         }
     }
 
+    /// `authenticatedSession(origins:)`: the SDK's own session runs the request, so the token, the
+    /// proof, the refresh and the origin check stay here. A call that produced no HTTP response is
+    /// not an SDK error: it crosses as the error's type and code alone, since a `URLError`'s text
+    /// carries the URL.
+    func httpRequest(handle: String, request: HttpRequestMessage) async throws -> HttpResult {
+        await attempt(HttpFailure.init(error:)) {
+            let client = try await clients.get(handle)
+            let prepared = try request.toURLRequest()
+            let session = try client.authenticatedSession(origins: request.origins.map(Set.init))
+            do {
+                let (data, response) = try await session.data(for: prepared)
+                return HttpOk(response: HttpResponseMessage(data, response))
+            } catch let error as URLError {
+                return HttpTransportFailure(exception: "URLError(\(error.code.rawValue))")
+            }
+        }
+    }
+
     /// Asking generates the key, so `hardwareBindingUnavailable` is a reachable answer here.
     func keyAttestation(handle: String) async throws -> KeyAttestationResult {
         await attempt(KeyAttestationFailure.init(error:)) {
