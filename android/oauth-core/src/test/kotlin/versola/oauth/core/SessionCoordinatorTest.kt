@@ -1972,6 +1972,30 @@ class SessionCoordinatorTest {
     }
 
     @Test
+    fun `a logout cancelled while it waits for a refresh in flight stops there, and still wipes`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val browser = FixedRedirectBrowser(pendingStore)
+        val (coordinator, tokenClient, credentialStore) = coordinator(pendingStore, browser = browser)
+        credentialStore.refreshToken = stored()
+        val refreshing = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        tokenClient.refreshActions = mutableListOf({ refreshing.complete(Unit); release.await(); issued() })
+
+        val refresh = async(start = CoroutineStart.UNDISPATCHED) { runCatching { coordinator.refresh() } }
+        refreshing.await()
+        val logout = launch(start = CoroutineStart.UNDISPATCHED) { coordinator.logout() }
+        logout.cancelAndJoin()
+        release.complete(Unit)
+        refresh.await()
+
+        // The cancellation was honoured at the wait, not swallowed: no revocation, no browser.
+        assertTrue(tokenClient.revokeCalls.isEmpty())
+        assertTrue(browser.launched.isEmpty())
+        assertNull(credentialStore.refreshToken)
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
     fun `invalid_grant on refresh tears the DPoP key down like a logout`() = runTest {
         val (coordinator, tokenClient, credentialStore) = coordinator()
         credentialStore.refreshToken = stored()

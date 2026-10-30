@@ -6,6 +6,8 @@ import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
@@ -746,7 +748,18 @@ public class SessionCoordinator(
         var serverSessionEnded = false
         var revoked = false
         try {
-            refreshFlight.mutex.withLock { refreshFlight.pending }?.let { flight -> runCatching { flight.await() } }
+            refreshFlight.mutex.withLock { refreshFlight.pending }?.let { flight ->
+                // The flight's outcome is a `Result` and is not this caller's to report (the wipe
+                // below ends the grant whatever it was), but this caller's cancellation is:
+                // `runCatching` swallowed it, and a cancelled `logout()` went on to revoke and
+                // open the end-session browser. A flight abandoned by its own winner completes with
+                // null, which is no reason to stop.
+                try {
+                    flight.await()
+                } catch (e: CancellationException) {
+                    currentCoroutineContext().ensureActive()
+                }
+            }
             if (revoke) revoked = revokeQuietly()
             if (endSession) {
                 val hint = try {
