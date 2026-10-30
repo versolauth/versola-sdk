@@ -18,9 +18,13 @@ services:
       KC_BOOTSTRAP_ADMIN_USERNAME: admin
       KC_BOOTSTRAP_ADMIN_PASSWORD: admin
       KC_HEALTH_ENABLED: "true"
+    # Loopback only: the throwaway credentials and `--dev` mode must not be reachable from the
+    # network the machine is on. The emulator still gets here: `adb reverse` and 10.0.2.2 (the
+    # emulator's alias for the host's loopback) both reach a 127.0.0.1 listener, and a simulator's
+    # localhost is the host's. A physical device needs `adb reverse`, not the host's LAN address.
     ports:
-      - "8080:8080"
-      - "9000:9000"
+      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:9000:9000"
     volumes:
       - ./realm.json:/opt/keycloak/data/import/realm.json:ro
     healthcheck:

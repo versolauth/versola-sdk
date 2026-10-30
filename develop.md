@@ -12,7 +12,7 @@ right and this file is stale.
 | Android SDK | platform 37.0, build-tools 36.0.0 | `compileSdk` 37 in every module (our build only, not what an app needs: see below); `minSdk` is 26 |
 | Android Gradle Plugin | 9.5.0 | pinned in `android/build.gradle.kts` |
 | Kotlin | 2.4.21 | pinned in `android/build.gradle.kts`; `explicitApi()` is on |
-| Gradle | 9.7.1 | through the wrapper, never a system Gradle |
+| Gradle | 9.8.2 | through the wrapper, never a system Gradle |
 | Xcode | 16.3 or newer, with an iOS simulator | `Package.swift` (swift-tools 6.0, Swift 6 language mode) |
 | Flutter | 3.47.8 (Dart 3.13.7) | pinned in `flutter/.fvmrc`, run through [fvm](https://fvm.app) (`brew install fvm`, then `fvm install` in `flutter/`) |
 | Python | 3.12 | `tools/validate-scenarios.py` |
@@ -56,7 +56,7 @@ spec/            normative: state machine, errors, retry policy, conformance sce
 android/         Gradle multi-project: oauth-core (protocol engine, plain Kotlin/JVM), core (the
                  edge back channel), dpop, storage, browser, okhttp, sdk (the Versola facade),
                  oauth (the generic OAuthClient facade)
-ios/Sources/     Swift targets (OAuthCore, OAuthClient; Versola* placeholders); the manifest is Package.swift at the repo root
+ios/Sources/     Swift targets (OAuthCore, OAuthClient); the manifest is Package.swift at the repo root
 flutter/         versola_oauth: the Flutter binding (Pigeon bridge over the native facades)
 conformance/     harness driving every SDK against a staged Versola stack
 tools/           validate-scenarios.py, the release scripts, verify-consumer/ (throwaway consumer apps, below)
@@ -86,6 +86,45 @@ out in `android/gradle.properties` because it does not work with
 kotlinx-binary-compatibility-validator; do not remove that without checking the upstream issue
 named there.
 
+#### Dependency verification
+
+`android/gradle/verification-metadata.xml` holds the SHA-256 of every artefact Gradle resolves (jar,
+aar, POM, Gradle module metadata) for the build and for its plugins, and Gradle refuses one that
+differs or is missing ("Dependency verification failed"). `android/gradle/wrapper/gradle-wrapper.properties`
+carries `distributionSha256Sum` for the distribution in the same way (the wrapper jar was compared
+with the checksum on services.gradle.org when it was added). The checksums were recorded from what
+the repositories served at the time, so they detect a changed artefact from then on, not a bad
+first download, and signatures are not checked (`verify-signatures` is off: much of AndroidX is
+unsigned). When a dependency or plugin is added or bumped, the build fails on the new artefacts;
+regenerate and commit the file with the change, and read its diff like a lockfile:
+
+Run it with an empty Gradle home. A warm one has the BOMs and parent POMs cached and the run records
+only what it resolves again, which is how the first CI run failed on four such files
+(`--refresh-dependencies` makes a warm home resolve them again, an empty home is the sure way):
+
+```bash
+cd android
+export GRADLE_USER_HOME="$(mktemp -d)"
+./gradlew --no-build-cache --rerun-tasks --refresh-dependencies --write-verification-metadata sha256 \
+  assemble assembleAndroidTest test lint apiCheck centralBundle -PreleaseVersion=9.9.9 -PallowUnsignedBundle
+ANDROID_SERIAL=<emulator-serial> ./gradlew --write-verification-metadata sha256 \
+  :storage:connectedDebugAndroidTest :dpop:connectedDebugAndroidTest   # only with an emulator booted; see below
+```
+
+Write mode only adds entries, so a stale one stays until it is deleted by hand. A Dependabot Gradle
+pull request is red until this is done on its branch (check it out, run the commands above, commit
+`android/gradle/verification-metadata.xml`, push); Dependabot does not update the file. No workflow
+does it for you: one that pushes to a Dependabot branch would need `pull_request_target`, which this
+repository does not use. Two things are not
+automatic. `aapt2` is resolved per host (`-osx`, `-linux`, `-windows`): a regeneration on one
+machine records one variant, so after an AGP bump add the other two by hand from the `.sha256`
+file Google Maven serves beside each jar
+(`https://dl.google.com/dl/android/maven2/com/android/tools/build/aapt2/<version>/aapt2-<version>-linux.jar.sha256`),
+because CI runs on Linux. And the Flutter example's build (`flutter/versola_oauth/example/android`,
+which includes this one) is not covered: a composite build is verified by its root, and the example's
+root also pulls in Flutter's own Gradle tooling. Robolectric downloads its `android-all` image at
+test time outside Gradle, so that jar is not covered either.
+
 `connectedDebugAndroidTest` needs the `androidTest` source sets, which arrive with the
 instrumented job (PR #44). Until then it has nothing to run on `main`.
 
@@ -95,8 +134,8 @@ Run from the repository root. These are the `ios.yml` steps.
 
 ```bash
 swift package resolve
-xcodebuild build -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 17"
-xcodebuild test  -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 17"
+xcodebuild build -scheme Versola -destination "platform=iOS Simulator,name=iPhone 17"
+xcodebuild test  -scheme Versola -destination "platform=iOS Simulator,name=iPhone 17"
 ```
 
 `swift build` and `swift test` on the Mac host work too (the manifest lists macOS 14.4, so the
@@ -385,7 +424,7 @@ answer it. Without `ISSUER` in the runner's environment every test is skipped.
 Both host apps double as small example apps over the generic facade: launch one with the issuer
 (`adb shell am start -n versola.conformance.browser.app/.HostActivity --es issuer ...`, or the
 `ISSUER` environment variable on iOS) and use the buttons by hand. `ios/BrowserLegHost` is not part
-of `Package.swift`, and `xcodebuild -scheme Versola-Package` does not see it.
+of `Package.swift`, and `xcodebuild -scheme Versola` does not see it.
 
 ## Agent setup
 
@@ -399,7 +438,7 @@ written so they keep holding after the planned `versola.*` package move (#46).
 
 1. `cd android && ./gradlew test apiCheck` is green. Run `lint` too if you touched resources or
    the manifest.
-2. `xcodebuild test -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 17"`
+2. `xcodebuild test -scheme Versola -destination "platform=iOS Simulator,name=iPhone 17"`
    is green if anything under `ios/` or `Package.swift` changed.
 3. `python3 tools/validate-scenarios.py` passes if anything under `spec/` changed, and
    `npx markdownlint-cli2 "**/*.md"` is clean if any Markdown did.

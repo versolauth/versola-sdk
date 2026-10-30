@@ -70,6 +70,11 @@ a vulnerability in every app that embeds it, not a bug. Platform specifics are i
   `exp`, `nonce`, `auth_time` under `max_age`) are never optional and have no off switch. The
   architecture review's F5 (ID token never validated) is the example of what a missing MUST costs.
   Never add a `validateX = false`, a debug bypass or a plain-HTTP allowance to the public API.
+  The one documented exception is cleartext `http` to a local development host, so that a provider
+  on the developer's machine works under `adb reverse` or on a simulator: `localhost`, `127.0.0.1`
+  and `[::1]`, for the issuer, explicit endpoints, `endSessionEndpoint` and `protectedOrigins`
+  (`spec/oauth-sdk-api.md` section 3). Every other `http` host is refused, `10.0.2.2` included, and
+  the exception gets no parameter and no switch: it is a property of the host, not of a flag.
 - Compare secrets and MACs in constant time (`MessageDigest.isEqual`, CryptoKit, a loop with no
   early exit); never `==` on a `state`, a code, a hash or a token.
 - Randomness for `state`, `nonce`, PKCE verifiers and `jti` comes from the platform CSPRNG

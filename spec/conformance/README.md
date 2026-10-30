@@ -60,10 +60,10 @@ A scenario carries `facade:` naming the facades it holds for: `versola` (the `Ve
 the default when the key is absent) and `oauth` (the generic facade of
 [`../oauth-sdk-api.md`](../oauth-sdk-api.md)). A scenario tagged with both runs under both; under
 `oauth` it runs once per provider in [`../providers.md`](../providers.md), and the `provider`
-actor stands for whichever OpenID Provider is staged. Scenarios 24 to 33 exist for what only the
+actor stands for whichever OpenID Provider is staged. Scenarios 24 to 36 exist for what only the
 generic facade does (explicit endpoints, PAR policy, providers without an `end_session_endpoint`
-or without refresh tokens, protected origins, DPoP against a provider that requires it) and for ID-token validation, which both facades
-share.
+or without refresh tokens, protected origins, DPoP against a provider that requires it, the retry
+policy and `Retry-After`) and, in 25 to 27, for ID-token validation, which both facades share.
 
 `applies_to` lists the platforms that meet every assertion of a scenario. A platform that lacks a
 surface the assertions need leaves it out, or, when only part of a scenario needs the surface, the

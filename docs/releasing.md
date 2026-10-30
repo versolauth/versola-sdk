@@ -1,11 +1,11 @@
 # Releasing
 
 How a release of the Versola SDKs is built, checked and published, and which parts are the
-maintainer's. Nothing has been published yet, and nothing in this document has run against a real
-Maven Central, pub.dev or GitHub release: the build side was exercised locally, the publishing side
-only by reading the vendors' documentation (the sources are named where they matter). The first
-release is therefore also the first test of every workflow, and the steps below are ordered so that
-each can be looked at, and undone, before the next.
+maintainer's. 0.1.0 is published: `release.yml` ran once, for that tag, and its Android artefacts are
+on Maven Central under a GitHub release of the same name. pub.dev is not published to (the first
+publish is by hand, step 7), and `verify-release.yml` has not yet run against a published version.
+The publishing side was written from the vendors' documentation (the sources are named where they
+matter), and the steps below are ordered so that each can be looked at, and undone, before the next.
 
 Releases, tags and publishing are the maintainer's act (`AGENTS.md`, `.claude/rules/ci-release.md`).
 **A release is a tag**: pushing `X.Y.Z` (for example `0.1.0`, no leading `v`) runs `release.yml`,
@@ -20,7 +20,7 @@ One version for every platform while the project is 0.x, written `X.Y.Z` and tag
 | Platform | Published as | How | Workflow |
 |---|---|---|---|
 | Android | `io.versola:oauth-android` and the five modules it depends on (below) | Maven Central, through the Central Portal | `release.yml` `maven-central` |
-| iOS | the repository itself: product `VersolaOAuth` (and the `Versola*` placeholders) | Swift Package Manager resolves the tag; nothing is uploaded | `release.yml` `swiftpm` verifies the tag builds |
+| iOS | the repository itself: product `VersolaOAuth` | Swift Package Manager resolves the tag; nothing is uploaded | `release.yml` `swiftpm` verifies the tag builds |
 | Flutter | `versola_oauth` on pub.dev | `flutter pub publish`, by hand for 0.1.0 and by workflow after | `publish-pubdev.yml` |
 
 The Android SDK is not a single artefact: a Gradle project dependency becomes a Maven dependency
@@ -40,6 +40,14 @@ released.
 The group `io.versola` is the one place reverse-DNS survives (`docs/adr/0001-generic-sdk-naming-and-layering.md`):
 Central verifies a group by DNS ownership of `versola.io`. The samples and the conformance drivers
 publish nothing.
+
+## For the next release's notes
+
+0.1.0 shipped five SwiftPM library products that were empty placeholders (`VersolaCore`,
+`VersolaDPoP`, `VersolaStorage`, `VersolaBrowser`, `VersolaURLSession`). They are removed from
+`Package.swift`; nothing could import anything from them, but a dependency naming one of those
+products fails to resolve. Say so in the notes of the release that first omits them (0.1.1 or 0.2.0):
+the products are gone, `VersolaOAuth` is the only one.
 
 ## What the repository does for you
 
@@ -65,16 +73,31 @@ publish nothing.
   `flutter.sh X.Y.Z` builds an app that takes `versola_oauth` as a git dependency at the tag, for Android
   and iOS. They run locally too (`develop.md`).
 - `release.yml`, on a pushed `X.Y.Z` tag: the tagged commit must be on `main`, then the version check
-  above, then (Android) `test lint apiCheck`, the signed bundle and the upload to the Central Portal,
-  (iOS) a clean-checkout build of the tag, and last the GitHub release with generated notes and the
-  dispatch of `verify-release.yml`. The
+  above, then (iOS) a clean-checkout build of the tag, which has to pass before the upload starts,
+  (Android) `test lint apiCheck`, the signed bundle and the upload to the Central Portal, and last the
+  GitHub release with generated notes and the dispatch of `verify-release.yml`. The
   Central job runs in the GitHub environment `maven-central`. `publish-pubdev.yml` is the dormant
   pub.dev counterpart.
 
-What was verified locally, on `-PreleaseVersion=0.1.0`: all six modules publish; every POM names
+- Provenance and the dependency graph. After the upload a separate `provenance` job of `release.yml` attests the build provenance
+  of every AAR and JAR in the bundle (`actions/attest-build-provenance`, signed through GitHub's
+  Sigstore, no secret involved, and not a gate of the GitHub release): they are the files Central serves, so
+  `gh attestation verify oauth-android-X.Y.Z.aar --repo versolauth/versola-sdk` ties a downloaded
+  artefact to the workflow run, tag and commit that built it (the first release that carries this is
+  the one after 0.1.0). `security.yml` submits the Gradle dependency graph on `main`, weekly and on
+  demand, which feeds Dependabot alerts and dependency review. An SBOM attached to the release is
+  deferred: the dependency graph above can be exported as SPDX
+  (`gh api repos/versolauth/versola-sdk/dependency-graph/sbom`), but a CycloneDX file per release
+  needs a Gradle plugin, which is a new dependency to approve (`AGENTS.md`, "Ask Before"), and
+  scanning the checkout with a generic tool misses the Gradle graph for the same reason Trivy does.
+  `android/gradle/verification-metadata.xml` checks every artefact the build resolves against a
+  recorded checksum (`develop.md`).
+
+What was verified locally, before 0.1.0 was tagged, on `-PreleaseVersion=0.1.0`: all six modules publish; every POM names
 only coordinates that are in the bundle; each artefact has sources, javadoc, POM and Gradle module
 metadata with MD5 and SHA-1 checksums; a bundle signed with a throwaway key has a signature for every
-file (40 of them) and one of them verifies with the matching public key. What was not verified:
+file (40 of them) and one of them verifies with the matching public key. What was not verified
+then (the Portal accepted 0.1.0's bundle):
 that the Portal accepts the bundle (the Android javadoc jars are what AGP generates from Kotlin
 sources, and `oauth-core`'s is empty, a placeholder Central's requirements allow), that it tolerates
 the checksum files Gradle also writes next to the signatures, and the upload and status calls.
