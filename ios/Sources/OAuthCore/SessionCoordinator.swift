@@ -326,9 +326,10 @@ package actor SessionCoordinator: AccessTokenSource {
             // invalid_grant): the answer is for a session that has ended.
             if epoch != startedIn { throw WipedMeanwhile() }
             if let refreshedClaims { claims = refreshedClaims }
-            // Step 2: persisted before returning to any caller. A response omitting the
-            // refresh token leaves the stored value alone rather than overwriting it.
-            if let rotated = issued.refreshToken { try await credentialStore.save(refreshToken: rotated, rawIdToken: issued.idToken) }
+            // Step 2: persisted before returning to any caller. A response omitting the refresh
+            // token or the ID token leaves the stored value alone rather than overwriting or
+            // deleting it, and a new ID token is stored whether or not the refresh token rotated.
+            try await credentialStore.saveRefreshed(refreshToken: issued.refreshToken, rawIdToken: issued.idToken)
             // Step 3: the slot is cleared only now.
             try await credentialStore.savePendingRotation(nil)
             cachedAccessToken = Cached(response: issued, receivedAt: clock.now())

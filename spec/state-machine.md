@@ -198,6 +198,13 @@ Persistence, in order:
 A process killed between 1 and 3 recovers by replaying with the same idempotency key on next
 start; the server resolves which generation is live.
 
+The ID token travels with step 2 and obeys the same rule as the refresh token: a refresh
+response without `id_token` leaves the stored one in place (OpenID Connect Core 12.2 permits the
+omission, and the stored value is what `id_token_hint` and the claims of a cold start are read
+from), and one that carries a new `id_token` stores it whether or not the refresh token rotated.
+Nothing on the refresh path deletes a stored ID token; only a login that replaces the grant, or a
+wipe, does.
+
 Under DPoP the server renews the refresh token in place (`BoundRenewal`) and the stored value
 does not change — the response echoes the same `refresh_token`, which is stored again as it
 was — so steps 1 and 3 are inert. The machinery exists for bearer mode.

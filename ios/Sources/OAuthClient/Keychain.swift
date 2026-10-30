@@ -187,6 +187,11 @@ package actor KeychainCredentialStore: CredentialStore {
         }
     }
 
+    package func saveRefreshed(refreshToken: String?, rawIdToken: String?) async throws {
+        if let refreshToken { try refreshItem.write(Data(refreshToken.utf8)) }
+        if let rawIdToken { try idTokenItem.write(Data(rawIdToken.utf8)) }
+    }
+
     package func savePendingRotation(_ idempotencyKey: String?) async throws {
         if let idempotencyKey {
             try rotationItem.write(Data(idempotencyKey.utf8))
@@ -268,6 +273,11 @@ package actor InMemoryCredentialStore: CredentialStore {
     package func save(refreshToken: String, rawIdToken: String?) async throws {
         refresh = refreshToken
         idToken = rawIdToken
+    }
+
+    package func saveRefreshed(refreshToken: String?, rawIdToken: String?) async throws {
+        if let refreshToken { refresh = refreshToken }
+        if let rawIdToken { idToken = rawIdToken }
     }
 
     package func savePendingRotation(_ idempotencyKey: String?) async throws { rotation = idempotencyKey }

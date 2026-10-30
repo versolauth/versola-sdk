@@ -29,6 +29,11 @@ final class SessionCoordinatorTests: XCTestCase {
             refresh = refreshToken
             idToken = rawIdToken
         }
+        func saveRefreshed(refreshToken: String?, rawIdToken: String?) async throws {
+            if let saveFailure { throw saveFailure }
+            if let refreshToken { refresh = refreshToken }
+            if let rawIdToken { idToken = rawIdToken }
+        }
         func savePendingRotation(_ idempotencyKey: String?) async throws { rotation = idempotencyKey }
         func pendingRotation() async throws -> String? { rotation }
         func clear() async throws {
@@ -429,6 +434,39 @@ final class SessionCoordinatorTests: XCTestCase {
         let validations = await f.validator.calls
         XCTAssertEqual(validations.last?.previous, "alice")
         XCTAssertNil(validations.last?.nonce)
+    }
+
+    private func refreshAnswer(refresh: String?, idToken: String?) -> TokenResponse {
+        TokenResponse(accessToken: "at-\(UUID().uuidString.prefix(4))", tokenType: "Bearer", expiresIn: 300, refreshToken: refresh, idToken: idToken, scope: "openid")
+    }
+
+    func testARefreshResponseWithoutAnIdTokenKeepsTheStoredOneForIdTokenHint() async throws {
+        let first = response(refresh: "rt-1", expiresIn: 60)
+        let f = try fixture(answers: [.success(first), .success(refreshAnswer(refresh: "rt-2", idToken: nil))])
+        try await f.coordinator.login(scopes: ["openid"])
+        f.clock.advance(61)
+
+        try await f.coordinator.refresh()
+
+        let stored = await f.store.idToken
+        XCTAssertEqual(stored, first.idToken, "OpenID Connect Core 12.2: a refresh may omit id_token; the last one known stays")
+        let refreshToken = await f.store.refresh
+        XCTAssertEqual(refreshToken, "rt-2")
+    }
+
+    func testARefreshIdTokenIsStoredEvenWhenTheRefreshTokenWasNotRotated() async throws {
+        let first = response(refresh: "rt-1", expiresIn: 60)
+        let renewed = idToken(subject: "alice", nonce: "later")
+        let f = try fixture(answers: [.success(first), .success(refreshAnswer(refresh: nil, idToken: renewed))])
+        try await f.coordinator.login(scopes: ["openid"])
+        f.clock.advance(61)
+
+        try await f.coordinator.refresh()
+
+        let stored = await f.store.idToken
+        XCTAssertEqual(stored, renewed)
+        let refreshToken = await f.store.refresh
+        XCTAssertEqual(refreshToken, "rt-1", "no rotation: the refresh token is left as it was")
     }
 
     func testAnAbandonedSlotIsReplayedWithTheSameKey() async throws {
