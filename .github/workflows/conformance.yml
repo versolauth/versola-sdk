@@ -93,7 +93,7 @@ jobs:
           READY: ${{ matrix.ready }}
         run: |
           docker compose up -d
-          for i in $(seq 1 90); do sh -c "$READY" && exit 0; sleep 2; done
+          for _ in $(seq 1 90); do sh -c "$READY" && exit 0; sleep 2; done
           echo "provider not ready after 180 s" >&2; docker compose logs --no-color | tail -50; exit 1
 
       - name: Scenarios 24 to 32 against ${{ matrix.provider }}
@@ -160,7 +160,7 @@ jobs:
         working-directory: conformance/providers/keycloak
         run: |
           docker compose up -d
-          for i in $(seq 1 90); do curl -fs http://localhost:8080/realms/conformance/.well-known/openid-configuration && exit 0; sleep 2; done
+          for _ in $(seq 1 90); do curl -fs http://localhost:8080/realms/conformance/.well-known/openid-configuration && exit 0; sleep 2; done
           echo "keycloak not ready after 180 s" >&2; docker compose logs --no-color | tail -50; exit 1
 
       - name: The browser leg on an emulator
@@ -264,16 +264,16 @@ jobs:
           PORT=9001 DPORT=9002 RUN_MIGRATIONS=true HTTP_CLIENT_POOL_SIZE=10 \
             nohup central/implementations/postgres/target/universal/stage/bin/central-postgres-impl \
             -Denv.path=central/dev/env.conf > central.log 2>&1 &
-          for i in $(seq 1 60); do curl -fs http://localhost:9002/readiness && break; sleep 2; done
+          for _ in $(seq 1 60); do curl -fs http://localhost:9002/readiness && break; sleep 2; done
           PORT=9003 DPORT=9004 APORT=9007 MPORT=9008 RUN_MIGRATIONS=true HTTP_CLIENT_POOL_SIZE=10 \
             nohup auth/implementations/postgres/target/universal/stage/bin/auth-postgres-impl \
             -Denv.path=auth/dev/env.conf > auth.log 2>&1 &
-          for i in $(seq 1 60); do curl -fs http://localhost:9004/readiness && break; sleep 2; done
+          for _ in $(seq 1 60); do curl -fs http://localhost:9004/readiness && break; sleep 2; done
           sudo nginx -c "$(pwd)/edge/dev/internal-tls/nginx.conf"
           PORT=9005 DPORT=9006 HTTP_CLIENT_POOL_SIZE=10 \
             nohup edge/implementations/postgres/target/universal/stage/bin/edge-postgres-impl \
             -Denv.path=edge/dev/env.conf > edge.log 2>&1 &
-          for i in $(seq 1 60); do curl -fs http://localhost:9006/readiness && break; sleep 2; done
+          for _ in $(seq 1 60); do curl -fs http://localhost:9006/readiness && break; sleep 2; done
 
       # ---- the driver ----
 

@@ -12,9 +12,10 @@ on:
     branches: [main]
   push:
     branches: [main]
+  # One `schedule:` key: a second one made GitHub reject the whole file (no jobs ran at all).
   schedule:
+    # An off-the-hour minute: GitHub delays or drops scheduled runs queued at :00.
     - cron: "17 4 * * 1"
-  schedule:
     # Recheck existing code against newly published findings every Monday.
     - cron: "0 5 * * 1"
   workflow_dispatch:
