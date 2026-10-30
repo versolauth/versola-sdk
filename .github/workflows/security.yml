@@ -60,6 +60,7 @@ jobs:
   codeql:
     if: ${{ !github.event.repository.private }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     permissions:
       actions: read
       contents: read
@@ -74,6 +75,11 @@ jobs:
             runner: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Match ios.yml: resolve the package before CodeQL instruments xcodebuild.
+      # Resolving the graph inside the traced build can stall before compilation starts.
+      - name: Resolve Swift packages before tracing
+        if: ${{ matrix.language == 'swift' }}
+        run: swift package resolve
       - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           languages: ${{ matrix.language }}
