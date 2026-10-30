@@ -42,6 +42,8 @@ package actor AuthorizationFlow {
     /// The `state` of the request whose validated grant was handed to the coordinator and has not
     /// been completed, abandoned or wiped yet: the code exchange, which runs outside the gate.
     private var redeeming: String?
+    /// True while `resumePendingAuthorization` waits for a redirect, and nothing else.
+    private var awaitingRedirect = false
     private var gateQueue: [(id: UUID, continuation: CheckedContinuation<Void, Error>)] = []
 
     /// `state` values of authorizations whose caller was cancelled while their tab was open: the
@@ -191,11 +193,19 @@ package actor AuthorizationFlow {
     }
 
     /// Whether an authorization is being carried out by this process right now: the browser is
-    /// up, a resume awaits its redirect, or a validated grant's code exchange has not finished.
-    /// What a new `login()` is refused for. A pending request that nobody awaits (a system
-    /// cancel left it, `resumePendingAuthorization()` has not been called) is not in flight: it
-    /// is superseded, not protected.
-    package var authorizationInFlight: Bool { gateHeld || redeeming != nil }
+    /// up, a validated grant's code exchange has not finished, or the provider's end-session page
+    /// is open. What a new `login()` is refused for. Two things are not in flight: a pending
+    /// request that nobody awaits (a system cancel left it, `resumePendingAuthorization()` has not
+    /// been called), which is superseded; and a resume that only *waits* for a redirect that may
+    /// never come (``isAwaitingRedirect``), which the facade ends first, as `logout()` does.
+    package var authorizationInFlight: Bool { (gateHeld && !awaitingRedirect) || redeeming != nil }
+
+    /// Whether the gate is held by a resume that has nothing but a redirect left to wait for: no
+    /// sheet is open, no code is in hand. After a cold start that redirect may never come (the
+    /// user abandoned the old sheet and came back to the app itself), so a new `login()` or
+    /// `stepUp()` ends the wait and takes the gate rather than being refused for up to ten
+    /// minutes. A resume that has the redirect and is redeeming its code is not this.
+    package var isAwaitingRedirect: Bool { awaitingRedirect }
 
     /// `authenticated -> stepUpRequired`; nothing else moves, the grant is intact.
     package func enterStepUpRequired() async {
@@ -352,6 +362,8 @@ package actor AuthorizationFlow {
             }
             await states.set(.authorizing)
             let remaining = PendingAuthorizationRequest.maxAge - now.timeIntervalSince(pending.createdAt)
+            awaitingRedirect = true
+            defer { awaitingRedirect = false }
             guard let outcome = try await awaitRedirect(pending, within: remaining) else {
                 await abandonLogin()
                 throw OAuthError.recoverable(.pendingRequestExpired)
@@ -537,7 +549,9 @@ package actor AuthorizationFlow {
     /// read `unauthenticated` and open two sheets (`spec/oauth-sdk-api.md` section 5).
     private func exclusivelyOrRefuse<T: Sendable>(_ body: () async throws -> T) async throws -> T {
         try Task.checkCancellation()
-        if authorizationInFlight {
+        // Strict: a resume that waits for its redirect still holds the gate, and two holders
+        // would share one browser and one redirect channel. The facade ends such a wait first.
+        if gateHeld || redeeming != nil {
             throw OAuthError.configuration(.invalidConfiguration(detail: "an authorization is already in progress; observe sessionStates() before asking again"))
         }
         gateHeld = true

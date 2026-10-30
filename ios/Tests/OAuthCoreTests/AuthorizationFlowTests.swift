@@ -403,6 +403,34 @@ final class AuthorizationFlowTests: XCTestCase {
         _ = try await f.flow.authorize(scopes: ["openid"])
     }
 
+    /// A resume that has only a redirect left to wait for is not an authorization in flight (the
+    /// facade ends it for a new login), yet it still holds the gate: the flow itself must not let
+    /// a second authorization share the browser with it.
+    func testAResumeWaitingForItsRedirectIsNotInFlightButStillRefusesAnAuthorizationAtTheFlow() async throws {
+        let browser = ScriptedBrowser { uri, _ in .redirect(AuthzKit.redirect(answering: uri)) }
+        let f = fixture(browser: browser, store: MemoryPendingStore(AuthzKit.pending(createdAt: AuthzKit.now - 60)))
+        let resume = Task { try await f.flow.resumePendingAuthorization() }
+        await AuthzKit.waitUntil("the resume waits for its redirect") { await browser.awaitCalls == 1 }
+
+        let waiting = await f.flow.isAwaitingRedirect
+        let inFlight = await f.flow.authorizationInFlight
+        XCTAssertTrue(waiting)
+        XCTAssertFalse(inFlight)
+        do {
+            _ = try await f.flow.authorize(scopes: ["openid"])
+            XCTFail("a second holder of the gate")
+        } catch let error as OAuthError {
+            guard case .configuration(.invalidConfiguration) = error else { return XCTFail("\(error)") }
+        }
+
+        resume.cancel()
+        _ = try? await resume.value
+        let after = await f.flow.isAwaitingRedirect
+        XCTAssertFalse(after)
+        let grant = try await f.flow.authorize(scopes: ["openid"])
+        XCTAssertNotNil(grant, "once the wait is ended the gate is free and the leftover is superseded")
+    }
+
     func testAnAbandonedExchangeFreesTheFlowToo() async throws {
         let f = fixture(browser: ScriptedBrowser.answering())
         _ = try await f.flow.authorize(scopes: ["openid"])

@@ -120,14 +120,17 @@ val oauth = OAuthClient.create(context, configuration)
 - `logout()` ends a resume that is still waiting for its redirect, then proceeds: the resume
   holds the authorization lock that the end-session step needs, and the pending request is
   abandoned by the local wipe.
+- `login()` and `stepUp()` end a resume that is still waiting for its redirect, as `logout()` does,
+  and then proceed: after a cold start the redirect may never come (the user abandoned the old
+  sheet and came back to the app itself), and the request nobody awaits is superseded by the new
+  one (section 5). A resume that already has its redirect and is redeeming the code is not
+  interrupted: `login()` is refused for that.
 - **Order.** While the state is `Authorizing` no grant is stored. An app that calls an
   authenticated operation (`accessToken()`, `refresh()`, `userInfo()`, a request through the
   authenticated client or session) before the resume has left `Authorizing` gets the
-  no-grant `Reauthenticate` error, and on iOS today that error wipes local
-  state, including the pending request and the DPoP key the code exchange is bound to
-  (`dpop_jkt`), so the sign-in can no longer finish. Observe `sessionState` until it has left
-  `Authorizing` before touching those operations. A known gap, tracked separately: a missing
-  grant should not wipe anything.
+  no-grant `Reauthenticate(GrantRejected)` error. Nothing is wiped for it, so the pending
+  sign-in and the DPoP key its `dpop_jkt` committed to survive and the sign-in can still finish
+  (`state-machine.md`, `Refreshing → Unauthenticated`); the state stays `Authorizing`.
 
 ## 5. Operations
 
@@ -148,14 +151,16 @@ val oauth = OAuthClient.create(context, configuration)
 grant; on cancel or failure the existing session stays (`state-machine.md`, settle on
 `Authenticated`). `login()` while an authorization is **in flight** is refused with
 `Configuration(InvalidConfiguration("an authorization is already in progress"))`; the app observes
-the state before asking. In flight means this process is carrying one out: the browser is up, a
-resume is awaiting its redirect, or a validated redirect's code exchange has not finished. A
-pending request that nobody awaits is not in flight even though the state reads `Authorizing`
-(a system cancel kept it for a resume the app has not asked for, or a cold start restored it and
-nothing was started): `login()` **supersedes** it, as it supersedes the slot of a cancelled
-caller, and remembers its `state` so that a redirect the old tab still delivers is stepped over
-instead of failing the new login as a mismatch. Platform note: Android refuses on the state alone
-today, so a request left behind there blocks `login()` until it expires (ten minutes).
+the state before asking. In flight means this process is carrying one out: the browser is up, or a validated redirect's
+code exchange has not finished (the end-session page is open too). A **resume that only waits for
+its redirect** is not in flight: `login()` and `stepUp()` end the wait and take its place. A
+pending request that nobody awaits is not in flight either, even though the state reads
+`Authorizing` (a system cancel kept it for a resume the app has not asked for, a cancelled caller
+did, or a cold start restored it and nothing was started): `login()` **supersedes** it, and
+remembers its `state` so that a redirect the old tab still delivers is stepped over instead of
+failing the new login as a mismatch.
+Platform note: Android refuses while its cold-start resume waits and offers
+`cancelPendingAuthorization()` instead; the two are meant to converge on this rule.
 
 ## 6. `login()` options
 
@@ -397,7 +402,7 @@ refresh token issued, `offline_access` advertised but not configured, a response
 
 1. `IdTokenRejected` as `Configuration` (section 11) versus a fifth category; the spec's
    four-category rule argues for `Configuration`.
-2. `login()` while an authorization is in flight refused (section 5) versus cancelling the outstanding request. A request nobody awaits is superseded.
+2. `login()` while an authorization is in flight refused (section 5) versus cancelling the outstanding request. A request nobody awaits, or a resume that only waits for its redirect, is superseded.
 3. `stepUp()` takes the configured scopes by default (section 5); the Versola facade requires
    them as a parameter. The two differ in signature, not in what is sent.
 4. The 24-hour discovery cache age and the 30-second refresh skew: both fixed, not configurable.

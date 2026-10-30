@@ -72,12 +72,13 @@ public final class OAuthClient: Sendable {
     /// (before first unlock), the restore is repeated by the next call that needs it, and the
     /// resume starts then.
     ///
-    /// **Order.** While the state is `authorizing`, the SDK holds no grant, so do not call
-    /// ``accessToken()``, ``refresh()``, ``userInfo()`` or an ``authenticatedSession(origins:)``
-    /// request until ``sessionStates()`` has left `authorizing`: with no grant stored they end the
-    /// session (`reauthenticate`), which erases the pending request and the DPoP key the code
-    /// exchange is bound to, and the sign-in cannot finish. ``login(_:)`` is refused meanwhile,
-    /// and ``logout(_:)`` abandons the pending sign-in.
+    /// **Order.** While the state is `authorizing`, the SDK holds no grant, so ``accessToken()``,
+    /// ``refresh()``, ``userInfo()`` and an ``authenticatedSession(origins:)`` request fail with
+    /// `reauthenticate(.grantRejected)` until ``sessionStates()`` has left `authorizing`. Nothing is
+    /// wiped for it: the pending request and the DPoP key the code exchange is bound to survive,
+    /// and the sign-in can still finish. ``login(_:)`` and ``stepUp(acrValues:maxAge:options:)``
+    /// end the resume if it is only waiting for a redirect that may never come (the user abandoned
+    /// that sheet) and supersede the request; ``logout(_:)`` abandons the pending sign-in.
     ///
     /// - Parameter presentationAnchor: the window the browser sheet is presented from, supplied
     ///   by the app; the SDK never finds a window by itself.
@@ -165,7 +166,9 @@ public final class OAuthClient: Sendable {
 
     /// Opens the system browser, validates the redirect, exchanges the code, validates the ID
     /// token and persists the grant, in that order; `authenticated` is published only after the
-    /// grant is durably stored. While `authorizing` it is refused: observe the state first.
+    /// grant is durably stored. Refused while an authorization is in flight (the sheet is up, or a code
+    /// is being exchanged); a cold-start resume that only waits for its redirect is ended first and
+    /// the request nobody awaits is superseded.
     public func login(_ options: LoginOptions = .default) async throws {
         try await refuseWhileAuthorizing()
         let coordinator = self.coordinator
@@ -338,6 +341,10 @@ public final class OAuthClient: Sendable {
 
     private func refuseWhileAuthorizing() async throws {
         try await flow.ensureRestored()
+        // A resume that only waits for its redirect (a cold start restored the request and the
+        // user abandoned that sheet) is not an authorization to protect: it is ended, as
+        // `logout()` ends it, and the request nobody awaits is superseded by this one.
+        if await flow.isAwaitingRedirect { await backgroundResume.cancelInFlight() }
         if await flow.authorizationInFlight {
             throw OAuthError.configuration(.invalidConfiguration(detail: "an authorization is already in progress; observe sessionStates() before asking again"))
         }
