@@ -8,7 +8,11 @@ plugins {
 
 android {
     namespace = "kz.versola.versola_oauth_example"
-    compileSdk = flutter.compileSdkVersion
+    // Not flutter.compileSdkVersion (36 under the pinned Flutter): the repository's own libraries
+    // (:oauth, :browser, ...) compile against 37 for OkHttp 5.5.1, and an application that depends on
+    // them must compile against at least that (checkDebugAarMetadata fails otherwise). Follows
+    // android/*/build.gradle.kts; raise it with them.
+    compileSdk = 37
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
