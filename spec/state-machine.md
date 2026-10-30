@@ -192,11 +192,29 @@ provider to. The generic facade (`oauth-sdk-api.md` section 8) sends none, persi
 Persistence, in order:
 
 1. the outgoing generation is copied into a `pending` slot before the request is sent
-2. the response is persisted before it is returned to any caller
-3. the `pending` slot is cleared after the new value is durably stored
+2. the response is persisted before it is returned to any caller: the rotated refresh token
+   first, **before the ID token the response carries is validated**
+3. the `pending` slot is cleared after the new value is durably stored, and before the ID token is
+   validated, since it named the generation that was just consumed
 
 A process killed between 1 and 3 recovers by replaying with the same idempotency key on next
 start; the server resolves which generation is live.
+
+The order of 2 and the validation is the point: the provider rotates the moment it answers, so
+the old refresh token is already spent and the new one is the only credential left. An ID token
+that cannot be judged or fails is rejected **on its own**; the rotation is not discarded with it,
+because the next refresh would then spend a dead token, get `invalid_grant` and wipe a healthy
+session. What the app sees is the validation's own outcome, and the grant is intact either way:
+
+| Validation outcome | Rotated refresh token | Access token, claims, stored ID token | Error | State |
+|---|---|---|---|---|
+| passes | stored | the new ones | none | `Authenticated` |
+| fails (`IdTokenRejected`: signature, `iss`, `aud`, `sub` changed, ...) | stored | not kept: the previous claims and stored ID token stand | `Configuration(IdTokenRejected)` | `Authenticated` |
+| cannot run (the key set cannot be fetched: `Network`, `Server`, `UnlockRequired`) | stored | not kept | the `Recoverable` cause | `Authenticated` (`Locked` for `UnlockRequired`) |
+
+The ID token stored for `id_token_hint` is replaced only by one that passed. A response with no
+`id_token` leaves the stored one alone, and one that passes is stored even when the refresh token
+did not rotate.
 
 Under DPoP the server renews the refresh token in place (`BoundRenewal`) and the stored value
 does not change — the response echoes the same `refresh_token`, which is stored again as it

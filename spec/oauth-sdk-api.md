@@ -181,7 +181,11 @@ is the precise error scenario 17 cannot give without PAR.
   provider that already rotated answers `invalid_grant`, which is `Reauthenticate(GrantRejected)`.
   Scenarios 09 and 13 therefore hold for the Versola facade only.
 - An `id_token` on a refresh response is validated with the same rules as at login, except that
-  `nonce` is not required and `auth_time` must not move backwards (OIDC Core 12.2).
+  `nonce` is not required and `auth_time` must not move backwards (OIDC Core 12.2). The rotated
+  refresh token is stored **before** that validation and survives its failure; a rejected ID token
+  is `Configuration(IdTokenRejected)` and an unreachable key set a `Recoverable`, and neither keeps
+  the response's access token or claims, nor ends the session (`state-machine.md`, "The refresh
+  skew" and the persistence order after it).
 
 ## 9. Token binding
 
@@ -225,7 +229,7 @@ token handed to app code is one the app can log.
 
 ## 11. ID-token and UserInfo validation
 
-Mandatory on every platform, before the token response is persisted (OIDC Core 3.1.3.7):
+Mandatory on every platform, before the token response is persisted (OIDC Core 3.1.3.7; on a refresh the rotated refresh token goes first, section 8):
 
 1. Signature with a key from `jwks_uri` (cached, refetched once on an unknown `kid`), algorithm in
    the closed set `RS256`, `PS256`, `ES256`, `ES384`, `ES512`, `RS384`, `RS512`, `PS384`, `PS512`,

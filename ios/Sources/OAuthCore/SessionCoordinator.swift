@@ -315,22 +315,43 @@ package actor SessionCoordinator: AccessTokenSource {
                     try await tokenClient.refresh(refreshToken: token, idempotencyKey: idempotencyKey)
                 }
             }
+            // The grant was wiped while this request was out (a logout, another caller's
+            // invalid_grant): the answer is for a session that has ended.
+            if epoch != startedIn { throw WipedMeanwhile() }
+            // Step 2, before the ID token is judged: the provider rotated the moment it answered,
+            // so the old token is spent and the new one is the only credential there is. Dropping
+            // it because the ID token failed (a key set fetch that blipped, a `kid` the set does
+            // not have yet, a changed `sub`) would turn the next refresh into `invalid_grant` and
+            // a wipe. A response omitting the refresh token leaves the stored value alone rather
+            // than overwriting it with an absence. The ID token stored beside it is the previous
+            // one: it is replaced only by one that passed (below).
+            if let rotated = issued.refreshToken {
+                try await credentialStore.save(refreshToken: rotated, rawIdToken: try await credentialStore.rawIdToken())
+            }
+            // Step 3: the slot named the generation just consumed, so it goes with the rotation,
+            // not after the validation: a process killed in between would replay the old key
+            // against the new token.
+            try await credentialStore.savePendingRotation(nil)
             // An ID token on a refresh is validated with the login rules minus the nonce, and
-            // against the claims it replaces (OpenID Connect Core 12.2), before persistence.
+            // against the claims it replaces (OpenID Connect Core 12.2). A refusal rejects the ID
+            // token alone: the rotation above stays, nothing else from this response is kept (no
+            // access token, no claims), and the error is the validator's, `configuration` for a
+            // token that is wrong and `recoverable` for a key set that could not be fetched.
             var refreshedClaims: IdTokenClaims?
             if let validator = idTokenValidator, let idToken = issued.idToken {
                 refreshedClaims = try await validator.validate(idToken: idToken, expectedNonce: nil, accessToken: issued.accessToken, maxAge: nil, previous: await restoreClaims(), serverTime: issued.serverDate)
             }
             warnIfNoExpiry(issued)
-            // The grant was wiped while this request was out (a logout, another caller's
-            // invalid_grant): the answer is for a session that has ended.
+            // The validation awaited; the grant may have been wiped meanwhile.
             if epoch != startedIn { throw WipedMeanwhile() }
-            if let refreshedClaims { claims = refreshedClaims }
-            // Step 2: persisted before returning to any caller. A response omitting the
-            // refresh token leaves the stored value alone rather than overwriting it.
-            if let rotated = issued.refreshToken { try await credentialStore.save(refreshToken: rotated, rawIdToken: issued.idToken) }
-            // Step 3: the slot is cleared only now.
-            try await credentialStore.savePendingRotation(nil)
+            if let idToken = issued.idToken {
+                if let refreshedClaims { claims = refreshedClaims }
+                // Stored whether or not the refresh token rotated: a provider that renews the ID
+                // token on every refresh and keeps the refresh token is the common case.
+                let current: String?
+                if let rotated = issued.refreshToken { current = rotated } else { current = try await credentialStore.refreshToken() }
+                if let current { try await credentialStore.save(refreshToken: current, rawIdToken: idToken) }
+            }
             cachedAccessToken = Cached(response: issued, receivedAt: clock.now())
             await flow.setState(.authenticated)
             return issued
