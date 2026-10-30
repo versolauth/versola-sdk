@@ -142,6 +142,8 @@ final class WireMappingTests: XCTestCase {
     }
 
     func testARelativeUrlANonHttpSchemeAndAMissingHostAreRefusedWithoutEchoingThem() {
+        // `ws://` is the input under test, a scheme the bridge must refuse, not a connection the test opens.
+        // nosemgrep: javascript.lang.security.detect-insecure-websocket.detect-insecure-websocket
         for url in ["/items", "ftp://api.example.com/x", "ws://api.example.com/x", "https:///x", ""] {
             let detail = refused(request(url: url))
             XCTAssertFalse(url.isEmpty ? false : (detail ?? "").contains(url), url)
