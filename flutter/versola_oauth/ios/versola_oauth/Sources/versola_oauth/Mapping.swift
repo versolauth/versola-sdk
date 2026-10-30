@@ -122,6 +122,11 @@ extension OAuthError {
             case .pendingRequestExpired: m.kind = "pendingRequestExpired"
             case .network(let detail, let attempts, let elapsedMillis):
                 m.kind = "network"; m.detail = detail; m.attempts = Int64(attempts); m.elapsedMillis = elapsedMillis
+            case .server(let status, let retryAfterMillis, let attempts, let elapsedMillis):
+                // An HTTP answer that kept the operation from finishing: the status says whether it
+                // was a 429 or a 5xx, `retryAfterMillis` how long the server asked the app to wait.
+                m.kind = "server"; m.status = Int64(status); m.retryAfterMillis = retryAfterMillis
+                m.attempts = Int64(attempts); m.elapsedMillis = elapsedMillis
             case .unlockRequired: m.kind = "unlockRequired"
             case .nonceLoop(let origin): m.kind = "nonceLoop"; m.origin = origin
             }

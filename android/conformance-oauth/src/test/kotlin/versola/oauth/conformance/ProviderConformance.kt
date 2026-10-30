@@ -18,6 +18,7 @@ import versola.oauth.OAuthConfiguration
 import versola.oauth.ProviderEndpoints
 import versola.oauth.core.CredentialKeyProvider
 import versola.oauth.core.PushedAuthorization
+import versola.oauth.core.RetryPolicy
 import versola.oauth.core.SessionState
 import versola.oauth.core.TokenBinding
 import versola.oauth.core.VersolaError
@@ -96,6 +97,7 @@ abstract class ProviderConformance {
         protectedOrigins: Set<String> = setOf(resource.origin),
         pushedAuthorization: PushedAuthorization = PushedAuthorization.WhenAdvertised,
         tokenBinding: TokenBinding = TokenBinding.Bearer,
+        retryPolicy: RetryPolicy = RetryPolicy.Default,
     ): OAuthConfiguration = OAuthConfiguration(
         issuer = if (endpoints == null) proxy.issuer else null,
         endpoints = endpoints,
@@ -106,6 +108,7 @@ abstract class ProviderConformance {
         protectedOrigins = protectedOrigins,
         pushedAuthorization = pushedAuthorization,
         tokenBinding = tokenBinding,
+        retryPolicy = retryPolicy,
         logger = logger,
         httpClient = httpClient,
     )

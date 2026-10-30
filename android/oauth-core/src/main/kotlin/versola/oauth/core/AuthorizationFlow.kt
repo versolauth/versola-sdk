@@ -184,7 +184,8 @@ public class AuthorizationFlow(
 
         val outcome = try {
             // Never ephemeral: the point is to end the session the shared browser holds.
-            browser.authorize(uri, BrowserSessionOptions(redirectUri = postLogoutRedirectUri))
+            // The user's time in the browser is not the SDK's retrying: see [outsideRetryBudget].
+            outsideRetryBudget { browser.authorize(uri, BrowserSessionOptions(redirectUri = postLogoutRedirectUri)) }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -280,7 +281,7 @@ public class AuthorizationFlow(
 
         val browserOptions = BrowserSessionOptions(ephemeral = ephemeralBrowser, redirectUri = configuration.redirectUri.value)
         val outcome = try {
-            belongingTo(pending, browser.authorize(uri, browserOptions))
+            belongingTo(pending, outsideRetryBudget { browser.authorize(uri, browserOptions) })
         } catch (e: CancellationException) {
             // The *caller* was cancelled, not the authorization. The browser may already be
             // in the foreground and its redirect may still arrive, so the slot and the
@@ -339,7 +340,7 @@ public class AuthorizationFlow(
         // before the process died — and an unbounded wait here holds the authorize lock, and
         // with it every later `login()`, for as long as the app lives.
         val remaining = PendingAuthorizationRequest.MAX_AGE_MILLIS - (clock() - pending.createdAtEpochMillis)
-        val outcome = withTimeoutOrNull(remaining) { belongingTo(pending, browser.awaitPendingRedirect()) }
+        val outcome = withTimeoutOrNull(remaining) { belongingTo(pending, outsideRetryBudget { browser.awaitPendingRedirect() }) }
             ?: run {
                 pendingStore.clear()
                 state.value = settledState()
@@ -363,7 +364,7 @@ public class AuthorizationFlow(
     ): BrowserOutcome {
         var outcome = first
         while (isAbandoned(outcome, pending)) {
-            outcome = browser.awaitPendingRedirect()
+            outcome = outsideRetryBudget { browser.awaitPendingRedirect() }
         }
         return outcome
     }

@@ -595,6 +595,9 @@ struct ErrorMessage: Hashable, CustomStringConvertible {
   var maxAge: Int64? = nil
   var attempts: Int64? = nil
   var elapsedMillis: Int64? = nil
+  /// The HTTP status of a `server` cause, and its parsed `Retry-After` in milliseconds.
+  var status: Int64? = nil
+  var retryAfterMillis: Int64? = nil
   var origin: String? = nil
   var expected: String? = nil
   var received: String? = nil
@@ -615,12 +618,14 @@ struct ErrorMessage: Hashable, CustomStringConvertible {
     let maxAge: Int64? = nilOrValue(pigeonVar_list[7])
     let attempts: Int64? = nilOrValue(pigeonVar_list[8])
     let elapsedMillis: Int64? = nilOrValue(pigeonVar_list[9])
-    let origin: String? = nilOrValue(pigeonVar_list[10])
-    let expected: String? = nilOrValue(pigeonVar_list[11])
-    let received: String? = nilOrValue(pigeonVar_list[12])
-    let field: String? = nilOrValue(pigeonVar_list[13])
-    let capability: String? = nilOrValue(pigeonVar_list[14])
-    let idTokenRejection: String? = nilOrValue(pigeonVar_list[15])
+    let status: Int64? = nilOrValue(pigeonVar_list[10])
+    let retryAfterMillis: Int64? = nilOrValue(pigeonVar_list[11])
+    let origin: String? = nilOrValue(pigeonVar_list[12])
+    let expected: String? = nilOrValue(pigeonVar_list[13])
+    let received: String? = nilOrValue(pigeonVar_list[14])
+    let field: String? = nilOrValue(pigeonVar_list[15])
+    let capability: String? = nilOrValue(pigeonVar_list[16])
+    let idTokenRejection: String? = nilOrValue(pigeonVar_list[17])
 
     return ErrorMessage(
       category: category,
@@ -633,6 +638,8 @@ struct ErrorMessage: Hashable, CustomStringConvertible {
       maxAge: maxAge,
       attempts: attempts,
       elapsedMillis: elapsedMillis,
+      status: status,
+      retryAfterMillis: retryAfterMillis,
       origin: origin,
       expected: expected,
       received: received,
@@ -653,6 +660,8 @@ struct ErrorMessage: Hashable, CustomStringConvertible {
       maxAge,
       attempts,
       elapsedMillis,
+      status,
+      retryAfterMillis,
       origin,
       expected,
       received,
@@ -665,7 +674,7 @@ struct ErrorMessage: Hashable, CustomStringConvertible {
     if Swift.type(of: lhs) != Swift.type(of: rhs) {
       return false
     }
-    return MessagesPigeonInternal.deepEquals(lhs.category, rhs.category) && MessagesPigeonInternal.deepEquals(lhs.kind, rhs.kind) && MessagesPigeonInternal.deepEquals(lhs.message, rhs.message) && MessagesPigeonInternal.deepEquals(lhs.code, rhs.code) && MessagesPigeonInternal.deepEquals(lhs.errorDescription, rhs.errorDescription) && MessagesPigeonInternal.deepEquals(lhs.detail, rhs.detail) && MessagesPigeonInternal.deepEquals(lhs.acrValues, rhs.acrValues) && MessagesPigeonInternal.deepEquals(lhs.maxAge, rhs.maxAge) && MessagesPigeonInternal.deepEquals(lhs.attempts, rhs.attempts) && MessagesPigeonInternal.deepEquals(lhs.elapsedMillis, rhs.elapsedMillis) && MessagesPigeonInternal.deepEquals(lhs.origin, rhs.origin) && MessagesPigeonInternal.deepEquals(lhs.expected, rhs.expected) && MessagesPigeonInternal.deepEquals(lhs.received, rhs.received) && MessagesPigeonInternal.deepEquals(lhs.field, rhs.field) && MessagesPigeonInternal.deepEquals(lhs.capability, rhs.capability) && MessagesPigeonInternal.deepEquals(lhs.idTokenRejection, rhs.idTokenRejection)
+    return MessagesPigeonInternal.deepEquals(lhs.category, rhs.category) && MessagesPigeonInternal.deepEquals(lhs.kind, rhs.kind) && MessagesPigeonInternal.deepEquals(lhs.message, rhs.message) && MessagesPigeonInternal.deepEquals(lhs.code, rhs.code) && MessagesPigeonInternal.deepEquals(lhs.errorDescription, rhs.errorDescription) && MessagesPigeonInternal.deepEquals(lhs.detail, rhs.detail) && MessagesPigeonInternal.deepEquals(lhs.acrValues, rhs.acrValues) && MessagesPigeonInternal.deepEquals(lhs.maxAge, rhs.maxAge) && MessagesPigeonInternal.deepEquals(lhs.attempts, rhs.attempts) && MessagesPigeonInternal.deepEquals(lhs.elapsedMillis, rhs.elapsedMillis) && MessagesPigeonInternal.deepEquals(lhs.status, rhs.status) && MessagesPigeonInternal.deepEquals(lhs.retryAfterMillis, rhs.retryAfterMillis) && MessagesPigeonInternal.deepEquals(lhs.origin, rhs.origin) && MessagesPigeonInternal.deepEquals(lhs.expected, rhs.expected) && MessagesPigeonInternal.deepEquals(lhs.received, rhs.received) && MessagesPigeonInternal.deepEquals(lhs.field, rhs.field) && MessagesPigeonInternal.deepEquals(lhs.capability, rhs.capability) && MessagesPigeonInternal.deepEquals(lhs.idTokenRejection, rhs.idTokenRejection)
   }
 
   func hash(into hasher: inout Hasher) {
@@ -680,6 +689,8 @@ struct ErrorMessage: Hashable, CustomStringConvertible {
     MessagesPigeonInternal.deepHash(value: maxAge, hasher: &hasher)
     MessagesPigeonInternal.deepHash(value: attempts, hasher: &hasher)
     MessagesPigeonInternal.deepHash(value: elapsedMillis, hasher: &hasher)
+    MessagesPigeonInternal.deepHash(value: status, hasher: &hasher)
+    MessagesPigeonInternal.deepHash(value: retryAfterMillis, hasher: &hasher)
     MessagesPigeonInternal.deepHash(value: origin, hasher: &hasher)
     MessagesPigeonInternal.deepHash(value: expected, hasher: &hasher)
     MessagesPigeonInternal.deepHash(value: received, hasher: &hasher)
@@ -689,7 +700,7 @@ struct ErrorMessage: Hashable, CustomStringConvertible {
   }
 
   public var description: String {
-    return "ErrorMessage(category: \(String(describing: category)), kind: \(String(describing: kind)), message: \(String(describing: message)), code: \(String(describing: code)), errorDescription: \(String(describing: errorDescription)), detail: \(String(describing: detail)), acrValues: \(String(describing: acrValues)), maxAge: \(String(describing: maxAge)), attempts: \(String(describing: attempts)), elapsedMillis: \(String(describing: elapsedMillis)), origin: \(String(describing: origin)), expected: \(String(describing: expected)), received: \(String(describing: received)), field: \(String(describing: field)), capability: \(String(describing: capability)), idTokenRejection: \(String(describing: idTokenRejection)))"
+    return "ErrorMessage(category: \(String(describing: category)), kind: \(String(describing: kind)), message: \(String(describing: message)), code: \(String(describing: code)), errorDescription: \(String(describing: errorDescription)), detail: \(String(describing: detail)), acrValues: \(String(describing: acrValues)), maxAge: \(String(describing: maxAge)), attempts: \(String(describing: attempts)), elapsedMillis: \(String(describing: elapsedMillis)), status: \(String(describing: status)), retryAfterMillis: \(String(describing: retryAfterMillis)), origin: \(String(describing: origin)), expected: \(String(describing: expected)), received: \(String(describing: received)), field: \(String(describing: field)), capability: \(String(describing: capability)), idTokenRejection: \(String(describing: idTokenRejection)))"
   }
 }
 

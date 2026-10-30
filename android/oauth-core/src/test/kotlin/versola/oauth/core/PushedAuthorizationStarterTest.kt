@@ -4,6 +4,7 @@ import java.io.IOException
 import java.net.URI
 import java.net.URLDecoder
 import kotlinx.coroutines.test.runTest
+import kotlin.random.Random
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
@@ -296,14 +297,14 @@ class PushedAuthorizationStarterTest {
     }
 
     @Test
-    fun `a provider having a bad moment is a recoverable network failure, not a configuration fault`() = runTest {
+    fun `a provider having a bad moment is a recoverable server failure with its status, not a configuration fault`() = runTest {
         server.enqueue(MockResponse.Builder().code(503).build())
 
         val error = thrown<VersolaError.Recoverable> {
                 starter().start(request(), metadata(), 0)
             }
 
-        assertTrue(error.reason is VersolaError.Recoverable.Cause.Network)
+        assertTrue(error.reason is VersolaError.Recoverable.Cause.Server)
         assertEquals(1, server.requestCount)
     }
 
@@ -317,5 +318,52 @@ class PushedAuthorizationStarterTest {
 
         assertTrue(error.reason is VersolaError.Recoverable.Cause.Network)
         assertTrue(error.cause is IOException)
+    }
+
+    // ---- scenario 34, unit tier: a push is repeated under the operation's budget -------------
+
+    @Test
+    fun `a 500, 503 or 429 on the push is repeated three times and the body is still intact each time`() = runTest {
+        for (status in listOf(500, 503, 429)) {
+            repeat(3) { server.enqueue(MockResponse.Builder().code(status).build()) }
+            val before = server.requestCount
+
+            val error = failure { RetryScope(RetryPolicy(), { testScheduler.currentTime }, Random(1)).operation { starter().start(request(), metadata(), 0) } } as VersolaError.Recoverable
+
+            val cause = error.reason as VersolaError.Recoverable.Cause.Server
+            assertEquals(status, cause.status)
+            assertEquals(3, cause.attempts)
+            assertEquals("$status", 3, server.requestCount - before)
+            // A repeat sends the same form: zeroing the body after the first attempt would send
+            // three requests, two of them empty.
+            repeat(3) {
+                val body = server.takeRequest().body!!.utf8()
+                assertTrue("empty body on a repeat: '$body'", body.contains("code_challenge="))
+            }
+        }
+    }
+
+    @Test
+    fun `a push that answers 503 once and then 201 succeeds`() = runTest {
+        server.enqueue(MockResponse.Builder().code(503).build())
+        server.enqueue(pushed())
+
+        val started = RetryScope(RetryPolicy(), { testScheduler.currentTime }, Random(1)).operation { starter().start(request(), metadata(), 0) }
+
+        assertTrue(started.browserUri.toString().contains("request_uri"))
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun `a push refused with an OAuth error is never repeated`() = runTest {
+        server.enqueue(
+            MockResponse.Builder().code(400).setHeader("Content-Type", "application/json")
+                .body("""{"error":"invalid_request"}""").build(),
+        )
+
+        val error = failure { RetryScope(RetryPolicy(), { testScheduler.currentTime }, Random(1)).operation { starter().start(request(), metadata(), 0) } }
+
+        assertTrue(error is VersolaError.Configuration)
+        assertEquals(1, server.requestCount)
     }
 }

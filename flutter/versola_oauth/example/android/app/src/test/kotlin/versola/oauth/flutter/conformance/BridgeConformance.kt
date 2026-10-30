@@ -21,6 +21,7 @@ import versola.oauth.conformance.ReversingKeyProvider
 import versola.oauth.core.BrowserAuthorizationSession
 import versola.oauth.core.BrowserOutcome
 import versola.oauth.core.PushedAuthorization
+import versola.oauth.core.RetryPolicy
 import versola.oauth.core.TokenBinding
 import versola.oauth.flutter.AccessTokenFailure
 import versola.oauth.flutter.AccessTokenMessage
@@ -33,6 +34,7 @@ import versola.oauth.flutter.EndpointsMessage
 import versola.oauth.flutter.ErrorCategoryMessage
 import versola.oauth.flutter.ErrorMessage
 import versola.oauth.flutter.PushedAuthorizationMessage
+import versola.oauth.flutter.RetryPolicyMessage
 import versola.oauth.flutter.TokenBindingMessage
 import versola.oauth.flutter.UnlockPolicyMessage
 import versola.oauth.flutter.UserInfoFailure
@@ -140,15 +142,16 @@ abstract class BridgeConformance : ProviderConformance() {
         protectedOrigins: Set<String> = setOf(resource.origin),
         pushedAuthorization: PushedAuthorization = PushedAuthorization.WhenAdvertised,
         tokenBinding: TokenBinding = TokenBinding.Bearer,
+        retryPolicy: RetryPolicy = RetryPolicy.Default,
     ): Bridge {
         val native = OAuthClient.create(
             application,
-            configuration(clientId, endpoints, redirectUri, scopes, protectedOrigins, pushedAuthorization, tokenBinding),
+            configuration(clientId, endpoints, redirectUri, scopes, protectedOrigins, pushedAuthorization, tokenBinding, retryPolicy),
             browser = OffTheMainThread(browser),
             keyProvider = ReversingKeyProvider,
         )
         val dart = dart()
-        dart.create(message(clientId, endpoints, redirectUri, scopes, protectedOrigins, pushedAuthorization, tokenBinding = tokenBinding)).failureOrNull()?.let {
+        dart.create(message(clientId, endpoints, redirectUri, scopes, protectedOrigins, pushedAuthorization, tokenBinding = tokenBinding, retryPolicy = retryPolicy)).failureOrNull()?.let {
             throw AssertionError("expected CreateOk, got ${it.category}/${it.kind}: ${it.message}")
         }
         return Bridge(native, dart)
@@ -167,6 +170,7 @@ abstract class BridgeConformance : ProviderConformance() {
         pushedAuthorization: PushedAuthorization = PushedAuthorization.WhenAdvertised,
         issuer: String? = if (endpoints == null) proxy.issuer else null,
         tokenBinding: TokenBinding = TokenBinding.Bearer,
+        retryPolicy: RetryPolicy = RetryPolicy.Default,
     ): ConfigurationMessage = ConfigurationMessage(
         issuer = issuer,
         endpoints = endpoints?.let {
@@ -199,7 +203,15 @@ abstract class BridgeConformance : ProviderConformance() {
         endSessionEndpoint = null,
         unlockPolicy = UnlockPolicyMessage.NONE,
         clockSkewToleranceSeconds = 60,
-        retryPolicy = null,
+        // The default policy travels as null, as Dart's `toMessage` sends it; any other as its six values.
+        retryPolicy = if (retryPolicy === RetryPolicy.Default) null else RetryPolicyMessage(
+            maxAttemptsPerOrigin = retryPolicy.maxAttemptsPerOrigin.toLong(),
+            maxTotalAttempts = retryPolicy.maxTotalAttempts.toLong(),
+            initialBackoffMillis = retryPolicy.initialBackoff.inWholeMilliseconds,
+            backoffMultiplier = retryPolicy.backoffMultiplier,
+            maxBackoffMillis = retryPolicy.maxBackoff.inWholeMilliseconds,
+            totalBudgetMillis = retryPolicy.totalBudget.inWholeMilliseconds,
+        ),
     )
 
     // ---- the typed answers, as a Flutter app reads them ----

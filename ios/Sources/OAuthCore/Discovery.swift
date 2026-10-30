@@ -24,35 +24,45 @@ package struct HTTPDiscoveryClient: DiscoveryClient {
         guard let url = URL(string: location), url.scheme != nil else {
             throw OAuthError.configuration(.invalidConfiguration(detail: "issuer is not a URL: \(issuer)"))
         }
-        let response: HTTPResponse
-        do {
-            response = try await httpClient.send(
-                HTTPRequest(method: .get, url: url, headers: ["Accept": "application/json"])
-            )
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch let error as OAuthError {
-            throw error
-        } catch {
-            throw OAuthError.recoverable(.network(
-                detail: "discovery request failed: \(type(of: error))", attempts: 1, elapsedMillis: 0
-            ))
+        let httpClient = self.httpClient
+        // A read-only request, repeated under the operation's budget (`spec/retry-policy.md`).
+        let response: HTTPResponse = try await OperationBudget.run(origin: DpopOrigin.of(url)) {
+            let response: HTTPResponse
+            do {
+                response = try await httpClient.send(
+                    HTTPRequest(method: .get, url: url, headers: ["Accept": "application/json"])
+                )
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as OAuthError {
+                throw error
+            } catch {
+                throw OAuthError.recoverable(.network(
+                    detail: "discovery request failed: \(type(of: error))", attempts: 1, elapsedMillis: 0
+                ))
+            }
+            // The provider having a bad moment (408, 429, 5xx): `server`, not a deployment fault.
+            if let failure = ServerFailure.error(for: response) { throw failure }
+            return response
         }
         switch response.statusCode {
         case 200..<300:
             break
-        // A 4xx means this issuer serves no discovery document at all, which no retry fixes:
-        // an integrator typo or the wrong environment.
+        // Any other 4xx means this issuer serves no discovery document at all, which no retry
+        // fixes: an integrator typo or the wrong environment.
         case 400..<500:
             throw OAuthError.configuration(.invalidConfiguration(
                 detail: "no discovery document at \(location) (HTTP \(response.statusCode))"
             ))
-        // Anything else is the provider having a bad moment: transport-shaped, retried under
-        // the caller's budget rather than surfaced as a deployment fault.
-        default:
-            throw OAuthError.recoverable(.network(
-                detail: "discovery returned HTTP \(response.statusCode)", attempts: 1, elapsedMillis: 0
+        // A redirect is not followed (`errors.md`): a deployment fault, not a busy provider.
+        case 300..<400:
+            throw OAuthError.configuration(.discoveryMalformed(
+                detail: "discovery answered HTTP \(response.statusCode); redirects are not followed"
             ))
+        // What is left (a 1xx) is an answer this client cannot use and a repeat cannot change:
+        // reported with its status, never repeated.
+        default:
+            throw ServerFailure.unexpected(response.statusCode)
         }
         do {
             return try JSONDecoder().decode(ProviderMetadata.self, from: response.body)

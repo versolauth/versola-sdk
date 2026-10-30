@@ -310,7 +310,7 @@ public class TokenRequestExecutor(
                         Attempt.Issued(issued(payload, response.header("Date")))
                     } else {
                         onStatus(response.code)?.let { throw it }
-                        rejected(response.code, payload, nonce, response.headers("WWW-Authenticate"))
+                        rejected(response.code, payload, nonce, response.headers("WWW-Authenticate"), response.headers)
                     }
                 }
             } catch (e: IOException) {
@@ -342,11 +342,7 @@ public class TokenRequestExecutor(
                     // The same split `rejected` draws: 5xx, 408 and 429 are the provider
                     // having a bad moment, anything else is a request it understood and
                     // refused — `invalid_client` above all, which is a registration fault.
-                    if (isTransient(response.code)) {
-                        throw VersolaError.Recoverable(
-                            VersolaError.Recoverable.Cause.Network("revocation endpoint returned HTTP ${response.code}"),
-                        )
-                    }
+                    if (ServerFault.isServerFault(response.code)) throw ServerFault.failure(response.code, response.headers)
                     val error = try {
                         discoveryJson.decodeFromString(TokenErrorPayload.serializer(), payload)
                     } catch (e: Exception) {
@@ -400,7 +396,13 @@ public class TokenRequestExecutor(
      * The second is what edge's own proxy and `/native/start` emit, and what a relay may
      * carry, so it is read here too — by parameter, never by scheme.
      */
-    private fun rejected(status: Int, payload: String, nonce: String?, wwwAuthenticate: List<String>): Attempt {
+    private fun rejected(
+        status: Int,
+        payload: String,
+        nonce: String?,
+        wwwAuthenticate: List<String>,
+        headers: okhttp3.Headers,
+    ): Attempt {
         // A redirect that was not followed. The `Location` is deliberately not reported: it
         // is the one part of this response the deployment did not have to have any right to,
         // and the answer is the same wherever it points — the token endpoint is whatever
@@ -422,13 +424,10 @@ public class TokenRequestExecutor(
         }
 
         // 5xx is the provider having a bad moment, and its body is as likely to be an HTML
-        // error page as JSON. Transport-shaped, retried under the caller's budget — as are a
-        // 408 and, until #22 gives it a cause of its own, a 429 (`spec/retry-policy.md`).
-        if (isTransient(status)) {
-            throw VersolaError.Recoverable(
-                VersolaError.Recoverable.Cause.Network("token endpoint returned HTTP $status"),
-            )
-        }
+        // error page as JSON; a 408 and a 429 are the same moment. `Server` carries the status
+        // and a `Retry-After`; whether it is repeated is the budget's to say, and the code
+        // exchange, which has none around it, surfaces it at once (`spec/retry-policy.md`).
+        if (ServerFault.isServerFault(status)) throw ServerFault.failure(status, headers)
 
         val error = try {
             discoveryJson.decodeFromString(TokenErrorPayload.serializer(), payload)
@@ -460,8 +459,6 @@ public class TokenRequestExecutor(
             )
         }
     }
-
-    private fun isTransient(status: Int): Boolean = status >= 500 || status == 408 || status == 429
 
     private sealed interface Attempt {
         class Issued(val response: TokenResponse) : Attempt

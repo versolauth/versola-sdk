@@ -62,10 +62,15 @@ package struct URLSessionHTTPClient: HTTPClient {
         if let detail {
             text = detail
         } else if let error {
-            let code = (error as? URLError).map { " (URLError \($0.code.rawValue))" } ?? ""
+            let code = (error as? URLError).map { NetworkFailure.suffix(forURLErrorCode: $0.code.rawValue) } ?? ""
+            // The one place the platform's error is in hand: say, as a typed fact, whether the
+            // request ever connected (`RefreshReplay`). The text above is for people.
             text = Self.stripURLs(error.localizedDescription) + code
         } else {
             text = "transport failure"
+        }
+        if let urlError = error as? URLError, NetworkFailure.isNeverConnected(urlErrorCode: urlError.code.rawValue) {
+            ConnectionFlag.current?.markNeverConnected()
         }
         let parts = elapsed.components
         let millis = parts.seconds * 1000 + parts.attoseconds / 1_000_000_000_000_000

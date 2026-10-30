@@ -1,6 +1,7 @@
 package versola.oauth.core
 
 import kotlinx.coroutines.test.runTest
+import kotlin.random.Random
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
@@ -212,24 +213,42 @@ class UserInfoClientTest {
     }
 
     @Test
-    fun `a 500 is a Network failure and is not retried here`() = runTest {
+    fun `a 500 is a Server failure and is not retried here`() = runTest {
         server.enqueue(MockResponse.Builder().code(500).build())
 
         val error = failure { client().fetch(tokens(bearer), "user-1") }
 
-        assertTrue((error as VersolaError.Recoverable).reason is VersolaError.Recoverable.Cause.Network)
+        assertTrue((error as VersolaError.Recoverable).reason is VersolaError.Recoverable.Cause.Server)
         assertEquals(1, server.requestCount)
     }
 
     @Test
-    fun `a redirect is not followed and is a Network failure`() = runTest {
+    fun `a redirect is not followed and is a Configuration fault, never repeated`() = runTest {
         server.enqueue(MockResponse.Builder().code(302).addHeader("Location", server.url("/elsewhere").toString()).build())
         serveJson()
 
-        val error = failure { client().fetch(tokens(bearer), "user-1") }
+        val error = failure { RetryScope(RetryPolicy(), { 0L }, kotlin.random.Random(1)).operation { client().fetch(tokens(bearer), "user-1") } }
 
-        assertTrue((error as VersolaError.Recoverable).reason is VersolaError.Recoverable.Cause.Network)
+        assertTrue(error is VersolaError.Configuration)
         assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun `a repeated DPoP-bound request carries a fresh proof on every attempt`() = runTest {
+        // A proof is single-use (RFC 9449 section 11.1: a resource server detects replay by jti), so a
+        // repeat that re-sent the first attempt's proof would be refused as a replay, turning a
+        // transient failure into a different, non-transient one.
+        server.enqueue(MockResponse.Builder().code(503).build())
+        server.enqueue(MockResponse.Builder().code(503).build())
+        serveJson()
+        val dpop = RecordingDpop()
+
+        RetryScope(RetryPolicy(), { testScheduler.currentTime }, kotlin.random.Random(1))
+            .operation { client(dpop = dpop).fetch(tokens(bound), "user-1") }
+
+        assertEquals(3, dpop.proofs.size)
+        val sent = (1..3).map { server.takeRequest().headers["DPoP"] }
+        assertEquals(listOf("proof-1", "proof-2", "proof-3"), sent)
     }
 
     @Test
@@ -342,13 +361,13 @@ class UserInfoClientTest {
     }
 
     @Test
-    fun `a signed response whose key set cannot be fetched is a Network failure`() = runTest {
+    fun `a signed response whose key set cannot be fetched is a Server failure`() = runTest {
         serveJwt(signed())
         server.enqueue(MockResponse.Builder().code(503).build())
 
         val error = failure { client().fetch(tokens(bearer), "user-1") }
 
-        assertTrue((error as VersolaError.Recoverable).reason is VersolaError.Recoverable.Cause.Network)
+        assertTrue((error as VersolaError.Recoverable).reason is VersolaError.Recoverable.Cause.Server)
     }
 
     // --- the value type ----------------------------------------------------------------------
@@ -359,5 +378,42 @@ class UserInfoClientTest {
 
         assertFalse(info.toString().contains("user-1"))
         assertFalse(info.toString().contains("alice"))
+    }
+
+    // ---- scenario 34, unit tier: UserInfo is repeated under the operation's budget -----------
+
+    @Test
+    fun `a 500, 503 or 429 on UserInfo is repeated three times and surfaced with its status`() = runTest {
+        for (status in listOf(500, 503, 429)) {
+            repeat(3) { server.enqueue(MockResponse.Builder().code(status).build()) }
+            val before = server.requestCount
+
+            val error = failure { RetryScope(RetryPolicy(), { testScheduler.currentTime }, Random(1)).operation { client().fetch(tokens(bearer), "user-1") } } as VersolaError.Recoverable
+
+            val cause = error.reason as VersolaError.Recoverable.Cause.Server
+            assertEquals(status, cause.status)
+            assertEquals(3, cause.attempts)
+            assertEquals("$status", 3, server.requestCount - before)
+        }
+    }
+
+    @Test
+    fun `UserInfo that answers 503 once and then the document succeeds`() = runTest {
+        server.enqueue(MockResponse.Builder().code(503).build())
+        serveJson()
+
+        val info = RetryScope(RetryPolicy(), { testScheduler.currentTime }, Random(1)).operation { client().fetch(tokens(bearer), "user-1") }
+
+        assertEquals("user-1", info.subject)
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun `a 403 on UserInfo is surfaced after one request and not repeated`() = runTest {
+        server.enqueue(MockResponse.Builder().code(403).build())
+
+        failure { RetryScope(RetryPolicy(), { testScheduler.currentTime }, Random(1)).operation { client().fetch(tokens(bearer), "user-1") } }
+
+        assertEquals(1, server.requestCount)
     }
 }

@@ -576,6 +576,8 @@ class ErrorMessage {
     this.maxAge,
     this.attempts,
     this.elapsedMillis,
+    this.status,
+    this.retryAfterMillis,
     this.origin,
     this.expected,
     this.received,
@@ -605,6 +607,11 @@ class ErrorMessage {
 
   int? elapsedMillis;
 
+  /// The HTTP status of a `server` cause, and its parsed `Retry-After` in milliseconds.
+  int? status;
+
+  int? retryAfterMillis;
+
   String? origin;
 
   String? expected;
@@ -629,6 +636,8 @@ class ErrorMessage {
       maxAge,
       attempts,
       elapsedMillis,
+      status,
+      retryAfterMillis,
       origin,
       expected,
       received,
@@ -655,12 +664,14 @@ class ErrorMessage {
       maxAge: result[7] as int?,
       attempts: result[8] as int?,
       elapsedMillis: result[9] as int?,
-      origin: result[10] as String?,
-      expected: result[11] as String?,
-      received: result[12] as String?,
-      field: result[13] as String?,
-      capability: result[14] as String?,
-      idTokenRejection: result[15] as String?,
+      status: result[10] as int?,
+      retryAfterMillis: result[11] as int?,
+      origin: result[12] as String?,
+      expected: result[13] as String?,
+      received: result[14] as String?,
+      field: result[15] as String?,
+      capability: result[16] as String?,
+      idTokenRejection: result[17] as String?,
     );
   }
 
@@ -683,6 +694,8 @@ class ErrorMessage {
         _deepEquals(maxAge, other.maxAge) &&
         _deepEquals(attempts, other.attempts) &&
         _deepEquals(elapsedMillis, other.elapsedMillis) &&
+        _deepEquals(status, other.status) &&
+        _deepEquals(retryAfterMillis, other.retryAfterMillis) &&
         _deepEquals(origin, other.origin) &&
         _deepEquals(expected, other.expected) &&
         _deepEquals(received, other.received) &&
@@ -697,7 +710,7 @@ class ErrorMessage {
 
   @override
   String toString() {
-    return 'ErrorMessage(category: $category, kind: $kind, message: $message, code: $code, errorDescription: $errorDescription, detail: $detail, acrValues: $acrValues, maxAge: $maxAge, attempts: $attempts, elapsedMillis: $elapsedMillis, origin: $origin, expected: $expected, received: $received, field: $field, capability: $capability, idTokenRejection: $idTokenRejection)';
+    return 'ErrorMessage(category: $category, kind: $kind, message: $message, code: $code, errorDescription: $errorDescription, detail: $detail, acrValues: $acrValues, maxAge: $maxAge, attempts: $attempts, elapsedMillis: $elapsedMillis, status: $status, retryAfterMillis: $retryAfterMillis, origin: $origin, expected: $expected, received: $received, field: $field, capability: $capability, idTokenRejection: $idTokenRejection)';
   }
 }
 

@@ -20,7 +20,8 @@ package protocol UserInfoClient: Sendable {
     /// - Throws: `configuration(.providerUnsupported("userinfo"))` without an endpoint,
     ///   `configuration(.userInfoRejected)` for a `sub` mismatch, a signed response that does not
     ///   verify or an unexpected status, `reauthenticate(.sessionRejected)` on a repeated 401,
-    ///   `recoverable(.network)` on a transport failure or a transient status.
+    ///   `recoverable(.network)` on a transport failure and `recoverable(.server)` on a transient
+    ///   status, both after the operation's retry budget.
     func fetch(tokens: AccessTokenSource, expectedSubject: String) async throws -> UserInfo
 }
 
@@ -79,7 +80,10 @@ package struct HTTPUserInfoClient: UserInfoClient {
         var nonceRetried = false
         var renewed = false
         while true {
-            switch try await attempt(url, accessToken) {
+            // One repeatable request under the operation's budget (a read-only `GET`); the
+            // nonce and renewal replays below are protocol answers, not retries of a failure.
+            let token = accessToken
+            switch try await OperationBudget.run(origin: DpopOrigin.of(url), { try await self.attempt(url, token) }) {
             case .body(let body, let signed):
                 return try await parse(body, signed: signed, expectedSubject: expectedSubject)
             // A bare 401 is read as an expired token: one renewal, one replay, then the session
@@ -138,10 +142,11 @@ package struct HTTPUserInfoClient: UserInfoClient {
                 return .useDpopNonce(nonce: nonce)
             }
             return .rejected
-        // A transient condition is the caller's retry budget; anything else is the provider
-        // refusing this request, which retrying does not change.
+        // A transient condition is the operation's retry budget (`server`, with the `Retry-After`
+        // of a 429 or a 503); anything else is the provider refusing this request, which
+        // retrying does not change.
         case 408, 429, 500..<600:
-            throw OAuthError.recoverable(.network(detail: "userinfo endpoint returned HTTP \(response.statusCode)", attempts: 1, elapsedMillis: 0))
+            throw ServerFailure.error(for: response)!
         default:
             throw OAuthError.configuration(.userInfoRejected(detail: "userinfo answered \(response.statusCode)"))
         }

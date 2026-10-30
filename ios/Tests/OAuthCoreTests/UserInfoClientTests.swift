@@ -154,7 +154,7 @@ final class UserInfoClientTests: XCTestCase {
             let source = JoseTokenSource([bearer])
             let error = await joseThrown { _ = try await client(stub).fetch(tokens: source, expectedSubject: "user-1") }
             if expectRecoverable {
-                guard case .recoverable(.network)? = error as? OAuthError else { return XCTFail("status \(status): \(String(describing: error))") }
+                guard case .recoverable(.server(let seen, _, _, _))? = error as? OAuthError, seen == status else { return XCTFail("status \(status): \(String(describing: error))") }
             } else {
                 XCTAssertEqual(rejected(error), "userinfo answered \(status)")
             }
@@ -248,12 +248,80 @@ final class UserInfoClientTests: XCTestCase {
         XCTAssertEqual(rejected(error), "sub does not match the ID token's")
     }
 
-    func testSignedResponseWhoseKeySetCannotBeFetchedIsANetworkFailure() async {
+    func testSignedResponseWhoseKeySetCannotBeFetchedIsAServerFailure() async {
         let stub = JoseStubHTTP()
         await stub.enqueue("/jwks.json", status: 500)
         await stub.enqueue("/userinfo", headers: ["Content-Type": "application/jwt"], text: JoseTestTokens.rsa("RS256", payload: #"{"sub":"user-1"}"#))
         let error = await joseThrown { _ = try await client(stub).fetch(tokens: JoseTokenSource([bearer]), expectedSubject: "user-1") }
-        guard case .recoverable(.network)? = error as? OAuthError else { return XCTFail("\(String(describing: error))") }
+        guard case .recoverable(.server(500, _, _, _))? = error as? OAuthError else { return XCTFail("\(String(describing: error))") }
+    }
+
+    // MARK: Server errors (spec/retry-policy.md, scenario 34)
+
+    private func operationBudget() -> RetryBudget {
+        RetryPolicy.default.newBudget(random: SystemRandomSource(), sleep: { _ in })
+    }
+
+    func testUserInfoIsRepeatedUnderTheOperationsBudgetOnTransientStatuses() async {
+        for status in [500, 502, 503, 504, 408, 429] {
+            let stub = JoseStubHTTP()
+            for _ in 0..<3 { await stub.enqueue("/userinfo", status: status) }
+            let source = JoseTokenSource([bearer])
+            let budget = operationBudget()
+            let error = await joseThrown {
+                _ = try await OperationBudget.$current.withValue(budget) {
+                    try await self.client(stub).fetch(tokens: source, expectedSubject: "user-1")
+                }
+            }
+            let count = await stub.requestCount()
+            XCTAssertEqual(count, 3, "HTTP \(status): maxAttemptsPerOrigin requests, original included")
+            guard case .recoverable(.server(let seen, nil, 3, _))? = error as? OAuthError, seen == status else { XCTFail("HTTP \(status): \(String(describing: error))"); continue }
+            let renewals = await source.renewals
+            XCTAssertEqual(renewals, 0, "a server error is not an expired token")
+        }
+    }
+
+    func testUserInfoSucceedsOnTheRepeatAfterATransientAnswer() async throws {
+        let stub = JoseStubHTTP()
+        await stub.enqueue("/userinfo", status: 503)
+        await stub.enqueue("/userinfo", headers: json, text: #"{"sub":"user-1","name":"A"}"#)
+        let budget = operationBudget()
+        let info = try await OperationBudget.$current.withValue(budget) {
+            try await self.client(stub).fetch(tokens: JoseTokenSource([bearer]), expectedSubject: "user-1")
+        }
+        XCTAssertEqual(info.subject, "user-1")
+        let count = await stub.requestCount()
+        XCTAssertEqual(count, 2)
+    }
+
+    func testUserInfoIsNotRepeatedOnA501OrARefusal() async {
+        for status in [501, 403, 404] {
+            let stub = JoseStubHTTP()
+            for _ in 0..<3 { await stub.enqueue("/userinfo", status: status) }
+            let budget = operationBudget()
+            _ = await joseThrown {
+                _ = try await OperationBudget.$current.withValue(budget) {
+                    try await self.client(stub).fetch(tokens: JoseTokenSource([bearer]), expectedSubject: "user-1")
+                }
+            }
+            let count = await stub.requestCount()
+            XCTAssertEqual(count, 1, "HTTP \(status)")
+        }
+    }
+
+    func testARetryAfterOnUserInfoBeyondTheBudgetIsReturnedWithoutAnotherRequest() async {
+        let stub = JoseStubHTTP()
+        await stub.enqueue("/userinfo", status: 429, headers: ["Retry-After": "90"])
+        await stub.enqueue("/userinfo", status: 429, headers: ["Retry-After": "90"])
+        let budget = operationBudget()
+        let error = await joseThrown {
+            _ = try await OperationBudget.$current.withValue(budget) {
+                try await self.client(stub).fetch(tokens: JoseTokenSource([bearer]), expectedSubject: "user-1")
+            }
+        }
+        let count = await stub.requestCount()
+        XCTAssertEqual(count, 1)
+        XCTAssertEqual(error as? OAuthError, .recoverable(.server(status: 429, retryAfterMillis: 90_000, attempts: 1, elapsedMillis: 0)))
     }
 
     // MARK: DPoP
@@ -299,6 +367,28 @@ final class UserInfoClientTests: XCTestCase {
         XCTAssertEqual(renewals, 0, "a nonce challenge is not an expired token")
         let remembered = await dpop.nonce(for: "https://issuer.example.com")
         XCTAssertEqual(remembered, "server-nonce-1")
+    }
+
+    /// A repeated request carries a proof of its own: a `jti` is single-use, and replaying the proof
+    /// of the request that failed is what a resource server would refuse.
+    func testARepeatedDpopBoundUserInfoRequestCarriesAFreshProof() async throws {
+        let stub = JoseStubHTTP()
+        await stub.enqueue("/userinfo", status: 503)
+        await stub.enqueue("/userinfo", headers: json, text: #"{"sub":"user-1"}"#)
+        let dpop = DpopProofFactory(key: SoftwareDpopKey())
+        let budget = operationBudget()
+
+        _ = try await OperationBudget.$current.withValue(budget) {
+            try await self.client(stub, dpop: dpop).fetch(tokens: JoseTokenSource([self.bound]), expectedSubject: "user-1")
+        }
+
+        let requests = await stub.requests
+        XCTAssertEqual(requests.count, 2)
+        let first = JoseTestTokens.decode(try XCTUnwrap(requests[0].headers["DPoP"]))
+        let second = JoseTestTokens.decode(try XCTUnwrap(requests[1].headers["DPoP"]))
+        XCTAssertNotNil(first.claims["jti"] as? String)
+        XCTAssertNotEqual(first.claims["jti"] as? String, second.claims["jti"] as? String, "two attempts, two proofs")
+        XCTAssertEqual(second.claims["ath"] as? String, first.claims["ath"] as? String, "both bound to the same token")
     }
 
     func testSecondUseDpopNonceChallengeIsNonceLoopAndEndsTheExchange() async {

@@ -82,6 +82,12 @@ internal fun VersolaError.toMessage(): ErrorMessage = when (this) {
         Cause.SystemCancelled -> recoverable("systemCancelled")
         Cause.PendingRequestExpired -> recoverable("pendingRequestExpired")
         is Cause.Network -> recoverable("network").copy(detail = c.detail, attempts = c.attempts.toLong(), elapsedMillis = c.elapsedMillis)
+        is Cause.Server -> recoverable("server").copy(
+            status = c.status.toLong(),
+            retryAfterMillis = c.retryAfterMillis,
+            attempts = c.attempts.toLong(),
+            elapsedMillis = c.elapsedMillis,
+        )
         Cause.UnlockRequired -> recoverable("unlockRequired")
         is Cause.NonceLoop -> recoverable("nonceLoop").copy(origin = c.origin)
     }

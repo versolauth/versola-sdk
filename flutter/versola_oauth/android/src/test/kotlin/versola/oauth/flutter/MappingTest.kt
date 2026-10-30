@@ -23,6 +23,18 @@ class MappingTest {
         assertEquals(3L, network.attempts)
         assertEquals(1200L, network.elapsedMillis)
 
+        val server = VersolaError.Recoverable(Cause.Server(status = 429, retryAfterMillis = 30_000, attempts = 1, elapsedMillis = 40)).toMessage()
+        assertEquals(ErrorCategoryMessage.RECOVERABLE, server.category)
+        assertEquals("server", server.kind)
+        assertEquals(429L, server.status)
+        assertEquals(30_000L, server.retryAfterMillis)
+        assertEquals(1L, server.attempts)
+
+        // No Retry-After is no field, not a zero: an app that waits zero is hammering.
+        val plain = VersolaError.Recoverable(Cause.Server(status = 500)).toMessage()
+        assertEquals(500L, plain.status)
+        assertNull(plain.retryAfterMillis)
+
         val loop = VersolaError.Recoverable(Cause.NonceLoop("https://api.example.com")).toMessage()
         assertEquals("nonceLoop", loop.kind)
         assertEquals("https://api.example.com", loop.origin)

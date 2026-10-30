@@ -851,6 +851,24 @@ public final class versola/oauth/core/VersolaError$Recoverable$Cause$PendingRequ
 	public fun toString ()Ljava/lang/String;
 }
 
+public final class versola/oauth/core/VersolaError$Recoverable$Cause$Server : versola/oauth/core/VersolaError$Recoverable$Cause {
+	public fun <init> (ILjava/lang/Long;IJ)V
+	public synthetic fun <init> (ILjava/lang/Long;IJILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public final fun component1 ()I
+	public final fun component2 ()Ljava/lang/Long;
+	public final fun component3 ()I
+	public final fun component4 ()J
+	public final fun copy (ILjava/lang/Long;IJ)Lversola/oauth/core/VersolaError$Recoverable$Cause$Server;
+	public static synthetic fun copy$default (Lversola/oauth/core/VersolaError$Recoverable$Cause$Server;ILjava/lang/Long;IJILjava/lang/Object;)Lversola/oauth/core/VersolaError$Recoverable$Cause$Server;
+	public fun equals (Ljava/lang/Object;)Z
+	public final fun getAttempts ()I
+	public final fun getElapsedMillis ()J
+	public final fun getRetryAfterMillis ()Ljava/lang/Long;
+	public final fun getStatus ()I
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
+}
+
 public final class versola/oauth/core/VersolaError$Recoverable$Cause$SystemCancelled : versola/oauth/core/VersolaError$Recoverable$Cause {
 	public static final field INSTANCE Lversola/oauth/core/VersolaError$Recoverable$Cause$SystemCancelled;
 	public fun equals (Ljava/lang/Object;)Z

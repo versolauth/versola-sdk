@@ -153,6 +153,10 @@ OAuthError errorFromMessage(ErrorMessage e) {
         elapsed: e.elapsedMillis == null
             ? null
             : Duration(milliseconds: e.elapsedMillis!),
+        status: e.status,
+        retryAfter: e.retryAfterMillis == null
+            ? null
+            : Duration(milliseconds: e.retryAfterMillis!),
         origin: e.origin,
       );
     case ErrorCategoryMessage.reauthenticate:

@@ -119,33 +119,44 @@ public final class OAuthClient: Sendable {
     }
 
     /// The provider's metadata, discovered once and cached on disk across restarts and logout.
-    public func metadata() async throws -> ProviderMetadata { try await flow.metadata() }
+    public func metadata() async throws -> ProviderMetadata {
+        let flow = self.flow
+        return try await coordinator.operation { try await flow.metadata() }
+    }
 
     /// Opens the system browser, validates the redirect, exchanges the code, validates the ID
     /// token and persists the grant, in that order; `authenticated` is published only after the
     /// grant is durably stored. While `authorizing` it is refused: observe the state first.
     public func login(_ options: LoginOptions = .default) async throws {
         try await refuseWhileAuthorizing()
-        try await coordinator.login(
-            scopes: Array((options.scopes ?? configuration.scopes).union(["openid"])).sorted(),
-            acrValues: options.acrValues,
-            maxAge: options.maxAge,
-            parameters: options.parameters,
-            ephemeralBrowser: options.ephemeralBrowser
-        )
+        let coordinator = self.coordinator
+        let scopes = Array((options.scopes ?? configuration.scopes).union(["openid"])).sorted()
+        _ = try await coordinator.operation {
+            try await coordinator.login(
+                scopes: scopes,
+                acrValues: options.acrValues,
+                maxAge: options.maxAge,
+                parameters: options.parameters,
+                ephemeralBrowser: options.ephemeralBrowser
+            )
+        }
     }
 
     /// Answers `OAuthError.stepUp` by re-authorizing at the authentication context the resource
     /// server asked for; the app then re-issues the refused call.
     public func stepUp(acrValues: [String], maxAge: Int?, options: LoginOptions = .default) async throws {
         try await refuseWhileAuthorizing()
-        try await coordinator.login(
-            scopes: Array((options.scopes ?? configuration.scopes).union(["openid"])).sorted(),
-            acrValues: acrValues,
-            maxAge: maxAge,
-            parameters: options.parameters,
-            ephemeralBrowser: options.ephemeralBrowser
-        )
+        let coordinator = self.coordinator
+        let scopes = Array((options.scopes ?? configuration.scopes).union(["openid"])).sorted()
+        _ = try await coordinator.operation {
+            try await coordinator.login(
+                scopes: scopes,
+                acrValues: acrValues,
+                maxAge: maxAge,
+                parameters: options.parameters,
+                ephemeralBrowser: options.ephemeralBrowser
+            )
+        }
     }
 
     /// Finishes an authorization that outlived the process that started it (scenario 12): call
@@ -156,28 +167,38 @@ public final class OAuthClient: Sendable {
     /// publishes `authenticated`. Returns without effect when nothing is pending; a failure
     /// settles the state as `login` does and is thrown.
     public func resumePendingAuthorization() async throws {
-        try await coordinator.resumePendingLogin()
+        let coordinator = self.coordinator
+        _ = try await coordinator.operation { try await coordinator.resumePendingLogin() }
     }
 
     /// Signs out (`spec/oauth-sdk-api.md` section 12): revokes, ends the provider's session
     /// through the browser, wipes locally; the wipe is unconditional.
     public func logout(_ options: LogoutOptions = .default) async -> LogoutOutcome {
-        await coordinator.logout(revoke: options.revoke, endSession: options.endSession)
+        let coordinator = self.coordinator
+        return await coordinator.operation { await coordinator.logout(revoke: options.revoke, endSession: options.endSession) }
     }
 
     /// The access token, refreshed first if it is at or within its refresh skew. **The escape
     /// hatch**: `authenticatedSession` attaches it without the value passing through app code.
-    public func accessToken() async throws -> AccessToken { try await coordinator.accessToken() }
+    public func accessToken() async throws -> AccessToken {
+        let coordinator = self.coordinator
+        return try await coordinator.operation { try await coordinator.accessToken() }
+    }
 
     /// Spends the refresh token now, once, whatever the access token's remaining lifetime.
-    public func refresh() async throws { _ = try await coordinator.refresh() }
+    public func refresh() async throws {
+        let coordinator = self.coordinator
+        _ = try await coordinator.operation { try await coordinator.refresh() }
+    }
 
     /// `GET` on the UserInfo endpoint with the session's token; `sub` must equal the ID token's.
     public func userInfo() async throws -> UserInfo {
         guard let subject = await coordinator.restoreClaims()?.subject else {
             throw OAuthError.reauthenticate(.grantRejected)
         }
-        return try await userInfoClient.fetch(tokens: coordinator, expectedSubject: subject)
+        let coordinator = self.coordinator
+        let userInfoClient = self.userInfoClient
+        return try await coordinator.operation { try await userInfoClient.fetch(tokens: coordinator, expectedSubject: subject) }
     }
 
     /// Which tier the DPoP key reached, or nil under `.bearer`. Asking this generates the key.
@@ -331,7 +352,10 @@ public final class OAuthClient: Sendable {
             },
             logger: logger,
             refreshTokens: .optional,
-            idTokenValidator: validator
+            idTokenValidator: validator,
+            // The refresh above sends no Idempotency-Key, so only a failure that proves it was not
+            // processed is repeated (`RefreshReplay`).
+            repeatsAmbiguousRefresh: false
         )
         let userInfo = HTTPUserInfoClient(
             userinfoEndpoint: { try await discovery.metadata().userinfoEndpoint },
