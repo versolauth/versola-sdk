@@ -55,8 +55,14 @@ Decisions to make before running it:
   `dependency-review`, `trivy-repo` and `semgrep` (`security.yml`). The platform checks (`build`,
   `instrumented (36)` of `android.yml`; `build` of `ios.yml`; `dart`, `android`, `ios` of
   `flutter.yml`; the `providers` rows of `conformance.yml`) are filtered by path and are **not**
-  listed. To require them, either remove the `paths:` filters or add one always-running job that
-  `needs:` them with `if: always()` and fails when a needed job failed, and require that job.
+  listed, and they are the checks that matter most for a code change (the Gradle build, the Swift
+  build and tests, the Flutter jobs). Why they are not in the list: a required check whose workflow
+  was skipped by `paths:` stays "Expected" forever and blocks a docs-only pull request. To require
+  them, either remove the `paths:` filters (simplest; it costs CI minutes on pull requests that touch
+  nothing of the platform), or, in each such workflow, replace the filter by a first job that
+  decides from the changed files whether the platform was touched, make the real jobs conditional on
+  it, and add a last job with `if: always()` that fails when a needed job failed and passes when
+  they were skipped; require that last job. A skipped job counts as passing, a missing one does not.
 - **Names are not unique.** `build` is the job name in `android.yml` and in `ios.yml`, and
   `scenarios` in `spec.yml` and in `conformance.yml` (the second is skipped on pull requests, which
   counts as passing). A ruleset matches on the name, so a required `scenarios` is satisfied or
@@ -193,10 +199,7 @@ branch pushed by a writer cannot get at the signing key at all, and a release wa
    done
    ```
 
-   The key is the one `docs/releasing.md` ("One-time setup", step 3) describes. If the repository
-   secrets have been readable by writers until now, consider whether the signing key and the
-   Portal token should be rotated rather than moved; that is the owner's call and not something this
-   file can judge.
+   The key is the one `docs/releasing.md` ("One-time setup", step 3) describes.
 4. `COCOAPODS_TRUNK_TOKEN` and `NPM_TOKEN` do not exist (those jobs are `if: false`); when one is
    created it goes into its own environment the same way. pub.dev's tag-based login uses the
    `pub.dev` environment `docs/releasing.md` mentions.
