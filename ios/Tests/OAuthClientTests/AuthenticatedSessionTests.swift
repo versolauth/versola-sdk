@@ -1,3 +1,5 @@
+import Network
+import os
 import XCTest
 @testable import OAuthClient
 
@@ -35,6 +37,7 @@ private actor FakeDpop: DpopProofSource {
 
     private(set) var proofs: [Proof] = []
     private(set) var observed: [(nonce: String, origin: String)] = []
+    private(set) var observedDates: [String?] = []
     private var nonces: [String: String] = [:]
 
     func thumbprint() async throws -> String { "jkt" }
@@ -48,6 +51,8 @@ private actor FakeDpop: DpopProofSource {
         observed.append((nonce, origin))
         nonces[origin] = nonce
     }
+
+    func observe(serverDate: String?, age: String?) async { observedDates.append(serverDate) }
 
     func nonce(for origin: String) async -> String? { nonces[origin] }
     func clearNonces() async { nonces = [:] }
@@ -358,6 +363,100 @@ final class AuthenticatedSessionTests: XCTestCase {
             XCTAssertEqual(error as? OAuthError, .recoverable(.nonceLoop(origin: "https://api.example.com")))
         }
         XCTAssertEqual(StubURLProtocol.requests.count, 1)
+    }
+
+    func testInvalidDpopProofFromASkewedDeviceClockIsRetriedOnceWithTheServersTimeAndSucceeds() async throws {
+        let serverTime = Date(timeIntervalSince1970: 1_700_000_000)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
+        let dateHeader = formatter.string(from: serverTime)
+        StubURLProtocol.install { request in
+            let iat = request.value(forHTTPHeaderField: "DPoP").flatMap { Self.iat(of: $0) }
+            if let iat, abs(iat - Int(serverTime.timeIntervalSince1970)) <= 60 {
+                return .response(status: 200, headers: ["Date": dateHeader], body: Data("ok".utf8))
+            }
+            return .response(status: 401, headers: ["Date": dateHeader, "WWW-Authenticate": "DPoP error=\"invalid_dpop_proof\""])
+        }
+        let tokens = FakeTokens(current: dpopToken)
+        let factory = DpopProofFactory(key: SoftwareDpopKey(), clock: Clock(now: { serverTime.addingTimeInterval(-900) }))
+
+        let (data, response) = try await session(tokens: tokens, dpop: factory).data(for: URLRequest(url: api))
+
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), "ok")
+        let requests = StubURLProtocol.requests
+        XCTAssertEqual(requests.count, 2, "one refusal, one corrected retry")
+        XCTAssertEqual(requests.compactMap { $0.value(forHTTPHeaderField: "DPoP").flatMap { Self.iat(of: $0) } }, [1_699_999_100, 1_700_000_000])
+        let renewals = await tokens.renewCount
+        XCTAssertEqual(renewals, 0)
+    }
+
+    /// A loopback HTTP server that answers every request with a response a cache may keep. The
+    /// built-in HTTP protocol is the only thing that consults `URLCache` and reports a local-cache
+    /// fetch in the task's metrics, so this one test uses a real socket rather than the stub.
+    private final class CacheableServer: Sendable {
+        private let listener: NWListener
+        private let served = OSAllocatedUnfairLock(initialState: 0)
+        var requests: Int { served.withLock { $0 } }
+        let port: UInt16
+
+        init() async throws {
+            listener = try NWListener(using: .tcp, on: .any)
+            let served = self.served
+            listener.newConnectionHandler = { connection in
+                connection.start(queue: .global())
+                connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { _, _, _, _ in
+                    served.withLock { $0 += 1 }
+                    let head = "HTTP/1.1 200 OK\r\nDate: Tue, 14 Nov 2023 21:53:20 GMT\r\nCache-Control: public, max-age=31536000\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+                    connection.send(content: Data(head.utf8), completion: .contentProcessed { _ in connection.cancel() })
+                }
+            }
+            let listener = self.listener
+            port = try await withCheckedThrowingContinuation { continuation in
+                listener.stateUpdateHandler = { state in
+                    switch state {
+                    case .ready: continuation.resume(returning: listener.port!.rawValue)
+                    case .failed(let error): continuation.resume(throwing: error)
+                    default: break
+                    }
+                }
+                listener.start(queue: .global())
+            }
+        }
+
+        func stop() { listener.cancel() }
+    }
+
+    func testAResponseTheUrlCacheServedIsNotTakenForTheServersClock() async throws {
+        let server = try await CacheableServer()
+        defer { server.stop() }
+        let origin = "http://127.0.0.1:\(server.port)"
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = URLCache(memoryCapacity: 1_000_000, diskCapacity: 0)
+        let dpop = FakeDpop()
+        let session = AuthenticatedSession(tokens: FakeTokens(current: dpopToken), scope: try scope([origin]), dpop: dpop, session: URLSession(configuration: configuration))
+        var request = URLRequest(url: URL(string: "\(origin)/v1/items")!)
+        request.cachePolicy = .returnCacheDataElseLoad
+
+        let (first, _) = try await session.data(for: request)
+        let (second, _) = try await session.data(for: request)
+
+        XCTAssertEqual(String(decoding: first, as: UTF8.self), "ok")
+        XCTAssertEqual(String(decoding: second, as: UTF8.self), "ok")
+        XCTAssertEqual(server.requests, 1, "the second answer came out of the URL cache")
+        let observed = await dpop.observedDates
+        XCTAssertEqual(observed, ["Tue, 14 Nov 2023 21:53:20 GMT", nil], "the network answer taught the clock; the cached one, stored earlier, did not")
+    }
+
+    private static func iat(of proof: String) -> Int? {
+        guard let payload = proof.split(separator: ".").dropFirst().first,
+              let data = Data(base64Encoded: String(payload).replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+                  + String(repeating: "=", count: (4 - payload.count % 4) % 4)),
+              let claims = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        else { return nil }
+        return claims["iat"] as? Int
     }
 
     func testInvalidDpopProofIsRetriedOnceThenCredentialsInvalidated() async throws {

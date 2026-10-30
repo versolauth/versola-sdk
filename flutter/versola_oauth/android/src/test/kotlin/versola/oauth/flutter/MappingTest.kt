@@ -3,7 +3,14 @@ package versola.oauth.flutter
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Test
+import okhttp3.Protocol
+import okhttp3.Request
+import okhttp3.Response
+import okhttp3.ResponseBody.Companion.toResponseBody
+import okio.Buffer
 import versola.oauth.core.IdTokenRejection
 import versola.oauth.core.SessionState
 import versola.oauth.core.TokenBinding
@@ -113,5 +120,136 @@ class MappingTest {
         assertEquals(setOf("openid", "profile"), c.effectiveScopes)
         assertEquals(TokenBinding.Dpop(requireHardware = true), c.tokenBinding)
         assertEquals(setOf("https://api.example.com"), c.protectedOrigins)
+    }
+
+    // MARK: HTTP
+
+    private fun request(
+        method: String = "GET",
+        url: String = "https://api.example.com/items?page=2",
+        headers: List<Pair<String, String>> = emptyList(),
+        body: ByteArray? = null,
+    ) = HttpRequestMessage(method, url, headers.map { HttpHeaderMessage(it.first, it.second) }, body)
+
+    private fun bodyOf(request: Request): ByteArray = Buffer().also { request.body!!.writeTo(it) }.readByteArray()
+
+    private fun refused(block: () -> Unit): VersolaError.Configuration = try {
+        block()
+        fail("expected the request to be refused")
+        error("unreachable")
+    } catch (e: VersolaError.Configuration) {
+        e
+    }
+
+    @Test
+    fun aRequestKeepsItsMethodUrlHeadersAndBytes() {
+        val sent = request(
+            method = "POST",
+            headers = listOf("X-Trace" to "abc", "Content-Type" to "application/json"),
+            body = "payload".toByteArray(),
+        ).toRequest()
+
+        assertEquals("POST", sent.method)
+        assertEquals("https://api.example.com/items?page=2", sent.url.toString())
+        assertEquals("abc", sent.header("x-trace"))
+        assertEquals("application/json", sent.header("Content-Type"))
+        assertEquals("payload", String(bodyOf(sent)))
+    }
+
+    @Test
+    fun aRepeatedRequestHeaderKeepsEveryValueInOrder() {
+        val sent = request(headers = listOf("Accept" to "a/b", "accept" to "c/d")).toRequest()
+
+        assertEquals(listOf("a/b", "c/d"), sent.headers.values("Accept"))
+    }
+
+    @Test
+    fun theMappingAddsNoAuthorizationAndKeepsTheAppsOwn() {
+        // Replacing it on a protected origin is the SDK client's rule (VersolaInterceptorTest); on any
+        // other origin the app's header must reach the wire as written, so the glue neither adds nor drops one.
+        val none = request().toRequest()
+        assertNull(none.header("Authorization"))
+        assertNull(none.header("DPoP"))
+        val own = request(headers = listOf("Authorization" to "Bearer app-own")).toRequest()
+        assertEquals("Bearer app-own", own.header("Authorization"))
+    }
+
+    @Test
+    fun anEmptyBodyIsFineForMethodsThatNeedOneAndNoBodyForGetAndHead() {
+        assertEquals(0, bodyOf(request(method = "POST").toRequest()).size)
+        assertEquals(0, bodyOf(request(method = "PUT", body = ByteArray(0)).toRequest()).size)
+        assertNull(request(method = "GET", body = ByteArray(0)).toRequest().body)
+        assertNull(request(method = "DELETE").toRequest().body)
+    }
+
+    @Test
+    fun aBodyOnGetAndHeadIsRefusedAsInvalidConfigurationRatherThanDroppedOrCrashing() {
+        listOf("GET", "HEAD").forEach { method ->
+            val error = refused { request(method = method, body = byteArrayOf(1)).toRequest() }
+            assertTrue(error.detail is Detail.InvalidConfiguration)
+        }
+    }
+
+    @Test
+    fun aRelativeUrlANonHttpSchemeAndAnUnparseableUrlAreRefusedWithoutEchoingThem() {
+        listOf("/items", "ftp://api.example.com/x", "ws://api.example.com/x", "not a url").forEach { url ->
+            val error = refused { request(url = url).toRequest() }
+            assertTrue(error.detail is Detail.InvalidConfiguration)
+            assertFalse(error.toString().contains(url))
+        }
+    }
+
+    @Test
+    fun aMalformedHeaderIsRefusedWithAFixedTextThatDoesNotQuoteItsValue() {
+        val secret = "Bearer s3cr3t\u00e9"
+        listOf("Authorization" to secret, "Bad Name" to "x", "X-Line" to "a\nb").forEach { header ->
+            val error = refused { request(headers = listOf(header)).toRequest() }
+            assertTrue(error.detail is Detail.InvalidConfiguration)
+            assertFalse(error.toString().contains("s3cr3t"))
+        }
+    }
+
+    @Test
+    fun aResponseKeepsStatusReasonBytesAndEveryHeaderValueInOrder() {
+        val response = Response.Builder()
+            .request(Request.Builder().url("https://api.example.com/").build())
+            .protocol(Protocol.HTTP_1_1)
+            .code(401)
+            .message("Unauthorized")
+            .addHeader("WWW-Authenticate", "Bearer realm=\"a\"")
+            .addHeader("WWW-Authenticate", "DPoP algs=\"ES256\"")
+            .addHeader("Set-Cookie", "a=1; Path=/")
+            .addHeader("Set-Cookie", "b=2; Path=/")
+            .body(byteArrayOf(0, 1, 2, 3).toResponseBody())
+            .build()
+
+        val message = response.toMessage()
+
+        assertEquals(401L, message.status)
+        assertEquals("Unauthorized", message.reasonPhrase)
+        assertEquals(listOf<Byte>(0, 1, 2, 3), message.body.toList())
+        assertEquals(
+            listOf("WWW-Authenticate" to "Bearer realm=\"a\"", "WWW-Authenticate" to "DPoP algs=\"ES256\"", "Set-Cookie" to "a=1; Path=/", "Set-Cookie" to "b=2; Path=/"),
+            message.headers.map { it.name to it.value },
+        )
+    }
+
+    @Test
+    fun aRedirectAndAThrottledResponseAreMappedAsResponses() {
+        listOf(302 to "Location", 429 to "Retry-After", 503 to "Retry-After").forEach { (code, name) ->
+            val message = Response.Builder()
+                .request(Request.Builder().url("https://api.example.com/").build())
+                .protocol(Protocol.HTTP_2)
+                .code(code)
+                .message("")
+                .addHeader(name, "7")
+                .body(ByteArray(0).toResponseBody())
+                .build()
+                .toMessage()
+
+            assertEquals(code.toLong(), message.status)
+            assertNull("HTTP/2 has no reason phrase", message.reasonPhrase)
+            assertEquals(listOf(name to "7"), message.headers.map { it.name to it.value })
+        }
     }
 }

@@ -1,3 +1,5 @@
+import CryptoKit
+import os
 import Security
 import XCTest
 @testable import OAuthClient
@@ -87,11 +89,82 @@ final class KeychainTests: XCTestCase {
         XCTAssertNil(PendingRequestCoding.decode(Data("{}".utf8)))
     }
 
-    func testLockedDeviceMapsToUnlockRequiredAndOtherStatusesToConfigurationWithoutData() {
+    func testStoresThatAreOutOfReachForNowAreUnlockRequiredAndOtherStatusesAreConfigurationWithoutData() {
         XCTAssertEqual(KeychainItem.error(for: errSecInteractionNotAllowed), .recoverable(.unlockRequired))
         XCTAssertEqual(KeychainItem.error(for: -25308), .recoverable(.unlockRequired))
-        XCTAssertEqual(KeychainItem.error(for: errSecAuthFailed), .configuration(.invalidConfiguration(detail: "keychain error \(errSecAuthFailed)")))
-        XCTAssertEqual(KeychainItem.error(for: errSecDecode), .configuration(.invalidConfiguration(detail: "keychain error \(errSecDecode)")))
+        // Transient: the store is not available yet (early boot) or authentication to it is withheld.
+        XCTAssertEqual(KeychainItem.error(for: errSecNotAvailable), .recoverable(.unlockRequired))
+        XCTAssertEqual(KeychainItem.error(for: errSecAuthFailed), .recoverable(.unlockRequired))
+        // Permanent: nothing a retry changes, and nothing that signs the user out.
+        for status in [errSecDecode, errSecParam, errSecMissingEntitlement, errSecDuplicateItem, errSecNoSuchAttr] {
+            XCTAssertEqual(KeychainItem.error(for: status), .configuration(.invalidConfiguration(detail: "keychain error \(status)")))
+        }
+    }
+
+    func testTheFirstLaunchDeleteNamesTheAccessGroupItIsScopedTo() {
+        // Without it SecItemDelete reaches every group the process is entitled to.
+        let query = KeychainItem.deleteQuery(service: "versola.oauth.abc", accessGroup: "TEAM.com.example.app")
+        XCTAssertEqual(query[kSecAttrAccessGroup as String] as? String, "TEAM.com.example.app")
+        XCTAssertEqual(query[kSecAttrService as String] as? String, "versola.oauth.abc")
+        XCTAssertNil(query[kSecAttrAccount as String], "every account of the service")
+        XCTAssertEqual(query[kSecAttrSynchronizable as String] as? Bool, false)
+        XCTAssertEqual(query[kSecUseDataProtectionKeychain as String] as? Bool, true)
+    }
+
+    func testAStatusThatMayBeARefusalNotALockIsLoggedWithItsNumberWhenMappedToUnlockRequired() {
+        let logger = RecordingLogger()
+        let item = KeychainItem(service: "versola.oauth.abc", account: "refresh-token", accessibility: .afterFirstUnlock, logger: logger)
+
+        XCTAssertEqual(item.failure(errSecAuthFailed), .recoverable(.unlockRequired))
+        XCTAssertEqual(item.failure(errSecNotAvailable), .recoverable(.unlockRequired))
+        XCTAssertEqual(item.failure(errSecInteractionNotAllowed), .recoverable(.unlockRequired), "a plain lock is not worth a line")
+        XCTAssertEqual(item.failure(errSecParam), .configuration(.invalidConfiguration(detail: "keychain error \(errSecParam)")))
+
+        XCTAssertEqual(logger.warnings.count, 2)
+        XCTAssertTrue(logger.warnings[0].contains("\(errSecAuthFailed)") && logger.warnings[0].contains("refresh-token"), logger.warnings[0])
+        XCTAssertTrue(logger.warnings[1].contains("\(errSecNotAvailable)"))
+    }
+
+    func testAStatusIsReadOffCryptoKitAndSecurityErrors() {
+        XCTAssertEqual(KeychainFailure.status(of: CryptoKitError.underlyingCoreCryptoError(error: -25308)), -25308)
+        XCTAssertEqual(KeychainFailure.status(of: NSError(domain: NSOSStatusErrorDomain, code: -25293)), -25293)
+        XCTAssertNil(KeychainFailure.status(of: CryptoKitError.incorrectKeySize))
+        XCTAssertNil(KeychainFailure.status(of: URLError(.timedOut)))
+    }
+
+    // MARK: deleting every item
+
+    private final class Attempts: Sendable {
+        private let lock = OSAllocatedUnfairLock(initialState: [String]())
+        func note(_ account: String) { lock.withLock { $0.append(account) } }
+        var accounts: [String] { lock.withLock { $0 } }
+    }
+
+    func testDeleteAllAttemptsEveryItemEvenWhenTheFirstFailsAndSaysSo() {
+        let attempts = Attempts()
+        func deletion(_ account: String, failing error: OAuthError? = nil) -> (account: String, run: () throws -> Void) {
+            (account, { attempts.note(account); if let error { throw error } })
+        }
+        do {
+            try KeychainItem.deleteAll([
+                deletion("refresh-token", failing: .configuration(.invalidConfiguration(detail: "keychain error -25300"))),
+                deletion("id-token"),
+                deletion("pending-rotation", failing: .recoverable(.unlockRequired)),
+            ])
+            XCTFail("a failed delete must not read as a completed wipe")
+        } catch let error as OAuthError {
+            guard case .configuration(.invalidConfiguration(let detail)) = error else { return XCTFail("\(error)") }
+            XCTAssertTrue(detail.contains("2 of 3") && detail.contains("refresh-token") && detail.contains("pending-rotation"), detail)
+            XCTAssertFalse(detail.contains("id-token"))
+        } catch { XCTFail("\(error)") }
+        XCTAssertEqual(attempts.accounts, ["refresh-token", "id-token", "pending-rotation"], "the rest were attempted after the first failed")
+    }
+
+    func testDeleteAllOfOnlyLockedFailuresIsUnlockRequiredAndSucceedsSilentlyOtherwise() {
+        XCTAssertNoThrow(try KeychainItem.deleteAll([("a", {}), ("b", {})]))
+        XCTAssertThrowsError(try KeychainItem.deleteAll([("a", { throw OAuthError.recoverable(.unlockRequired) }), ("b", {})])) {
+            XCTAssertEqual($0 as? OAuthError, .recoverable(.unlockRequired))
+        }
     }
 
     func testUnlockPolicyChoosesTheAccessibilityClass() {
@@ -139,6 +212,15 @@ final class KeychainTests: XCTestCase {
         XCTAssertEqual(refresh2, "r2")
         XCTAssertNil(id2)
 
+        // A refresh: the ID token it returns is stored without a rotation, and one that returns
+        // none leaves the stored one alone.
+        try await credentials.saveRefreshed(refreshToken: nil, rawIdToken: "id3")
+        try await credentials.saveRefreshed(refreshToken: "r3", rawIdToken: nil)
+        let refresh3 = try await credentials.refreshToken()
+        let id3 = try await credentials.rawIdToken()
+        XCTAssertEqual(refresh3, "r3")
+        XCTAssertEqual(id3, "id3")
+
         try await credentials.savePendingRotation("rotation-1")
         let rotation = try await credentials.pendingRotation()
         XCTAssertEqual(rotation, "rotation-1")
@@ -153,11 +235,18 @@ final class KeychainTests: XCTestCase {
         let updated = try await pending.load()
         XCTAssertEqual(updated?.state, "state-2")
 
-        try await credentials.clear()
-        try await pending.clear()
+        // What a reinstall must not inherit: one query takes every account of the service.
+        try KeychainItem.deleteAllInOwnGroup(service: KeychainItem.service(forStorageKey: storageKey))
         let goneGrant = try await credentials.hasGrant()
         let gonePending = try await pending.load()
+        let goneId = try await credentials.rawIdToken()
         XCTAssertFalse(goneGrant)
         XCTAssertNil(gonePending)
+        XCTAssertNil(goneId)
+
+        try await credentials.save(refreshToken: "r4", rawIdToken: "id4")
+        try await credentials.clear()
+        let clearedGrant = try await credentials.hasGrant()
+        XCTAssertFalse(clearedGrant)
     }
 }

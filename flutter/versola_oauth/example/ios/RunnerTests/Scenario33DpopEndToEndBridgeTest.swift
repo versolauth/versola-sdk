@@ -12,11 +12,14 @@ import XCTest
 /// own `SecureEnclaveDpopKey` told no Secure Enclave exists, so the tier is **software** and nothing
 /// here says anything about the Secure Enclave.
 ///
-/// Flutter has no authenticated client and mints no proof (`spec/oauth-sdk-api.md` section 10), so
-/// what a native test proved through the authenticated session (the call's own proof, the resource's
-/// nonce challenge, the replay of a proof the SDK sent) is the native facades'. The bridge makes the
-/// stolen-token requests with the token `accessToken()` hands over, which is what a Flutter app
-/// holds and cannot present itself.
+/// Flutter mints no proof itself, but it has the authenticated client (`OAuthClient.httpClient()`,
+/// `spec/oauth-sdk-api.md` section 10): the tests named `HttpRequest` below send the request the way
+/// the Dart client does and the plugin runs it with `authenticatedSession`, so the call's own proof,
+/// the resource's nonce challenge and the nonce loop are asserted through the bridge, on the wire and
+/// at the resource server, with no token ever handed to Dart. Only the replay of a proof the SDK
+/// sent needs the harness to reach the SDK's request and stays the native driver's. The
+/// stolen-token requests are made with the token `accessToken()` hands over, which is what a
+/// Flutter app holds and cannot present itself.
 final class Scenario33DpopEndToEndBridgeTest: BridgeConformance {
     private static let origin = "http://localhost:18083"
 
@@ -298,5 +301,88 @@ final class Scenario33DpopEndToEndBridgeTest: BridgeConformance {
         XCTAssertNil(token.responseJSON?["access_token"])
         let state = try await bridge.dart.sessionState()
         XCTAssertNotEqual(state, .authenticated)
+    }
+
+    func test33BridgeHttpRequestSendsTheDpopSchemeAndAProofBoundToTheTokenWhichTheResourceServerAccepts() async throws {
+        let rs = try await DpopResourceServer.install(network, origin: Self.origin)
+        let bridge = try await bridge(clientId: Provider.dpopClientId, protectedOrigins: [Self.origin], tokenBinding: .dpop(required: false))
+        try ok(await bridge.dart.login())
+        let jkt = DpopResourceServer.thumbprint(try sdkKey().publicKey)
+        let claims = try await bridge.dart.claims()
+        let subject = try XCTUnwrap(claims).subject
+
+        let answer = try response(await bridge.dart.httpRequest(rs.url("/api/items?page=2")))
+
+        XCTAssertEqual(answer.status, 200, String(decoding: answer.body.data, as: UTF8.self))
+        let sent = try XCTUnwrap(network.transcript.first { $0.url.hasPrefix(Self.origin) })
+        let authorization = try XCTUnwrap(sent.header("Authorization"))
+        XCTAssertTrue(authorization.hasPrefix("DPoP "), authorization)
+        let accessToken = String(authorization.dropFirst(5))
+        let proof = try XCTUnwrap(sent.proofClaims)
+        XCTAssertEqual(proof["htm"] as? String, "GET")
+        XCTAssertEqual(proof["htu"] as? String, rs.url("/api/items"), "the URL without its query")
+        XCTAssertEqual(proof["ath"] as? String, DpopResourceServer.sha256Url(accessToken))
+        XCTAssertEqual(try self.jkt(of: sent.proofHeader), jkt)
+        XCTAssertEqual((accessClaims(accessToken)["cnf"] as? [String: Any])?["jkt"] as? String, jkt)
+        XCTAssertEqual(rs.attempts.map(\.verdict), [.accepted(jkt: jkt, subject: subject)])
+        // The token itself never crossed: the app did not ask for it, and the response carries none.
+        XCTAssertFalse(String(decoding: answer.body.data, as: UTF8.self).contains(accessToken))
+
+        // An origin that is not protected gets neither the token nor a proof, whatever the app put in the headers.
+        _ = try response(await bridge.dart.httpRequest(Provider.proxyOrigin + "/elsewhere", headers: [("DPoP", "app-own")]))
+        let elsewhere = try XCTUnwrap(network.transcript.first { $0.url == Provider.proxyOrigin + "/elsewhere" })
+        XCTAssertNil(elsewhere.header("Authorization"))
+        XCTAssertEqual(elsewhere.header("DPoP"), "app-own")
+    }
+
+    func test33BridgeAnAuthorizationAndADpopHeaderTheAppSetOnTheDpopProtectedOriginAreReplacedTheResourceSeesExactlyOneOfEach() async throws {
+        let rs = try await DpopResourceServer.install(network, origin: Self.origin)
+        let bridge = try await bridge(clientId: Provider.dpopClientId, protectedOrigins: [Self.origin], tokenBinding: .dpop(required: false))
+        try ok(await bridge.dart.login())
+
+        let answer = try response(await bridge.dart.httpRequest(
+            rs.url("/api"), headers: [("Authorization", "Bearer app-supplied"), ("DPoP", "app-forged"), ("dpop", "app-forged-too")]
+        ))
+
+        XCTAssertEqual(answer.status, 200, String(decoding: answer.body.data, as: UTF8.self))
+        let sent = try XCTUnwrap(network.transcript.first { $0.url.hasPrefix(Self.origin) })
+        XCTAssertTrue(try XCTUnwrap(sent.header("Authorization")).hasPrefix("DPoP "))
+        XCTAssertFalse(try XCTUnwrap(sent.header("DPoP")).contains("app-forged"))
+        XCTAssertEqual(rs.attempts.count, 1)
+        guard case .accepted? = rs.attempts.first?.verdict else { return XCTFail("\(String(describing: rs.attempts.first?.verdict))") }
+    }
+
+    func test33BridgeHttpRequestAnswersTheResourcesNonceChallengeOnceWithTheNonceAndRemembersItForTheOrigin() async throws {
+        let rs = try await DpopResourceServer.install(network, origin: Self.origin, nonce: "resource-nonce-1")
+        let bridge = try await bridge(clientId: Provider.dpopClientId, protectedOrigins: [Self.origin], tokenBinding: .dpop(required: false))
+        try ok(await bridge.dart.login())
+
+        let first = try response(await bridge.dart.httpRequest(rs.url("/api")))
+
+        XCTAssertEqual(first.status, 200)
+        let sent = network.transcript.filter { $0.url.hasPrefix(Self.origin) }
+        XCTAssertEqual(sent.count, 2, "exactly one retry: \(sent)")
+        XCTAssertEqual(sent[0].status, 401)
+        XCTAssertEqual(sent[0].responseHeader("DPoP-Nonce"), "resource-nonce-1")
+        XCTAssertNil(sent[0].proofClaims?["nonce"])
+        XCTAssertEqual(sent[1].proofClaims?["nonce"] as? String, "resource-nonce-1")
+        XCTAssertNotEqual(sent[0].proofClaims?["jti"] as? String, sent[1].proofClaims?["jti"] as? String, "a fresh proof, not the first one resent")
+
+        // The nonce is per origin and kept: the next call needs no challenge.
+        _ = try response(await bridge.dart.httpRequest(rs.url("/api")))
+        let afterwards = network.transcript.filter { $0.url.hasPrefix(Self.origin) }
+        XCTAssertEqual(afterwards.count, 3)
+        XCTAssertEqual(afterwards[2].proofClaims?["nonce"] as? String, "resource-nonce-1")
+    }
+
+    func test33BridgeAResourceThatKeepsChallengingGetsOneRetryAndThenNonceLoopThroughHttpRequest() async throws {
+        let rs = try await DpopResourceServer.install(network, origin: Self.origin, nonce: "demanded", offered: "offered")
+        let bridge = try await bridge(clientId: Provider.dpopClientId, protectedOrigins: [Self.origin], tokenBinding: .dpop(required: false))
+        try ok(await bridge.dart.login())
+
+        let error = try failure(await bridge.dart.httpRequest(rs.url("/api")))
+
+        assertError(error, .recoverable, "nonceLoop")
+        XCTAssertEqual(rs.attempts.count, 2, "one request and one retry, no more")
     }
 }

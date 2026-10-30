@@ -4,6 +4,11 @@ package versola.oauth.flutter
 
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import okhttp3.Headers
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import versola.oauth.OAuthConfiguration
 import versola.oauth.ProviderEndpoints
 import versola.oauth.core.PushedAuthorization
@@ -146,3 +151,46 @@ private fun VersolaError.reauthenticate(kind: String) =
 
 private fun VersolaError.configuration(kind: String) =
     ErrorMessage(category = ErrorCategoryMessage.CONFIGURATION, kind = kind, message = message.orEmpty())
+
+// MARK: HTTP (`OAuthClient.call`)
+
+/** OkHttp refuses these methods without a body, where Dart's `package:http` allows an empty one. */
+private val METHODS_NEEDING_A_BODY = setOf("POST", "PUT", "PATCH", "PROPPATCH", "REPORT")
+private val METHODS_WITHOUT_A_BODY = setOf("GET", "HEAD")
+
+private fun invalidRequest(): VersolaError.Configuration =
+    // A fixed text, not OkHttp's: its messages quote the offending header value, which can be a credential.
+    VersolaError.Configuration(Detail.InvalidConfiguration("the request is not a valid HTTP request (an absolute http(s) URL, a method, headers)"))
+
+/**
+ * The request Dart described, as an OkHttp request, and nothing else: no header is added,
+ * removed or rewritten here (the SDK's client replaces `Authorization` and `DPoP` on a protected
+ * origin and leaves every other origin untouched). Headers are added in order, so a repeated
+ * name keeps its values. Anything OkHttp or the rules below refuse is `InvalidConfiguration`
+ * with a fixed text.
+ */
+internal fun HttpRequestMessage.toRequest(): Request {
+    val parsed = url.toHttpUrlOrNull() ?: throw invalidRequest()
+    val payload = body?.takeIf { it.isNotEmpty() }
+    val requestBody = when {
+        method in METHODS_WITHOUT_A_BODY -> if (payload == null) null else throw invalidRequest()
+        payload != null -> payload.toRequestBody()
+        method in METHODS_NEEDING_A_BODY -> ByteArray(0).toRequestBody()
+        else -> null
+    }
+    return try {
+        val sent = Headers.Builder().apply { headers.forEach { add(it.name, it.value) } }.build()
+        Request.Builder().url(parsed).headers(sent).method(method, requestBody).build()
+    } catch (e: IllegalArgumentException) {
+        throw invalidRequest()
+    }
+}
+
+/** The whole response, body included: the bridge carries bytes. Reads the body, so it runs off the main thread. */
+internal fun Response.toMessage(): HttpResponseMessage = HttpResponseMessage(
+    status = code.toLong(),
+    // HTTP/2 has no reason phrase; OkHttp reports an empty one.
+    reasonPhrase = message.ifEmpty { null },
+    headers = (0 until headers.size).map { HttpHeaderMessage(name = headers.name(it), value = headers.value(it)) },
+    body = body.bytes(),
+)

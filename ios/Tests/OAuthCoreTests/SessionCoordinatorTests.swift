@@ -29,6 +29,11 @@ final class SessionCoordinatorTests: XCTestCase {
             refresh = refreshToken
             idToken = rawIdToken
         }
+        func saveRefreshed(refreshToken: String?, rawIdToken: String?) async throws {
+            if let saveFailure { throw saveFailure }
+            if let refreshToken { refresh = refreshToken }
+            if let rawIdToken { idToken = rawIdToken }
+        }
         func savePendingRotation(_ idempotencyKey: String?) async throws { rotation = idempotencyKey }
         func pendingRotation() async throws -> String? { rotation }
         func clear() async throws {
@@ -132,7 +137,7 @@ final class SessionCoordinatorTests: XCTestCase {
         TokenResponse(accessToken: "at-\(refresh ?? "none")-\(UUID().uuidString.prefix(4))", tokenType: "Bearer", expiresIn: expiresIn, refreshToken: refresh, idToken: idToken(subject: subject), scope: "openid")
     }
 
-    private func fixture(answers: [Result<TokenResponse, OAuthError>], policy: RefreshTokenPolicy = .optional, store: MemoryCredentials = MemoryCredentials(), retry: RetryPolicy? = nil, pending: PendingAuthorizationRequest? = nil, browser: ScriptedBrowser = ScriptedBrowser.answering(), clock injectedClock: TickingClock? = nil, validatorOverride: IdTokenValidator? = nil, repeatsAmbiguousRefresh: Bool = true, discoveryClient: DiscoveryClient? = nil) throws -> Fixture {
+    private func fixture(answers: [Result<TokenResponse, OAuthError>], policy: RefreshTokenPolicy = .optional, store: MemoryCredentials = MemoryCredentials(), retry: RetryPolicy? = nil, pending: PendingAuthorizationRequest? = nil, browser: ScriptedBrowser = ScriptedBrowser.answering(), clock injectedClock: TickingClock? = nil, validatorOverride: IdTokenValidator? = nil, repeatsAmbiguousRefresh: Bool = true, discoveryClient: DiscoveryClient? = nil, onCredentialsWiped: (@Sendable () async throws -> Void)? = nil) throws -> Fixture {
         let clock = injectedClock ?? TickingClock(Date(timeIntervalSince1970: 1_700_000_000))
         let configuration = CoreConfiguration(issuer: Self.issuer, clientId: "mobile", redirectUri: URL(string: Self.redirect)!, postLogoutRedirectUri: URL(string: "https://app.example.com/signed-out"))
         let discovery = DiscoveryService(issuer: Self.issuer, client: discoveryClient ?? StaticDiscoveryClient(metadata: AuthzKit.metadata()), cache: MemoryMetadataCache())
@@ -148,7 +153,8 @@ final class SessionCoordinatorTests: XCTestCase {
         let coordinator = SessionCoordinator(
             flow: flow, tokenClient: tokens, credentialStore: store,
             retryPolicy: try retry ?? RetryPolicy(maxAttemptsPerOrigin: 2, maxTotalAttempts: 2, initialBackoff: 0, backoffMultiplier: 1, maxBackoff: 0, totalBudget: 10),
-            clock: Clock(now: { clock.peek() }, uptime: { clock.peekUptime() }), logger: logger, refreshTokens: policy, idTokenValidator: validatorOverride ?? validator,
+            clock: Clock(now: { clock.peek() }, uptime: { clock.peekUptime() }), onCredentialsWiped: onCredentialsWiped ?? {},
+            logger: logger, refreshTokens: policy, idTokenValidator: validatorOverride ?? validator,
             repeatsAmbiguousRefresh: repeatsAmbiguousRefresh
         )
         return Fixture(coordinator: coordinator, flow: flow, store: store, tokens: tokens, validator: validator, logger: logger, clock: clock, pendingStore: pendingStore)
@@ -252,6 +258,33 @@ final class SessionCoordinatorTests: XCTestCase {
         XCTAssertNil(stored)
         let claims = await f.coordinator.claims
         XCTAssertEqual(claims?.subject, "alice")
+    }
+
+    func testATokenLessLoginOverAStoredGrantKeepsTheDpopKeyTheNewTokenIsBoundTo() async throws {
+        // The exchange was signed with the installation's one key, so the new access token is
+        // bound to it; destroying it with the old grant leaves a token no proof can match.
+        let store = MemoryCredentials()
+        try await store.save(refreshToken: "rt-old", rawIdToken: idToken(subject: "bob"))
+        let wipes = Box(0)
+        let f = try fixture(answers: [.success(response(refresh: nil))], store: store, onCredentialsWiped: { await wipes.set(await wipes.value + 1) })
+
+        try await f.coordinator.login(scopes: ["openid"])
+
+        let stored = await f.store.refresh
+        XCTAssertNil(stored, "the old grant is still cleared")
+        let destroyed = await wipes.value
+        XCTAssertEqual(destroyed, 0, "the key and nonce caches belong to the new session")
+    }
+
+    func testLogoutStillDestroysTheDpopKey() async throws {
+        let wipes = Box(0)
+        let f = try fixture(answers: [.success(response())], onCredentialsWiped: { await wipes.set(await wipes.value + 1) })
+        try await f.coordinator.login(scopes: ["openid"])
+
+        _ = await f.coordinator.logout(revoke: false, endSession: false)
+
+        let destroyed = await wipes.value
+        XCTAssertEqual(destroyed, 1)
     }
 
     // MARK: - Resume: a redirect delivered to a cold-started process
@@ -429,6 +462,39 @@ final class SessionCoordinatorTests: XCTestCase {
         let validations = await f.validator.calls
         XCTAssertEqual(validations.last?.previous, "alice")
         XCTAssertNil(validations.last?.nonce)
+    }
+
+    private func refreshAnswer(refresh: String?, idToken: String?) -> TokenResponse {
+        TokenResponse(accessToken: "at-\(UUID().uuidString.prefix(4))", tokenType: "Bearer", expiresIn: 300, refreshToken: refresh, idToken: idToken, scope: "openid")
+    }
+
+    func testARefreshResponseWithoutAnIdTokenKeepsTheStoredOneForIdTokenHint() async throws {
+        let first = response(refresh: "rt-1", expiresIn: 60)
+        let f = try fixture(answers: [.success(first), .success(refreshAnswer(refresh: "rt-2", idToken: nil))])
+        try await f.coordinator.login(scopes: ["openid"])
+        f.clock.advance(61)
+
+        try await f.coordinator.refresh()
+
+        let stored = await f.store.idToken
+        XCTAssertEqual(stored, first.idToken, "OpenID Connect Core 12.2: a refresh may omit id_token; the last one known stays")
+        let refreshToken = await f.store.refresh
+        XCTAssertEqual(refreshToken, "rt-2")
+    }
+
+    func testARefreshIdTokenIsStoredEvenWhenTheRefreshTokenWasNotRotated() async throws {
+        let first = response(refresh: "rt-1", expiresIn: 60)
+        let renewed = idToken(subject: "alice", nonce: "later")
+        let f = try fixture(answers: [.success(first), .success(refreshAnswer(refresh: nil, idToken: renewed))])
+        try await f.coordinator.login(scopes: ["openid"])
+        f.clock.advance(61)
+
+        try await f.coordinator.refresh()
+
+        let stored = await f.store.idToken
+        XCTAssertEqual(stored, renewed)
+        let refreshToken = await f.store.refresh
+        XCTAssertEqual(refreshToken, "rt-1", "no rotation: the refresh token is left as it was")
     }
 
     func testAnAbandonedSlotIsReplayedWithTheSameKey() async throws {

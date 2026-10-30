@@ -94,6 +94,9 @@ package actor DpopProofFactory: DpopProofSource {
     /// short-lived server state, and a stale one restored from disk buys a guaranteed extra round
     /// trip rather than saving one.
     private var nonces: [String: String] = [:]
+    /// One offset for the device clock, not one per origin: it is a fact about this device, and
+    /// what the token endpoint taught is right for the first request to a resource server too.
+    private var skew = ClockSkew()
 
     package init(key: DpopSigningKey, clock: Clock = .system, random: RandomSource = SystemRandomSource()) {
         self.key = key
@@ -136,7 +139,9 @@ package actor DpopProofFactory: DpopProofSource {
         var claims: [String: JoseJSON] = [
             "htm": .string(method.uppercased()),
             "htu": .string("\(parts.scheme)://\(parts.host)\(port)\(parts.rawPath)"),
-            "iat": .integer(Int64(clock.now().timeIntervalSince1970.rounded(.down))),
+            // Truncated, not rounded: rounding up puts `iat` in the future, the side of the
+            // server's leeway with less room on it. From the clock the `Date` headers corrected.
+            "iat": .integer(Int64(skew.corrected(clock.now()).timeIntervalSince1970.rounded(.down))),
             // 128 bits from the CSPRNG: a proof must never be replayable under another jti.
             "jti": .string(JoseBase64Url.encode(Data(random.bytes(16)))),
         ]
@@ -158,6 +163,10 @@ package actor DpopProofFactory: DpopProofSource {
     /// `DpopOrigin.of(_:)`; an empty nonce is not a nonce.
     package func observe(nonce: String, origin: String) async {
         if !nonce.isEmpty { nonces[origin] = nonce }
+    }
+
+    package func observe(serverDate: String?, age: String?) async {
+        skew.learn(dateHeader: serverDate, age: age, deviceNow: clock.now())
     }
 
     package func nonce(for origin: String) async -> String? { nonces[origin] }

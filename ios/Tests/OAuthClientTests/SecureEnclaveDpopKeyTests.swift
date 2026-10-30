@@ -166,4 +166,81 @@ final class SecureEnclaveDpopKeyTests: XCTestCase {
         } catch OAuthError.configuration(.hardwareBindingUnavailable) {
         }
     }
+
+    // MARK: locked device and access control
+
+    /// A store whose reads fail as a locked Keychain's do.
+    private struct LockedStore: DpopKeyStore {
+        func load() throws -> Data? { throw OAuthError.recoverable(.unlockRequired) }
+        func save(_ data: Data) throws {}
+        func delete() throws {}
+    }
+
+    func testAnEnclaveSigningRefusalOnALockedDeviceIsUnlockRequiredNotARawCryptoKitError() {
+        let refusal = CryptoKitError.underlyingCoreCryptoError(error: errSecInteractionNotAllowed)
+        XCTAssertEqual(SecureEnclaveDpopKey.typed(signingError: refusal, store: MemoryKeyStore()), .recoverable(.unlockRequired))
+        let bridged = NSError(domain: NSOSStatusErrorDomain, code: Int(errSecAuthFailed))
+        XCTAssertEqual(SecureEnclaveDpopKey.typed(signingError: bridged, store: MemoryKeyStore()), .recoverable(.unlockRequired))
+    }
+
+    func testAnUnreadableSigningErrorIsUnlockRequiredWhenTheKeychainSaysTheDeviceIsLocked() {
+        // The error's shape is not documented; the store item shares the key's protection class.
+        let unknown = CryptoKitError.incorrectParameterSize
+        XCTAssertEqual(SecureEnclaveDpopKey.typed(signingError: unknown, store: LockedStore()), .recoverable(.unlockRequired))
+    }
+
+    func testAnyOtherSigningFailureIsTypedAndPermanentAndNamesNoKeyMaterial() {
+        let error = SecureEnclaveDpopKey.typed(signingError: CryptoKitError.incorrectParameterSize, store: MemoryKeyStore())
+        XCTAssertEqual(error, .configuration(.hardwareBindingUnavailable(detail: "the Secure Enclave could not sign the proof")))
+        // A permanent keychain status is not "locked".
+        let missing = CryptoKitError.underlyingCoreCryptoError(error: errSecMissingEntitlement)
+        XCTAssertEqual(SecureEnclaveDpopKey.typed(signingError: missing, store: MemoryKeyStore()), error)
+    }
+
+    func testAnEnclaveThatRefusesAKeyBecauseTheDeviceIsLockedIsUnlockRequiredAndNoSoftwareKeyIsPersisted() async throws {
+        let store = MemoryKeyStore()
+        let key = SecureEnclaveDpopKey(
+            store: store, secureEnclaveAvailable: true,
+            makeEnclaveKey: { throw CryptoKitError.underlyingCoreCryptoError(error: errSecInteractionNotAllowed) }
+        )
+        do {
+            _ = try await key.publicJwk()
+            XCTFail("expected unlockRequired")
+        } catch {
+            XCTAssertEqual(error as? OAuthError, .recoverable(.unlockRequired))
+        }
+        XCTAssertNil(try store.load(), "a passing lock must not pin the grant to a software key for good")
+    }
+
+    func testAnEnclaveThatRefusesAKeyForAnotherReasonStillFallsBackToSoftwareUnlessHardwareIsRequired() async throws {
+        let refusal: @Sendable () throws -> SecureEnclave.P256.Signing.PrivateKey = { throw CryptoKitError.incorrectParameterSize }
+        let logger = RecordingLogger()
+        let fallback = SecureEnclaveDpopKey(store: MemoryKeyStore(), logger: logger, secureEnclaveAvailable: true, makeEnclaveKey: refusal)
+        let attestation = try await fallback.attestation()
+        XCTAssertEqual(attestation, KeyAttestation(tier: .software))
+        XCTAssertTrue(logger.warnings.contains { $0.contains("refused to generate") })
+
+        let required = SecureEnclaveDpopKey(store: MemoryKeyStore(), requireHardware: true, secureEnclaveAvailable: true, makeEnclaveKey: refusal)
+        do {
+            _ = try await required.attestation()
+            XCTFail("expected hardwareBindingUnavailable")
+        } catch OAuthError.configuration(.hardwareBindingUnavailable) {
+        }
+    }
+
+    func testAKeyStoreThatIsLockedIsUnlockRequiredAndNothingIsGenerated() async {
+        let key = SecureEnclaveDpopKey(store: LockedStore(), secureEnclaveAvailable: false)
+        do {
+            _ = try await key.publicJwk()
+            XCTFail("expected unlockRequired")
+        } catch {
+            XCTAssertEqual(error as? OAuthError, .recoverable(.unlockRequired))
+        }
+    }
+
+    func testTheEnclaveAccessControlIsBuildableOnAHost() {
+        // The key itself needs hardware (device tier: the owner's checklist in the PR); what a host
+        // can pin is that the access control the key is created with can be built.
+        XCTAssertNoThrow(try SecureEnclaveDpopKey.enclaveAccessControl())
+    }
 }

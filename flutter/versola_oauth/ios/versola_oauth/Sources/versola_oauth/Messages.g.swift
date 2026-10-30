@@ -1517,6 +1517,283 @@ struct KeyAttestationFailure: KeyAttestationResult, Hashable, CustomStringConver
   }
 }
 
+/// One header line, name and value as they are on the wire. A list of these rather than a map:
+/// a name that appears twice (`WWW-Authenticate`, `Set-Cookie`) keeps both values and their order
+/// across the bridge. The name's case is whatever the sender used; matching is the receiver's
+/// case-insensitive business.
+///
+/// Generated class from Pigeon that represents data sent in messages.
+struct HttpHeaderMessage: Hashable, CustomStringConvertible {
+  var name: String
+  var value: String
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> HttpHeaderMessage? {
+    let name = pigeonVar_list[0] as! String
+    let value = pigeonVar_list[1] as! String
+
+    return HttpHeaderMessage(
+      name: name,
+      value: value
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      name,
+      value,
+    ]
+  }
+  static func == (lhs: HttpHeaderMessage, rhs: HttpHeaderMessage) -> Bool {
+    if Swift.type(of: lhs) != Swift.type(of: rhs) {
+      return false
+    }
+    return MessagesPigeonInternal.deepEquals(lhs.name, rhs.name) && MessagesPigeonInternal.deepEquals(lhs.value, rhs.value)
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine("HttpHeaderMessage")
+    MessagesPigeonInternal.deepHash(value: name, hasher: &hasher)
+    MessagesPigeonInternal.deepHash(value: value, hasher: &hasher)
+  }
+
+  public var description: String {
+    return "HttpHeaderMessage(name: \(String(describing: name)), value: \(String(describing: value)))"
+  }
+}
+
+/// An HTTP request the native authenticated client executes (`spec/oauth-sdk-api.md` section
+/// 10). The body is bytes and is buffered whole: the bridge does not stream. `origins` is the
+/// protected-origin set for this call, or null for the configuration's `protectedOrigins`.
+///
+/// Generated class from Pigeon that represents data sent in messages.
+struct HttpRequestMessage: Hashable, CustomStringConvertible {
+  var method: String
+  var url: String
+  var headers: [HttpHeaderMessage]
+  var body: FlutterStandardTypedData? = nil
+  var origins: [String]? = nil
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> HttpRequestMessage? {
+    let method = pigeonVar_list[0] as! String
+    let url = pigeonVar_list[1] as! String
+    let headers = pigeonVar_list[2] as! [HttpHeaderMessage]
+    let body: FlutterStandardTypedData? = nilOrValue(pigeonVar_list[3])
+    let origins: [String]? = nilOrValue(pigeonVar_list[4])
+
+    return HttpRequestMessage(
+      method: method,
+      url: url,
+      headers: headers,
+      body: body,
+      origins: origins
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      method,
+      url,
+      headers,
+      body,
+      origins,
+    ]
+  }
+  static func == (lhs: HttpRequestMessage, rhs: HttpRequestMessage) -> Bool {
+    if Swift.type(of: lhs) != Swift.type(of: rhs) {
+      return false
+    }
+    return MessagesPigeonInternal.deepEquals(lhs.method, rhs.method) && MessagesPigeonInternal.deepEquals(lhs.url, rhs.url) && MessagesPigeonInternal.deepEquals(lhs.headers, rhs.headers) && MessagesPigeonInternal.deepEquals(lhs.body, rhs.body) && MessagesPigeonInternal.deepEquals(lhs.origins, rhs.origins)
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine("HttpRequestMessage")
+    MessagesPigeonInternal.deepHash(value: method, hasher: &hasher)
+    MessagesPigeonInternal.deepHash(value: url, hasher: &hasher)
+    MessagesPigeonInternal.deepHash(value: headers, hasher: &hasher)
+    MessagesPigeonInternal.deepHash(value: body, hasher: &hasher)
+    MessagesPigeonInternal.deepHash(value: origins, hasher: &hasher)
+  }
+
+  public var description: String {
+    return "HttpRequestMessage(method: \(String(describing: method)), url: \(String(describing: url)), headers: \(String(describing: headers)), body: \(String(describing: body)), origins: \(String(describing: origins)))"
+  }
+}
+
+/// The response as the server sent it: status, headers (every value of a repeated name, where
+/// the platform reports them apart) and the whole body. A 3xx, a 429 and a 5xx are responses.
+///
+/// Generated class from Pigeon that represents data sent in messages.
+struct HttpResponseMessage: Hashable, CustomStringConvertible {
+  var status: Int64
+  var reasonPhrase: String? = nil
+  var headers: [HttpHeaderMessage]
+  var body: FlutterStandardTypedData
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> HttpResponseMessage? {
+    let status = pigeonVar_list[0] as! Int64
+    let reasonPhrase: String? = nilOrValue(pigeonVar_list[1])
+    let headers = pigeonVar_list[2] as! [HttpHeaderMessage]
+    let body = pigeonVar_list[3] as! FlutterStandardTypedData
+
+    return HttpResponseMessage(
+      status: status,
+      reasonPhrase: reasonPhrase,
+      headers: headers,
+      body: body
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      status,
+      reasonPhrase,
+      headers,
+      body,
+    ]
+  }
+  static func == (lhs: HttpResponseMessage, rhs: HttpResponseMessage) -> Bool {
+    if Swift.type(of: lhs) != Swift.type(of: rhs) {
+      return false
+    }
+    return MessagesPigeonInternal.deepEquals(lhs.status, rhs.status) && MessagesPigeonInternal.deepEquals(lhs.reasonPhrase, rhs.reasonPhrase) && MessagesPigeonInternal.deepEquals(lhs.headers, rhs.headers) && MessagesPigeonInternal.deepEquals(lhs.body, rhs.body)
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine("HttpResponseMessage")
+    MessagesPigeonInternal.deepHash(value: status, hasher: &hasher)
+    MessagesPigeonInternal.deepHash(value: reasonPhrase, hasher: &hasher)
+    MessagesPigeonInternal.deepHash(value: headers, hasher: &hasher)
+    MessagesPigeonInternal.deepHash(value: body, hasher: &hasher)
+  }
+
+  public var description: String {
+    return "HttpResponseMessage(status: \(String(describing: status)), reasonPhrase: \(String(describing: reasonPhrase)), headers: \(String(describing: headers)), body: \(String(describing: body)))"
+  }
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+/// This protocol should not be extended by any user class outside of the generated file.
+protocol HttpResult {
+
+}
+
+/// Generated class from Pigeon that represents data sent in messages.
+struct HttpOk: HttpResult, Hashable, CustomStringConvertible {
+  var response: HttpResponseMessage
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> HttpOk? {
+    let response = pigeonVar_list[0] as! HttpResponseMessage
+
+    return HttpOk(
+      response: response
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      response
+    ]
+  }
+  static func == (lhs: HttpOk, rhs: HttpOk) -> Bool {
+    if Swift.type(of: lhs) != Swift.type(of: rhs) {
+      return false
+    }
+    return MessagesPigeonInternal.deepEquals(lhs.response, rhs.response)
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine("HttpOk")
+    MessagesPigeonInternal.deepHash(value: response, hasher: &hasher)
+  }
+
+  public var description: String {
+    return "HttpOk(response: \(String(describing: response)))"
+  }
+}
+
+/// The SDK refused or could not finish the call: a step-up challenge, a session the provider
+/// refused, a nonce that kept changing, a `Configuration` problem (an invalid origin set, a
+/// request that is not a valid HTTP request). The typed taxonomy, as everywhere else.
+///
+/// Generated class from Pigeon that represents data sent in messages.
+struct HttpFailure: HttpResult, Hashable, CustomStringConvertible {
+  var error: ErrorMessage
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> HttpFailure? {
+    let error = pigeonVar_list[0] as! ErrorMessage
+
+    return HttpFailure(
+      error: error
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      error
+    ]
+  }
+  static func == (lhs: HttpFailure, rhs: HttpFailure) -> Bool {
+    if Swift.type(of: lhs) != Swift.type(of: rhs) {
+      return false
+    }
+    return MessagesPigeonInternal.deepEquals(lhs.error, rhs.error)
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine("HttpFailure")
+    MessagesPigeonInternal.deepHash(value: error, hasher: &hasher)
+  }
+
+  public var description: String {
+    return "HttpFailure(error: \(String(describing: error)))"
+  }
+}
+
+/// The request never produced an HTTP response (no route, DNS, TLS, a connection reset, the
+/// native client's own timeout). Not an SDK error and not a category of `spec/errors.md`: the
+/// Dart client turns it into `package:http`'s `ClientException`. `exception` is the native
+/// exception's class name and nothing else; its message can carry the URL.
+///
+/// Generated class from Pigeon that represents data sent in messages.
+struct HttpTransportFailure: HttpResult, Hashable, CustomStringConvertible {
+  var exception: String
+
+
+  // swift-format-ignore: AlwaysUseLowerCamelCase
+  static func fromList(_ pigeonVar_list: [Any?]) -> HttpTransportFailure? {
+    let exception = pigeonVar_list[0] as! String
+
+    return HttpTransportFailure(
+      exception: exception
+    )
+  }
+  func toList() -> [Any?] {
+    return [
+      exception
+    ]
+  }
+  static func == (lhs: HttpTransportFailure, rhs: HttpTransportFailure) -> Bool {
+    if Swift.type(of: lhs) != Swift.type(of: rhs) {
+      return false
+    }
+    return MessagesPigeonInternal.deepEquals(lhs.exception, rhs.exception)
+  }
+
+  func hash(into hasher: inout Hasher) {
+    hasher.combine("HttpTransportFailure")
+    MessagesPigeonInternal.deepHash(value: exception, hasher: &hasher)
+  }
+
+  public var description: String {
+    return "HttpTransportFailure(exception: \(String(describing: exception)))"
+  }
+}
+
 private class MessagesPigeonCodecReader: FlutterStandardReader {
   override func readValue(ofType type: UInt8) -> Any? {
     switch type {
@@ -1608,6 +1885,18 @@ private class MessagesPigeonCodecReader: FlutterStandardReader {
       return KeyAttestationOk.fromList(self.readValue() as! [Any?])
     case 160:
       return KeyAttestationFailure.fromList(self.readValue() as! [Any?])
+    case 161:
+      return HttpHeaderMessage.fromList(self.readValue() as! [Any?])
+    case 162:
+      return HttpRequestMessage.fromList(self.readValue() as! [Any?])
+    case 163:
+      return HttpResponseMessage.fromList(self.readValue() as! [Any?])
+    case 164:
+      return HttpOk.fromList(self.readValue() as! [Any?])
+    case 165:
+      return HttpFailure.fromList(self.readValue() as! [Any?])
+    case 166:
+      return HttpTransportFailure.fromList(self.readValue() as! [Any?])
     default:
       return super.readValue(ofType: type)
     }
@@ -1712,6 +2001,24 @@ private class MessagesPigeonCodecWriter: FlutterStandardWriter {
     } else if let value = value as? KeyAttestationFailure {
       super.writeByte(160)
       super.writeValue(value.toList())
+    } else if let value = value as? HttpHeaderMessage {
+      super.writeByte(161)
+      super.writeValue(value.toList())
+    } else if let value = value as? HttpRequestMessage {
+      super.writeByte(162)
+      super.writeValue(value.toList())
+    } else if let value = value as? HttpResponseMessage {
+      super.writeByte(163)
+      super.writeValue(value.toList())
+    } else if let value = value as? HttpOk {
+      super.writeByte(164)
+      super.writeValue(value.toList())
+    } else if let value = value as? HttpFailure {
+      super.writeByte(165)
+      super.writeValue(value.toList())
+    } else if let value = value as? HttpTransportFailure {
+      super.writeByte(166)
+      super.writeValue(value.toList())
     } else {
       super.writeValue(value)
     }
@@ -1753,6 +2060,10 @@ protocol OAuthHostApi {
   func claims(handle: String) async throws -> ClaimsResult
   func userInfo(handle: String) async throws -> UserInfoResult
   func keyAttestation(handle: String) async throws -> KeyAttestationResult
+  /// Executes one request with the native authenticated client (`OAuthClient.call` on Android,
+  /// `authenticatedSession` on iOS): the token and the DPoP proof are attached, refreshed and
+  /// replayed natively and never cross; only the request and the response do.
+  func httpRequest(handle: String, request: HttpRequestMessage) async throws -> HttpResult
 }
 
 /// Generated setup class from Pigeon to handle messages through the `binaryMessenger`.
@@ -1938,6 +2249,27 @@ class OAuthHostApiSetup {
       }
     } else {
       keyAttestationChannel.setMessageHandler(nil)
+    }
+    /// Executes one request with the native authenticated client (`OAuthClient.call` on Android,
+    /// `authenticatedSession` on iOS): the token and the DPoP proof are attached, refreshed and
+    /// replayed natively and never cross; only the request and the response do.
+    let httpRequestChannel = FlutterBasicMessageChannel(name: "dev.flutter.pigeon.versola_oauth.OAuthHostApi.httpRequest\(channelSuffix)", binaryMessenger: binaryMessenger, codec: codec)
+    if let api = api {
+      httpRequestChannel.setMessageHandler { message, reply in
+        let args = message as! [Any?]
+        let handleArg = args[0] as! String
+        let requestArg = args[1] as! HttpRequestMessage
+        Task { @MainActor in
+          do {
+            let result = try await api.httpRequest(handle: handleArg, request: requestArg)
+            reply(wrapResult(result))
+          } catch {
+            reply(wrapError(error))
+          }
+        }
+      }
+    } else {
+      httpRequestChannel.setMessageHandler(nil)
     }
   }
 }

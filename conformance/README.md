@@ -251,24 +251,39 @@ The plugin itself is unmodified and never calls the opt-in wiring. Every test al
 refresh token, raw ID token, authorization code or PKCE verifier appeared in any reply or event,
 and that the access token appeared only in the reply of `accessToken()`.
 
-**What is not the same as natively.** Flutter has no authenticated client (`spec/oauth-sdk-api.md`
-section 10: `accessToken()` only), so where a native test called through the SDK's interceptor or
-session the bridge test makes the call as a Flutter app does, with the token `accessToken()`
-returned, and the origin-matching and redirect assertions of scenario 32 (and the "no
-`Authorization` elsewhere" half of scenario 24) have no bridge equivalent and are the native
-drivers' alone. Scenario 32 asserts what does cross: the token is accepted at a protected origin,
-the SDK sends nothing there by itself, and `create` refuses a `protectedOrigins` entry that is not
-an origin. Scenario 31's second test waits for the expiry through `userInfo()` instead of the
-authenticated client. The spec follows: `32-protected-origins.yaml` lists
-`android` and `ios` only, and `24-generic-happy-path.yaml` notes which of its assertions are the
-native facades'. An empty `protectedOrigins` is accepted by `create` (no authenticated client needs
-origins), which is why the scenario's "empty set is refused" assertion has no bridge test.
+**What is not the same as natively.** Flutter's authenticated client is `OAuthClient.httpClient()`
+(`spec/oauth-sdk-api.md` section 10): the Dart client sends one `httpRequest` call and the plugin runs
+it with `OAuthClient.call` (Android) or `authenticatedSession` (iOS). The bridge tests of scenarios 32
+and 33 therefore send the request as the Dart client does (`DartSide.httpRequest`) and read what
+reached the wire off the SDK's transcript, which is the native tests' own observation. Scenario 32
+asserts through it: the token goes to the configured origin with any path and query and to no other
+(another port, another host name: no `Authorization`, no refresh), a redirect is returned with its
+`Location` and not followed, per-client `origins` replace the configured ones, an empty or non-https
+set (and a configuration with no `protectedOrigins` that names none) is `InvalidConfiguration` before
+anything is sent, an `Authorization` or `DPoP` header the app set is replaced on a protected origin and
+left as written elsewhere, a 401 refreshes once and replays the request with its body, a second 401 is
+`sessionRejected`, a step-up challenge is `StepUp` with no refresh, a 503 with `Retry-After` is the
+response after one request, request and response bytes cross unchanged, and a call that produced no
+HTTP response is a transport failure naming the exception class only. Two tests keep the older shape on
+purpose (the token `accessToken()` returns is accepted at the resource; `create` refuses a
+`protectedOrigins` entry that is not an origin). `create` accepts an empty `protectedOrigins`, so the
+scenario's "constructing with an empty set" assertion is the first request through the client. A
+repeated response header keeps both values on Android; on iOS the virtual network answers with a
+header dictionary and `URLSession` folds repeated headers, so that assertion is Android's alone.
+Scenario 31's second test waits for the expiry through `userInfo()` instead of the authenticated
+client. The spec follows: `32-protected-origins.yaml` lists `flutter` with its notes, and
+`24-generic-happy-path.yaml` notes which of its assertions the native facades make.
 
-Scenario 33 is the same: Flutter has no authenticated client and mints no proof, so the call's own
-proof, the resource's nonce challenges and the replay of a proof the SDK sent are the native
-drivers' alone, and `33-dpop-end-to-end.yaml` says so in its `notes`. The bridge asserts the rest
-with the token `accessToken()` returns (`tokenType` `DPoP`, which a Flutter app cannot present):
-the binding on the wire, the key kept across a refresh, `userInfo()` and `logout()` under DPoP, the
+Scenario 33 is the same: its bridge tests named `HttpRequest` send a request to the harness's DPoP
+resource server through the client and assert the DPoP scheme, the proof's `htm`, `htu` without the
+query, `ath` and `jwk` thumbprint equal to `cnf.jkt`, the server's own verdict (accepted), the
+resource's nonce challenge retried once and remembered for the origin, a server that keeps challenging
+ending in `NonceLoop` after two requests, and an app-supplied `Authorization` or `DPoP` replaced so the
+resource sees exactly one of each, with no token ever handed to Dart. Flutter mints no proof, and the
+replay of a proof the SDK itself sent needs the harness to reach the SDK's request, so that one stays
+the native drivers' alone (`33-dpop-end-to-end.yaml` says so in its `notes`). The rest is asserted with
+the token `accessToken()` returns (`tokenType` `DPoP`, which a Flutter app cannot present): the
+binding on the wire, the key kept across a refresh, `userInfo()` and `logout()` under DPoP, the
 provider's nonce challenge and the `dpop_jkt` refusal, the stolen-token refusals, `requireHardware`
 (`dpopRequireHardware`) refused as `hardwareBindingUnavailable`, and a Bearer-configured client
 against the DPoP-requiring one.

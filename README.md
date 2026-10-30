@@ -54,7 +54,8 @@ The current version is on the [Releases](https://github.com/versolauth/versola-s
 write it where `<version>` stands.
 
 - **Android:** `implementation("io.versola:oauth-android:<version>")` from `mavenCentral()` (and
-  `google()`).
+  `google()`), with `minSdk` 26 and the `compileSdk` described under Flutter below (OkHttp's; the
+  SDK's own AARs ask for less).
 - **iOS:** Swift Package Manager, `.package(url: "https://github.com/versolauth/versola-sdk", from: "<version>")`,
   product `VersolaOAuth`.
 - **Flutter:** a git dependency in `pubspec.yaml` (below), with Swift Package Manager integration
@@ -71,6 +72,8 @@ dependencies:
 
 A Flutter app needs `compileSdk` 37 and `minSdk` 26 in `android/app/build.gradle.kts` and an iOS
 deployment target of 17.4; a lower value fails the build with a message that names the minimum.
+The 37 is OkHttp's: its AAR declares it, and the SDK's own AARs ask for less, so the number follows
+the OkHttp release the SDK depends on, not a choice of ours.
 
 ### Android (Kotlin)
 
@@ -154,6 +157,19 @@ do {
 
 The Swift package product is `VersolaOAuth`; the module you import is `OAuthClient`.
 
+iOS notes for integrators:
+
+- **Scenes.** Whether the app is in the background when the browser sheet is cancelled is read from
+  the scene of the `presentationAnchor` window (`UIApplication.shared` is unavailable to app
+  extensions). A window attached to no scene, as in an app that has not adopted UIScene, counts as
+  foreground: a system cancel while backgrounded is then read as the user's, and the pending
+  request is dropped instead of kept. Adopt UIScene, or expect the user to start the sign-in again.
+- **Reinstall.** The Keychain outlives the app, so on the first launch of a fresh install the SDK
+  deletes the Keychain items of the client from the app's own access group. An app upgraded from
+  0.1.0 keeps its session. The check does not run inside an app extension.
+- **Extensions.** The package builds with `-application-extension`. The SDK configures no Keychain
+  access group, so an extension has Keychain items of its own unless you share a group yourself.
+
 ### Flutter (Dart)
 
 ```dart
@@ -170,7 +186,8 @@ client.sessionStates().listen((state) => render(state)); // any number of listen
 
 try {
   await client.login();
-  final token = await client.accessToken(); // call your API with dio or http; no authenticated client
+  final api = client.httpClient(); // a package:http Client: the SDK attaches and refreshes the token
+  final response = await api.get(Uri.https('api.example.com', '/items'));
   await client.logout();
 } on StepUpError catch (e) {
   await client.stepUp(e);

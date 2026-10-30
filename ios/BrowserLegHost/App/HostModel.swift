@@ -60,8 +60,10 @@ final class HostModel {
             }
             for await state in await created.sessionStates() {
                 append("state: \(state.rawValue)")
-                // The app's half of a cold start (`OAuthClient.resumePendingAuthorization`): a
-                // restored `authorizing` is finished by calling it, once.
+                // `create` already finishes a restored `authorizing` on its own; this host calls
+                // `OAuthClient.resumePendingAuthorization` once only to await the outcome and
+                // log it (`resume: ...`), which the UI tests read. It joins the resume `create`
+                // started, so the code is not exchanged twice.
                 if state == .authorizing, !resuming, !loginInFlight {
                     resuming = true
                     Task { await resume(created) }

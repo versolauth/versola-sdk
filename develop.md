@@ -9,7 +9,7 @@ right and this file is stale.
 | Tool | Version | Used for |
 |---|---|---|
 | JDK | 17 | Gradle, the Android modules (`sourceCompatibility` is 17) |
-| Android SDK | platform 37.0, build-tools 36.0.0 | `compileSdk` 37 in every module; `minSdk` is 26 |
+| Android SDK | platform 37.0, build-tools 36.0.0 | `compileSdk` 37 in every module (our build only, not what an app needs: see below); `minSdk` is 26 |
 | Android Gradle Plugin | 9.5.0 | pinned in `android/build.gradle.kts` |
 | Kotlin | 2.4.21 | pinned in `android/build.gradle.kts`; `explicitApi()` is on |
 | Gradle | 9.8.2 | through the wrapper, never a system Gradle |
@@ -39,6 +39,15 @@ Robolectric emulates, neither of which needs the platform package:
 ```bash
 yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "build-tools;36.0.0"
 ```
+
+What an app must compile against is a separate number from our `compileSdk`. AGP publishes a
+library's `compileSdk` as the AAR's `minCompileSdk`, and the app's `checkDebugAarMetadata` fails
+when its `compileSdk` is lower than any AAR's in its graph. Each published module therefore sets
+`aarMetadata { minCompileSdk = N }` in `defaultConfig`, N being the highest platform API its AAR
+links against (its public API names nothing newer than API 1), so a module never asks an app for
+the level it builds with. The levels an app needs are then those of the dependencies: OkHttp's AAR
+declares 37 today, `androidx.browser`'s 36, `androidx.datastore`'s 34. To see what an AAR declares,
+read `META-INF/com/android/build/gradle/aar-metadata.properties` in it (`unzip -p`).
 
 ## Layout
 
@@ -135,6 +144,32 @@ Keychain round-trip test runs only with `OAUTH_KEYCHAIN_TESTS=1`. `xcodebuild` w
 destination is what CI runs and is the run to report. The simulator name is whatever your Xcode ships. CI's name drifts on
 Xcode upgrades (it moved from "iPhone 16" to "iPhone 17"); list yours with
 `xcrun simctl list devices available` and use the same name if it exists.
+
+The package must stay usable from an app extension (a notification service extension that
+refreshes a token, a widget): no `UIApplication.shared`, nothing else marked unavailable there.
+`-application-extension` is the flag Xcode's `APPLICATION_EXTENSION_API_ONLY=YES` passes to the
+compiler, and SwiftPM takes it directly, so this check needs no Xcode project:
+
+```bash
+swift build --sdk "$(xcrun --sdk iphonesimulator --show-sdk-path)" --triple arm64-apple-ios17.4-simulator -Xswiftc -application-extension
+```
+
+Which runner proves what. `xcodebuild test` (what CI runs) is the reference run, and the only
+one that can host an app, so it is the one for the real Keychain and the browser leg. On Xcode 16.3
+it cannot load the workspace while an iOS 27 device is paired (`xcodebuild -list` aborts with
+`__SwiftDeferredNSArray intersectsSet:`); unplugging the device, or a newer Xcode, restores it. `swift test`
+on the host proves the rules against stubs and runs the whole conformance driver. The SwiftPM
+simulator run below proves the same unit tests on iOS code paths (UIKit, the Keychain API surface) without
+`xcodebuild`, but with no app host: it cannot prove the real Keychain, the Secure Enclave or an
+extension's behaviour.
+
+The same SwiftPM cross-build runs the unit tests inside a simulator without `xcodebuild`: build with `--build-tests` and the same `--sdk`/`--triple`,
+copy `.build/arm64-apple-ios-simulator/debug/VersolaPackageTests.xctest/Contents/MacOS/VersolaPackageTests`
+into a flat `VersolaPackageTests.xctest` bundle with a minimal `Info.plist`, and run it with
+`xcrun simctl spawn <udid> "$(xcrun --sdk iphonesimulator --show-sdk-platform-path)"/Developer/Library/Xcode/Agents/xctest`
+(`SIMCTL_CHILD_DYLD_FRAMEWORK_PATH` pointing at the platform's `Developer/Library/Frameworks`). That
+process has no app host, so the real-Keychain tests still answer `-34018` there; they need an app
+(device tier).
 
 ### Flutter
 
@@ -328,8 +363,10 @@ fails at its first login. Scenario 33 skips itself on a provider that does not a
 proofs (Hydra), with that reason. Its DPoP key is software-tier in every run described here (the JVM
 and the iOS host or simulator have no secure element), so the Keystore's StrongBox and TEE tiers and the
 Secure Enclave remain the device tier's; the run says so, the PR says so. The counts to expect:
-Keycloak 41 tests on each native driver (27 + scenario 33's fourteen) and 38 through each Flutter bridge
-(the iOS one runs 3 wire-mapping tests more); Hydra 25 passed and 16 skipped natively.
+Keycloak 41 tests on each native driver (27 + scenario 33's fourteen), 71 through the Android Flutter
+bridge and 60 through the iOS one (which also runs 10 wire-mapping tests); Hydra 25 passed and 16
+skipped natively, and 53 passed through each bridge (18 skipped on Android, 17 on iOS: scenario 33 and
+the PAR tests Hydra does not advertise).
 
 A run takes about a minute per provider, most of it scenario 31 waiting for ten-second tokens
 to expire. `conformance/README.md` ("Providers") says how the proxy, the HTTP browser leg and the
