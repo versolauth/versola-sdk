@@ -9,10 +9,6 @@
 /android/storage/                   @goshacodes
 /android/browser/                   @goshacodes
 /android/core/                      @goshacodes
-/ios/Sources/VersolaDPoP/           @goshacodes
-/ios/Sources/VersolaStorage/        @goshacodes
-/ios/Sources/VersolaBrowser/        @goshacodes
-/ios/Sources/VersolaCore/           @goshacodes
 /ios/Sources/OAuthCore/             @goshacodes
 /ios/Sources/OAuthClient/           @goshacodes
 /spec/                              @goshacodes

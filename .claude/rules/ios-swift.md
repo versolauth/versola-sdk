@@ -4,8 +4,8 @@ paths: ["ios/**", "Package.swift"]
 
 # iOS / Swift
 
-`OAuthCore` and `OAuthClient` (product `VersolaOAuth`) are real since issue #46's B5; the
-`Versola*` targets are still placeholders. Copy the Android module of the same name for behaviour
+`OAuthCore` and `OAuthClient` (product `VersolaOAuth`) are real since issue #46's B5; there is no
+iOS counterpart of the `Versola` facade yet. Copy the Android module of the same name for behaviour
 (`android-kotlin.md`), and the spec for what it must do (`spec/`). The two implementations are written against the same conformance
 transcripts, not against each other's code. Security rules are in `security.md`.
 
@@ -19,10 +19,11 @@ transcripts, not against each other's code. Security rules are in `security.md`.
 - Targets: `OAuthCore` (the protocol engine, Android's `:oauth-core`: Foundation, CryptoKit and
   Security only, no UI, no Keychain, no browser) and `OAuthClient` (the generic facade and the
   platform halves it wires: Keychain stores, `ASWebAuthenticationSession`, the authenticated
-  `URLSession` wrapper, the Secure Enclave DPoP key; product `VersolaOAuth`). The placeholder
-  `VersolaCore`, `VersolaDPoP`, `VersolaStorage`, `VersolaBrowser`, `VersolaURLSession` targets are
-  for the Versola facade, which does not exist on iOS yet; when it does it depends on `OAuthCore`
-  the way Android's `:core` does, and `OAuthCore` never on it. `OAuthConformanceTests` is the
+  `URLSession` wrapper, the Secure Enclave DPoP key; product `VersolaOAuth`). The
+  five empty `Versola*` placeholder targets and products that stood for the Versola facade were
+  removed from the manifest (nothing imported them); when that facade exists on iOS it is added
+  as real targets that depend on `OAuthCore` the way Android's `:core` does, and `OAuthCore` never
+  on it. `OAuthConformanceTests` is the
   generic facade's conformance driver (`conformance/README.md`, "Providers"): skipped without
   `OAUTH_CONFORMANCE_ISSUER`, never a place for a stub of the SDK's own behaviour.
 - The package is source, not a binary XCFramework: the licence is Apache-2.0, there is nothing to
@@ -62,7 +63,7 @@ transcripts, not against each other's code. Security rules are in `security.md`.
 ## Browser
 
 - `ASWebAuthenticationSession` only. `WKWebView` and `SFSafariViewController` are unreachable from
-  any public API in `VersolaBrowser`.
+  any public API of the browser leg (`WebAuthenticationBrowser`).
 - `prefersEphemeralWebBrowserSession` is `false` by default, with an opt-in that mirrors Android's
   ephemeral option, so the state machine stays one machine.
 - `canceledLogin` is one error code for two causes. Pair it with app lifecycle state at the moment

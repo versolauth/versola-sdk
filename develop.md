@@ -47,7 +47,7 @@ spec/            normative: state machine, errors, retry policy, conformance sce
 android/         Gradle multi-project: oauth-core (protocol engine, plain Kotlin/JVM), core (the
                  edge back channel), dpop, storage, browser, okhttp, sdk (the Versola facade),
                  oauth (the generic OAuthClient facade)
-ios/Sources/     Swift targets (OAuthCore, OAuthClient; Versola* placeholders); the manifest is Package.swift at the repo root
+ios/Sources/     Swift targets (OAuthCore, OAuthClient); the manifest is Package.swift at the repo root
 flutter/         versola_oauth: the Flutter binding (Pigeon bridge over the native facades)
 conformance/     harness driving every SDK against a staged Versola stack
 tools/           validate-scenarios.py, the release scripts, verify-consumer/ (throwaway consumer apps, below)

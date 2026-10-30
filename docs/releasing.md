@@ -20,7 +20,7 @@ One version for every platform while the project is 0.x, written `X.Y.Z` and tag
 | Platform | Published as | How | Workflow |
 |---|---|---|---|
 | Android | `io.versola:oauth-android` and the five modules it depends on (below) | Maven Central, through the Central Portal | `release.yml` `maven-central` |
-| iOS | the repository itself: product `VersolaOAuth` (and the `Versola*` placeholders) | Swift Package Manager resolves the tag; nothing is uploaded | `release.yml` `swiftpm` verifies the tag builds |
+| iOS | the repository itself: product `VersolaOAuth` | Swift Package Manager resolves the tag; nothing is uploaded | `release.yml` `swiftpm` verifies the tag builds |
 | Flutter | `versola_oauth` on pub.dev | `flutter pub publish`, by hand for 0.1.0 and by workflow after | `publish-pubdev.yml` |
 
 The Android SDK is not a single artefact: a Gradle project dependency becomes a Maven dependency
