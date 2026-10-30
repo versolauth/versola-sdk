@@ -1,0 +1,34 @@
+id: 34-server-error-per-operation
+title: A transient server error is repeated or surfaced according to the operation, never uniformly
+issues: [22, 46]
+applies_to: [android, ios, flutter]
+facade: [oauth]
+mode: any
+fault_injection: [respond-with-status]
+preconditions:
+  - The SDK is configured with the default RetryPolicy.
+  - The provider proxy can answer a chosen method and path with a chosen status while forwarding everything else.
+steps:
+  - actor: harness
+    action: For each of discovery, the JWKS, the pushed authorization request, the refresh, the revocation and UserInfo in turn, answer that one operation with 500 on every request, then with 503, then with 429, with no Retry-After.
+  - actor: app
+    action: Run the application call that reaches the operation (metadata(), login() up to the push, accessToken() with an expired token, logout(), userInfo()), and count the requests the proxy saw for that path.
+  - actor: harness
+    action: Answer the token endpoint's authorization_code exchange with 503 once, during login().
+  - actor: harness
+    action: Answer one operation with 501, then with 400 and an OAuth error body.
+  - actor: app
+    action: Make a request through the authenticated client to a protected origin that answers 503 with a Retry-After header.
+assertions:
+  - Each repeatable operation makes exactly maxAttemptsPerOrigin requests (three by default) for 500, 503 and 429 without Retry-After, with delays that grow, are capped at maxBackoff, and are not identical across two runs, and finishes within totalBudget.
+  - Each of them then fails with Recoverable, cause Server, whose status is the last status seen and whose attempts equals the request count. Nothing is reported as a transport failure.
+  - A refresh that fails this way leaves the session Authenticated and the stored refresh token and pending rotation key unchanged; the next refresh carries the same Idempotency-Key.
+  - The authorization_code exchange makes exactly one request. The login fails with Recoverable, cause Server, the pending request is wiped, and a second login() starts from the browser.
+  - A 501 is surfaced after one request, with no delay. A 400 with an OAuth error body is the error of errors.md after one request.
+  - The request through the authenticated client is returned to the app as the 503 it is, with its Retry-After header intact, after one request.
+  - When login() reaches the code exchange, the discovery document and the JWKS have already been fetched by then, and the exchange issues no request other than its own and any DPoP nonce retry.
+notes: >
+  The operation table of spec/retry-policy.md is the rule; this scenario is its test. Before it,
+  only refresh was repeated and the other operations made one request, which is why the counts
+  are asserted rather than the outcome alone: an outcome of Recoverable is the same after one
+  request and after three.

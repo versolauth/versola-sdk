@@ -217,8 +217,9 @@ browser is not opened. Scenario 31.
 
 ### `Refreshing → Unauthenticated`
 
-Only on `invalid_grant`. Network failures, `use_dpop_nonce` and 5xx leave the state at
-`Authenticated` and are retried under the SDK's own policy.
+Only on `invalid_grant`. Network failures, `use_dpop_nonce`, 429 and 5xx leave the state at
+`Authenticated` and are retried under the SDK's own policy, which honours `Retry-After`
+(`retry-policy.md`).
 
 Everything credential-shaped is wiped: refresh token, pending slot, nonce caches. The DPoP key
 follows the logout rule (below).

@@ -50,6 +50,9 @@ behaviour must be the same. Scenarios 21–23 exist for what only the edge flow 
 | 31 | Session without a refresh token ends in `Reauthenticate` | any | 46 |
 | 32 | Token attached only to protected origins | any | 46 |
 | 33 | DPoP end to end against a provider that requires it and a resource server that verifies it | dpop | 46 |
+| 34 | A transient server error is repeated or surfaced according to the operation | any | 22, 46 |
+| 35 | `Retry-After` on 429 and 503 is honoured, bounded and never fails the request when malformed | any | 22, 46 |
+| 36 | After a `Retry-After`, the SDK sends nothing to that origin until it has passed | any | 22, 46 |
 
 ## Facades
 
@@ -80,6 +83,7 @@ Most scenarios are unreachable without the harness being able to misbehave on pu
 | `process-death` | Kills the app process at a named point and cold-starts it. |
 | `omit-discovery-field` | Serves a discovery document with a member removed. |
 | `network-partition` | Blocks connectivity for a bounded window. |
+| `respond-with-status` | Answers matching requests with a given status and headers (`Retry-After`, `Date`) instead of forwarding them, for a bounded number of requests or a bounded window. Matches by method and path, so one operation fails while the rest of the flow runs. |
 
 ## Validating
 
