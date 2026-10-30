@@ -1,4 +1,5 @@
 import CryptoKit
+import os
 import Security
 import XCTest
 @testable import OAuthClient
@@ -105,6 +106,41 @@ final class KeychainTests: XCTestCase {
         XCTAssertEqual(KeychainFailure.status(of: NSError(domain: NSOSStatusErrorDomain, code: -25293)), -25293)
         XCTAssertNil(KeychainFailure.status(of: CryptoKitError.incorrectKeySize))
         XCTAssertNil(KeychainFailure.status(of: URLError(.timedOut)))
+    }
+
+    // MARK: deleting every item
+
+    private final class Attempts: Sendable {
+        private let lock = OSAllocatedUnfairLock(initialState: [String]())
+        func note(_ account: String) { lock.withLock { $0.append(account) } }
+        var accounts: [String] { lock.withLock { $0 } }
+    }
+
+    func testDeleteAllAttemptsEveryItemEvenWhenTheFirstFailsAndSaysSo() {
+        let attempts = Attempts()
+        func deletion(_ account: String, failing error: OAuthError? = nil) -> (account: String, run: () throws -> Void) {
+            (account, { attempts.note(account); if let error { throw error } })
+        }
+        do {
+            try KeychainItem.deleteAll([
+                deletion("refresh-token", failing: .configuration(.invalidConfiguration(detail: "keychain error -25300"))),
+                deletion("id-token"),
+                deletion("pending-rotation", failing: .recoverable(.unlockRequired)),
+            ])
+            XCTFail("a failed delete must not read as a completed wipe")
+        } catch let error as OAuthError {
+            guard case .configuration(.invalidConfiguration(let detail)) = error else { return XCTFail("\(error)") }
+            XCTAssertTrue(detail.contains("2 of 3") && detail.contains("refresh-token") && detail.contains("pending-rotation"), detail)
+            XCTAssertFalse(detail.contains("id-token"))
+        } catch { XCTFail("\(error)") }
+        XCTAssertEqual(attempts.accounts, ["refresh-token", "id-token", "pending-rotation"], "the rest were attempted after the first failed")
+    }
+
+    func testDeleteAllOfOnlyLockedFailuresIsUnlockRequiredAndSucceedsSilentlyOtherwise() {
+        XCTAssertNoThrow(try KeychainItem.deleteAll([("a", {}), ("b", {})]))
+        XCTAssertThrowsError(try KeychainItem.deleteAll([("a", { throw OAuthError.recoverable(.unlockRequired) }), ("b", {})])) {
+            XCTAssertEqual($0 as? OAuthError, .recoverable(.unlockRequired))
+        }
     }
 
     func testUnlockPolicyChoosesTheAccessibilityClass() {

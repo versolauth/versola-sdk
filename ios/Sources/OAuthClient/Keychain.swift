@@ -150,6 +150,23 @@ struct KeychainItem: Sendable {
     }
 }
 
+extension KeychainItem {
+    /// Runs every deletion whether or not an earlier one failed, then throws one error for all of
+    /// them: `unlockRequired` when each failure was the store being out of reach (retrying after
+    /// the unlock finishes the job), `invalidConfiguration` naming the accounts and statuses
+    /// otherwise. Nothing credential-shaped is in the detail, only account names and numbers.
+    static func deleteAll(_ deletions: [(account: String, run: () throws -> Void)]) throws {
+        var failures: [(account: String, error: OAuthError)] = []
+        for deletion in deletions {
+            do { try deletion.run() } catch let error as OAuthError { failures.append((deletion.account, error)) }
+        }
+        if failures.isEmpty { return }
+        if failures.allSatisfy({ $0.error == .recoverable(.unlockRequired) }) { throw OAuthError.recoverable(.unlockRequired) }
+        let named = failures.map { "\($0.account): \($0.error)" }.joined(separator: "; ")
+        throw OAuthError.configuration(.invalidConfiguration(detail: "keychain: \(failures.count) of \(deletions.count) items could not be deleted (\(named))"))
+    }
+}
+
 // MARK: - Credential store
 
 /// The refresh token, the raw ID token and the rotation slot in the Keychain. Three items under
@@ -202,10 +219,15 @@ package actor KeychainCredentialStore: CredentialStore {
 
     package func pendingRotation() async throws -> String? { try rotationItem.read().flatMap { String(data: $0, encoding: .utf8) } }
 
+    /// Every item is attempted, the refresh token first, and the failures come back together: a
+    /// delete that fails (a locked device) must not leave the other two behind, and the caller
+    /// must not be told the wipe succeeded while a credential remains.
     package func clear() async throws {
-        try refreshItem.delete()
-        try idTokenItem.delete()
-        try rotationItem.delete()
+        try KeychainItem.deleteAll([
+            (refreshItem.account, refreshItem.delete),
+            (idTokenItem.account, idTokenItem.delete),
+            (rotationItem.account, rotationItem.delete),
+        ])
     }
 }
 
