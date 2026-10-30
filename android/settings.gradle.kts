@@ -14,6 +14,30 @@ dependencyResolutionManagement {
     }
 }
 
+// AGP and its lint tooling carry vulnerable transitive build-time libraries. Keep the
+// overrides in build tooling configurations; they do not become SDK dependencies.
+gradle.beforeProject {
+    val patchedBuildDependencies = arrayOf(
+            "org.apache.httpcomponents:httpclient:4.5.14",
+            "org.apache.commons:commons-lang3:3.18.0",
+            "org.jdom:jdom2:2.0.6.1",
+            "org.bitbucket.b_c:jose4j:0.9.6",
+            "org.bouncycastle:bcprov-jdk18on:1.85",
+            "org.bouncycastle:bcpkix-jdk18on:1.85",
+            "org.bouncycastle:bcutil-jdk18on:1.85",
+            "org.bouncycastle:bcpg-jdk18on:1.85",
+            "com.google.guava:guava:33.7.2-jre",
+    )
+    buildscript.configurations.configureEach {
+        resolutionStrategy.force(*patchedBuildDependencies)
+    }
+    configurations.configureEach {
+        if (name == "androidLintTool" || name == "kotlinBouncyCastleConfiguration") {
+            resolutionStrategy.force(*patchedBuildDependencies)
+        }
+    }
+}
+
 rootProject.name = "versola-android"
 
 // Order matches the dependency direction: core has no internal dependents,
