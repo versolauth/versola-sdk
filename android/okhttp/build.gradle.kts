@@ -8,7 +8,7 @@ plugins {
 
 android {
     namespace = "versola.sdk.okhttp"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 26
@@ -34,8 +34,6 @@ kotlin {
 dependencies {
     api(project(":oauth-core"))
     implementation(project(":dpop"))
-    // Pinned to 5.4.0: 5.5.0's AAR declares minCompileSdk=37, ahead of any SDK Platform
-    // release available at scaffolding time. Revisit once compileSdk 37 is installable.
     api("com.squareup.okhttp3:okhttp:5.5.1")
 
     testImplementation("junit:junit:4.13.2")

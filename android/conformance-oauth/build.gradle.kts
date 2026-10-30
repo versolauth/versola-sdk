@@ -15,7 +15,7 @@ plugins {
 
 android {
     namespace = "versola.oauth.conformance"
-    compileSdk = 36
+    compileSdk = 37
 
     defaultConfig {
         minSdk = 26
