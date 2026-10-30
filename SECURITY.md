@@ -49,8 +49,10 @@ and do not take action against good-faith research that follows this policy.
 
 ## Vulnerability management
 
-Dependabot proposes updates for Gradle, Swift Package Manager, pub, Python tooling and GitHub Actions
-(`.github/dependabot.yml`).
+Dependabot proposes updates for Gradle, Swift Package Manager, pub, Python tooling, GitHub Actions
+and the conformance container images (`.github/dependabot.yml`). Gradle resolves every artefact
+against a recorded checksum (`android/gradle/verification-metadata.xml`), every action is pinned to a
+commit SHA, and the Gradle dependency graph is submitted to GitHub from `security.yml`.
 
 Scanning runs in `.github/workflows/security.yml` on pull requests, pushes to `main`, weekly
 and on demand. TruffleHog checks verified secrets in PR/push commit ranges. Trivy scans the

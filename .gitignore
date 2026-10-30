@@ -21,3 +21,17 @@ node_modules/
 # Editors, OS
 .idea/
 .DS_Store
+
+# Secrets and key material: nothing here belongs in a commit (the release key and the Portal token
+# are repository secrets, docs/releasing.md). A test fixture that has to be a key is generated.
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+*.p12
+*.pem
+google-services.json
+
+# Claude Code worktrees
+.claude/worktrees/

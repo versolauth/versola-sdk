@@ -10,7 +10,7 @@ trap for the next reader. Security rules are in `security.md`, test conventions 
 
 ## Toolchain
 
-- Gradle 9.7.1 (`android/gradle/wrapper`), JDK 21 to build (Temurin 21 in CI; Robolectric's API 36
+- Gradle 9.8.2 (`android/gradle/wrapper`), JDK 21 to build (Temurin 21 in CI; Robolectric's API 36
   image needs it) with Java 17 bytecode for consumers (`JavaVersion.VERSION_17` in every Android
   module, `jvmTarget` 17 in `:oauth-core`), Kotlin 2.4.21, AGP 9.5.0, `minSdk = 26`,
   `compileSdk = 37`. The versions are declared
@@ -133,7 +133,7 @@ for API 36. If you cannot start an emulator, say the device tier was not run (`t
 
 ## Tests
 
-- JUnit 4 with `kotlinx-coroutines-test` (virtual time) and MockWebServer (`mockwebserver3:5.4.0`)
+- JUnit 4 with `kotlinx-coroutines-test` (virtual time) and MockWebServer (`mockwebserver3:5.5.1`)
   for HTTP. No sleeps, no real network.
 - Robolectric is for framework interactions (Custom Tabs launch, `KeyGenParameterSpec` per API
   level) in `:browser`, `:storage`, `:sdk` and `:oauth` (and in `:conformance-oauth`, whose tests

@@ -123,24 +123,6 @@ spec does not distinguish a redirect delivered by the browser session from one h
 app (`handleRedirect`). A URL that is not the configured redirect URI at all is not a response
 and is ignored by the facade before it reaches the flow.
 
-**A resume that only waits gives way.** A pending request whose browser is gone — the app was killed
-while it was open and the user came back to the app itself, not through the redirect — is awaited
-by the resume the restore started, for up to its ten minutes: nothing observes the browser from a
-process that was not running when it opened. That wait is not an authorization being carried out,
-so it does not hold the gate against the operations that need it: `login()`, `stepUp()`,
-`logout()` and the local wipe each **pre-empt** a resume that is still only waiting for its
-redirect (the wait is cancelled, the request's `state` is remembered so a redirect its tab still
-delivers is stepped over rather than failing the next login as a mismatch, and the slot is left to
-the operation that took over: a login's `save` replaces it, a sign-out's wipe clears it). There is
-no separate cancel call. What is **not** pre-empted is an authorization truly being carried out:
-a `login()` with its browser up and a live awaiter, or a validated redirect's code exchange in
-progress (a resume past its wait is the second); a `login()` then is refused
-(`oauth-sdk-api.md` section 5). The same rule holds on Android, iOS and Flutter.
-
-A pending request that nobody awaits (a cancelled caller kept it for a resume the app never asked
-for, a system cancel did, or a restore found it and nothing started) is likewise not in flight: it
-is kept for a resume, not reserved, and a new `login()` supersedes it, remembering its `state`.
-
 iOS, a caller cancelled mid-browser (a SwiftUI `.task` torn down by navigation): the SDK's
 cancellation handler dismisses the `ASWebAuthenticationSession`, so nothing can redirect
 afterwards, and the pending request is **wiped** as for a user cancel. Android keeps it, because

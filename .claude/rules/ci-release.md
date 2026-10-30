@@ -10,15 +10,15 @@ paths: [".github/**", "conformance/**", "tools/**"]
 |---|---|---|---|
 | `android.yml` `build` | push to `main` and PRs touching `android/**` | `./gradlew assemble`, `test` (unit, Robolectric on API 36), `lint`, `apiCheck` on JDK 21 with `platforms;android-37.0` (compileSdk 37) | anything on a device or against a server |
 | `android.yml` `instrumented` | `:storage` and `:dpop` on an emulator, API 36 (`google_apis`) | the platform half: real Keystore, GCM wrapping, key tiers | the browser leg, the server |
-| `ios.yml` | push to `main` and PRs touching `ios/**`, `Package.swift` | `swift package resolve` from a clean checkout, `xcodebuild build` and `test` of scheme `Versola-Package` on a simulator | Secure Enclave, a real Keychain group, `-strict-concurrency=complete` until it is added to the step |
+| `ios.yml` | push to `main` and PRs touching `ios/**`, `Package.swift` | `swift package resolve` from a clean checkout, `xcodebuild build` and `test` of scheme `Versola` on a simulator | Secure Enclave, a real Keychain group, `-strict-concurrency=complete` until it is added to the step |
 | `flutter.yml` `dart` | push to `main` and PRs touching `flutter/**`, the generic facades the plugin calls, `Package.swift` | `dart format`, `flutter analyze` (plugin and example), `flutter test` against a mocked channel, and that regenerating the Pigeon bridge reproduces the three generated files | the bridge on a device, the native SDKs' behaviour |
 | `flutter.yml` `android` | same filter | the plugin compiles against the repository's `:oauth` through the example's composite build, the Kotlin glue's unit tests, `flutter build apk --debug` | a sign-in on a device, the bridge conformance driver (it is skipped without `OAUTH_CONFORMANCE_ISSUER`) |
 | `flutter.yml` `ios` | same filter, macOS | the plugin compiles against the root package by path, `flutter build ios --no-codesign`, the Swift glue's tests on a simulator (the example app launches as the test host) | the Secure Enclave, a Universal Link delivered to a terminated app |
 | `spec.yml` | every PR and push to `main` | `tools/validate-scenarios.py` (schema, `id` = file name, index rows) and markdownlint over `**/*.md` | that a scenario's states exist on every platform |
 | `conformance.yml` `scenarios` | on demand (nightly once the checkout token exists) | scenarios against a staged `auth` + `central` + `edge` from `versolauth/versola`, driven from an emulator | everything the driver does not yet run (`conformance/README.md`, order of work) |
 | `conformance.yml` `providers` | PRs touching the generic facade, the modules under it or the drivers, nightly, on demand | scenarios 24 to 32 of the generic facade against Keycloak and Ory Hydra in Docker (`android/conformance-oauth`), one matrix row each | the device tier, the iOS driver (local only: the macOS runners have no Docker daemon) and what `conformance/README.md` ("Providers") lists as not proven |
-| `security.yml` | every PR, push to `main`, weekly and on demand | TruffleHog on PR/push, Trivy, Semgrep (gate); dependency review on PRs and CodeQL while public | Gradle transitive coverage from Trivy; a skipped scanner |
-| `release.yml` | push of an `X.Y.Z` tag (no `v`) | the tagged commit is on `main`; tag/pubspec/plugin-pin/changelog agree; `test lint apiCheck`; the signed Central bundle, checked before upload (`check-bundle.sh`: six modules, sources and javadoc, checksums, a `.asc` per file, POMs naming the tag and only modules that are in the bundle), uploaded as `USER_MANAGED`; a clean-checkout build of the tag; then the GitHub release and the dispatch of `verify-release.yml`. The CocoaPods and npm jobs are `if: false` | that the Portal accepts the bundle: it has never run (`docs/releasing.md`); that the signatures verify (presence only); that a consumer can install the result (that is `verify-release.yml`) |
+| `security.yml` | every PR, push to `main`, weekly and on demand | TruffleHog on PR/push, Trivy, Semgrep (gate); dependency review on PRs and CodeQL while public; the Gradle dependency graph submitted on `main`, weekly and on demand (reports) | Gradle transitive coverage from Trivy; a skipped scanner |
+| `release.yml` | push of an `X.Y.Z` tag (no `v`) | the tagged commit is on `main`; tag/pubspec/plugin-pin/changelog agree; `test lint apiCheck`; a clean-checkout build of the tag (`swiftpm`, which the Central job waits for, so a red Swift build stops the release before anything is uploaded); the signed Central bundle, checked before upload (`check-bundle.sh`: six modules, sources and javadoc, checksums, a `.asc` per file, POMs naming the tag and only modules that are in the bundle), uploaded as `USER_MANAGED`, with a separate `provenance` job attesting the AARs and JARs (it does not gate the release); then the GitHub release and the dispatch of `verify-release.yml`. The CocoaPods and npm jobs are `if: false` | that the Portal accepts every bundle (0.1.0's did, by a click in the Portal); that the signatures verify (presence only); that a consumer can install the result (that is `verify-release.yml`) |
 | `verify-release.yml` | a published GitHub release (a person's), `release.yml`'s dispatch after its release job, and on demand with `version` | after the Central deployment is published (polls `repo1.maven.org` for the `oauth-android` POM, every 60 s up to 3 h): `android.sh` (an app with `mavenCentral()` and `google()` only resolves `io.versola:oauth-android:X.Y.Z` and its five modules and builds), `ios.sh` (a SwiftPM package resolves the tag by URL and builds `VersolaOAuth` for the simulator), `flutter.sh` (an app with the plugin as a git dependency at the tag builds for Android and iOS); a final job lists which passed | that the Portal accepted the bundle (`release.yml`); that a sign-in works (no device, no server); pub.dev (dormant) |
 | `prepare-release.yml` | on demand, branch `main` | `tools/prepare-release.sh`: the version in pubspec, the plugin's Android pin and `version`, the changelog entry and `VERSION_NAME`, checked by `check-release-version.sh`, on a `release/X.Y.Z` branch | that the changelog is prose: a person edits it |
 | `publish-pubdev.yml` | push of an `X.Y.Z` tag, `if: false` | nothing today: dormant. The `flutter pub publish` job pub.dev's tag-based OIDC login needs; the first publish is by hand | whether pub.dev's OIDC login works for a Flutter package (unverified) |
@@ -40,18 +40,21 @@ paths: [".github/**", "conformance/**", "tools/**"]
 - Least privilege: top-level `permissions: contents: read` (as `conformance.yml` has), widened per
   job only where a job needs it (`attestations`, `id-token` for provenance, `packages`). A new
   workflow without a `permissions:` block gets the repository default, which is wider than needed.
-- Pin every new action to a full commit SHA with the version in a comment
-  (`uses: owner/repo@<sha> # v4.2.1`). The existing workflows still use tags (`actions/checkout@v4`,
-  `gradle/actions/setup-gradle@v4`, `reactivecircus/android-emulator-runner@v2`) because they
-  predate this rule; pin the ones you touch, and do not replace a pin with a floating tag.
-  Third-party actions that receive secrets or a write token get the most scrutiny.
+- Pin every action to a full commit SHA with the version in a comment
+  (`uses: owner/repo@<sha> # v4.2.1`); every workflow does. Resolve the SHA from the real tag
+  (`gh api repos/<owner>/<repo>/git/ref/tags/<tag>`, dereferencing an annotated tag), never from
+  memory, and do not replace a pin with a floating tag. Dependabot's `github-actions` entry bumps
+  the pin and the comment together. Third-party actions that receive secrets or a write token get
+  the most scrutiny. `spec.yml`'s `workflows` job (actionlint) runs on every pull request, so a
+  workflow GitHub would reject fails there first.
 - Never interpolate untrusted `${{ ... }}` (PR titles and bodies, branch names, issue text,
   `inputs.*` from `workflow_dispatch`) straight into a `run:` body. Pass it through `env:` and
   validate it, as the server repository does for `test_tag`. `inputs.versola_ref` is checked out
   through `with: ref:`, not through a shell; keep it that way.
 - Secrets are named by reference (`secrets.VERSOLA_CHECKOUT_TOKEN`, `MAVEN_SIGNING_KEY`) and never
-  echoed. A step that checks out another repository with a token does not persist it
-  (`persist-credentials: false` unless a later step needs to push).
+  echoed. Every checkout sets `persist-credentials: false` unless a later step pushes
+  (`prepare-release.yml` is the only one), and above all the one that clones another repository
+  with a token.
 - Comments explain why, at length, in the existing style: the simulator-name drift in `ios.yml`,
   why `android.builtInKotlin=false` in `gradle.properties`, why `conformance.yml` is on demand.
   A non-obvious step without its reason is a trap for the next person.
@@ -76,7 +79,9 @@ paths: [".github/**", "conformance/**", "tools/**"]
 - Upload transcripts and the server logs as artifacts with `if: always()`: a failing scenario is
   diagnosed from them.
 - The Docker compose files in `conformance/` are for local runs and the provider containers of
-  issue #46; they use throwaway credentials only. A provider container is pinned to a release
+  issue #46; they use throwaway credentials only and publish every port on `127.0.0.1` (the
+  emulator still reaches them through `adb reverse` or `10.0.2.2`; a physical device uses
+  `adb reverse`). A provider container is pinned to a release
   (`keycloak:26.4`, `hydra:v26.2.0`) so the matrix row in `spec/providers.md` names what was tested.
 
 ## Scanners and the private repository
@@ -93,11 +98,18 @@ paths: [".github/**", "conformance/**", "tools/**"]
 
 `.github/dependabot.yml` covers `gradle` (`/android`, and the Flutter example's own build at
 `/flutter/versola_oauth/example/android`, which ignores the two plugins that must equal
-`android/build.gradle.kts`), `swift` (`/`), `pub` (`/flutter/versola_oauth`, with `pigeon` ignored:
-its bump comes with the regeneration), `github-actions` and `pip` (`/tools`). Minor and patch updates are grouped into one PR per ecosystem
+`android/build.gradle.kts`, and the plugin's own `/flutter/versola_oauth/android`, which ignores
+the `io.versola:oauth-android` release pin), `swift` (`/`), `pub` (`/flutter/versola_oauth`, with
+`pigeon` ignored: its bump comes with the regeneration, and `/flutter/versola_oauth/example`),
+`docker-compose` (the provider containers and the stack's Postgres under `/conformance`),
+`github-actions` and `pip` (`/tools`). Minor and patch updates are grouped into one PR per ecosystem
 per week; majors are separate so a breaking major blocks only itself. A Dependabot PR is reviewed
 like any other dependency change: licence, maintenance, what the release notes say. Known holds are
-documented where they live (OkHttp 5.4.0 pinned below 5.5.0, `android/okhttp/build.gradle.kts`).
+documented where they live (none is in force today: OkHttp was held at 5.4.0 until the build moved to compileSdk 37 for 5.5.x).
+`android/gradle/verification-metadata.xml` pins the checksum of every Gradle artefact, so a Gradle
+update PR (Dependabot's included) is red with "Dependency verification failed" until the file is
+regenerated and pushed to the branch; `develop.md` ("Dependency verification") has the command and
+the two entries that are not automatic (`aapt2` per host, the Flutter example).
 
 ## Release engineering
 
