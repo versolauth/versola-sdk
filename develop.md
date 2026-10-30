@@ -233,6 +233,13 @@ cd ios && TEST_RUNNER_OAUTH_CONFORMANCE_ISSUER=http://localhost:8080/realms/conf
   -destination "platform=iOS Simulator,id=<udid from: xcrun simctl list devices available>" -only-testing:RunnerTests
 ```
 
+The iOS target lists the native driver's support files by name: a file added to or removed from
+`ios/Tests/OAuthConformanceTests` is also added to or removed from the `RunnerTests` target of
+`flutter/versola_oauth/example/ios/Runner.xcodeproj` (the `Scenario*` files stay out). The Android
+example takes the directory by itself, but its six test pins in `example/android/app/build.gradle.kts`
+are a second copy of `android/conformance-oauth/build.gradle.kts`'s, as are its AGP and Kotlin plugin
+versions in `example/android/settings.gradle.kts` of `android/build.gradle.kts`'s; change them together.
+
 Name the simulator by `id` when two devices share a name. Hydra is the same with its issuer and
 `hydra`. Do not enable parallel testing for `RunnerTests` (the scheme sets it off): the virtual
 network is one per process, as in the native iOS driver.

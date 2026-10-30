@@ -36,3 +36,9 @@ assertions:
   - No request to a non-protected origin carried an Authorization header.
   - After logout the credential store holds no refresh token, ID token or pending request, and the provider reports the refresh token revoked where it supports introspection or revocation.
   - The same transcript shape is produced on every provider in the matrix; differences are limited to the capabilities providers.md lists.
+notes: >
+  Flutter runs this scenario through its bridge with one difference: it has no authenticated client
+  (`spec/oauth-sdk-api.md` section 10), so the authenticated-call step and the assertion that no
+  request to a non-protected origin carried Authorization are the native facades'. The bridge
+  makes the call as an app does, with the token `accessToken()` returned, and asserts that the SDK
+  sent nothing to the resource itself.

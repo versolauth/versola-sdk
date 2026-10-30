@@ -210,8 +210,13 @@ every operation through the plugin's generated Pigeon host API the way Dart does
 `ios/Tests/OAuthConformanceTests` where they live: the Gradle test source set of the example app
 names that directory and filters out its `Scenario*` files, and `RunnerTests` references the Swift
 files in place. A support module or symlinks would move or alias the native driver's files, which other changes
-are editing. The bridge scenarios are the
-native ones, test for test (27 on each platform), so the pass counts are comparable.
+are editing. A file added to or removed
+from `ios/Tests/OAuthConformanceTests` must also be added to or removed from the `RunnerTests`
+target (the project lists the files by name; the Scenario files stay out), and the example's Gradle
+test pins and plugin versions follow `android/conformance-oauth` and `android/build.gradle.kts`
+(`develop.md`). The bridge scenarios are the native ones, test for test (27 on each platform), so the
+pass counts are comparable; the tests whose assertions differ from their native twin (24, 31's second
+test and 32) carry `bridge` in their names, and the next paragraphs say how.
 
 **How the wiring gets in.** The test builds the native client first, with the driver's browser,
 key provider or stores, and then calls the plugin's `create` through the host API with the
@@ -232,7 +237,17 @@ returned, and the origin-matching and redirect assertions of scenario 32 (and th
 drivers' alone. Scenario 32 asserts what does cross: the token is accepted at a protected origin,
 the SDK sends nothing there by itself, and `create` refuses a `protectedOrigins` entry that is not
 an origin. Scenario 31's second test waits for the expiry through `userInfo()` instead of the
-authenticated client.
+authenticated client. The spec follows: `32-protected-origins.yaml` lists
+`android` and `ios` only, and `24-generic-happy-path.yaml` notes which of its assertions are the
+native facades'. An empty `protectedOrigins` is accepted by `create` (no authenticated client needs
+origins), which is why the scenario's "empty set is refused" assertion has no bridge test.
+
+Two things about what the state-stream check can see. Its `cancel` assertion reads the native
+side, not Dart's receipts: the messenger counts every message the plugin sends on the channel, kept
+after the test's own listener is gone. On Android the engine's event channel itself drops what a
+cancelled sink is sent, so the count alone could not tell a cancelled collection from a live one;
+the Android test also reads how many collections the plugin's scope has running (its private
+`scope`, so a rename fails the test).
 
 Run commands are in `develop.md` ("Provider containers"). Like the native drivers, both skip
 without `OAUTH_CONFORMANCE_ISSUER`, and neither has a CI job: the Android one could run beside
