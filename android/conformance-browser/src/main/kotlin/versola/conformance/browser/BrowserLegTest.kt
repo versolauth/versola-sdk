@@ -27,7 +27,7 @@ import org.junit.runners.Parameterized
  * through `assetlinks.json`).
  *
  * Scenario ids: 01 (the happy half of the browser leg), 12 (process death with the browser
- * open), 15 (state mismatch) and 18 (logout); the cancel table of `spec/state-machine.md`.
+ * open), 15 (a redirect that is not the awaited response) and 18 (logout); the cancel table of `spec/state-machine.md`.
  */
 @RunWith(Parameterized::class)
 class BrowserLegTest(private val leg: String) {
@@ -149,26 +149,55 @@ class BrowserLegTest(private val leg: String) {
         assertEquals("the provider holds the session", 1, harness.keycloak!!.sessions(ALICE))
     }
 
+    /**
+     * Scenario 15 (`15-state-mismatch`): the redirect URI is public, so another app can fire it at
+     * the exported redirect activity with a state it made up. That is not the response to this
+     * login: ignored, the tab stays in front, and the genuine sign-in in it still completes.
+     */
     @Test
-    fun aRedirectCarryingTheWrongStateIsRefusedAndALaterSignInStillWorks() {
+    fun aRedirectCarryingTheWrongStateIsIgnoredAndTheLoginStillCompletes() {
         startLogin()
         harness.awaitLoginForm()
 
-        // Another app (or a page) firing the redirect at the exported redirect activity with a
-        // state it made up: the request is refused before any token request, and nothing is kept.
-        harness.shell(
-            "am start -W -a android.intent.action.VIEW -n ${Harness.HOST}/versola.sdk.browser.VersolaRedirectActivity " +
-                "-d com.example.versola.devicetier://app/oauth?code=forged&state=forged&iss=${harness.issuer}",
-        )
+        fireRedirect("code=forged&state=forged&iss=${harness.issuer}")
+        fireRedirect("code=forged&iss=${harness.issuer}")
+        Thread.sleep(SETTLE_MILLIS)
 
-        val log = harness.awaitLog("login: failed")
-        assertTrue("refused as a state mismatch\n$log", "login: failed Configuration(StateMismatch)" in log)
-        assertFalse("no sign-in happened", "state: Authenticated" in log)
+        val log = harness.log()
+        assertFalse("not a failure: it was not the response\n$log", "login: failed" in log)
+        assertFalse("no sign-in happened\n$log", "state: Authenticated" in log)
         assertEquals("the provider never saw a code exchange", 0, harness.keycloak!!.sessions(ALICE))
+        assertTrue("the tab is still in front, not the app: ${harness.topActivity()}", "CustomTabActivity" in harness.topActivity())
 
-        startLogin()
         harness.signInAtProvider()
         harness.awaitLog("login: ok")
+        assertTrue("the genuine redirect completed the login that waited", "state: Authenticated" in harness.log())
+    }
+
+    /**
+     * The other half of scenario 15 on a device: after a redirect was ignored the cancel detection
+     * is intact. A delivered redirect silences it (`redirectDelivered`), so the ignored one must not
+     * have been delivered; the user closing the tab afterwards is still a cancel.
+     */
+    @Test
+    fun aDismissalAfterAnIgnoredRedirectStillEndsTheLoginAsACancel() {
+        startLogin()
+        harness.awaitLoginForm()
+
+        fireRedirect("code=forged&state=forged&iss=${harness.issuer}")
+        Thread.sleep(SETTLE_MILLIS)
+        assertFalse("not a failure\n${harness.log()}", "login: failed" in harness.log())
+        harness.awaitTopActivity("CustomTabActivity")
+        harness.closeTabWithBack()
+
+        assertUserCancelledAndPendingRequestWiped()
+    }
+
+    private fun fireRedirect(query: String) {
+        harness.shell(
+            "am start -W -a android.intent.action.VIEW -n ${Harness.HOST}/versola.sdk.browser.VersolaRedirectActivity " +
+                "-d com.example.versola.devicetier://app/oauth?$query",
+        )
     }
 
     @Test
