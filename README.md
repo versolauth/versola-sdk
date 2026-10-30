@@ -205,10 +205,9 @@ switch.
 ## Supported providers
 
 The contract a provider must meet, the capability matrix and the documented limits are in
-[`spec/providers.md`](spec/providers.md). Setup guides per provider are in
-[`docs/providers/`](docs/providers/), and coming from AppAuth is covered in
-[`docs/migrating-from-appauth.md`](docs/migrating-from-appauth.md). Supported and exercised in
-conformance: Keycloak 26.4 and Ory Hydra v26.2.0.
+[`spec/providers.md`](spec/providers.md). The setup guides per provider and the guide for moving
+from AppAuth are part of the SDK documentation on the website (<https://docs.versola.kz>), not in
+this repository. Supported and exercised in conformance: Keycloak 26.4 and Ory Hydra v26.2.0.
 
 ## Repository layout
 
@@ -250,8 +249,8 @@ tools/           validate-scenarios.py
   [`providers.md`](spec/providers.md), [`state-machine.md`](spec/state-machine.md),
   [`errors.md`](spec/errors.md), [`retry-policy.md`](spec/retry-policy.md) and the scenarios in
   [`spec/conformance/`](spec/conformance/).
-- [`docs/README.md`](docs/README.md): decision records, reviews, provider guides and the AppAuth
-  migration guide.
+- [`docs/README.md`](docs/README.md): decision records, reviews and the release runbook. Provider
+  guides and the AppAuth migration guide are on the website.
 - Per platform: [`android/README.md`](android/README.md), [`ios/README.md`](ios/README.md),
   [`flutter/versola_oauth/README.md`](flutter/versola_oauth/README.md).
 - [`conformance/README.md`](conformance/README.md): what each test tier covers.

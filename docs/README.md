@@ -6,10 +6,9 @@ source: this directory, [`spec/`](../spec/) and the per-platform READMEs.
 
 ## Guides
 
-- [`providers/`](providers/): setup guides for each provider `OAuthClient` is used with. The capability matrix and the documented limits they rest on are in
-  [`spec/providers.md`](../spec/providers.md).
-- [`migrating-from-appauth.md`](migrating-from-appauth.md): moving an app from AppAuth to
-  `OAuthClient`.
+Provider setup guides and the AppAuth migration guide are part of the SDK documentation on the
+website, not in this repository. The capability matrix and the documented limits they rest on are
+in [`spec/providers.md`](../spec/providers.md).
 
 - [`releasing.md`](releasing.md): the maintainer's runbook for a release (Maven Central, Swift
   Package Manager, pub.dev) and what has to exist before the first one.
