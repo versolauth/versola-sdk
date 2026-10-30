@@ -139,7 +139,10 @@ deployment can be dropped, rather than on Central.
 6. **Check what a consumer sees**, from a project outside this repository, once Central has it:
    `implementation("io.versola:oauth-android:X.Y.Z")` with `mavenCentral()` and `google()` resolves, and
    a Swift package depending on `.package(url: "https://github.com/versolauth/versola-sdk", from: "X.Y.Z")`
-   resolves and builds the `VersolaOAuth` product.
+   resolves and builds the `VersolaOAuth` product. Also read each AAR's
+   `META-INF/com/android/build/gradle/aar-metadata.properties` (`unzip -p`): its `minCompileSdk`
+   must be the module's own `aarMetadata` value (`develop.md`), not 37, which is what AGP writes
+   when a module sets none and what it would then demand of every app.
 7. **pub.dev, first release by hand.** From a clean checkout of the tag:
 
    ```bash

@@ -13,6 +13,11 @@ android {
 
     defaultConfig {
         minSdk = 26
+        // What an app must compile against, which is not what this module builds with (see :dpop).
+        // The highest platform API the AAR links against is KeyGenParameterSpec.Builder
+        // .setUserAuthenticationParameters (30, behind SDK_INT); the public API names nothing newer than
+        // API 1. The app's own check also applies androidx.datastore's value (34), which is the higher one.
+        aarMetadata { minCompileSdk = 30 }
         // The instrumented tests under src/androidTest run against a real Android Keystore
         // on an emulator (#30, #37): the tier negotiation, the authentication window and the
         // exception mapping have no JVM equivalent, and Robolectric emulates none of them.

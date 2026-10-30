@@ -9,7 +9,7 @@ right and this file is stale.
 | Tool | Version | Used for |
 |---|---|---|
 | JDK | 17 | Gradle, the Android modules (`sourceCompatibility` is 17) |
-| Android SDK | platform 37.0, build-tools 36.0.0 | `compileSdk` 37 in every module; `minSdk` is 26 |
+| Android SDK | platform 37.0, build-tools 36.0.0 | `compileSdk` 37 in every module (our build only, not what an app needs: see below); `minSdk` is 26 |
 | Android Gradle Plugin | 9.5.0 | pinned in `android/build.gradle.kts` |
 | Kotlin | 2.4.21 | pinned in `android/build.gradle.kts`; `explicitApi()` is on |
 | Gradle | 9.7.1 | through the wrapper, never a system Gradle |
@@ -36,6 +36,15 @@ CI installs `android-36` and lets AGP download the rest:
 ```bash
 yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "platforms;android-36" "build-tools;36.0.0"
 ```
+
+What an app must compile against is a separate number from our `compileSdk`. AGP publishes a
+library's `compileSdk` as the AAR's `minCompileSdk`, and the app's `checkDebugAarMetadata` fails
+when its `compileSdk` is lower than any AAR's in its graph. Each published module therefore sets
+`aarMetadata { minCompileSdk = N }` in `defaultConfig`, N being the highest platform API its AAR
+links against (its public API names nothing newer than API 1), so a module never asks an app for
+the level it builds with. The levels an app needs are then those of the dependencies: OkHttp's AAR
+declares 37 today, `androidx.browser`'s 36, `androidx.datastore`'s 34. To see what an AAR declares,
+read `META-INF/com/android/build/gradle/aar-metadata.properties` in it (`unzip -p`).
 
 ## Layout
 

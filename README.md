@@ -54,7 +54,8 @@ The current version is on the [Releases](https://github.com/versolauth/versola-s
 write it where `<version>` stands.
 
 - **Android:** `implementation("io.versola:oauth-android:<version>")` from `mavenCentral()` (and
-  `google()`).
+  `google()`), with `minSdk` 26 and the `compileSdk` described under Flutter below (OkHttp's; the
+  SDK's own AARs ask for less).
 - **iOS:** Swift Package Manager, `.package(url: "https://github.com/versolauth/versola-sdk", from: "<version>")`,
   product `VersolaOAuth`.
 - **Flutter:** a git dependency in `pubspec.yaml` (below), with Swift Package Manager integration
@@ -71,6 +72,8 @@ dependencies:
 
 A Flutter app needs `compileSdk` 37 and `minSdk` 26 in `android/app/build.gradle.kts` and an iOS
 deployment target of 17.4; a lower value fails the build with a message that names the minimum.
+The 37 is OkHttp's: its AAR declares it, and the SDK's own AARs ask for less, so the number follows
+the OkHttp release the SDK depends on, not a choice of ours.
 
 ### Android (Kotlin)
 
