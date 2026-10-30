@@ -77,13 +77,14 @@ class BridgeConformance: ProviderConformance {
         redirectUri: String = Provider.redirectUri,
         scopes: Set<String>? = nil,
         protectedOrigins: Set<String> = [ResourceServer.origin],
-        pushedAuthorization: PushedAuthorization = .whenAdvertised
+        pushedAuthorization: PushedAuthorization = .whenAdvertised,
+        tokenBinding: TokenBinding = .bearer
     ) async throws -> Bridge {
         let native = try await client(
-            configuration(clientId: clientId, endpoints: endpoints, redirectUri: redirectUri, scopes: scopes, protectedOrigins: protectedOrigins, pushedAuthorization: pushedAuthorization)
+            configuration(clientId: clientId, endpoints: endpoints, redirectUri: redirectUri, scopes: scopes, protectedOrigins: protectedOrigins, pushedAuthorization: pushedAuthorization, tokenBinding: tokenBinding)
         )
         let dart = dart()
-        let created = try await dart.create(message(clientId: clientId, endpoints: endpoints, redirectUri: redirectUri, scopes: scopes, protectedOrigins: protectedOrigins, pushedAuthorization: pushedAuthorization))
+        let created = try await dart.create(message(clientId: clientId, endpoints: endpoints, redirectUri: redirectUri, scopes: scopes, protectedOrigins: protectedOrigins, pushedAuthorization: pushedAuthorization, tokenBinding: tokenBinding))
         if let failure = created as? CreateFailure {
             throw BridgeFailure("expected CreateOk, got \(failure.error.category)/\(failure.error.kind): \(failure.error.message)")
         }
@@ -105,7 +106,8 @@ class BridgeConformance: ProviderConformance {
         scopes: Set<String>? = nil,
         protectedOrigins: Set<String> = [ResourceServer.origin],
         pushedAuthorization: PushedAuthorization = .whenAdvertised,
-        issuer: String?? = nil
+        issuer: String?? = nil,
+        tokenBinding: TokenBinding = .bearer
     ) -> ConfigurationMessage {
         ConfigurationMessage(
             issuer: issuer ?? (endpoints == nil ? proxyIssuer : nil),
@@ -121,7 +123,12 @@ class BridgeConformance: ProviderConformance {
             redirectUri: redirectUri,
             postLogoutRedirectUri: Provider.postLogoutRedirectUri,
             scopes: Array(scopes ?? provider.scopes),
-            tokenBinding: .bearer,
+            tokenBinding: {
+                switch tokenBinding {
+                case .bearer: return .bearer
+                case .dpop(let required): return required ? .dpopRequireHardware : .dpop
+                }
+            }(),
             pushedAuthorization: {
                 switch pushedAuthorization {
                 case .never: return .never

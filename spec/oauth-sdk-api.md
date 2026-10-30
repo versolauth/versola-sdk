@@ -188,7 +188,11 @@ presented as `Authorization: DPoP`; an integrator opts in when their resource se
 the behaviour is `errors.md`'s: one `use_dpop_nonce` retry per origin, one `invalid_dpop_proof`
 retry, clock-skew learned from the `Date` header, `ath` on resource requests. The key is
 non-exportable, not user-gated, and regenerated on every `login()`; `keyAttestation()` reports the
-tier read back.
+tier read back. The authorization request, pushed or not, carries `dpop_jkt` (RFC 9449 section
+10), the thumbprint of that key; a refresh is proved with the same key. A key whose
+tier is `Software` where hardware was required (`Dpop(requireHardware = true)` on Android,
+`dpop(required: true)` on iOS) is `Configuration(HardwareBindingUnavailable)` before any request to
+the authorization endpoint (`errors.md`). Scenario 33 holds all of this against a real provider.
 
 ## 10. The authenticated client
 

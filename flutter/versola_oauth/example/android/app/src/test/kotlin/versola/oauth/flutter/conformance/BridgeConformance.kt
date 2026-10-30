@@ -21,6 +21,7 @@ import versola.oauth.conformance.ReversingKeyProvider
 import versola.oauth.core.BrowserAuthorizationSession
 import versola.oauth.core.BrowserOutcome
 import versola.oauth.core.PushedAuthorization
+import versola.oauth.core.TokenBinding
 import versola.oauth.flutter.AccessTokenFailure
 import versola.oauth.flutter.AccessTokenMessage
 import versola.oauth.flutter.AccessTokenOk
@@ -138,15 +139,16 @@ abstract class BridgeConformance : ProviderConformance() {
         scopes: Set<String> = provider.scopes,
         protectedOrigins: Set<String> = setOf(resource.origin),
         pushedAuthorization: PushedAuthorization = PushedAuthorization.WhenAdvertised,
+        tokenBinding: TokenBinding = TokenBinding.Bearer,
     ): Bridge {
         val native = OAuthClient.create(
             application,
-            configuration(clientId, endpoints, redirectUri, scopes, protectedOrigins, pushedAuthorization),
+            configuration(clientId, endpoints, redirectUri, scopes, protectedOrigins, pushedAuthorization, tokenBinding),
             browser = OffTheMainThread(browser),
             keyProvider = ReversingKeyProvider,
         )
         val dart = dart()
-        dart.create(message(clientId, endpoints, redirectUri, scopes, protectedOrigins, pushedAuthorization)).failureOrNull()?.let {
+        dart.create(message(clientId, endpoints, redirectUri, scopes, protectedOrigins, pushedAuthorization, tokenBinding = tokenBinding)).failureOrNull()?.let {
             throw AssertionError("expected CreateOk, got ${it.category}/${it.kind}: ${it.message}")
         }
         return Bridge(native, dart)
@@ -164,6 +166,7 @@ abstract class BridgeConformance : ProviderConformance() {
         protectedOrigins: Set<String> = setOf(resource.origin),
         pushedAuthorization: PushedAuthorization = PushedAuthorization.WhenAdvertised,
         issuer: String? = if (endpoints == null) proxy.issuer else null,
+        tokenBinding: TokenBinding = TokenBinding.Bearer,
     ): ConfigurationMessage = ConfigurationMessage(
         issuer = issuer,
         endpoints = endpoints?.let {
@@ -183,7 +186,10 @@ abstract class BridgeConformance : ProviderConformance() {
         redirectUri = redirectUri,
         postLogoutRedirectUri = Provider.POST_LOGOUT_REDIRECT_URI,
         scopes = scopes.toList(),
-        tokenBinding = TokenBindingMessage.BEARER,
+        tokenBinding = when (tokenBinding) {
+            TokenBinding.Bearer -> TokenBindingMessage.BEARER
+            is TokenBinding.Dpop -> if (tokenBinding.requireHardware) TokenBindingMessage.DPOP_REQUIRE_HARDWARE else TokenBindingMessage.DPOP
+        },
         pushedAuthorization = when (pushedAuthorization) {
             PushedAuthorization.Never -> PushedAuthorizationMessage.NEVER
             PushedAuthorization.WhenAdvertised -> PushedAuthorizationMessage.WHEN_ADVERTISED

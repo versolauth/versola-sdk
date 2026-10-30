@@ -1,0 +1,83 @@
+id: 33-dpop-end-to-end
+title: DPoP end to end through the generic facade, against a provider that requires it and a resource server that verifies it
+issues: [46]
+applies_to: [android, ios, flutter]
+facade: [oauth]
+mode: dpop
+fault_injection: [force-dpop-nonce, always-demand-dpop-nonce]
+preconditions:
+  - The provider advertises dpop_signing_alg_values_supported including ES256 and has a public client registered for authorization code + PKCE that requires DPoP-bound tokens (Keycloak 26.4, the client attribute dpop.bound.access.tokens; spec/providers.md). A provider that does not advertise ES256 DPoP proofs skips the scenario with that reason.
+  - A protected resource is staged that verifies DPoP itself (RFC 9449 section 7) and holds nothing but the provider's public keys. It accepts a request only when the access token is an unexpired JWT signed by the provider for the configured issuer and carrying cnf.jkt, the scheme is DPoP with exactly one DPoP header, and the proof has typ dpop+jwt, alg ES256, a public EC P-256 jwk, a valid signature under it, htm, htu without query and fragment, iat within 60 seconds, a jti not seen before, ath equal to the base64url SHA-256 of the access token, and a jwk thumbprint equal to cnf.jkt. It records the reason for every refusal.
+  - The SDK is configured with tokenBinding Dpop (requireHardware false) for that client and the resource's origin in protectedOrigins. The harness can reach the DPoP key the SDK generated, only to sign proofs with claims it chooses.
+  - The key tier is read back from the SDK (keyAttestation); a run on a JVM or a host with no secure element reports Software, and the Keystore (StrongBox, TEE) and Secure Enclave tiers are the device tier's.
+steps:
+  - actor: app
+    action: Create the client and call login().
+  - actor: sdk
+    action: Generate the DPoP key, build the authorization request (PAR when advertised), redeem the code at the token endpoint with a proof.
+    expect: The authorization request carries dpop_jkt; the token request carries one DPoP header; the token response has token_type DPoP.
+  - actor: app
+    action: Request the protected resource through the authenticated client, with a query string.
+    expect: Authorization DPoP with a proof whose ath is the hash of that token; the resource accepts it.
+  - actor: harness
+    action: Make the resource demand a nonce (force-dpop-nonce), then request it again through the authenticated client; then make a resource offer a nonce it will not accept (always-demand-dpop-nonce) and request that.
+    expect: The first is retried once with the nonce and the nonce is kept for the origin; the second ends after one retry in Recoverable NonceLoop.
+  - actor: app
+    action: Call userInfo(), and call logout() with the defaults.
+    expect: The UserInfo request carries the DPoP scheme and a proof bound to the token, and the provider refuses the same token at UserInfo with no proof, as a Bearer, or with another key's proof; logout revokes the refresh token with no proof and the provider then refuses that token.
+  - actor: harness
+    action: Answer the first token request with use_dpop_nonce and a DPoP-Nonce header (force-dpop-nonce), then answer every one (always-demand-dpop-nonce), without forwarding them to the provider.
+    expect: The first is retried once with the nonce in the proof and the login completes at the provider; the second ends after one retry in Recoverable NonceLoop.
+  - actor: harness
+    action: Forward the token request to the provider with a proof from another key in place of the SDK's.
+    expect: The provider refuses the code, which was bound by dpop_jkt, with 400 invalid_request, and the SDK surfaces Configuration TokenRequestRejected with the provider's code.
+  - actor: app
+    action: Call refresh().
+    expect: The refresh request carries a proof from the same key; the new token is DPoP-bound to the same key and the resource accepts it.
+  - actor: harness
+    action: Present the access token to the resource without a proof, as a Bearer, with a proof from another key, with the SDK's jwk but another key's signature, with the SDK's key but a wrong ath, htu, htm or iat, with two proofs, with the token re-bound to another key, and with a proof the SDK already sent.
+    expect: Each is refused by the resource for exactly the check that case changes; the same request with every claim right is accepted.
+  - actor: harness
+    action: Present the refresh token to the token endpoint with no proof and with a proof from another key; then call refresh().
+    expect: The provider refuses both; the SDK's refresh then succeeds.
+  - actor: app
+    action: Configure tokenBinding Dpop with requireHardware true on a machine whose key is Software, and call login().
+    expect: Configuration HardwareBindingUnavailable; no request to the authorization, PAR or token endpoint and no browser opened.
+  - actor: app
+    action: Configure tokenBinding Bearer for the DPoP-requiring client and call login().
+    expect: The token request carries no DPoP header and the provider refuses it; no session.
+assertions:
+  - The token request carries exactly one DPoP header whose proof has typ dpop+jwt, alg ES256, a jwk with only kty, crv, x and y, htm POST, htu equal to the token endpoint, a fresh jti, an iat within 60 seconds of the request, and no ath.
+  - The authorization request, pushed or not, carries dpop_jkt equal to the thumbprint of the proof's jwk.
+  - The token response has token_type DPoP and an access token whose cnf.jkt equals the thumbprint of the SDK's key, which is the thumbprint of the token request's jwk.
+  - keyAttestation reports the tier read back from the key, and a Software tier is logged as software-backed.
+  - A call through the authenticated client carries Authorization with the DPoP scheme, one DPoP header with htm the request method, htu the request URL without its query, ath equal to the base64url SHA-256 of the access token actually sent, and a jwk whose thumbprint equals cnf.jkt; the resource server's verdict is accepted.
+  - A request to an origin not in protectedOrigins carries neither Authorization nor DPoP.
+  - A resource's use_dpop_nonce challenge is retried exactly once, with a new jti and the DPoP-Nonce value in the proof's nonce claim; the next request to that origin carries the nonce without being challenged; a resource that keeps challenging gets exactly two requests and then Recoverable NonceLoop.
+  - Keycloak 26.4 sends no use_dpop_nonce of its own, so the provider-side challenge is injected by the harness (see the steps) and Keycloak is only shown to accept a proof carrying a nonce it never issued; the resource's challenges above are a real server's.
+  - A refresh request carries one DPoP header whose jwk equals the login proof's jwk member for member, a new jti, htm POST, htu equal to the token endpoint and no ath; its response is token_type DPoP with cnf.jkt equal to the same thumbprint, a new access token, and the SDK holds exactly one key.
+  - The access token replayed to the resource with no DPoP header is refused as NoProof; as a Bearer, with or without a proof, as WrongScheme.
+  - With every claim right except one, a proof is refused for that one, namely a signature that is not the sender's (the header carries the SDK's jwk, another key signed) as ProofSignature, ath of another token or no ath as AccessTokenHash, another URL as Url, another method as Method, an iat ten minutes old as IssuedAt, two DPoP headers as MultipleProofs, and a proof from a different key as KeyMismatch (every other claim, ath included, right).
+  - The access token with cnf.jkt changed to another key's thumbprint, under a proof from that key, is refused as TokenSignature.
+  - A proof the SDK itself sent, replayed, is refused as ReplayedJti; the control request (SDK key, every claim right) is accepted.
+  - The UserInfo request of a DPoP-bound session carries Authorization with the DPoP scheme and one proof with htm GET, htu equal to the UserInfo endpoint, ath equal to the base64url SHA-256 of that token and the SDK key's jwk; its sub equals the ID token's. The provider answers 401 to the same token with no proof, as a Bearer, and with a proof from another key, and 200 to a proof signed by the SDK's key with every claim right.
+  - logout() of a DPoP-bound session sends the revocation request with no DPoP header and the provider takes it (200, tokenRevoked true); the refresh token, presented afterwards with a proof from the key that bound it, is refused 400 invalid_grant.
+  - A use_dpop_nonce challenge on the token endpoint (400, DPoP-Nonce header) is retried exactly once, with the nonce in the new proof's nonce claim and a new jti, and the provider accepts that proof and completes the login; a token endpoint that challenges every request gets exactly two requests and then Recoverable NonceLoop, with no session.
+  - A token request carrying a proof from a key other than the one the authorization request committed to with dpop_jkt is refused by the provider with 400 invalid_request naming dpop_jkt, no access_token is issued, and the SDK surfaces Configuration TokenRequestRejected with that code and description.
+  - The provider refuses a refresh grant that carries no DPoP proof, and one with a proof from another key, with 400; neither spends the refresh token.
+  - With requireHardware true and a Software key, login() fails with Configuration HardwareBindingUnavailable before any request to the authorization, PAR or token endpoint, with no browser opened and SessionState Unauthenticated.
+  - A Bearer-configured SDK against the DPoP-requiring client sends no DPoP header and receives 400 without an access_token.
+notes: >
+  The negative assertions are the resource server's checks and are proven by showing each one fail
+  when the check is removed. They use the SDK's own key, reached through the harness, so a refusal
+  is that one claim's and not a forger's; the DPoP key tier is Software in a run without a secure
+  element, and nothing in a Software run is a statement about StrongBox, the TEE or the Secure
+  Enclave. Where the platforms spell the option differently, Android's TokenBinding.Dpop(requireHardware = true)
+  and iOS's TokenBinding.dpop(required: true) are the same assertion (the key must be hardware-backed,
+  errors.md "Hardware key unavailable"); a Software key is refused by both before any authorization
+  request. Flutter runs this through its bridge with one difference: it has no authenticated client
+  (`spec/oauth-sdk-api.md` section 10) and no way to mint a proof, so the authenticated-call
+  assertions, the resource's nonce challenges and the replay of a proof the SDK itself sent are the
+  native facades'; the bridge makes the stolen-token requests with the token `accessToken()`
+  returned (token type DPoP) and asserts the binding, the refresh, userInfo(), logout(), the provider's
+  nonce challenges, the dpop_jkt refusal, the stolen-token refusals and requireHardware as the others do. A Flutter app that receives a DPoP-bound token cannot present it itself.

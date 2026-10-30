@@ -89,6 +89,12 @@ class Provider private constructor(
         /** The same client without refresh tokens and with ten-second access tokens (scenario 31). */
         const val NO_REFRESH_CLIENT_ID = "conformance-app-norefresh"
 
+        /**
+         * The same client again, but the provider refuses to issue it a token that is not bound to a
+         * DPoP key (scenario 33). Keycloak only: Hydra does not advertise DPoP (`spec/providers.md`).
+         */
+        const val DPOP_CLIENT_ID = "conformance-app-dpop"
+
         /** Registered on both clients; `example.com` because no browser ever opens it. */
         const val REDIRECT_URI = "https://conformance.example.com/oauth"
         const val POST_LOGOUT_REDIRECT_URI = "https://conformance.example.com/signed-out"
