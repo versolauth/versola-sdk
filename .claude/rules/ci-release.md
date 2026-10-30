@@ -79,7 +79,9 @@ paths: [".github/**", "conformance/**", "tools/**"]
 - Upload transcripts and the server logs as artifacts with `if: always()`: a failing scenario is
   diagnosed from them.
 - The Docker compose files in `conformance/` are for local runs and the provider containers of
-  issue #46; they use throwaway credentials only. A provider container is pinned to a release
+  issue #46; they use throwaway credentials only and publish every port on `127.0.0.1` (the
+  emulator still reaches them through `adb reverse` or `10.0.2.2`; a physical device uses
+  `adb reverse`). A provider container is pinned to a release
   (`keycloak:26.4`, `hydra:v26.2.0`) so the matrix row in `spec/providers.md` names what was tested.
 
 ## Scanners and the private repository
@@ -96,8 +98,11 @@ paths: [".github/**", "conformance/**", "tools/**"]
 
 `.github/dependabot.yml` covers `gradle` (`/android`, and the Flutter example's own build at
 `/flutter/versola_oauth/example/android`, which ignores the two plugins that must equal
-`android/build.gradle.kts`), `swift` (`/`), `pub` (`/flutter/versola_oauth`, with `pigeon` ignored:
-its bump comes with the regeneration), `github-actions` and `pip` (`/tools`). Minor and patch updates are grouped into one PR per ecosystem
+`android/build.gradle.kts`, and the plugin's own `/flutter/versola_oauth/android`, which ignores
+the `io.versola:oauth-android` release pin), `swift` (`/`), `pub` (`/flutter/versola_oauth`, with
+`pigeon` ignored: its bump comes with the regeneration, and `/flutter/versola_oauth/example`),
+`docker-compose` (the provider containers and the stack's Postgres under `/conformance`),
+`github-actions` and `pip` (`/tools`). Minor and patch updates are grouped into one PR per ecosystem
 per week; majors are separate so a breaking major blocks only itself. A Dependabot PR is reviewed
 like any other dependency change: licence, maintenance, what the release notes say. Known holds are
 documented where they live (OkHttp 5.4.0 pinned below 5.5.0, `android/okhttp/build.gradle.kts`).
