@@ -121,6 +121,9 @@ final class ConfigurationError extends OAuthError {
 }
 
 enum ConfigurationDetail {
+  /// Reserved: the native flow no longer reports it for a waiting login, which ignores a redirect
+  /// whose `state` is not its request's (`spec/state-machine.md`, scenario 15). Kept because the
+  /// native error types keep the case.
   stateMismatch,
   issuerMismatch,
   malformedAuthorizationResponse,
