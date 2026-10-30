@@ -100,11 +100,14 @@ val oauth = OAuthClient.create(context, configuration)
   state is `Authorizing`; it runs the tail of `login()` (redirect validation, code exchange,
   ID-token validation, persistence, then `Authenticated`), with `max_age` taken from the restored
   request. An app that wants to await it observes `sessionState`.
-- **Deviation, iOS:** the redirect cannot start the SDK by itself, because the app's URL handler
-  is the only thing the system calls. The app calls `resumePendingAuthorization()` on launch when
-  `sessionState` is `authorizing` and passes the URL to `handleRedirect(url)`; the call awaits the
-  redirect and finishes the sign-in with the same tail as `login()`. Observing `sessionState`
-  works as on Android.
+- **iOS:** the same: `create()` starts that work when the restored state is `Authorizing`, and the
+  session completes on its own once the redirect arrives. The only difference is how the redirect
+  reaches the SDK: the app's URL handler is the only thing the system calls, so the app passes the
+  URL to `handleRedirect(url)` (the Flutter plugin does it natively). `resumePendingAuthorization()`
+  stays on the iOS `OAuthClient` and is optional: an app that wants to await the outcome calls it,
+  and calling it after `create()` joins the resume `create()` started instead of making a second
+  attempt (the code is single-use). It also finishes a pending request `create()` did not see,
+  one a system cancel left in the running process. Observing `sessionState` works as on Android.
 
 ## 5. Operations
 
@@ -286,7 +289,7 @@ handled in app code after `logout()` has wiped locally; the SDK does not special
 | Step-up | `suspend fun stepUp(challenge, options)` | `func stepUp(acrValues:maxAge:options:) async throws` (the challenge is the `stepUp` case's payload) | `Future<void> stepUp(challenge, [options])` |
 | HTTP | `interceptor(origins)`, `authenticatedClient(origins)` | `authenticatedSession(origins)` | `accessToken()` |
 | Browser leg | Auth Tab (androidx.browser, activity result) where the Custom Tabs provider supports it, Custom Tabs otherwise, any browser last; `WebView` unrepresentable | `ASWebAuthenticationSession` | native |
-| Redirect | an Auth Tab returns it as its result; otherwise the manifest-declared activity | `ASWebAuthenticationSession` returns it; `handleRedirect(_ url: URL) async -> Bool` feeds a Universal Link received while the app was cold to `resumePendingAuthorization()` | native |
+| Redirect | an Auth Tab returns it as its result; otherwise the manifest-declared activity | `ASWebAuthenticationSession` returns it; `handleRedirect(_ url: URL) async -> Bool` feeds a Universal Link received while the app was cold to the pending authorization that `create()` resumes | native |
 | Errors | `sealed class VersolaError : Exception` (the rename to `OAuthError` is deferred, ADR 0001) | `enum OAuthError: Error, Sendable` with the same four cases and payloads | `sealed class OAuthError implements Exception` |
 | Internal wiring | `@VersolaInternalApi` (`RequiresOptIn`, error level) | `package` access / `_` prefix, not in products | `src/` private, not exported |
 

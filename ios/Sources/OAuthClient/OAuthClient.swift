@@ -19,6 +19,8 @@ public final class OAuthClient: Sendable {
     private let dpopKey: SecureEnclaveDpopKey?
     private let browser: WebAuthenticationBrowser?
     private let httpSession: URLSession
+    /// Single flight for the resume `create` starts and an explicit `resumePendingAuthorization()`.
+    private let backgroundResume = BackgroundResume()
 
     /// One client per configuration per process: a second `create` with the same issuer and
     /// client id returns the first instance (two coordinators over one Keychain item would race
@@ -27,16 +29,18 @@ public final class OAuthClient: Sendable {
 
     private actor Registry {
         var clients: [String: OAuthClient] = [:]
-        func resolve(_ configuration: OAuthConfiguration, build: () throws -> OAuthClient) throws -> OAuthClient {
+        /// `created` is true only for the call that built the client: that call, and no later one
+        /// that merely gets the instance back, starts the resume of a cold start.
+        func resolve(_ configuration: OAuthConfiguration, build: () throws -> OAuthClient) throws -> (client: OAuthClient, created: Bool) {
             if let existing = clients[configuration.storageKey] {
                 if existing.configuration.fingerprint != configuration.fingerprint {
                     throw OAuthError.configuration(.invalidConfiguration(detail: "a client for \(configuration.issuerIdentifier) / \(configuration.clientId) already exists in this process with a different configuration"))
                 }
-                return existing
+                return (existing, false)
             }
             let client = try build()
             clients[configuration.storageKey] = client
-            return client
+            return (client, true)
         }
         func forgetAll() { clients.removeAll() }
     }
@@ -45,15 +49,25 @@ public final class OAuthClient: Sendable {
     /// No network I/O and no key generation happen here: discovery runs on the first operation
     /// that needs it, the DPoP key is generated on first use.
     ///
+    /// An authorization that outlived the process that began it (the app was killed while the
+    /// browser was up) finishes on its own: when the restored state is `authorizing`, `create`
+    /// starts finishing it in the background, as the Android `create` does. It waits for the
+    /// redirect the app hands to ``handleRedirect(_:)`` for what is left of the request's ten
+    /// minutes, then runs the tail of ``login(_:)`` and publishes `authenticated`; a failure
+    /// settles the state as `login` does and is logged, not thrown. Observe ``sessionStates()``
+    /// to follow it. Nothing is started when no authorization is pending.
+    ///
     /// - Parameter presentationAnchor: the window the browser sheet is presented from, supplied
     ///   by the app; the SDK never finds a window by itself.
     public static func create(
         configuration: OAuthConfiguration,
         presentationAnchor: @escaping @MainActor @Sendable () -> ASPresentationAnchor
     ) async throws -> OAuthClient {
-        try await registry.resolve(configuration) {
+        let (client, created) = try await registry.resolve(configuration) {
             try build(configuration: configuration, presentationAnchor: presentationAnchor, browser: nil, credentialStore: nil, pendingStore: nil, metadataCache: nil, jwksCache: nil, makeDpopKey: nil)
         }
+        if created { await client.resumeInBackground() }
+        return client
     }
 
     /// Wiring for a driver: the browser leg and the stores replaced (an HTTP login conversation
@@ -73,9 +87,11 @@ public final class OAuthClient: Sendable {
         /// and whether the Secure Enclave counts as present are the driver's.
         dpopKey makeDpopKey: (@Sendable (_ requireHardware: Bool, _ logger: any OAuthLogger) -> SecureEnclaveDpopKey)? = nil
     ) async throws -> OAuthClient {
-        try await registry.resolve(configuration) {
+        let (client, created) = try await registry.resolve(configuration) {
             try build(configuration: configuration, presentationAnchor: nil, browser: browser, credentialStore: credentialStore, pendingStore: pendingStore, metadataCache: metadataCache, jwksCache: jwksCache, makeDpopKey: makeDpopKey)
         }
+        if created { await client.resumeInBackground() }
+        return client
     }
 
     /// Forgets every client this process created, for a driver whose tests each stage a
@@ -159,16 +175,73 @@ public final class OAuthClient: Sendable {
         }
     }
 
-    /// Finishes an authorization that outlived the process that started it (scenario 12): call
-    /// it on launch when `sessionState` is `authorizing`, and feed the redirect the system
-    /// delivers to `handleRedirect(_:)`. It waits for that redirect (for what is left of the
-    /// request's ten minutes), validates it against the restored request, exchanges the code,
+    /// Finishes an authorization that outlived the process that started it (scenario 12). **Now
+    /// optional for that case**: ``create(configuration:presentationAnchor:)`` starts this work
+    /// itself when the restored state is `authorizing`, so an app only feeds the redirect the
+    /// system delivers to ``handleRedirect(_:)``. Calling this after `create` is harmless: while
+    /// the resume `create` started is running it waits for that one and returns, or throws its
+    /// failure, instead of making a second attempt (the code is single-use); once it is done
+    /// there is nothing pending and this returns without effect.
+    ///
+    /// It remains the way to finish a pending request that `create` did not see: one left in this
+    /// process by a system cancel (the app was sent to the background while the sheet was up),
+    /// which has no caller to complete it. It waits for the redirect (for what is left of the
+    /// request's ten minutes), validates it against the pending request, exchanges the code,
     /// validates the ID token and persists the grant, the same steps `login` ends with, and
     /// publishes `authenticated`. Returns without effect when nothing is pending; a failure
     /// settles the state as `login` does and is thrown.
     public func resumePendingAuthorization() async throws {
+        // One resume at a time per client, whoever asks: the exchange sits outside the flow's
+        // gate, so a second caller admitted behind the first would find the request still
+        // stored and wait for a redirect that was already consumed.
+        guard try await backgroundResume.enter() else { return }
+        do {
+            let acted = try await resume()
+            await backgroundResume.finish(acted ? .completed : .nothingToDo)
+        } catch {
+            // A caller that gave up has not failed the resume for the others.
+            await backgroundResume.finish(error is CancellationError ? .nothingToDo : .failed(error))
+            throw error
+        }
+    }
+
+    private func resume() async throws -> Bool {
         let coordinator = self.coordinator
-        _ = try await coordinator.operation { try await coordinator.resumePendingLogin() }
+        return try await coordinator.operation { try await coordinator.resumePendingLogin() } != nil
+    }
+
+    /// Starts finishing a cold-started authorization, from `create`. Acts only when the restored
+    /// state is `authorizing`, so a client with nothing pending costs one read of the store. The
+    /// wait for the redirect is bounded by what is left of the request's ten minutes
+    /// (`AuthorizationFlow.resumePendingAuthorization`), and the work after it is
+    /// `SessionCoordinator.resumePendingLogin`, the tail of `login` itself. A failure has
+    /// already settled the state, so it is logged and not rethrown into a task nobody awaits.
+    /// The task runs until the redirect or the ten minutes end it.
+    ///
+    /// The resume is registered before `create` returns, so an explicit
+    /// `resumePendingAuthorization()` made right after it joins this one instead of racing it.
+    private func resumeInBackground() async {
+        // First call on a fresh client: always the leader.
+        guard (try? await backgroundResume.enter()) == true else { return }
+        let flow = self.flow
+        let logger = configuration.logger
+        let resume = self.backgroundResume
+        Task {
+            do {
+                try await flow.ensureRestored()
+                guard await flow.states.current == .authorizing else {
+                    await resume.finish(.nothingToDo)
+                    return
+                }
+                let acted = try await self.resume()
+                await resume.finish(acted ? .completed : .nothingToDo)
+            } catch {
+                // The typed error's own text, which carries no secret; for anything else only
+                // the type, since a parser's or a provider's message could.
+                logger.warn("resuming the pending authorization failed: \(error is OAuthError ? String(describing: error) : String(describing: type(of: error)))")
+                await resume.finish(error is CancellationError ? .nothingToDo : .failed(error))
+            }
+        }
     }
 
     /// Signs out (`spec/oauth-sdk-api.md` section 12): revokes, ends the provider's session
@@ -403,6 +476,65 @@ import UIKit
 #else
 import AppKit
 #endif
+
+/// Single flight for finishing a pending authorization, shared by the resume `create` starts and
+/// an explicit `resumePendingAuthorization()`: the first caller does the work, the others wait for
+/// it, carry its failure, and (when it had nothing to do) take their turn. Waiting honours
+/// cancellation.
+private actor BackgroundResume {
+    enum Outcome: Sendable {
+        /// A pending authorization was finished; a joined caller has nothing left to do.
+        case completed
+        /// Nothing was pending; a joined caller looks for itself.
+        case nothingToDo
+        case failed(any Error)
+    }
+
+    private var running = false
+    private var waiters: [(id: UUID, continuation: CheckedContinuation<Outcome, any Error>)] = []
+
+    /// True: the caller leads and must call `finish`. False: a resume ran to completion while
+    /// the caller waited. Throws that resume's failure, or the caller's cancellation.
+    func enter() async throws -> Bool {
+        while running {
+            if case .completed = try await park() { return false }
+        }
+        running = true
+        return true
+    }
+
+    func finish(_ outcome: Outcome) {
+        running = false
+        let ending = waiters
+        waiters = []
+        for waiter in ending {
+            if case .failed(let error) = outcome {
+                waiter.continuation.resume(throwing: error)
+            } else {
+                waiter.continuation.resume(returning: outcome)
+            }
+        }
+    }
+
+    private func park() async throws -> Outcome {
+        try Task.checkCancellation()
+        let id = UUID()
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                waiters.append((id, continuation))
+                // The cancellation hop below may have run before this registration.
+                if Task.isCancelled { cancelWaiter(id) }
+            }
+        } onCancel: {
+            Task { await self.cancelWaiter(id) }
+        }
+    }
+
+    private func cancelWaiter(_ id: UUID) {
+        guard let index = waiters.firstIndex(where: { $0.id == id }) else { return }
+        waiters.remove(at: index).continuation.resume(throwing: CancellationError())
+    }
+}
 
 /// The one discovered value a configuration may replace (`spec/oauth-sdk-api.md` section 3).
 private struct EndSessionOverride: DiscoveryClient {

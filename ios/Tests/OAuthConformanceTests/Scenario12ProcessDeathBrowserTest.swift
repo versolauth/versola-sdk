@@ -29,19 +29,25 @@ final class Scenario12ProcessDeathBrowserTest: ProviderConformance {
     }
 
     /// The browser of the process the redirect started: nothing is opened, and what the user
-    /// completed in the real browser arrives as the redirect the system hands over.
+    /// completed in the real browser arrives as the redirect the system hands over, once the test
+    /// calls `deliver()` (on a device the redirect comes after the app has launched, so the app
+    /// has observed `authorizing` by then).
     private final class ColdStartBrowser: BrowserAuthorizationSession, Sendable {
         let completedLogin: HttpLoginBrowser
         let uri: URL
+        private let gate = AsyncStream.makeStream(of: Void.self)
         init(completedLogin: HttpLoginBrowser, uri: URL) {
             self.completedLogin = completedLogin
             self.uri = uri
         }
+        func deliver() { gate.continuation.yield() }
         func authorize(_ uri: URL, options: BrowserSessionOptions) async throws -> BrowserOutcome {
             throw ConformanceFailure("a cold-started process opens no browser")
         }
         func awaitPendingRedirect() async throws -> BrowserOutcome {
-            try await completedLogin.authorize(uri, options: BrowserSessionOptions(redirectURI: URL(string: Provider.redirectUri)))
+            for await _ in gate.stream { break }
+            try Task.checkCancellation()
+            return try await completedLogin.authorize(uri, options: BrowserSessionOptions(redirectURI: URL(string: Provider.redirectUri)))
         }
     }
 
@@ -73,7 +79,16 @@ final class Scenario12ProcessDeathBrowserTest: ProviderConformance {
         let restored = await second.sessionState
         XCTAssertEqual(restored, .authorizing, "the app observes authorizing on cold start, never unauthenticated")
 
-        try await second.resumePendingAuthorization()
+        // The app does nothing more than hand over the redirect: `create` started finishing the
+        // sign-in (`spec/oauth-sdk-api.md` section 4), as the Android `create` does.
+        cold.deliver()
+        // A real provider answers over a real network, so this waits on the clock, bounded at 30 s.
+        var finished = false
+        for _ in 0..<3_000 {
+            if await second.sessionState == .authenticated { finished = true; break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertTrue(finished, "the cold-started process finished the sign-in on its own")
 
         let state = await second.sessionState
         XCTAssertEqual(state, .authenticated)

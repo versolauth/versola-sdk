@@ -32,20 +32,40 @@ final class OAuthClientTests: XCTestCase {
         func remember(nonce: String) { self.nonce = nonce }
     }
 
-    /// The browser of a process the redirect cold-started: nothing is opened, and what the system
-    /// delivered through `handleRedirect` is waiting.
+    /// The browser of a process the redirect cold-started: nothing is opened, and the redirect
+    /// the system delivers through `handleRedirect` arrives when the test calls `release()`, as
+    /// it does on a device, after the app has launched and observed `authorizing`.
     actor ColdStartBrowser: BrowserAuthorizationSession {
         private let outcome: BrowserOutcome
         private(set) var awaited = 0
+        private var released = false
+        private var waiting: [CheckedContinuation<Void, Never>] = []
         init(_ outcome: BrowserOutcome) { self.outcome = outcome }
         func authorize(_ uri: URL, options: BrowserSessionOptions) async throws -> BrowserOutcome {
             throw CancellationError()
         }
         func awaitPendingRedirect() async throws -> BrowserOutcome {
             awaited += 1
+            if !released { await withCheckedContinuation { waiting.append($0) } }
             return outcome
         }
+        func release() {
+            released = true
+            for continuation in waiting { continuation.resume() }
+            waiting = []
+        }
     }
+
+    /// Polls, yielding between looks; bounded, so a regression fails instead of hanging.
+    private func waitForState(_ expected: SessionState, of client: OAuthClient, file: StaticString = #filePath, line: UInt = #line) async {
+        for _ in 0..<2_000_000 {
+            if await client.sessionState == expected { return }
+            await Task.yield()
+        }
+        XCTFail("timed out waiting for \(expected)", file: file, line: line)
+    }
+
+    private func tokenRequests() -> Int { StubURLProtocol.requests.filter { $0.url?.path == "/token" }.count }
 
     private static func jwks() -> String {
         let x963 = key.publicKey.x963Representation
@@ -216,7 +236,11 @@ final class OAuthClientTests: XCTestCase {
         let before = await client.sessionState
         XCTAssertEqual(before, .authorizing, "the app observes authorizing on cold start, never unauthenticated")
 
-        try await client.resumePendingAuthorization()
+        // The app's call is optional now: `create` already started the same work, and this one
+        // joins it, so the single-use code is exchanged once.
+        let resume = Task { try await client.resumePendingAuthorization() }
+        await cold.release()
+        try await resume.value
 
         let state = await client.sessionState
         XCTAssertEqual(state, .authenticated)
@@ -226,12 +250,122 @@ final class OAuthClientTests: XCTestCase {
         XCTAssertEqual(token.value, "at")
         let awaited = await cold.awaited
         XCTAssertEqual(awaited, 1)
-        XCTAssertEqual(StubURLProtocol.requests.filter { $0.url?.path == "/token" }.count, 1)
+        XCTAssertEqual(tokenRequests(), 1)
+    }
+
+    func testCreateAloneFinishesTheSignInOfAColdStartedProcess() async throws {
+        let (client, cold) = try await coldStartedClient(redirect: "\(Self.redirect)?code=the-code&state=cold-state&iss=\(Self.issuer)")
+        let before = await client.sessionState
+        XCTAssertEqual(before, .authorizing, "the app observes authorizing on cold start, never unauthenticated")
+        XCTAssertEqual(tokenRequests(), 0, "no redirect has arrived, so nothing is exchanged")
+
+        // The app never calls resumePendingAuthorization(): the redirect is all it hands over.
+        await cold.release()
+        await waitForState(.authenticated, of: client)
+
+        let claims = await client.claims
+        XCTAssertEqual(claims?.subject, "alice")
+        let token = try await client.accessToken()
+        XCTAssertEqual(token.value, "at")
+        let awaited = await cold.awaited
+        XCTAssertEqual(awaited, 1)
+        XCTAssertEqual(tokenRequests(), 1)
+    }
+
+    func testResumePendingAuthorizationAfterTheBackgroundResumeFinishedDoesNotExchangeTheCodeAgain() async throws {
+        let (client, cold) = try await coldStartedClient(redirect: "\(Self.redirect)?code=the-code&state=cold-state&iss=\(Self.issuer)")
+        await cold.release()
+        await waitForState(.authenticated, of: client)
+
+        try await client.resumePendingAuthorization()
+
+        let state = await client.sessionState
+        XCTAssertEqual(state, .authenticated)
+        XCTAssertEqual(tokenRequests(), 1, "the code is single-use: the late call must not exchange it again")
+        let awaited = await cold.awaited
+        XCTAssertEqual(awaited, 1)
+    }
+
+    func testResumePendingAuthorizationCalledTwiceWhileTheBackgroundResumeRunsExchangesTheCodeOnce() async throws {
+        let (client, cold) = try await coldStartedClient(redirect: "\(Self.redirect)?code=the-code&state=cold-state&iss=\(Self.issuer)")
+
+        let first = Task { try await client.resumePendingAuthorization() }
+        let second = Task { try await client.resumePendingAuthorization() }
+        await cold.release()
+        try await first.value
+        try await second.value
+
+        let state = await client.sessionState
+        XCTAssertEqual(state, .authenticated)
+        XCTAssertEqual(tokenRequests(), 1)
+        let awaited = await cold.awaited
+        XCTAssertEqual(awaited, 1)
+    }
+
+    func testACancelledExplicitCallStopsWaitingAndLeavesTheBackgroundResumeRunning() async throws {
+        let (client, cold) = try await coldStartedClient(redirect: "\(Self.redirect)?code=the-code&state=cold-state&iss=\(Self.issuer)")
+
+        let explicit = Task { try await client.resumePendingAuthorization() }
+        explicit.cancel()
+        do {
+            try await explicit.value
+            XCTFail("expected a cancellation")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "\(error)")
+        }
+
+        await cold.release()
+        await waitForState(.authenticated, of: client)
+        XCTAssertEqual(tokenRequests(), 1)
+    }
+
+    func testASecondCreateReturnsTheSameClientAndDoesNotStartAnotherResume() async throws {
+        let (client, cold) = try await coldStartedClient(redirect: "\(Self.redirect)?code=the-code&state=cold-state&iss=\(Self.issuer)")
+
+        let again = try await OAuthClient.create(configuration: try configuration(), browser: cold, credentialStore: InMemoryCredentialStore(), pendingStore: InMemoryPendingAuthorizationStore())
+        XCTAssertTrue(again === client)
+        await cold.release()
+        await waitForState(.authenticated, of: client)
+
+        let awaited = await cold.awaited
+        XCTAssertEqual(awaited, 1)
+        XCTAssertEqual(tokenRequests(), 1)
+    }
+
+    func testCreateWithNothingPendingWaitsForNoRedirectAndMakesNoRequest() async throws {
+        let cold = ColdStartBrowser(.redirect(URL(string: "\(Self.redirect)?code=the-code&state=cold-state")!))
+        let client = try await OAuthClient.create(configuration: try configuration(), browser: cold, credentialStore: InMemoryCredentialStore(), pendingStore: InMemoryPendingAuthorizationStore())
+
+        let state = await client.sessionState
+        XCTAssertEqual(state, .unauthenticated)
+        for _ in 0..<1_000 { await Task.yield() }
+        let awaited = await cold.awaited
+        XCTAssertEqual(awaited, 0, "no authorization is pending, so nothing waits for a redirect")
+        XCTAssertTrue(StubURLProtocol.requests.isEmpty)
+    }
+
+    func testAFailedBackgroundResumeSettlesTheStateAndIsLoggedWithoutTheRedirectsSecrets() async throws {
+        let (client, cold) = try await coldStartedClient(redirect: "\(Self.redirect)?code=the-code&state=forged&iss=\(Self.issuer)")
+        await cold.release()
+
+        await waitForState(.unauthenticated, of: client)
+
+        XCTAssertEqual(tokenRequests(), 0)
+        for _ in 0..<2_000_000 where logger.warnings.isEmpty { await Task.yield() }
+        let lines = logger.warnings.filter { $0.contains("resuming the pending authorization failed") }
+        XCTAssertEqual(lines.count, 1)
+        for secret in ["the-code", "forged", "cold-state", "cold-nonce"] {
+            XCTAssertFalse(lines[0].contains(secret), "the log line must not carry \(secret)")
+        }
+        // The failure was logged, not rethrown anywhere the app could not catch it; a late
+        // explicit call finds nothing pending.
+        try await client.resumePendingAuthorization()
     }
 
     func testResumePendingAuthorizationRefusesARedirectWithAnotherStateBeforeAnyTokenRequest() async throws {
-        let (client, _) = try await coldStartedClient(redirect: "\(Self.redirect)?code=the-code&state=forged&iss=\(Self.issuer)")
+        let (client, cold) = try await coldStartedClient(redirect: "\(Self.redirect)?code=the-code&state=forged&iss=\(Self.issuer)")
 
+        await cold.release()
         do {
             try await client.resumePendingAuthorization()
             XCTFail("expected stateMismatch")
@@ -247,8 +381,9 @@ final class OAuthClientTests: XCTestCase {
     }
 
     func testResumePendingAuthorizationRefusesARedirectFromAnotherIssuerBeforeAnyTokenRequest() async throws {
-        let (client, _) = try await coldStartedClient(redirect: "\(Self.redirect)?code=the-code&state=cold-state&iss=https://evil.example.com")
+        let (client, cold) = try await coldStartedClient(redirect: "\(Self.redirect)?code=the-code&state=cold-state&iss=https://evil.example.com")
 
+        await cold.release()
         do {
             try await client.resumePendingAuthorization()
             XCTFail("expected issuerMismatch")
@@ -260,9 +395,10 @@ final class OAuthClientTests: XCTestCase {
     }
 
     func testResumePendingAuthorizationRefusesAnIdTokenWithTheWrongNonceAndPersistsNothing() async throws {
-        let (client, _) = try await coldStartedClient(redirect: "\(Self.redirect)?code=the-code&state=cold-state&iss=\(Self.issuer)")
+        let (client, cold) = try await coldStartedClient(redirect: "\(Self.redirect)?code=the-code&state=cold-state&iss=\(Self.issuer)")
         await browser.remember(nonce: "not-the-one")
 
+        await cold.release()
         do {
             try await client.resumePendingAuthorization()
             XCTFail("expected idTokenRejected")
