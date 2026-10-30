@@ -4,6 +4,7 @@ import androidx.datastore.core.DataStore
 import androidx.datastore.core.DataStoreFactory
 import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import java.io.File
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -122,19 +123,20 @@ public class DataStoreCredentialStore(
     }
 
     /**
-     * A [VersolaError] from the provider is already the right answer and passes through —
-     * `UnlockRequired` above all, which is a grant out of reach rather than a grant gone.
-     * Anything else means these bytes will not open again: an enrolment change invalidated
-     * the key, or the ciphertext was altered, and `spec/errors.md` treats both as a sign-out
-     * because they cannot be told apart.
+     * A [VersolaError] from the provider is already the right answer and passes through, as
+     * does a cancellation: the caller's scope ending says nothing about the grant, and
+     * reporting it as a lost one would have the coordinator wipe a session that is fine.
+     * Anything else is sorted by [StorageFailure]: a verdict on the bytes (a tampered
+     * ciphertext, an invalidated key) is a sign-out because `spec/errors.md` cannot tell the
+     * two apart, and every other failure leaves the grant in place and the caller to retry.
      */
     private suspend fun unwrapping(wrapped: ByteArray): ByteArray = try {
         keyProvider.unwrap(wrapped)
+    } catch (e: CancellationException) {
+        throw e
     } catch (e: VersolaError) {
         throw e
     } catch (e: Exception) {
-        throw VersolaError.Reauthenticate(
-            VersolaError.Reauthenticate.Reason.CredentialsInvalidated,
-        )
+        throw StorageFailure.toError(e)
     }
 }

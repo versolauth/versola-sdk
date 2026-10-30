@@ -1,10 +1,21 @@
 package versola.sdk.storage
 
 import java.io.File
+import java.io.IOException
+import java.security.InvalidKeyException
+import java.security.ProviderException
+import java.security.UnrecoverableKeyException
+import javax.crypto.AEADBadTagException
+import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.runTest
 import versola.oauth.core.VersolaError
 import org.junit.After
@@ -182,16 +193,128 @@ class DataStoreCredentialStoreTest {
     }
 
     @Test
-    fun `a grant that will not unwrap is a sign-out`() = runTest {
+    fun `a ciphertext that fails authentication is a sign-out`() = runTest {
         store.save(refreshToken.toByteArray())
-        keyProvider.unwrapFailure = IllegalStateException("key no longer decrypts this")
+        keyProvider.unwrapFailure = AEADBadTagException("Tag mismatch")
+
+        assertSignedOut { store.useRefreshToken { String(it) } }
+    }
+
+    @Test
+    fun `a key that cannot be recovered is a sign-out`() = runTest {
+        store.save(refreshToken.toByteArray())
+        keyProvider.unwrapFailure = UnrecoverableKeyException("key entry is unreadable")
+
+        assertSignedOut { store.useRefreshToken { String(it) } }
+    }
+
+    @Test
+    fun `a permanent failure wrapped by the provider is still a sign-out`() = runTest {
+        // Some providers wrap what the Keystore threw; the verdict is in the cause.
+        store.save(refreshToken.toByteArray())
+        keyProvider.unwrapFailure = IOException("unwrap failed", AEADBadTagException("Tag mismatch"))
+
+        assertSignedOut { store.useRefreshToken { String(it) } }
+    }
+
+    @Test
+    fun `every reader maps a permanent failure the same way`() = runTest {
+        store.save(refreshToken.toByteArray(), idToken)
+        store.savePendingRotation("idem-key-1")
+        keyProvider.unwrapFailure = AEADBadTagException("Tag mismatch")
+
+        assertSignedOut { store.rawIdToken() }
+        assertSignedOut { store.pendingRotation() }
+    }
+
+    @Test
+    fun `a failure that is no verdict on the key is recoverable and leaves the grant in place`() = runTest {
+        // One OEM Keystore hiccup must not end the session: the grant is intact and the next
+        // attempt will most likely open it.
+        store.save(refreshToken.toByteArray(), idToken)
+        val failures = listOf(
+            IllegalStateException("Keystore operation failed"),
+            ProviderException("Failed to communicate with the keystore service"),
+            IOException("the keystore daemon is not ready"),
+            InvalidKeyException("Keystore operation failed"),
+        )
+
+        for (failure in failures) {
+            keyProvider.unwrapFailure = failure
+            try {
+                store.useRefreshToken { String(it) }
+                fail("${failure.message}: an unreadable grant must not read as no grant")
+            } catch (e: VersolaError.Recoverable) {
+                assertTrue("${failure.message}: $e", e.reason is VersolaError.Recoverable.Cause.Network)
+                assertSame(failure, e.cause)
+            }
+            assertTrue(store.hasGrant())
+        }
+
+        keyProvider.unwrapFailure = null
+        assertEquals("the grant opens again once the key answers", refreshToken, store.useRefreshToken { String(it) })
+        assertEquals(idToken, store.rawIdToken())
+    }
+
+    @Test
+    fun `the cause names the failure class and nothing the failure said`() = runTest {
+        // The message of a Keystore exception is the provider's to write; the error detail
+        // that reaches an app's log carries the class alone.
+        store.save(refreshToken.toByteArray())
+        keyProvider.unwrapFailure = ProviderException("blob=$refreshToken")
 
         try {
             store.useRefreshToken { String(it) }
-            fail("an unreadable grant must not read as no grant")
-        } catch (e: VersolaError.Reauthenticate) {
-            assertSame(VersolaError.Reauthenticate.Reason.CredentialsInvalidated, e.reason)
+            fail("expected Recoverable")
+        } catch (e: VersolaError.Recoverable) {
+            assertFalse(e.toString().contains(refreshToken))
+            assertEquals("storage key unavailable: ProviderException", (e.reason as VersolaError.Recoverable.Cause.Network).detail)
         }
+    }
+
+    @Test
+    fun `a cancelled caller is a cancellation, not a sign-out`() = runTest {
+        // The caller's scope was cancelled while the key was being used: nothing about the
+        // grant changed, and reporting it as invalidated makes the coordinator wipe it.
+        store.save(refreshToken.toByteArray())
+        keyProvider.unwrapFailure = CancellationException("the caller's scope ended")
+
+        try {
+            store.useRefreshToken { String(it) }
+            fail("cancellation must propagate")
+        } catch (e: CancellationException) {
+            assertEquals("the caller's scope ended", e.message)
+        }
+        assertTrue(store.hasGrant())
+    }
+
+    @Test
+    fun `cancelling a caller suspended in the unwrap leaves the grant readable`() = runTest {
+        store.save(refreshToken.toByteArray())
+        val entered = CompletableDeferred<Unit>()
+        keyProvider.onUnwrap = {
+            entered.complete(Unit)
+            awaitCancellation()
+        }
+
+        var thrown: Throwable? = null
+        val caller = async(start = CoroutineStart.UNDISPATCHED) {
+            try {
+                store.useRefreshToken { String(it) }
+            } catch (e: Throwable) {
+                thrown = e
+                throw e
+            }
+        }
+        withContext(Dispatchers.Default) { entered.await() }
+        caller.cancel()
+        caller.join()
+
+        // What the coordinator sees: a cancellation passes through and leaves the grant alone;
+        // a sign-out would wipe it and destroy the DPoP key.
+        assertTrue("the unwrap's cancellation reached the caller as itself: $thrown", thrown is CancellationException)
+        keyProvider.onUnwrap = null
+        assertEquals(refreshToken, store.useRefreshToken { String(it) })
     }
 
     @Test
@@ -247,5 +370,14 @@ class DataStoreCredentialStoreTest {
         assertSame(first, second)
         first.save("token".toByteArray(), null)
         assertTrue(second.hasGrant())
+    }
+
+    private suspend fun assertSignedOut(read: suspend () -> Unit) {
+        try {
+            read()
+            fail("an unreadable grant must not read as no grant")
+        } catch (e: VersolaError.Reauthenticate) {
+            assertSame(VersolaError.Reauthenticate.Reason.CredentialsInvalidated, e.reason)
+        }
     }
 }

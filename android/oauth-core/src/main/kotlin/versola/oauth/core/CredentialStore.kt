@@ -39,9 +39,11 @@ public interface CredentialStore {
      * ask [hasGrant] first.
      *
      * Throws [VersolaError.Reauthenticate] with [VersolaError.Reauthenticate.Reason.CredentialsInvalidated]
-     * when the stored bytes will not unwrap, and propagates
-     * [VersolaError.Recoverable.Cause.UnlockRequired] unchanged: one is a grant that is gone,
-     * the other a grant that is merely out of reach.
+     * when the stored bytes can never be unwrapped again (an invalidated key, a ciphertext that
+     * fails authentication), and propagates [VersolaError.Recoverable.Cause.UnlockRequired]
+     * unchanged: one is a grant that is gone, the other a grant that is merely out of reach.
+     * Any other failure of the key is [VersolaError.Recoverable] and leaves the grant stored,
+     * and a cancellation propagates as itself: neither says anything about the grant.
      */
     public suspend fun <T> useRefreshToken(block: suspend (ByteArray) -> T): T?
 
