@@ -166,10 +166,10 @@ final class PushedAuthorizationStarterTests: XCTestCase {
                                http: RecordingHTTP.json(400, #"{"error":""}"#))
     }
 
-    func testAServerSideFailureIsRecoverableNetwork() async {
+    func testAServerSideFailureIsRecoverableServerWithItsStatus() async {
         for status in [500, 503, 408, 429] {
             await assertStartFails(
-                .recoverable(.network(detail: "PAR endpoint returned HTTP \(status)", attempts: 1, elapsedMillis: 0)),
+                .recoverable(.server(status: status, retryAfterMillis: nil, attempts: 1, elapsedMillis: 0)),
                 policy: .required, metadata: AuthzKit.metadata(parEndpoint: parEndpoint),
                 http: RecordingHTTP.json(status, ""))
         }

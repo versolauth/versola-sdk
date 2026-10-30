@@ -62,8 +62,9 @@ final class Scenario30LogoutTest: ProviderConformance {
         XCTAssertFalse(outcome.sessionEnded)
         XCTAssertFalse(outcome.tokenRevoked)
         let attempts = network.matching("POST", revocationPath)
-        XCTAssertFalse(attempts.isEmpty, "revocation attempts: \(attempts.count)")
-        XCTAssertLessThanOrEqual(attempts.count, client.configuration.retryPolicy.maxAttemptsPerOrigin, "revocation attempts: \(attempts.count)")
+        // Exactly the allowance: revocation is repeated (`spec/retry-policy.md`, operations), so one
+        // request is a failure of this scenario, and more than the allowance is another.
+        XCTAssertEqual(attempts.count, client.configuration.retryPolicy.maxAttemptsPerOrigin, "revocation attempts: \(attempts.count)")
         for attempt in attempts { assertRevocationRequest(attempt) }
         await assertWiped(client)
     }

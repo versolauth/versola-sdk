@@ -11,8 +11,10 @@ import Foundation
 /// Pushing changes only what crosses the browser. The verifier stays on the pending request and
 /// the grant carries no extension, so the code is redeemed at the token endpoint as it would be
 /// for the plain request. A package client has no credential, so the push carries none: the form
-/// is exactly what the query would have been, `client_id` included. Nothing here retries; the
-/// caller's budget decides that, and the `HTTPClient` contract is that redirects are not followed.
+/// is exactly what the query would have been, `client_id` included. Nothing here retries itself; the
+/// operation's budget decides that (a push is repeated: a second one creates a second `request_uri`
+/// and the first expires unused, so nothing is spent), and the `HTTPClient` contract is that
+/// redirects are not followed.
 package struct PushedAuthorizationStarter: AuthorizationStarter {
     private let configuration: CoreConfiguration
     private let httpClient: HTTPClient
@@ -74,17 +76,22 @@ package struct PushedAuthorizationStarter: AuthorizationStarter {
             headers: ["Accept": "application/json", "Content-Type": "application/x-www-form-urlencoded"],
             body: FormEncoding.body(request.formParameters())
         )
-        let response: HTTPResponse
-        do {
-            response = try await httpClient.send(httpRequest)
-        } catch is CancellationError {
-            throw CancellationError()
-        } catch let error as OAuthError {
-            throw error
-        } catch {
-            throw OAuthError.recoverable(.network(
-                detail: "pushed authorization request failed: \(type(of: error))", attempts: 1, elapsedMillis: 0
-            ))
+        let httpClient = self.httpClient
+        let response: HTTPResponse = try await OperationBudget.run(origin: DpopOrigin.of(url)) {
+            let response: HTTPResponse
+            do {
+                response = try await httpClient.send(httpRequest)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch let error as OAuthError {
+                throw error
+            } catch {
+                throw OAuthError.recoverable(.network(
+                    detail: "pushed authorization request failed: \(type(of: error))", attempts: 1, elapsedMillis: 0
+                ))
+            }
+            if let failure = ServerFailure.error(for: response) { throw failure }
+            return response
         }
         return try interpret(status: response.statusCode, body: response.body)
     }
@@ -100,12 +107,6 @@ package struct PushedAuthorizationStarter: AuthorizationStarter {
            let error = try? JSONDecoder().decode(ErrorPayload.self, from: body),
            let code = error.error, !code.isEmpty {
             throw OAuthError.configuration(.authorizationRejected(code: code, description: error.errorDescription))
-        }
-        // The statuses the retry policy already treats as the provider having a bad moment.
-        if status >= 500 || status == 408 || status == 429 {
-            throw OAuthError.recoverable(.network(
-                detail: "PAR endpoint returned HTTP \(status)", attempts: 1, elapsedMillis: 0
-            ))
         }
         throw OAuthError.configuration(.invalidConfiguration(detail: "PAR endpoint answered \(status)"))
     }
