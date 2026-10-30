@@ -131,7 +131,8 @@ jobs:
   # whose Chrome lacks Auth Tab; the log says so. conformance/README.md ("The browser leg").
   browser-leg:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    # Two attempts at the emulator step (below), each up to fifteen minutes with the build.
+    timeout-minutes: 50
     defaults:
       run:
         working-directory: android
@@ -167,33 +168,140 @@ jobs:
           for _ in $(seq 1 90); do curl -fs http://localhost:8080/realms/conformance/.well-known/openid-configuration && exit 0; sleep 2; done
           echo "keycloak not ready after 180 s" >&2; docker compose logs --no-color | tail -50; exit 1
 
+      # What a lost emulator leaves behind. Many runs end in `adb: device 'emulator-5554'
+      # not found` a minute or two into the instrumented run, with nothing in the step log that
+      # says why (the emulator process simply goes away), so the runner is sampled from here
+      # to the end of the job: memory and the biggest processes every few seconds, Keycloak's
+      # container, and the emulator's logcat (re-attached after a restart, so the second attempt
+      # below is in the same file). The `device offline` lines the emulator action prints while
+      # the AVD boots are its own poll and appear in green runs too; they are not the failure.
+      - name: Sample the runner while the emulator runs
+        run: |
+          mkdir -p "$RUNNER_TEMP/diag"
+          cat > "$RUNNER_TEMP/sample.sh" <<'EOF'
+          while :; do
+            { date -u +%T; free -m | sed -n 2p; cat /proc/loadavg
+              ps -eo pid,rss,cputimes,args --sort=-rss | head -6 | cut -c1-150
+              docker stats --no-stream --format "{{.Name}} cpu={{.CPUPerc}} mem={{.MemUsage}}"; echo; } >> "$RUNNER_TEMP/diag/samples.log" 2>&1
+            sleep 5
+          done
+          EOF
+          # adb is not on PATH yet (the emulator action adds it), hence the full path. The loop
+          # records the device state whenever it changes, follows the logcat while the device is
+          # up, and, when a device that was up goes offline while its emulator process is still
+          # running, asks adb to reconnect it once: whether the guest answers afterwards says if
+          # the emulator or only the adb transport was lost.
+          cat > "$RUNNER_TEMP/logcat.sh" <<'EOF'
+          adb="$ANDROID_HOME/platform-tools/adb"
+          last=""; seen=0; offline=0
+          while :; do
+            state=$("$adb" -s emulator-5554 get-state 2>&1)
+            if [ "$state" != "$last" ]; then echo "$(date -u +%T) $state" >> "$RUNNER_TEMP/diag/adbstate.log"; last="$state"; fi
+            case "$state" in
+              device)
+                seen=1; offline=0
+                echo "--- logcat attached $(date -u +%T)" >> "$RUNNER_TEMP/diag/logcat.txt"
+                "$adb" -s emulator-5554 logcat -v threadtime >> "$RUNNER_TEMP/diag/logcat.txt" 2>&1 ;;
+              *offline*)
+                offline=$((offline + 1))
+                if [ "$seen" = 1 ] && [ "$offline" = 3 ]; then
+                  "$adb" reconnect offline >> "$RUNNER_TEMP/diag/adbstate.log" 2>&1
+                  sleep 3
+                  echo "$(date -u +%T) after reconnect: $("$adb" devices | tail -n +2 | head -1) boot_completed=$(timeout 5 "$adb" -s emulator-5554 shell getprop sys.boot_completed 2>&1)" >> "$RUNNER_TEMP/diag/adbstate.log"
+                fi ;;
+              *) seen=0; offline=0 ;;
+            esac
+            sleep 2
+          done
+          EOF
+          nohup bash "$RUNNER_TEMP/sample.sh" > /dev/null 2>&1 &
+          nohup bash "$RUNNER_TEMP/logcat.sh" > /dev/null 2>&1 &
+
+      # Two attempts, the first allowed to fail. The emulator on a hosted runner is lost
+      # often enough that the red runs were the emulator and not the SDK; a fresh
+      # emulator is the only recovery, so the same step runs again, once, and the job is red only
+      # if both attempts are. The retry cannot hide a real regression: a deterministic failure
+      # fails both attempts and the job stays red (at twice the time). `outcome` is the result
+      # before `continue-on-error` turns it into a pass.
       - name: The browser leg on an emulator
+        id: leg1
+        continue-on-error: true
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: 36
           arch: x86_64
           target: google_apis
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot -show-kernel
           disable-animations: true
+          disable-spellchecker: true
           working-directory: android
           script: |
             adb reverse tcp:8080 tcp:8080
             ./gradlew :conformance-browser:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.issuer=http://localhost:8080/realms/conformance
+
+      # Between the attempts: say what state the first one left (is the emulator process gone,
+      # or alive and offline?), keep its results (the second overwrites the build directory),
+      # and clear the emulator and the adb server so the second one gets port 5554 and a new AVD.
+      - name: What the first attempt left behind
+        if: steps.leg1.outcome == 'failure'
+        run: |
+          mkdir -p "$RUNNER_TEMP/diag/attempt1"
+          echo "### adb devices"; adb devices -l || true
+          echo "### emulator processes"; pgrep -af 'qemu-system|emulator' | cut -c1-200 || true
+          echo "### free -m"; free -m
+          echo "### kernel log: kills, OOM, crashes"; sudo dmesg 2>&1 | grep -iE 'out of memory|oom|killed process|segfault|qemu|emulator' | tail -30 || true
+          cp -r conformance-browser/build/outputs/androidTest-results "$RUNNER_TEMP/diag/attempt1/" 2>/dev/null || true
+          cp -r conformance-browser/build/reports/androidTests "$RUNNER_TEMP/diag/attempt1/" 2>/dev/null || true
+          adb kill-server || true
+          pkill -f qemu-system || true
+          sleep 3
+
+      - name: The browser leg on an emulator, second attempt
+        if: steps.leg1.outcome == 'failure'
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 36
+          arch: x86_64
+          target: google_apis
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot -show-kernel
+          disable-animations: true
+          disable-spellchecker: true
+          working-directory: android
+          script: |
+            adb reverse tcp:8080 tcp:8080
+            ./gradlew :conformance-browser:connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.issuer=http://localhost:8080/realms/conformance
+
+      - name: Runner diagnostics
+        if: always()
+        run: |
+          echo "### first attempt: ${{ steps.leg1.outcome }}"
+          echo "### free -m"; free -m
+          echo "### kernel log: kills, OOM, crashes"; sudo dmesg 2>&1 | grep -iE 'out of memory|oom|killed process|segfault|qemu|emulator' | tail -30 || true
+          echo "### dmesg tail"; sudo dmesg 2>&1 | tee "$RUNNER_TEMP/diag/dmesg.txt" | tail -50
+          echo "### biggest processes"; ps aux --sort=-rss | head -10 | cut -c1-200
+          echo "### docker stats"; docker stats --no-stream || true
+          echo "### samples, last 60 lines"; tail -60 "$RUNNER_TEMP/diag/samples.log" || true
+          cp -r /tmp/android-runner "$RUNNER_TEMP/diag/android-runner" 2>/dev/null || true
+          cp /tmp/adb*.log "$RUNNER_TEMP/diag/" 2>/dev/null || true
+          gzip -f "$RUNNER_TEMP/diag/logcat.txt" 2>/dev/null || true
 
       - name: Provider logs
         if: always()
         working-directory: conformance/providers/keycloak
         run: docker compose logs --no-color > provider.log 2>&1 || true
 
-      - name: Upload test reports and provider logs
+      - name: Upload test reports, provider logs and runner diagnostics
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: browser-leg
+          # A re-run of the job uploads under the same name.
+          overwrite: true
           path: |
             android/conformance-browser/build/reports/androidTests
             android/conformance-browser/build/outputs/androidTest-results
             conformance/providers/keycloak/provider.log
+            ${{ runner.temp }}/diag
           if-no-files-found: ignore
 
   scenarios:
