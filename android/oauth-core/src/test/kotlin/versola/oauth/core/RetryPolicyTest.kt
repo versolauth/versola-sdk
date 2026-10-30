@@ -466,16 +466,6 @@ class RetryPolicyTest {
         assertEquals(3, attempts)
     }
 
-    @Test
-    fun `a request made without retries stays single whatever budget the caller is under`() = runTest {
-        val scope = RetryScope(RetryPolicy(), { testScheduler.currentTime }, Random(1))
-        var attempts = 0
-
-        failure { scope.operation { withoutRetries { retrying(ORIGIN) { attempts++; throw server(500) } } } }
-
-        assertEquals(1, attempts)
-    }
-
     private fun TestScope.budget(
         policy: RetryPolicy = RetryPolicy(),
         random: Random = Random(1),

@@ -347,14 +347,11 @@ internal class RetryCooldown(private val clock: () -> Long) {
 
 /**
  * Carries the operation's [RetryBudget] down the coroutine tree, so a client reaches it without a
- * parameter. A null budget is an operation that is deliberately single-attempt ([withoutRetries]).
+ * parameter.
  */
-internal class RetryBudgetElement(val budget: RetryBudget?) : AbstractCoroutineContextElement(Key) {
+internal class RetryBudgetElement(val budget: RetryBudget) : AbstractCoroutineContextElement(Key) {
     companion object Key : CoroutineContext.Key<RetryBudgetElement>
 }
-
-/** Runs [block] so that every request in it is made once, whatever budget the caller is under. */
-internal suspend fun <T> withoutRetries(block: suspend () -> T): T = withContext(RetryBudgetElement(null)) { block() }
 
 /** Runs [block] with its duration left out of the current operation's budget, if there is one. */
 internal suspend fun <T> outsideRetryBudget(block: suspend () -> T): T {

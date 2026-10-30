@@ -112,13 +112,13 @@ discovery that failed twice leaves less for the push.
 
 ### Order of work
 
-An operation does everything repeatable **before** its one non-repeatable step. `login()` completes
-discovery and the push, and warms the JWKS the ID token will be verified against, before the
-browser opens; the code exchange then needs no network request but its own. A JWKS fetch that
-fails only after the code was redeemed would cost the user a login that the provider already
-completed, so a warm-up success removes that window. The warm-up is one request with no retries
-and a failure is not an error of its own: the validation fetches again, under the budget. The time
-the user spends in the browser is not counted against `totalBudget`.
+`login()` has one step that cannot be repeated, the code exchange, and a request that can fail after
+it: the key set the ID token is verified against, when it is not cached yet. That fetch is repeated
+under the budget like any other (three attempts and the backoff), which is what covers the window
+in which a login the provider already completed would otherwise be lost. Fetching the key set before
+the browser opens was considered and refused: it changes when the key set is requested (scenarios 24
+and 26 assert that validation, and a rejection before it, decide that), for a window the budget
+already covers. The time the user spends in the browser is not counted against `totalBudget`.
 
 ### `Retry-After`
 

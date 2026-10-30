@@ -268,24 +268,8 @@ public class SessionCoordinator(
             warnedOfflineAccess = true
             logger?.warn("the provider advertises offline_access and the configured scopes omit it; a refresh token may not be issued")
         }
-        // Everything repeatable is done before the one step that is not: the key set the ID token
-        // will be checked against is fetched now, with no retries of its own, so that the code
-        // exchange is not followed by a fetch that fails and costs the user a login the provider
-        // already completed. A failure here is ignored: validation fetches again under the budget.
-        prepareValidator()
         val grant = flow.authorize(requested, acrValues, maxAge, parameters, ephemeralBrowser)
         finishLogin(grant, maxAge)
-    }
-
-    private suspend fun prepareValidator() {
-        val validator = idTokenValidator ?: return
-        try {
-            withoutRetries { validator.prepare() }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: VersolaError) {
-            logger?.warn("login: the provider's keys could not be fetched ahead of the browser (${e.message}); they are fetched again after it")
-        }
     }
 
     /**

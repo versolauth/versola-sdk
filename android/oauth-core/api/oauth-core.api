@@ -220,13 +220,11 @@ public final class versola/oauth/core/IdTokenRejection : java/lang/Enum {
 }
 
 public abstract interface class versola/oauth/core/IdTokenValidator {
-	public fun prepare (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun validate (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Long;Lversola/oauth/core/IdTokenClaims;Ljava/time/Instant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun validate$default (Lversola/oauth/core/IdTokenValidator;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Long;Lversola/oauth/core/IdTokenClaims;Ljava/time/Instant;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 }
 
 public final class versola/oauth/core/IdTokenValidator$DefaultImpls {
-	public static fun prepare (Lversola/oauth/core/IdTokenValidator;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun validate$default (Lversola/oauth/core/IdTokenValidator;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/lang/Long;Lversola/oauth/core/IdTokenClaims;Ljava/time/Instant;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 }
 

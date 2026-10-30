@@ -301,14 +301,6 @@ class SessionCoordinatorTest {
     private class RecordingValidator : IdTokenValidator {
         val calls = mutableListOf<List<Any?>>()
         var refusal: IdTokenRejection? = null
-        var prepared = 0
-        var prepareFailure: (() -> VersolaError)? = null
-
-        override suspend fun prepare() {
-            prepared++
-            prepareFailure?.let { throw it() }
-        }
-
         override suspend fun validate(idToken: String, expectedNonce: String?, accessToken: String?, maxAge: Long?, previous: IdTokenClaims?, serverTime: java.time.Instant?): IdTokenClaims {
             calls += listOf(idToken, expectedNonce, accessToken, maxAge, previous, serverTime)
             refusal?.let { throw VersolaError.Configuration(VersolaError.Configuration.Detail.IdTokenRejected(it)) }
@@ -1200,29 +1192,6 @@ class SessionCoordinatorTest {
 
         assertEquals(1, tokenClient.exchangeCalls.size)
         assertEquals(503, (error.reason as VersolaError.Recoverable.Cause.Server).status)
-    }
-
-    @Test
-    fun `the keys the ID token needs are fetched before the browser opens, and a failure there is ignored`() = runTest {
-        val validator = RecordingValidator()
-        val (coordinator, tokenClient, _) = generic(validator = validator)
-        tokenClient.exchangeResult = { issued(idToken = "id-token") }
-
-        coordinator.login(setOf("openid"))
-
-        assertEquals(1, validator.prepared)
-    }
-
-    @Test
-    fun `a failing key fetch ahead of the browser does not fail the login`() = runTest {
-        val validator = RecordingValidator().also { it.prepareFailure = { serverFailure(503) } }
-        val (coordinator, tokenClient, _) = generic(validator = validator)
-        tokenClient.exchangeResult = { issued(idToken = "id-token") }
-
-        coordinator.login(setOf("openid"))
-
-        assertEquals(1, validator.prepared)
-        assertEquals(1, tokenClient.exchangeCalls.size)
     }
 
     @Test

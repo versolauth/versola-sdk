@@ -13,7 +13,7 @@ steps:
   - actor: harness
     action: Answer the refresh with 429 and Retry-After 30.
   - actor: app
-    action: Call accessToken(), and then call it again, userInfo() and logout() within the next second.
+    action: Call accessToken() (refresh() where the access token has not yet expired), and then call it again, userInfo() and logout() within the next second.
   - actor: harness
     action: Wait until thirty seconds have passed since the first answer, then forward requests again.
   - actor: app
