@@ -349,7 +349,7 @@ package actor SessionCoordinator: AccessTokenSource {
             // than overwriting it with an absence. The ID token stored beside it is the previous
             // one: it is replaced only by one that passed (below).
             if let rotated = issued.refreshToken {
-                try await credentialStore.save(refreshToken: rotated, rawIdToken: try await credentialStore.rawIdToken())
+                try await credentialStore.saveRefreshed(refreshToken: rotated, rawIdToken: nil)
             }
             // Step 3: the slot named the generation just consumed, so it goes with the rotation,
             // not after the validation: a process killed in between would replay the old key
@@ -369,11 +369,10 @@ package actor SessionCoordinator: AccessTokenSource {
             if epoch != startedIn { throw WipedMeanwhile() }
             if let idToken = issued.idToken {
                 if let refreshedClaims { claims = refreshedClaims }
-                // Stored whether or not the refresh token rotated: a provider that renews the ID
-                // token on every refresh and keeps the refresh token is the common case.
-                let current: String?
-                if let rotated = issued.refreshToken { current = rotated } else { current = try await credentialStore.refreshToken() }
-                if let current { try await credentialStore.save(refreshToken: current, rawIdToken: idToken) }
+                // The ID token that passed, stored beside whatever refresh token is current: a
+                // provider that renews it on every refresh and keeps the refresh token is the
+                // common case. Reads and deletes nothing else (`CredentialStore.saveRefreshed`).
+                try await credentialStore.saveRefreshed(refreshToken: nil, rawIdToken: idToken)
             }
             cachedAccessToken = Cached(response: issued, receivedAt: clock.uptime())
             await flow.setState(.authenticated)
@@ -466,13 +465,14 @@ package actor SessionCoordinator: AccessTokenSource {
         }
     }
 
+    /// Removes the previous grant a token-less login replaces. Not `wipe()`'s teardown: the key
+    /// and the nonce caches are not the old grant's. The exchange that just succeeded was signed
+    /// with the installation's one DPoP key, so the new access token is bound to it, and
+    /// destroying it here would leave a token no proof can match.
     private func clearStoredGrant() async {
         epoch += 1
         cachedAccessToken = nil
         try? await credentialStore.clear()
-        do { try await onCredentialsWiped() } catch {
-            logger?.warn("login: teardown of the previous grant's key or nonce caches failed")
-        }
     }
 
     private func warnIfNoExpiry(_ response: TokenResponse) {

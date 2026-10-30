@@ -67,9 +67,10 @@ or without refresh tokens, protected origins, DPoP against a provider that requi
 share.
 
 `applies_to` lists the platforms that meet every assertion of a scenario. A platform that lacks a
-surface the assertions need leaves it out (scenario 32 and Flutter, which has no authenticated
-client: `../oauth-sdk-api.md` section 10), or, when only part of a scenario needs the surface, the
-scenario's `notes` say which part is the native facades' (scenario 24).
+surface the assertions need leaves it out, or, when only part of a scenario needs the surface, the
+scenario's `notes` say which part is the native facades' (scenarios 24 and 33 and the replay of a
+proof on Flutter, which has the authenticated client as `httpClient()`, `../oauth-sdk-api.md`
+section 10, but no way to reach the SDK's own request).
 
 ## Fault injection
 

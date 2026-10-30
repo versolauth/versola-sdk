@@ -425,6 +425,43 @@ final class UserInfoClientTests: XCTestCase {
         XCTAssertEqual(renewals, 1)
     }
 
+    func testAnInvalidProofFromASkewedDeviceClockIsRetriedOnceWithTheServersTimeAndNoRenewal() async throws {
+        let serverTime = Date(timeIntervalSince1970: 1_700_000_000)
+        let dateHeader = ["Date": HTTPDate.format(serverTime)]
+        let stub = JoseStubHTTP()
+        await stub.enqueue("/userinfo", status: 401, headers: dateHeader.merging(["WWW-Authenticate": #"DPoP error="invalid_dpop_proof", algs="ES256""#]) { $1 })
+        await stub.enqueue("/userinfo", headers: json.merging(dateHeader) { $1 }, text: #"{"sub":"user-1"}"#)
+        let dpop = DpopProofFactory(key: SoftwareDpopKey(), clock: Clock(now: { serverTime.addingTimeInterval(600) }))
+        let source = JoseTokenSource([bound])
+
+        let info = try await client(stub, dpop: dpop).fetch(tokens: source, expectedSubject: "user-1")
+
+        XCTAssertEqual(info.subject, "user-1")
+        let requests = await stub.requests
+        XCTAssertEqual(requests.count, 2)
+        let iats = requests.map { JoseTestTokens.decode($0.headers["DPoP"]!).claims["iat"] as? Int }
+        XCTAssertEqual(iats, [1_700_000_600, 1_700_000_000])
+        let renewals = await source.renewals
+        XCTAssertEqual(renewals, 0, "a refresh rotates the grant and cannot repair a proof")
+    }
+
+    func testASecondInvalidProofIsCredentialsInvalidatedAfterExactlyTwoRequests() async {
+        let stub = JoseStubHTTP()
+        let challenge = ["WWW-Authenticate": #"DPoP error="invalid_dpop_proof""#]
+        await stub.enqueue("/userinfo", status: 401, headers: challenge)
+        await stub.enqueue("/userinfo", status: 401, headers: challenge)
+        await stub.enqueue("/userinfo", headers: json, text: #"{"sub":"user-1"}"#)  // a third attempt would be seen
+        let source = JoseTokenSource([bound])
+
+        let error = await joseThrown { _ = try await client(stub, dpop: DpopProofFactory(key: SoftwareDpopKey())).fetch(tokens: source, expectedSubject: "user-1") }
+
+        XCTAssertEqual(error as? OAuthError, .reauthenticate(.credentialsInvalidated))
+        let count = await stub.requestCount()
+        XCTAssertEqual(count, 2)
+        let renewals = await source.renewals
+        XCTAssertEqual(renewals, 0)
+    }
+
     func testDpopBoundTokenWithoutAProofSourceIsInvalidConfigurationAndNothingIsSent() async {
         let stub = JoseStubHTTP()
         let error = await joseThrown { _ = try await client(stub).fetch(tokens: JoseTokenSource([bound]), expectedSubject: "user-1") }

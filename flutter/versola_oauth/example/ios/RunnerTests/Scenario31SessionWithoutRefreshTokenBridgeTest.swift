@@ -10,7 +10,7 @@ import XCTest
 /// the test, and the wait is bounded (up to 40 polls, one real second apart), not fixed
 /// (`Scenario31SessionWithoutRefreshTokenTest`).
 ///
-/// Flutter has no authenticated session to observe the expiry through, so the two paths that ask
+/// The tests ask the SDK directly rather than through `httpRequest`, so the two paths that ask
 /// the SDK for a live access token are the two that take its place: `accessToken()` in the first
 /// test, `userInfo()` (which needs a live token as well) in the second.
 final class Scenario31SessionWithoutRefreshTokenBridgeTest: BridgeConformance {

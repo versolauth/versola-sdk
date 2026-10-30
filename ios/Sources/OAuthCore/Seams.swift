@@ -101,6 +101,15 @@ package protocol CredentialStore: Sendable {
     func rawIdToken() async throws -> String?
     /// Writes the new grant over the old one atomically: a crash between the two cannot lose it.
     func save(refreshToken: String, rawIdToken: String?) async throws
+    /// Persists the answer of a *refresh*, on top of what a login stored: the rotated refresh
+    /// token when the provider issued one, the ID token when the response carried one, and
+    /// whichever is nil is left as it is. A refresh response may omit either (OpenID Connect
+    /// Core 12.2 permits no `id_token`; a provider that does not rotate sends no new
+    /// `refresh_token`), and the stored ID token exists to be replayed as `id_token_hint` at
+    /// logout and to restore claims after a cold start, where the last one known is the right one.
+    /// The refresh token is written first: if the process dies between the two writes the grant
+    /// is the new one, which is the part that cannot be recovered. Never deletes anything.
+    func saveRefreshed(refreshToken: String?, rawIdToken: String?) async throws
     /// The rotation slot (`spec/state-machine.md`, `Refreshing`): the idempotency key of the
     /// refresh in flight, persisted before the request and cleared after the new token is
     /// stored, so a process death between the two replays the same rotation. nil clears it.
@@ -161,6 +170,11 @@ package protocol DpopProofSource: Sendable {
     func proof(method: String, url: URL, nonce: String?, accessToken: String?) async throws -> String
     /// A nonce the origin demanded (`use_dpop_nonce`), remembered per origin.
     func observe(nonce: String, origin: String) async
+    /// The `Date` header of any response from a server the proofs are for, successful or not:
+    /// the server's clock, from which the next proof's `iat` is corrected. Called before a
+    /// retry is minted, so the single `invalid_dpop_proof` retry carries the corrected time.
+    /// `age` is the response's `Age` header: a cached answer's `Date` is not the server's now.
+    func observe(serverDate: String?, age: String?) async
     func nonce(for origin: String) async -> String?
     func clearNonces() async
 }

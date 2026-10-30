@@ -183,6 +183,7 @@ final class TokenClientTests: XCTestCase {
             return "proof-\(minted.count)"
         }
         func observe(nonce: String, origin: String) async { nonces[origin] = nonce }
+        func observe(serverDate: String?, age: String?) async {}
         func nonce(for origin: String) async -> String? { nonces[origin] }
         func clearNonces() async { nonces.removeAll() }
     }
@@ -269,6 +270,76 @@ final class TokenClientTests: XCTestCase {
         }
         let attempts = await http.requests.count
         XCTAssertEqual(attempts, 2)
+    }
+
+    /// A server that verifies `iat` within `leeway` of its own clock and says what time it is.
+    private func skewCheckingServer(serverTime: Date, leeway: TimeInterval = 60) -> RecordingHTTP {
+        RecordingHTTP { request in
+            let dateHeader = ["Date": HTTPDate.format(serverTime)]
+            guard let proof = request.headers["DPoP"], let iat = JoseTestTokens.decode(proof).claims["iat"] as? Int,
+                  abs(TimeInterval(iat) - serverTime.timeIntervalSince1970) <= leeway
+            else {
+                return HTTPResponse(statusCode: 400, headers: dateHeader, body: Data(#"{"error":"invalid_dpop_proof"}"#.utf8))
+            }
+            return HTTPResponse(statusCode: 200, headers: dateHeader, body: Data(#"{"access_token":"at","token_type":"DPoP","expires_in":300,"refresh_token":"rt"}"#.utf8))
+        }
+    }
+
+    func testAnInvalidProofFromAFastDeviceClockIsRetriedOnceWithTheServersTimeAndSucceeds() async throws {
+        let server = Date(timeIntervalSince1970: 1_700_000_000)
+        let device = server.addingTimeInterval(600)
+        let http = skewCheckingServer(serverTime: server)
+        let factory = DpopProofFactory(key: SoftwareDpopKey(), clock: Clock(now: { device }))
+
+        let response = try await client(http, dpop: factory, binding: .dpop(), metadata: metadata(dpop: true)).exchange(grant())
+
+        XCTAssertEqual(response.accessToken, "at")
+        let requests = await http.requests
+        XCTAssertEqual(requests.count, 2, "one refusal, one corrected retry")
+        let iats = requests.map { JoseTestTokens.decode($0.headers["DPoP"]!).claims["iat"] as? Int }
+        XCTAssertEqual(iats, [1_700_000_600, 1_700_000_000])
+    }
+
+    func testAnInvalidProofFromASlowDeviceClockIsCorrectedForwards() async throws {
+        let server = Date(timeIntervalSince1970: 1_700_000_000)
+        let device = server.addingTimeInterval(-600)
+        let http = skewCheckingServer(serverTime: server)
+        let factory = DpopProofFactory(key: SoftwareDpopKey(), clock: Clock(now: { device }))
+
+        _ = try await client(http, dpop: factory, binding: .dpop(), metadata: metadata(dpop: true)).refresh(refreshToken: "rt-1", idempotencyKey: "k")
+
+        let attempts = await http.requests.count
+        XCTAssertEqual(attempts, 2)
+    }
+
+    func testAnInvalidProofThatTheCorrectedClockDoesNotFixIsStillOneRetryThenCredentialsInvalidated() async throws {
+        // A key that does not match the grant: the server refuses at the right time as well. The
+        // corrected retry is the only one, and the outcome is the one the spec gives.
+        let server = Date(timeIntervalSince1970: 1_700_000_000)
+        let http = RecordingHTTP { _ in
+            HTTPResponse(statusCode: 400, headers: ["Date": HTTPDate.format(server)], body: Data(#"{"error":"invalid_dpop_proof"}"#.utf8))
+        }
+        let factory = DpopProofFactory(key: SoftwareDpopKey(), clock: Clock(now: { server.addingTimeInterval(600) }))
+        do {
+            _ = try await client(http, dpop: factory, binding: .dpop(), metadata: metadata(dpop: true)).exchange(grant())
+            XCTFail("no error")
+        } catch let error as OAuthError {
+            XCTAssertEqual(error, .reauthenticate(.credentialsInvalidated))
+        }
+        let attempts = await http.requests.count
+        XCTAssertEqual(attempts, 2)
+    }
+
+    func testADateFromACachedResponseIsNotLearnedFrom() async throws {
+        // An intermediary answers with a Date from twenty minutes ago and says so with Age.
+        let server = Date(timeIntervalSince1970: 1_700_000_000)
+        let http = RecordingHTTP { _ in
+            HTTPResponse(statusCode: 400, headers: ["Date": HTTPDate.format(server.addingTimeInterval(-1200)), "Age": "1200"], body: Data(#"{"error":"invalid_dpop_proof"}"#.utf8))
+        }
+        let factory = DpopProofFactory(key: SoftwareDpopKey(), clock: Clock(now: { server }))
+        _ = try? await client(http, dpop: factory, binding: .dpop(), metadata: metadata(dpop: true)).exchange(grant())
+        let iats = await http.requests.map { JoseTestTokens.decode($0.headers["DPoP"]!).claims["iat"] as? Int }
+        XCTAssertEqual(iats, [1_700_000_000, 1_700_000_000], "the retry was not shifted by the cached Date")
     }
 
     // MARK: - Revocation

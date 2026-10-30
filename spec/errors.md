@@ -116,7 +116,7 @@ From `versola.oauth.userinfo.model.UserInfoError`.
 | `InvalidToken` | `Recoverable` → refresh → retry, else `Reauthenticate` | |
 | `InsufficientScope` | `Configuration` | The token was not issued with the scopes this call needs. |
 | `Unauthorized` | `Reauthenticate` | |
-| `InvalidDpopProof` | handled internally, then `Reauthenticate` | Same one-retry rule as the token endpoint; nothing reaches the app until the retry also fails. Also covers the RFC 9449 §7.2 downgrade refusal: a `Bearer`-scheme request carrying a key-bound token. |
+| `InvalidDpopProof` | handled internally, then `Reauthenticate` | Same one-retry rule as the token endpoint; nothing reaches the app until the retry also fails (implemented on iOS; the Android UserInfo client does not retry yet). Also covers the RFC 9449 §7.2 downgrade refusal: a `Bearer`-scheme request carrying a key-bound token. |
 | `UseDpopNonce` | handled internally | Retry once against the **userinfo origin's** nonce cache. |
 
 ## Edge — `versola.io`
@@ -182,7 +182,8 @@ Not every error comes from a server.
 | 408, 429 or 5xx from a request the SDK originates | `Recoverable`, cause `Server(status, retryAfter, attempts, elapsed)` | After the budget is exhausted, or at once when `Retry-After` exceeds what is left of it, or on a 5xx that cannot be transient (501, 505). `retryAfter` is the parsed header on 429 and 503, absent otherwise. The session is left where it was. `retry-policy.md`. |
 | Nonce demanded on a retry that already carried one | `Recoverable`, cause `NonceLoop` | **Terminating.** A server that always demands a nonce must produce an error, never an unbounded retry. |
 | Storage key invalidated by biometric enrolment change | `Reauthenticate` | Indistinguishable from tampering; treated as sign-out. |
-| Storage key's authentication window has elapsed | `Recoverable`, cause `UnlockRequired` | `UnlockPolicy.OnAppUnlock` only. The app presents the prompt and retries; the grant is intact. |
+| Storage key's authentication window has elapsed | `Recoverable`, cause `UnlockRequired` | `UnlockPolicy.OnAppUnlock` only. The app presents the prompt and retries; the grant is intact. On iOS the cause is the device being locked and there is no window or prompt (`state-machine.md`, iOS deviation): the app retries after the device is unlocked. |
+| iOS: the Keychain or the Secure Enclave is out of reach for now (`errSecInteractionNotAllowed`: locked, or not unlocked since boot; `errSecNotAvailable`; `errSecAuthFailed`), on a read, on a DPoP signature or when the key is generated | `Recoverable`, cause `UnlockRequired` | The grant and the DPoP key are intact and are never wiped or replaced for it: a key refused only because the device is locked is not generated as a software key. Any other Keychain status is `Configuration`, detail `InvalidConfiguration`. |
 | Hardware key unavailable while `requireHardware = true` | `Configuration` | The app asked for a guarantee this device cannot provide. |
 | `BackChannel.Edge` without `edgeBaseUrl`, with `TokenBinding.Bearer`, or with a non-`https` redirect URI | `Configuration` | Refused at `configure()`. Edge's native endpoints are edge's, accept no bearer presentation, and front clients registered with `https` redirect URIs only. |
 | A grant started through one back channel redeemed through the other | `Configuration` | Wiring. Refused before the code is spent. |
