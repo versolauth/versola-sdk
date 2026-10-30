@@ -124,6 +124,17 @@ private class FakeCredentialStore : CredentialStore {
         if (rawIdToken != null) this.rawIdToken = rawIdToken
     }
 
+    /** One write for the rotated token and the slot, as the DataStore-backed store does it. */
+    override suspend fun replaceRefreshToken(refreshToken: ByteArray, rawIdToken: String?) {
+        events += "replaceRefreshToken"
+        saveFailure?.let { throw it() }
+        savePendingRotationClearFailure?.let { throw it() }
+        this.refreshToken = refreshToken.copyOf()
+        refreshToken.fill(0)
+        if (rawIdToken != null) this.rawIdToken = rawIdToken
+        pendingRotationSlot = null
+    }
+
     override suspend fun <T> useRefreshToken(block: suspend (ByteArray) -> T): T? {
         val current = refreshToken ?: return null
         unwrapFailure?.let { throw it() }
@@ -414,13 +425,104 @@ class SessionCoordinatorTest {
         assertNull(call[1])
         assertSame(first, call[4])
         assertEquals("rt-2", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        assertEquals("second", credentialStore.rawIdToken)
 
         validator.refusal = IdTokenRejection.AuthTime
+        val claimsBefore = coordinator.claims
         tokenClient.refreshActions = mutableListOf({ issued(accessToken = "at-3", refreshToken = "rt-3", idToken = "third") })
         val error = runCatching { coordinator.refresh() }.exceptionOrNull()
         assertTrue(error is VersolaError.Configuration)
-        // The response was not persisted and the grant is intact.
-        assertEquals("rt-2", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        // The provider rotated, so the rotated token is the only live one and is kept; only
+        // what the rejected ID token vouches for is dropped.
+        assertEquals("rt-3", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        assertNull(credentialStore.pendingRotationSlot)
+        assertEquals("the rejected ID token is not kept as the logout hint", "second", credentialStore.rawIdToken)
+        assertSame(claimsBefore, coordinator.claims)
+        assertEquals("access-token of the rejected response is not served", "at-2", coordinator.currentAccessToken()?.accessToken)
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a refresh persists the rotated token before the ID token is validated`() = runTest {
+        val credentialStore = FakeCredentialStore()
+        var storedWhenValidating: String? = null
+        var slotWhenValidating: String? = "unset"
+        val validator = object : IdTokenValidator {
+            override suspend fun validate(idToken: String, expectedNonce: String?, accessToken: String?, maxAge: Long?, previous: IdTokenClaims?, serverTime: java.time.Instant?): IdTokenClaims {
+                storedWhenValidating = credentialStore.refreshToken?.toString(Charsets.UTF_8)
+                slotWhenValidating = credentialStore.pendingRotationSlot
+                throw VersolaError.Configuration(VersolaError.Configuration.Detail.IdTokenRejected(IdTokenRejection.Signature))
+            }
+        }
+        val (coordinator, tokenClient, _) = generic(credentialStore = credentialStore, validator = validator)
+        credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        tokenClient.refreshActions = mutableListOf({ issued(refreshToken = "rotated", idToken = "h.p.s") })
+
+        failure { coordinator.refresh() }
+
+        assertEquals("rotated", storedWhenValidating)
+        assertNull("the slot of the spent generation is already cleared", slotWhenValidating)
+    }
+
+    @Test
+    fun `a key set that cannot be fetched during a refresh keeps the rotated token and fails as Recoverable`() = runTest {
+        val credentialStore = FakeCredentialStore()
+        var blip = true
+        val validator = object : IdTokenValidator {
+            override suspend fun validate(idToken: String, expectedNonce: String?, accessToken: String?, maxAge: Long?, previous: IdTokenClaims?, serverTime: java.time.Instant?): IdTokenClaims {
+                if (blip) throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.Network("jwks request failed"))
+                return IdTokenClaims(
+                    subject = "alice", issuer = "https://id.example.com", audience = listOf("mobile-app"),
+                    issuedAt = java.time.Instant.EPOCH, expiresAt = java.time.Instant.EPOCH.plusSeconds(3600),
+                )
+            }
+        }
+        val (coordinator, tokenClient, _) = generic(credentialStore = credentialStore, validator = validator)
+        credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        tokenClient.refreshActions = mutableListOf(
+            { issued(accessToken = "at-1", refreshToken = "rotated-1", idToken = "id-1") },
+            { issued(accessToken = "at-2", refreshToken = "rotated-2", idToken = "id-2") },
+        )
+
+        val error = failure { coordinator.refresh() }
+
+        assertTrue(error is VersolaError.Recoverable)
+        // Nothing was dropped: the rotated token is stored, and the next refresh spends it
+        // instead of the spent seed (which would be `invalid_grant` and a wipe).
+        assertEquals("rotated-1", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        assertEquals(0, credentialStore.clears)
+        assertEquals(0, teardowns)
+        assertNull(coordinator.currentAccessToken())
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+
+        blip = false
+        coordinator.refresh()
+
+        assertEquals("rotated-1", tokenClient.refreshCalls.last().first.toString(Charsets.UTF_8))
+        assertEquals("rotated-2", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        assertEquals("id-2", credentialStore.rawIdToken)
+    }
+
+    @Test
+    fun `a refresh cancelled while its ID token is being validated has already kept the rotated token`() = runTest {
+        val credentialStore = FakeCredentialStore()
+        val validating = CompletableDeferred<Unit>()
+        val validator = object : IdTokenValidator {
+            override suspend fun validate(idToken: String, expectedNonce: String?, accessToken: String?, maxAge: Long?, previous: IdTokenClaims?, serverTime: java.time.Instant?): IdTokenClaims {
+                validating.complete(Unit)
+                awaitCancellation()
+            }
+        }
+        val (coordinator, tokenClient, _) = generic(credentialStore = credentialStore, validator = validator)
+        credentialStore.refreshToken = "seed".toByteArray(Charsets.UTF_8)
+        tokenClient.refreshActions = mutableListOf({ issued(refreshToken = "rotated", idToken = "h.p.s") })
+
+        val job = launch(start = CoroutineStart.UNDISPATCHED) { coordinator.refresh() }
+        validating.await()
+        job.cancelAndJoin()
+
+        assertEquals("rotated", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        assertNull(credentialStore.pendingRotationSlot)
         assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
     }
 
@@ -793,7 +895,7 @@ class SessionCoordinatorTest {
         assertEquals(1, tokenClient.refreshCalls.size)
         assertEquals(50, results.size)
         assertTrue(results.all { it.accessToken == "the-one-response" })
-        assertEquals(1, credentialStore.events.count { it == "save" })
+        assertEquals(1, credentialStore.events.count { it == "replaceRefreshToken" })
     }
 
     @Test
@@ -962,13 +1064,13 @@ class SessionCoordinatorTest {
 
         coordinator.refresh()
 
-        // savePendingRotation(key) before the request, save() persists the new value, then
-        // savePendingRotation(null) clears the slot — never the other order.
+        // savePendingRotation(key) before the request, then the new value and the cleared slot
+        // in one write — never the slot cleared first, and never two writes a kill can land between.
         val order = credentialStore.events
-        val keySave = order.indexOfFirst { it.startsWith("savePendingRotation") && it != "savePendingRotation(null)" }
-        val persist = order.indexOf("save")
-        val clear = order.indexOf("savePendingRotation(null)")
-        assertTrue("$order", keySave in 0 until persist && persist < clear)
+        val keySave = order.indexOfFirst { it.startsWith("savePendingRotation") }
+        val persist = order.indexOf("replaceRefreshToken")
+        assertTrue("$order", keySave in 0 until persist)
+        assertEquals("the slot is cleared by the same write, not a second one", listOf("savePendingRotation"), order.filter { it.startsWith("savePendingRotation") }.map { it.substringBefore('(') })
         assertEquals("rotated", credentialStore.refreshToken?.toString(Charsets.UTF_8))
         assertNull(credentialStore.pendingRotationSlot)
     }
@@ -1379,7 +1481,7 @@ class SessionCoordinatorTest {
 
         assertEquals("fresh-access", response.accessToken)
         assertEquals("unchanged", credentialStore.refreshToken?.toString(Charsets.UTF_8))
-        assertEquals("save() must not run when there is nothing new to persist", 0, credentialStore.events.count { it == "save" })
+        assertEquals("save() must not run when there is nothing new to persist", 0, credentialStore.events.count { it == "replaceRefreshToken" })
         assertNull(credentialStore.pendingRotationSlot)
         assertNotNull(coordinator.currentAccessToken())
     }
@@ -1633,7 +1735,7 @@ class SessionCoordinatorTest {
         // The late answer was persisted (the flight finished first) and then wiped — never
         // the other way round.
         assertEquals(1, credentialStore.clears)
-        assertTrue(credentialStore.events.contains("save"))
+        assertTrue(credentialStore.events.contains("replaceRefreshToken"))
         assertTrue(refreshing.await().isSuccess)
     }
 

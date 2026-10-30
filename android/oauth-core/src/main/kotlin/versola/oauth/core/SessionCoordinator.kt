@@ -581,48 +581,80 @@ public class SessionCoordinator(
                 // `spec/state-machine.md`'s `Locked` section states for every other caller.
                 credentialStore.useRefreshToken { tokenClient.refresh(it, idempotencyKey) } ?: noGrantStored()
             }
-            // An ID token on a refresh response is validated with the login rules minus the
-            // nonce, and against the claims it replaces (OpenID Connect Core 12.2), before the
-            // response is persisted. A refusal is a `Configuration` fault handled below: the
-            // grant stays, nothing from this response is kept.
-            val refreshedClaims = idTokenValidator?.let { validator ->
-                issued.idToken?.let {
-                    validator.validate(
-                        it,
+            // Step 2 comes before the ID token is judged, and for a reason the validator cannot
+            // give: by now the provider has rotated, so the response's refresh token is the only
+            // live one and the stored one is spent. Validating first would let a key set that
+            // cannot be fetched, an unknown `kid` or a changed `sub` — or a caller cancelled
+            // during that fetch — drop the new token on the floor, and the next refresh would
+            // present the spent one: `invalid_grant`, a wipe, and on a provider that treats
+            // reuse as theft a revoked family. A bad ID token costs the ID token, never the grant.
+            val validator = idTokenValidator
+            val rawIdToken = issued.idToken
+            val validating = validator != null && rawIdToken != null
+            // The raw ID token is stored only once it has been validated (what is on disk is
+            // read back as claims without being re-verified, and replayed as `id_token_hint`),
+            // so this write carries none and a copy of the token is held for the one that does.
+            val rotated = issued.refreshToken
+            val rotatedForIdToken = if (validating) rotated?.copyOf() else null
+            try {
+                withContext(NonCancellable) {
+                    refreshFlight.mutex.withLock {
+                        // The grant was wiped while this request was out — a `logout()`, or another
+                        // caller's `invalid_grant`. The server's answer is for a session that has
+                        // ended, and persisting it would resurrect the session; the wipe's state stands.
+                        if (epoch.get() != startedIn) throw WipedMeanwhile()
+                        // `BoundRenewal` echoes the same `refresh_token`, which is stored again as
+                        // it was; a response omitting it leaves the stored value alone rather than
+                        // overwriting it with an absence. Step 3 rides on the same write — see
+                        // [CredentialStore.replaceRefreshToken] — and under DPoP clears a slot
+                        // whose value never moved: inert, per the class doc, not skipped.
+                        //
+                        // Both inside this same try: a key that locks or is invalidated between the
+                        // server answering and the write landing is exactly what the catches below
+                        // already map to `Locked` or `Unauthenticated`, and leaving it outside would
+                        // let that failure escape with `Refreshing` never resolved — the one state
+                        // this class must never leave stuck. And under the flight mutex, so a wipe
+                        // cannot slip between the check and the write.
+                        if (rotated != null) {
+                            credentialStore.replaceRefreshToken(rotated, rawIdToken.takeUnless { validator != null })
+                        } else {
+                            credentialStore.savePendingRotation(null)
+                        }
+                        if (!validating) {
+                            cachedAccessToken = Cached(issued, elapsedMillis())
+                            flow.setState(SessionState.Authenticated)
+                        }
+                    }
+                }
+                if (validating) {
+                    // An ID token on a refresh response is validated with the login rules minus
+                    // the nonce, and against the claims it replaces (OpenID Connect Core 12.2). A
+                    // refusal is a `Configuration` fault handled below, a key set that cannot be
+                    // fetched a `Recoverable` one; either way the grant — the rotated token just
+                    // stored — stays, and nothing else from this response is kept: not the access
+                    // token, which the same ID token vouches for, nor the ID token, nor its claims.
+                    val refreshedClaims = checkNotNull(validator).validate(
+                        checkNotNull(rawIdToken),
                         expectedNonce = null,
                         accessToken = issued.accessToken,
                         maxAge = null,
                         previous = restoreClaims(),
                         serverTime = issued.serverDate,
                     )
+                    withContext(NonCancellable) {
+                        refreshFlight.mutex.withLock {
+                            if (epoch.get() != startedIn) throw WipedMeanwhile()
+                            rotatedForIdToken?.let { credentialStore.save(it, rawIdToken) }
+                            claims = refreshedClaims
+                            cachedAccessToken = Cached(issued, elapsedMillis())
+                            flow.setState(SessionState.Authenticated)
+                        }
+                    }
                 }
+            } finally {
+                rotatedForIdToken?.fill(0)
             }
             warnIfNoExpiry(issued)
-            refreshFlight.mutex.withLock {
-                // The grant was wiped while this request was out — a `logout()`, or another
-                // caller's `invalid_grant`. The server's answer is for a session that has
-                // ended, and persisting it would resurrect the session; the wipe's state stands.
-                if (epoch.get() != startedIn) throw WipedMeanwhile()
-                refreshedClaims?.let { claims = it }
-                // Step 2. Persisted before returning to any caller — including the one whose
-                // call triggered this refresh. `BoundRenewal` echoes the same `refresh_token`,
-                // which is stored again as it was; a response omitting it leaves the stored
-                // value alone rather than overwriting it with an absence.
-                issued.refreshToken?.let { credentialStore.save(it, issued.idToken) }
-                // Step 3. Cleared only now. Under DPoP this clears a slot whose value never
-                // moved — inert, per the class doc, not skipped.
-                //
-                // Both writes run inside this same try: a key that locks or is invalidated
-                // between the server answering and either one landing is exactly what the
-                // catches below already map to `Locked` or `Unauthenticated`, and leaving
-                // them outside would let that failure escape as an uncaught exception with
-                // `Refreshing` never resolved — the one state this class must never leave
-                // stuck. And under the flight mutex, with the state published in the same
-                // breath, so a wipe cannot slip between the save and the `Authenticated`.
-                credentialStore.savePendingRotation(null)
-                cachedAccessToken = Cached(issued, elapsedMillis())
-                flow.setState(SessionState.Authenticated)
-            }
             issued
         } catch (e: WipedMeanwhile) {
             // Not a failure of the refresh and nothing to wipe: the caller that asked is told

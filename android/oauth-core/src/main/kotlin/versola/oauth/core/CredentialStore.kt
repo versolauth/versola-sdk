@@ -33,6 +33,22 @@ public interface CredentialStore {
     public suspend fun save(refreshToken: ByteArray, rawIdToken: String? = null)
 
     /**
+     * Step 2 and step 3 of the refresh ordering as one write: persists the rotated
+     * [refreshToken] and clears the pending rotation slot. **Takes ownership of
+     * [refreshToken]**, as [save] does.
+     *
+     * Two writes leave a window in which a process kill finds the new token beside the old
+     * generation's idempotency key; the next refresh then replays that stale key against the
+     * new token, which a provider that honours the key can resolve to the previous rotation's
+     * response. A store whose medium can write both at once overrides this; the default is the
+     * two writes in order, which is correct everywhere except in that window.
+     */
+    public suspend fun replaceRefreshToken(refreshToken: ByteArray, rawIdToken: String? = null) {
+        save(refreshToken, rawIdToken)
+        savePendingRotation(null)
+    }
+
+    /**
      * Runs [block] against the unwrapped refresh token and zeroes the buffer afterwards,
      * whether [block] returned or threw. Returns null when no grant is stored — a block that
      * itself returns null cannot be told apart from that, so callers wanting the distinction

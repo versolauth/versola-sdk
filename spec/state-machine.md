@@ -193,10 +193,23 @@ Persistence, in order:
 
 1. the outgoing generation is copied into a `pending` slot before the request is sent
 2. the response is persisted before it is returned to any caller
-3. the `pending` slot is cleared after the new value is durably stored
+3. the `pending` slot is cleared after the new value is durably stored, in the same write as 2
+   where the store can make one (a kill between two writes would leave the new token beside the
+   previous generation's idempotency key)
 
 A process killed between 1 and 3 recovers by replaying with the same idempotency key on next
 start; the server resolves which generation is live.
+
+**An ID token on a refresh response** (the generic facade, and the Versola facade once it validates
+them) is judged *after* step 2, never before: by then the provider has rotated, so the new
+refresh token is the only live one and dropping it would turn a JWKS fetch failure, an unknown
+`kid` or a changed `sub` into `invalid_grant` on the next refresh and a wipe. What the ID token
+vouches for waits for its validation: the raw ID token (stored only once validated, so it is
+never replayed as `id_token_hint` unchecked), the claims and the access token of that response
+are kept only if it passes. A rejection leaves the session `Authenticated` on the rotated
+token and fails the call as `Configuration(IdTokenRejected)`; a key set that cannot be reached
+fails it as `Recoverable`, and the next refresh simply runs again. A caller cancelled during
+the validation has already kept the rotated token.
 
 Under DPoP the server renews the refresh token in place (`BoundRenewal`) and the stored value
 does not change — the response echoes the same `refresh_token`, which is stored again as it

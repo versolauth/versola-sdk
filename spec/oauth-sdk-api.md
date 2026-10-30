@@ -181,7 +181,9 @@ is the precise error scenario 17 cannot give without PAR.
   provider that already rotated answers `invalid_grant`, which is `Reauthenticate(GrantRejected)`.
   Scenarios 09 and 13 therefore hold for the Versola facade only.
 - An `id_token` on a refresh response is validated with the same rules as at login, except that
-  `nonce` is not required and `auth_time` must not move backwards (OIDC Core 12.2).
+  `nonce` is not required and `auth_time` must not move backwards (OIDC Core 12.2). Unlike at
+  login, the rotated refresh token is persisted first and the ID token judged after (section 11):
+  the provider has already spent the old one, so the grant must not depend on the ID token.
 
 ## 9. Token binding
 
@@ -225,7 +227,10 @@ token handed to app code is one the app can log.
 
 ## 11. ID-token and UserInfo validation
 
-Mandatory on every platform, before the token response is persisted (OIDC Core 3.1.3.7):
+Mandatory on every platform, before the token response is persisted at login (OIDC Core 3.1.3.7).
+On a refresh the order is the other way round for the refresh token alone (section 8): the rotated
+token is stored first, and the ID token, its claims and that response's access token are kept only
+if the checks below pass:
 
 1. Signature with a key from `jwks_uri` (cached, refetched once on an unknown `kid`), algorithm in
    the closed set `RS256`, `PS256`, `ES256`, `ES384`, `ES512`, `RS384`, `RS512`, `PS384`, `PS512`,
@@ -240,8 +245,11 @@ Mandatory on every platform, before the token response is persisted (OIDC Core 3
 
 A failure is `Configuration(IdTokenRejected(reason))`, where `reason` is a closed enum
 (`Signature`, `Algorithm`, `Issuer`, `Audience`, `Expired`, `IssuedAt`, `Nonce`, `AuthTime`,
-`Malformed`, `AccessTokenHash`): nothing is persisted, the pending request is discarded, the state
-settles on what it was before `login()`. The category is `Configuration` because every cause is
+`Malformed`, `AccessTokenHash`): at login nothing is persisted, the pending request is discarded,
+the state settles on what it was before `login()`; on a refresh the grant stays on the
+rotated token, nothing else from the response is kept, and the state stays `Authenticated`.
+A key set that cannot be fetched is not a rejection: it is `Recoverable` (`Network` or `Server`),
+raised before any claim is read, with the same consequences. The category is `Configuration` because every cause is
 either a deployment mistake (issuer, algorithm, audience, clock) or an attack, and neither is fixed
 by the user trying again; see `errors.md`'s rule that a category is the app's action.
 

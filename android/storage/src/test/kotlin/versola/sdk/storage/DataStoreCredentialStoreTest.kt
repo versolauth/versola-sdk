@@ -169,6 +169,18 @@ class DataStoreCredentialStoreTest {
     }
 
     @Test
+    fun `a rotated refresh token and the cleared rotation slot land in one write`() = runTest {
+        store.save("generation-1".toByteArray(), idToken)
+        store.savePendingRotation("key-of-generation-1")
+
+        store.replaceRefreshToken("generation-2".toByteArray())
+
+        assertEquals("generation-2", store.useRefreshToken { String(it) })
+        assertNull(store.pendingRotation())
+        assertEquals("the ID token of the previous generation stays", idToken, store.rawIdToken())
+    }
+
+    @Test
     fun `clear leaves nothing behind`() = runTest {
         store.save(refreshToken.toByteArray(), idToken)
         store.savePendingRotation("idem-key-1")
