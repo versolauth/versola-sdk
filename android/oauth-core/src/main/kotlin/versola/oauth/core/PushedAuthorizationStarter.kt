@@ -1,7 +1,6 @@
 package versola.oauth.core
 
 import java.io.IOException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -113,7 +112,7 @@ public class PushedAuthorizationStarter(
         // with it, not after each attempt, because a repeat sends the same bytes.
         return try {
             retrying(originOf(endpoint)) {
-                withContext(Dispatchers.IO) {
+                withContext(SdkDispatchers.blocking) {
                     try {
                         httpClient.newCall(httpRequest).execute().use { response ->
                             interpret(response.code, response.body.string(), response.headers)

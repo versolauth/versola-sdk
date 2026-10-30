@@ -383,7 +383,9 @@ handled in app code after `logout()` has wiped locally; the SDK does not special
 | Internal wiring | `@VersolaInternalApi` (`RequiresOptIn`, error level) | `package` access / `_` prefix, not in products | `src/` private, not exported |
 
 Threading: Kotlin APIs are `suspend` and main-safe; the SDK never blocks the caller's thread except
-inside an OkHttp interceptor, where the work it waits on runs on a dispatcher the SDK owns. Swift
+inside an OkHttp interceptor, where the work it waits on runs on a dispatcher the SDK owns rather
+than on the platform's shared IO pool, so an app that parks every thread of `Dispatchers.IO` in
+`execute()` cannot starve the refresh those calls wait for. Swift
 APIs are `async` on a `Sendable` client; the coordinator is an actor. Dart APIs return futures; the
 plugin forwards to the native SDK and never reimplements protocol logic (`flutter.md`).
 

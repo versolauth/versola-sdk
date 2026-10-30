@@ -2,12 +2,12 @@ package versola.sdk.storage
 
 import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import versola.oauth.core.CredentialKeyProvider
 import versola.oauth.core.PendingAuthorizationCodec
 import versola.oauth.core.PendingAuthorizationRequest
 import versola.oauth.core.PendingAuthorizationStore
+import versola.oauth.core.SdkDispatchers
 import versola.oauth.core.VersolaError
 
 /**
@@ -36,7 +36,7 @@ public class FilePendingAuthorizationStore(
             encoded.fill(0)
             sealed.fill(0)
         }
-        withContext(Dispatchers.IO) {
+        withContext(SdkDispatchers.blocking) {
             file.parentFile?.mkdirs()
             // Written to a sibling and renamed: a process killed mid-write must not leave a
             // half-written slot behind, since the whole point of this file is surviving a kill.
@@ -50,7 +50,7 @@ public class FilePendingAuthorizationStore(
     }
 
     override suspend fun load(): PendingAuthorizationRequest? {
-        val wrapped = withContext(Dispatchers.IO) {
+        val wrapped = withContext(SdkDispatchers.blocking) {
             if (file.exists()) file.readBytes() else null
         } ?: return null
 
@@ -91,7 +91,7 @@ public class FilePendingAuthorizationStore(
     }
 
     override suspend fun clear() {
-        withContext(Dispatchers.IO) {
+        withContext(SdkDispatchers.blocking) {
             file.delete()
             File(file.parentFile, file.name + ".tmp").delete()
         }

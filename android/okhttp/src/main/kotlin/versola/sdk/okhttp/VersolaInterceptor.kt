@@ -62,12 +62,15 @@ public class VersolaInterceptor(
         // block, and this is the blocking one: the calling thread waits here, for a refresh when
         // the token is stale. `HttpTokenClient` issues its requests with `execute()`, and OkHttp's
         // `Dispatcher` caps concurrency for `enqueue`d calls only, so calls blocked on a refresh
-        // do not starve it on OkHttp's own threads. They do on `Dispatchers.IO`: the refresh
-        // dispatches its token request and its storage reads there, so 64 callers parked on that
-        // dispatcher in `execute()` hold every one of its threads and the refresh they wait for
-        // is never run (reproduced by `OAuthClientConcurrencyTest`). A caller therefore does not
-        // `execute()` an authenticated call from `Dispatchers.IO` en masse: `enqueue`, a thread of
-        // its own, or `OAuthClient.call()`, which blocks on a view of its own.
+        // do not starve it on OkHttp's own threads. Nor do they on `Dispatchers.IO`, though a caller
+        // may park all of it here, as long as everything the refresh waits on (its token request, the
+        // storage reads, the DPoP key) runs on the SDK's own dispatcher, `SdkDispatchers.blocking`:
+        // it has threads of its own to give (`OAuthClientIoSaturationTest`). That holds for the
+        // generic `OAuthClient`; the Versola facade's edge back channel (`:core`) still dispatches to
+        // `Dispatchers.IO`, so many callers parked there in `execute()` can still starve its refresh.
+        // The rule that keeps the first true: nothing under this `runBlocking` dispatches to the
+        // caller's dispatcher, so a new suspension point on the refresh path uses the SDK's, never
+        // `Dispatchers.IO` (`.claude/rules/android-kotlin.md`).
         return try {
             runBlocking { authenticated(chain, request) }
         } catch (e: VersolaHttpException) {
