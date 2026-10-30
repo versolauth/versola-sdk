@@ -15,6 +15,11 @@ android {
 
     defaultConfig {
         minSdk = 26
+        // What an app must compile against, which is not what this module builds with (see :dpop).
+        // The highest platform API the AAR links against is Context.getNoBackupFilesDir (21); the public API
+        // names only Context. The app's own check also applies its dependencies' values (OkHttp's 37 today),
+        // which are the higher ones.
+        aarMetadata { minCompileSdk = 21 }
         // No targetSdk on a library module; see :core.
     }
 

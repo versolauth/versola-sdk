@@ -6,6 +6,7 @@ package versola.oauth.flutter
 import android.content.Context
 import io.flutter.embedding.engine.plugins.FlutterPlugin
 import io.flutter.plugin.common.BinaryMessenger
+import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CancellationException
@@ -15,6 +16,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.launch
 import versola.oauth.LoginOptions
 import versola.oauth.LogoutOptions
@@ -138,6 +140,24 @@ public class VersolaOAuthPlugin : FlutterPlugin, OAuthHostApi {
     /** Asking generates the key, so `Configuration(HardwareBindingUnavailable)` is a reachable answer here. */
     override suspend fun keyAttestation(handle: String): KeyAttestationResult = attempt(::KeyAttestationFailure) {
         KeyAttestationOk(client(handle).keyAttestation()?.toWireName())
+    }
+
+    /**
+     * `OAuthClient.call`: the SDK's own authenticated client runs the request, so the token, the
+     * proof, the refresh and the origin check stay here. The body is read to the end inside the
+     * IO dispatcher (a blocking read must not run on the main thread). A call that produced no
+     * HTTP response is not an SDK error: it crosses as its class name alone, since the
+     * exception's message can carry the URL.
+     */
+    override suspend fun httpRequest(handle: String, request: HttpRequestMessage): HttpResult = attempt(::HttpFailure) {
+        val client = client(handle)
+        val prepared = request.toRequest()
+        val origins = request.origins?.toSet() ?: client.configuration.protectedOrigins
+        try {
+            withContext(Dispatchers.IO) { client.call(prepared, origins).use { HttpOk(it.toMessage()) } }
+        } catch (e: IOException) {
+            HttpTransportFailure(e.javaClass.simpleName)
+        }
     }
 
     private inline fun voidResult(block: () -> Unit): VoidResult = attempt(::VoidFailure) {

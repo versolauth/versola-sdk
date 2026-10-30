@@ -669,7 +669,14 @@ public class SessionCoordinator(
                     withContext(NonCancellable) {
                         refreshFlight.mutex.withLock {
                             if (epoch.get() != startedIn) throw WipedMeanwhile()
-                            rotatedForIdToken?.let { credentialStore.save(it, rawIdToken) }
+                            if (rotatedForIdToken != null) {
+                                credentialStore.save(rotatedForIdToken, rawIdToken)
+                            } else {
+                                // No new refresh token (the provider kept the old one): the ID token
+                                // that passed is still stored (`spec/state-machine.md`, the ID token
+                                // travels with step 2), by writing the stored token back beside it.
+                                credentialStore.useRefreshToken { credentialStore.save(it.copyOf(), rawIdToken) }
+                            }
                             claims = refreshedClaims
                             cachedAccessToken = Cached(issued, elapsedMillis())
                             flow.setState(SessionState.Authenticated)

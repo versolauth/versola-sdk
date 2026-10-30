@@ -28,9 +28,15 @@ trap for the next reader. Security rules are in `security.md`, test conventions 
   cleanly and checks nothing. Do not "modernise" those properties or the plugin lines; the
   architecture review (F9) asks for a CI guard that fails when `apiCheck` ran zero tasks.
 - Dependency versions are literals in the module files today, pinned and shared by value
-  (`okhttp:5.4.0` in `:oauth-core` and `:okhttp`, `kotlinx-coroutines-test:1.11.0` everywhere). OkHttp
-  stays at 5.4.0 because 5.5.0's AAR declares `minCompileSdk=37`; the comment in
-  `android/okhttp/build.gradle.kts` says when to revisit. A new dependency needs approval.
+  (`okhttp:5.5.1` in `:oauth-core` and `:okhttp`, `kotlinx-coroutines-test:1.11.0` everywhere). A
+  dependency's AAR `minCompileSdk` is a requirement on every app (`checkDebugAarMetadata`): OkHttp
+  5.5.x declares 37, 5.4.0 declared 36, and that is what an app needs today. Read the value before
+  bumping one (`develop.md`). A new dependency needs approval.
+- Every published Android module sets `defaultConfig { aarMetadata { minCompileSdk = N } }`, N being
+  the highest platform API its AAR links against. Without it AGP publishes the module's own
+  `compileSdk` (37), and that is a requirement an app has no reason to meet. Our `compileSdk` is not
+  the app's: do not lower it to fix this, and do not raise N to match it. A new published module
+  sets N the same way (`develop.md`).
 
 ## Commands (run from `android/`)
 

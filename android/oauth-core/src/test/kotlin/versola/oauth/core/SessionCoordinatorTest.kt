@@ -497,6 +497,20 @@ class SessionCoordinatorTest {
     }
 
     @Test
+    fun `a validated ID token is stored even when the response carries no new refresh token`() = runTest {
+        val validator = RecordingValidator()
+        val (coordinator, tokenClient, credentialStore) = generic(validator = validator)
+        credentialStore.refreshToken = "kept".toByteArray(Charsets.UTF_8)
+        credentialStore.rawIdToken = "old-id"
+        tokenClient.refreshActions = mutableListOf({ issued(refreshToken = null, idToken = "new-id") })
+
+        coordinator.refresh()
+
+        assertEquals("new-id", credentialStore.rawIdToken)
+        assertEquals("kept", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+    }
+
+    @Test
     fun `a refresh persists the rotated token before the ID token is validated`() = runTest {
         val credentialStore = FakeCredentialStore()
         var storedWhenValidating: String? = null

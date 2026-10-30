@@ -160,6 +160,9 @@ deployment can be dropped, rather than on Central.
    before you clicked, or you want to repeat it, run `verify-release` from the Actions tab with the
    version. If it is red, that version cannot be installed by some consumer; the version is
    immutable on Central, so the fix is the next one.
+   Also read each AAR's `META-INF/com/android/build/gradle/aar-metadata.properties` (`unzip -p`): its
+   `minCompileSdk` must be the module's own `aarMetadata` value (`develop.md`), not 37, which is what AGP
+   writes when a module sets none and what it would then demand of every app.
 7. **pub.dev, first release by hand.** From a clean checkout of the tag:
 
    ```bash

@@ -1,11 +1,11 @@
 id: 32-protected-origins
 title: The authenticated client attaches a token only to configured origins and treats them exactly
 issues: [46]
-applies_to: [android, ios]
+applies_to: [android, ios, flutter]
 facade: [oauth]
 mode: any
 preconditions:
-  - The platform has an authenticated client (Android `interceptor` / `authenticatedClient`, iOS `authenticatedSession`). Flutter has none (`spec/oauth-sdk-api.md` section 10 gives it `accessToken()` only), so these assertions are the native facades' and `flutter` is not in `applies_to`.
+  - The platform has an authenticated client (Android `interceptor` / `authenticatedClient`, iOS `authenticatedSession`, Flutter `OAuthClient.httpClient()`, which hands each request to the native client and so is asserted through the bridge, where the request is one `httpRequest` call).
   - Two resources are staged on different origins; only the first is in protectedOrigins.
   - The SDK is Authenticated.
 steps:
@@ -18,3 +18,13 @@ assertions:
   - A redirect (3xx) from a protected origin is returned to the app, not followed, so the token is not re-sent to a Location on another origin.
   - Constructing with an empty or non-https origin set fails with Configuration InvalidConfiguration.
   - Under DPoP the proof's htu is the request URL without query and fragment and ath is present.
+notes: >
+  Flutter's `httpClient()` returns synchronously and cannot ask native, so for Flutter "constructing"
+  in the last assertion is the first request through the client: it fails with Configuration
+  InvalidConfiguration before anything is sent, and so does a client whose configuration has no
+  protectedOrigins and which names none. The bridge also asserts what the Dart client adds to this
+  scenario: an Authorization (and DPoP) header the app supplied is replaced by the SDK's on a protected
+  origin and left as written on any other, a 401 refreshes once and replays the request with its body,
+  a step-up challenge is StepUp with no refresh, a 503 with Retry-After is the response after one
+  request, and a call with no HTTP response is not an SDK error. A repeated response header keeps
+  every value on Android; iOS's URLSession folds them (spec/oauth-sdk-api.md section 10).

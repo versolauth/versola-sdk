@@ -197,6 +197,112 @@ final class DpopProofFactoryTests: XCTestCase {
         XCTAssertNil(afterEdge)
     }
 
+    // MARK: clock skew
+
+    /// 2023-11-14T22:13:20Z, as epoch seconds and as the `Date` header a server sends for it.
+    private static let serverSeconds: TimeInterval = 1_700_000_000
+    private static let serverDate = "Tue, 14 Nov 2023 22:13:20 GMT"
+
+    private func iat(of proof: String) -> Int? {
+        JoseTestTokens.decode(proof).claims["iat"] as? Int
+    }
+
+    /// A factory whose device clock reads `serverSeconds + offset`.
+    private func skewedFactory(deviceAhead offset: TimeInterval) -> DpopProofFactory {
+        let device = Date(timeIntervalSince1970: Self.serverSeconds + offset)
+        return DpopProofFactory(key: SoftwareDpopKey(), clock: Clock(now: { device }))
+    }
+
+    func testADeviceRunningFastStampsIatFromTheServersClockOnceItHasSeenADate() async throws {
+        let subject = skewedFactory(deviceAhead: 300)
+        let before = try await subject.proof(method: "GET", url: url, nonce: nil, accessToken: nil)
+        XCTAssertEqual(iat(of: before), Int(Self.serverSeconds) + 300, "nothing learned yet: the device clock")
+
+        await subject.observe(serverDate: Self.serverDate, age: nil)
+
+        let after = try await subject.proof(method: "GET", url: url, nonce: nil, accessToken: nil)
+        XCTAssertEqual(iat(of: after), Int(Self.serverSeconds))
+    }
+
+    func testADeviceRunningSlowIsCorrectedForwards() async throws {
+        // Both directions, because an implementation that subtracts where it should add passes one.
+        let subject = skewedFactory(deviceAhead: -300)
+        await subject.observe(serverDate: Self.serverDate, age: nil)
+        let proof = try await subject.proof(method: "GET", url: url, nonce: nil, accessToken: nil)
+        XCTAssertEqual(iat(of: proof), Int(Self.serverSeconds))
+    }
+
+    func testAnAbsentOrUnreadableDateLeavesTheLearnedOffsetAlone() async throws {
+        let subject = skewedFactory(deviceAhead: 300)
+        await subject.observe(serverDate: Self.serverDate, age: nil)
+
+        await subject.observe(serverDate: nil, age: nil)
+        await subject.observe(serverDate: "whenever", age: nil)
+        await subject.observe(serverDate: "", age: nil)
+
+        let proof = try await subject.proof(method: "GET", url: url, nonce: nil, accessToken: nil)
+        XCTAssertEqual(iat(of: proof), Int(Self.serverSeconds))
+    }
+
+    func testADateFurtherAwayThanAnyBelievableClockIsIgnored() async throws {
+        // A cached response or a broken intermediary: 1994 against a 2023 device. Believing it would
+        // put iat 29 years in the past, and the proofs the device clock got right would be refused.
+        let subject = skewedFactory(deviceAhead: 0)
+        await subject.observe(serverDate: "Sun, 06 Nov 1994 08:49:37 GMT", age: nil)
+        let proof = try await subject.proof(method: "GET", url: url, nonce: nil, accessToken: nil)
+        XCTAssertEqual(iat(of: proof), Int(Self.serverSeconds))
+    }
+
+    func testACachedResponseDoesNotShiftTheOffsetByItsAge() async throws {
+        // A cache stored it 20 minutes ago: its Date is then, not now. Believing it would put every
+        // proof 20 minutes in the past, well inside the 30-day bound.
+        let subject = skewedFactory(deviceAhead: 0)
+        let stale = "Tue, 14 Nov 2023 21:53:20 GMT"
+        await subject.observe(serverDate: stale, age: "1200")
+        await subject.observe(serverDate: stale, age: "not a number")
+        let proof = try await subject.proof(method: "GET", url: url, nonce: nil, accessToken: nil)
+        XCTAssertEqual(iat(of: proof), Int(Self.serverSeconds))
+
+        // `Age: 0` is a cache that revalidated just now: a fresh Date.
+        let fast = skewedFactory(deviceAhead: 300)
+        await fast.observe(serverDate: Self.serverDate, age: "0")
+        let corrected = try await fast.proof(method: "GET", url: url, nonce: nil, accessToken: nil)
+        XCTAssertEqual(iat(of: corrected), Int(Self.serverSeconds))
+    }
+
+    func testTheOffsetIsSharedByEveryOriginAndTheLastResponseWins() {
+        // Android's design: one offset for the client. A server whose clock is wrong moves it too,
+        // until the next response from a server that is right.
+        var skew = ClockSkew()
+        let device = Date(timeIntervalSince1970: Self.serverSeconds)
+        skew.learn(dateHeader: Self.serverDate, deviceNow: device)
+        XCTAssertEqual(skew.offset, 0)
+        skew.learn(dateHeader: "Tue, 14 Nov 2023 22:18:20 GMT", deviceNow: device)
+        XCTAssertEqual(skew.offset, 300)
+        skew.learn(dateHeader: Self.serverDate, deviceNow: device)
+        XCTAssertEqual(skew.offset, 0)
+    }
+
+    func testALaterDateRelearnsTheOffset() {
+        // The clock can be corrected under us, by NTP or by the user; a one-shot offset would then
+        // be the only thing making proofs wrong.
+        var skew = ClockSkew()
+        skew.learn(dateHeader: Self.serverDate, deviceNow: Date(timeIntervalSince1970: Self.serverSeconds + 300))
+        XCTAssertEqual(skew.offset, -300)
+
+        skew.learn(dateHeader: Self.serverDate, deviceNow: Date(timeIntervalSince1970: Self.serverSeconds))
+
+        XCTAssertEqual(skew.offset, 0)
+    }
+
+    func testTheOffsetAppliesToTheNextProofOfEveryOrigin() async throws {
+        // One device clock, one offset: what the token endpoint taught is right for a resource server.
+        let subject = skewedFactory(deviceAhead: 300)
+        await subject.observe(serverDate: Self.serverDate, age: nil)
+        let other = try await subject.proof(method: "GET", url: URL(string: "https://other.example.org/x")!, nonce: nil, accessToken: nil)
+        XCTAssertEqual(iat(of: other), Int(Self.serverSeconds))
+    }
+
     func testOriginIsSchemeHostAndPortWithTheDefaultPortAndCaseNormalisedAway() {
         func origin(_ text: String) -> String { DpopOrigin.of(URL(string: text)!) }
         XCTAssertEqual(origin("https://Auth.Example.com/path?q=1"), "https://auth.example.com")

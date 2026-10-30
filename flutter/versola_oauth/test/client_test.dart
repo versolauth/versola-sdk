@@ -50,6 +50,17 @@ class FakeHost extends OAuthHostApi {
   @override
   Future<KeyAttestationResult> keyAttestation(String handle) async =>
       _next('keyAttestation');
+
+  /// Every request the HTTP client sent across, in order.
+  final List<HttpRequestMessage> requests = [];
+  @override
+  Future<HttpResult> httpRequest(
+    String handle,
+    HttpRequestMessage request,
+  ) async {
+    requests.add(request);
+    return _next('httpRequest');
+  }
 }
 
 const configuration = OAuthConfiguration(

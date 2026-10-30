@@ -1613,6 +1613,312 @@ class KeyAttestationFailure extends KeyAttestationResult {
   }
 }
 
+/// One header line, name and value as they are on the wire. A list of these rather than a map:
+/// a name that appears twice (`WWW-Authenticate`, `Set-Cookie`) keeps both values and their order
+/// across the bridge. The name's case is whatever the sender used; matching is the receiver's
+/// case-insensitive business.
+class HttpHeaderMessage {
+  HttpHeaderMessage({required this.name, required this.value});
+
+  String name;
+
+  String value;
+
+  List<Object?> _toList() {
+    return <Object?>[name, value];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static HttpHeaderMessage decode(Object result) {
+    result as List<Object?>;
+    return HttpHeaderMessage(
+      name: result[0]! as String,
+      value: result[1]! as String,
+    );
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! HttpHeaderMessage || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(name, other.name) && _deepEquals(value, other.value);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
+
+  @override
+  String toString() {
+    return 'HttpHeaderMessage(name: $name, value: $value)';
+  }
+}
+
+/// An HTTP request the native authenticated client executes (`spec/oauth-sdk-api.md` section
+/// 10). The body is bytes and is buffered whole: the bridge does not stream. `origins` is the
+/// protected-origin set for this call, or null for the configuration's `protectedOrigins`.
+class HttpRequestMessage {
+  HttpRequestMessage({
+    required this.method,
+    required this.url,
+    required this.headers,
+    this.body,
+    this.origins,
+  });
+
+  String method;
+
+  String url;
+
+  List<HttpHeaderMessage> headers;
+
+  Uint8List? body;
+
+  List<String>? origins;
+
+  List<Object?> _toList() {
+    return <Object?>[method, url, headers, body, origins];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static HttpRequestMessage decode(Object result) {
+    result as List<Object?>;
+    return HttpRequestMessage(
+      method: result[0]! as String,
+      url: result[1]! as String,
+      headers: (result[2]! as List<Object?>).cast<HttpHeaderMessage>(),
+      body: result[3] as Uint8List?,
+      origins: (result[4] as List<Object?>?)?.cast<String>(),
+    );
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! HttpRequestMessage || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(method, other.method) &&
+        _deepEquals(url, other.url) &&
+        _deepEquals(headers, other.headers) &&
+        _deepEquals(body, other.body) &&
+        _deepEquals(origins, other.origins);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
+
+  @override
+  String toString() {
+    return 'HttpRequestMessage(method: $method, url: $url, headers: $headers, body: $body, origins: $origins)';
+  }
+}
+
+/// The response as the server sent it: status, headers (every value of a repeated name, where
+/// the platform reports them apart) and the whole body. A 3xx, a 429 and a 5xx are responses.
+class HttpResponseMessage {
+  HttpResponseMessage({
+    required this.status,
+    this.reasonPhrase,
+    required this.headers,
+    required this.body,
+  });
+
+  int status;
+
+  String? reasonPhrase;
+
+  List<HttpHeaderMessage> headers;
+
+  Uint8List body;
+
+  List<Object?> _toList() {
+    return <Object?>[status, reasonPhrase, headers, body];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static HttpResponseMessage decode(Object result) {
+    result as List<Object?>;
+    return HttpResponseMessage(
+      status: result[0]! as int,
+      reasonPhrase: result[1] as String?,
+      headers: (result[2]! as List<Object?>).cast<HttpHeaderMessage>(),
+      body: result[3]! as Uint8List,
+    );
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! HttpResponseMessage || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(status, other.status) &&
+        _deepEquals(reasonPhrase, other.reasonPhrase) &&
+        _deepEquals(headers, other.headers) &&
+        _deepEquals(body, other.body);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
+
+  @override
+  String toString() {
+    return 'HttpResponseMessage(status: $status, reasonPhrase: $reasonPhrase, headers: $headers, body: $body)';
+  }
+}
+
+sealed class HttpResult {}
+
+class HttpOk extends HttpResult {
+  HttpOk({required this.response});
+
+  HttpResponseMessage response;
+
+  List<Object?> _toList() {
+    return <Object?>[response];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static HttpOk decode(Object result) {
+    result as List<Object?>;
+    return HttpOk(response: result[0]! as HttpResponseMessage);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! HttpOk || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(response, other.response);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
+
+  @override
+  String toString() {
+    return 'HttpOk(response: $response)';
+  }
+}
+
+/// The SDK refused or could not finish the call: a step-up challenge, a session the provider
+/// refused, a nonce that kept changing, a `Configuration` problem (an invalid origin set, a
+/// request that is not a valid HTTP request). The typed taxonomy, as everywhere else.
+class HttpFailure extends HttpResult {
+  HttpFailure({required this.error});
+
+  ErrorMessage error;
+
+  List<Object?> _toList() {
+    return <Object?>[error];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static HttpFailure decode(Object result) {
+    result as List<Object?>;
+    return HttpFailure(error: result[0]! as ErrorMessage);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! HttpFailure || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(error, other.error);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
+
+  @override
+  String toString() {
+    return 'HttpFailure(error: $error)';
+  }
+}
+
+/// The request never produced an HTTP response (no route, DNS, TLS, a connection reset, the
+/// native client's own timeout). Not an SDK error and not a category of `spec/errors.md`: the
+/// Dart client turns it into `package:http`'s `ClientException`. `exception` is the native
+/// exception's class name and nothing else; its message can carry the URL.
+class HttpTransportFailure extends HttpResult {
+  HttpTransportFailure({required this.exception});
+
+  String exception;
+
+  List<Object?> _toList() {
+    return <Object?>[exception];
+  }
+
+  Object encode() {
+    return _toList();
+  }
+
+  static HttpTransportFailure decode(Object result) {
+    result as List<Object?>;
+    return HttpTransportFailure(exception: result[0]! as String);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  bool operator ==(Object other) {
+    if (other is! HttpTransportFailure || other.runtimeType != runtimeType) {
+      return false;
+    }
+    if (identical(this, other)) {
+      return true;
+    }
+    return _deepEquals(exception, other.exception);
+  }
+
+  @override
+  // ignore: avoid_equals_and_hash_code_on_mutable_classes
+  int get hashCode => _deepHash(<Object?>[runtimeType, ..._toList()]);
+
+  @override
+  String toString() {
+    return 'HttpTransportFailure(exception: $exception)';
+  }
+}
+
 class _PigeonCodec extends StandardMessageCodec {
   const _PigeonCodec();
   @override
@@ -1716,6 +2022,24 @@ class _PigeonCodec extends StandardMessageCodec {
     } else if (value is KeyAttestationFailure) {
       buffer.putUint8(160);
       writeValue(buffer, value.encode());
+    } else if (value is HttpHeaderMessage) {
+      buffer.putUint8(161);
+      writeValue(buffer, value.encode());
+    } else if (value is HttpRequestMessage) {
+      buffer.putUint8(162);
+      writeValue(buffer, value.encode());
+    } else if (value is HttpResponseMessage) {
+      buffer.putUint8(163);
+      writeValue(buffer, value.encode());
+    } else if (value is HttpOk) {
+      buffer.putUint8(164);
+      writeValue(buffer, value.encode());
+    } else if (value is HttpFailure) {
+      buffer.putUint8(165);
+      writeValue(buffer, value.encode());
+    } else if (value is HttpTransportFailure) {
+      buffer.putUint8(166);
+      writeValue(buffer, value.encode());
     } else {
       super.writeValue(buffer, value);
     }
@@ -1794,6 +2118,18 @@ class _PigeonCodec extends StandardMessageCodec {
         return KeyAttestationOk.decode(readValue(buffer)!);
       case 160:
         return KeyAttestationFailure.decode(readValue(buffer)!);
+      case 161:
+        return HttpHeaderMessage.decode(readValue(buffer)!);
+      case 162:
+        return HttpRequestMessage.decode(readValue(buffer)!);
+      case 163:
+        return HttpResponseMessage.decode(readValue(buffer)!);
+      case 164:
+        return HttpOk.decode(readValue(buffer)!);
+      case 165:
+        return HttpFailure.decode(readValue(buffer)!);
+      case 166:
+        return HttpTransportFailure.decode(readValue(buffer)!);
       default:
         return super.readValueOfType(type, buffer);
     }
@@ -2042,6 +2378,33 @@ class OAuthHostApi {
       isNullValid: false,
     );
     return pigeonVar_replyValue! as KeyAttestationResult;
+  }
+
+  /// Executes one request with the native authenticated client (`OAuthClient.call` on Android,
+  /// `authenticatedSession` on iOS): the token and the DPoP proof are attached, refreshed and
+  /// replayed natively and never cross; only the request and the response do.
+  Future<HttpResult> httpRequest(
+    String handle,
+    HttpRequestMessage request,
+  ) async {
+    final pigeonVar_channelName =
+        'dev.flutter.pigeon.versola_oauth.OAuthHostApi.httpRequest$pigeonVar_messageChannelSuffix';
+    final pigeonVar_channel = BasicMessageChannel<Object?>(
+      pigeonVar_channelName,
+      pigeonChannelCodec,
+      binaryMessenger: pigeonVar_binaryMessenger,
+    );
+    final Future<Object?> pigeonVar_sendFuture = pigeonVar_channel.send(
+      <Object?>[handle, request],
+    );
+    final pigeonVar_replyList = await pigeonVar_sendFuture as List<Object?>?;
+
+    final Object? pigeonVar_replyValue = _extractReplyValueOrThrow(
+      pigeonVar_replyList,
+      pigeonVar_channelName,
+      isNullValid: false,
+    );
+    return pigeonVar_replyValue! as HttpResult;
   }
 }
 

@@ -14,7 +14,9 @@ package protocol UserInfoClient: Sendable {
     /// - Parameters:
     ///   - tokens: the session: its token is sent as `Bearer`, or as `DPoP` with a proof when it
     ///     is key-bound; a bare 401 spends one renewal and one replay, then is
-    ///     `reauthenticate(.sessionRejected)` (`spec/errors.md`, a resource server's 401).
+    ///     `reauthenticate(.sessionRejected)` (`spec/errors.md`, a resource server's 401). An
+    ///     `invalid_dpop_proof` is replayed once with a fresh proof and no renewal, then is
+    ///     `reauthenticate(.credentialsInvalidated)`.
     ///   - expectedSubject: the `sub` of the validated ID token. Core 5.3.2: a UserInfo response
     ///     about anyone else must not be used, so a different `sub` is refused.
     /// - Throws: `configuration(.providerUnsupported("userinfo"))` without an endpoint,
@@ -32,8 +34,9 @@ package protocol UserInfoClient: Sendable {
 /// may follow a `Location` the endpoint named in discovery did not have a right to.
 ///
 /// No retries here. The caller's budget decides whether a transport failure is tried again
-/// (`spec/retry-policy.md`); the one exception is the DPoP nonce challenge, answered once,
-/// because it is a protocol step and not a retry (RFC 9449 section 9).
+/// (`spec/retry-policy.md`); the exceptions are the DPoP nonce challenge (RFC 9449 section 9) and
+/// one `invalid_dpop_proof` (clock skew, corrected from the response's `Date`), each answered
+/// once, because they are protocol steps and not retries.
 package struct HTTPUserInfoClient: UserInfoClient {
     private let userinfoEndpoint: @Sendable () async throws -> String?
     private let httpClient: HTTPClient
@@ -61,6 +64,7 @@ package struct HTTPUserInfoClient: UserInfoClient {
     private enum Outcome {
         case body(Data, signed: Bool)
         case useDpopNonce(nonce: String?)
+        case invalidProof
         case rejected
     }
 
@@ -78,6 +82,7 @@ package struct HTTPUserInfoClient: UserInfoClient {
             ))
         }
         var nonceRetried = false
+        var proofRetried = false
         var renewed = false
         while true {
             // One repeatable request under the operation's budget (a read-only `GET`); the
@@ -92,6 +97,12 @@ package struct HTTPUserInfoClient: UserInfoClient {
                 if renewed { throw OAuthError.reauthenticate(.sessionRejected) }
                 renewed = true
                 accessToken = try await tokens.renewAccessToken()
+            // The one recoverable cause is clock skew, learned off this response's `Date` by
+            // `attempt`; renewing the token would rotate the refresh token for a proof problem.
+            // A second refusal means the key does not match the grant (`spec/errors.md`).
+            case .invalidProof:
+                if proofRetried { throw OAuthError.reauthenticate(.credentialsInvalidated) }
+                proofRetried = true
             case .useDpopNonce(let nonce):
                 // `attempt` already remembered the nonce off this response, so the next proof
                 // carries it. A challenge without one, or a second challenge, cannot be answered
@@ -129,6 +140,8 @@ package struct HTTPUserInfoClient: UserInfoClient {
             throw OAuthError.recoverable(.network(detail: "userinfo request failed", attempts: 1, elapsedMillis: 0))
         }
 
+        // The server's clock, off every answer: the retry of an `invalid_dpop_proof` is minted from it.
+        if let dpop { await dpop.observe(serverDate: response.header("Date"), age: response.header("Age")) }
         // Every response may carry a nonce, not only a challenge: the next proof to this origin
         // should have it.
         let nonce = response.header("DPoP-Nonce")
@@ -138,8 +151,12 @@ package struct HTTPUserInfoClient: UserInfoClient {
         case 200..<300:
             return .body(response.body, signed: Self.isSigned(response))
         case 401:
-            if bound, WwwAuthenticate.error(response.header("WWW-Authenticate")) == "use_dpop_nonce" {
-                return .useDpopNonce(nonce: nonce)
+            if bound {
+                switch WwwAuthenticate.error(response.header("WWW-Authenticate")) {
+                case "use_dpop_nonce": return .useDpopNonce(nonce: nonce)
+                case "invalid_dpop_proof": return .invalidProof
+                default: break
+                }
             }
             return .rejected
         // A transient condition is the operation's retry budget (`server`, with the `Retry-After`

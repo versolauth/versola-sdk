@@ -15,6 +15,12 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # The `Client` / `BaseClient` types of OAuthClient.httpClient(), so an app composes the
+  # authenticated client with its own interceptors. Dart-team package (dart.dev), BSD-3-Clause;
+  # pulls http_parser and web (same publisher). A range across 1.x, not a one-minor pin: the
+  # type is part of the public API and shared with the integrator's own graph, where a tight pin
+  # would fail their resolve (flutter.md, "Packages and dependencies"). 1.6.0 is the tested floor.
+  http: ">=1.6.0 <2.0.0"
 
 dev_dependencies:
   flutter_test:
