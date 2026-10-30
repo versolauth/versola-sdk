@@ -17,7 +17,7 @@ import versola.oauth.flutter.UserInfoFailure
  * real time here, as in the native driver: the realm issues tokens short enough to expire within
  * the test, and the wait is bounded, not fixed (`Scenario31SessionWithoutRefreshTokenTest`).
  *
- * Flutter has no authenticated client to observe the expiry through, so the two paths that ask
+ * The tests ask the SDK directly rather than through `httpRequest`, so the two paths that ask
  * the SDK for a live access token are the two that take its place: `accessToken()` in the first
  * test, `userInfo()` (which needs a live token as well) in the second.
  */

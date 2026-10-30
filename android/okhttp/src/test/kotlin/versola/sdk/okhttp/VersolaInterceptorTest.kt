@@ -151,6 +151,54 @@ class VersolaInterceptorTest {
     }
 
     @Test
+    fun `an Authorization and a DPoP header the app set are replaced, never sent beside ours (DPoP token)`() {
+        server.enqueue(ok())
+        val request = get().newBuilder()
+            .addHeader("Authorization", "Bearer app-supplied")
+            .addHeader("authorization", "Bearer app-supplied-too")
+            .addHeader("DPoP", "app-forged")
+            .build()
+
+        client().newCall(request).execute().close()
+
+        val recorded = server.takeRequest()
+        assertEquals(listOf("DPoP token-0"), recorded.headers.values("Authorization"))
+        assertEquals(listOf("proof-1"), recorded.headers.values("DPoP"))
+    }
+
+    @Test
+    fun `an Authorization and a DPoP header the app set are replaced or dropped under a bearer token`() {
+        tokens = FakeTokenSource(AccessToken("token-0", isDpopBound = false))
+        server.enqueue(ok())
+        val request = get().newBuilder()
+            .addHeader("Authorization", "Bearer app-supplied")
+            .addHeader("DPoP", "app-forged")
+            .build()
+
+        client().newCall(request).execute().close()
+
+        val recorded = server.takeRequest()
+        assertEquals(listOf("Bearer token-0"), recorded.headers.values("Authorization"))
+        assertTrue(recorded.headers.values("DPoP").isEmpty())
+    }
+
+    @Test
+    fun `the headers the app set on a request outside the scope are left as they were`() {
+        server.enqueue(ok())
+        val other = client(base = server.url("/resources/"))
+        val request = get("/oauth/token").newBuilder()
+            .addHeader("Authorization", "Bearer app-own-credential")
+            .addHeader("DPoP", "app-own-proof")
+            .build()
+
+        other.newCall(request).execute().close()
+
+        val recorded = server.takeRequest()
+        assertEquals("Bearer app-own-credential", recorded.headers["Authorization"])
+        assertEquals("app-own-proof", recorded.headers["DPoP"])
+    }
+
+    @Test
     fun `a request outside the edge base URL is passed through untouched`() {
         server.enqueue(ok())
 

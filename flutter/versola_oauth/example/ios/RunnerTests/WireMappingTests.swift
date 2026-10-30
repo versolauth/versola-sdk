@@ -1,3 +1,5 @@
+import Flutter
+import Foundation
 import OAuthClient
 import XCTest
 
@@ -75,5 +77,95 @@ final class WireMappingTests: XCTestCase {
     func testTheSevenSessionStatesMapOneToOneAndInOrder() {
         let states: [SessionState] = [.unauthenticated, .authorizing, .authenticated, .refreshing, .stepUpRequired, .locked, .loggingOut]
         XCTAssertEqual(states.map { $0.toMessage().rawValue }, Array(0..<7))
+    }
+
+    // MARK: HTTP
+
+    private func request(
+        method: String = "GET", url: String = "https://api.example.com/items?page=2",
+        headers: [(String, String)] = [], body: [UInt8]? = nil
+    ) -> HttpRequestMessage {
+        HttpRequestMessage(
+            method: method, url: url, headers: headers.map { HttpHeaderMessage(name: $0.0, value: $0.1) },
+            body: body.map { FlutterStandardTypedData(bytes: Data($0)) }
+        )
+    }
+
+    private func refused(_ message: HttpRequestMessage, file: StaticString = #filePath, line: UInt = #line) -> String? {
+        do {
+            _ = try message.toURLRequest()
+            XCTFail("expected the request to be refused", file: file, line: line)
+            return nil
+        } catch let error as OAuthError {
+            guard case .configuration(.invalidConfiguration(let detail)) = error else {
+                XCTFail("expected invalidConfiguration, got \(error)", file: file, line: line)
+                return nil
+            }
+            return detail
+        } catch {
+            XCTFail("expected an OAuthError, got \(error)", file: file, line: line)
+            return nil
+        }
+    }
+
+    func testARequestKeepsItsMethodUrlHeadersAndBytes() throws {
+        let sent = try request(method: "POST", headers: [("X-Trace", "abc"), ("Content-Type", "application/json")], body: Array("payload".utf8)).toURLRequest()
+
+        XCTAssertEqual(sent.httpMethod, "POST")
+        XCTAssertEqual(sent.url?.absoluteString, "https://api.example.com/items?page=2")
+        XCTAssertEqual(sent.value(forHTTPHeaderField: "x-trace"), "abc")
+        XCTAssertEqual(sent.value(forHTTPHeaderField: "Content-Type"), "application/json")
+        XCTAssertEqual(sent.httpBody, Data("payload".utf8))
+    }
+
+    func testARepeatedRequestHeaderKeepsEveryValue() throws {
+        let sent = try request(headers: [("Accept", "a/b"), ("accept", "c/d")]).toURLRequest()
+
+        XCTAssertEqual(sent.value(forHTTPHeaderField: "Accept"), "a/b,c/d")
+    }
+
+    func testTheMappingAddsNoAuthorizationAndKeepsTheAppsOwn() throws {
+        // Replacing it on a protected origin is the SDK session's rule; on any other origin the app's
+        // header must reach the wire as written, so the glue neither adds nor drops one.
+        let none = try request().toURLRequest()
+        XCTAssertNil(none.value(forHTTPHeaderField: "Authorization"))
+        XCTAssertNil(none.value(forHTTPHeaderField: "DPoP"))
+        let own = try request(headers: [("Authorization", "Bearer app-own")]).toURLRequest()
+        XCTAssertEqual(own.value(forHTTPHeaderField: "Authorization"), "Bearer app-own")
+    }
+
+    func testAnEmptyBodyIsNoBodyAndABodyOnGetOrHeadIsRefusedRatherThanDropped() throws {
+        XCTAssertNil(try request(method: "POST", body: []).toURLRequest().httpBody)
+        XCTAssertNil(try request(method: "GET", body: []).toURLRequest().httpBody)
+        XCTAssertNotNil(refused(request(method: "GET", body: [1])))
+        XCTAssertNotNil(refused(request(method: "HEAD", body: [1])))
+    }
+
+    func testARelativeUrlANonHttpSchemeAndAMissingHostAreRefusedWithoutEchoingThem() {
+        for url in ["/items", "ftp://api.example.com/x", "ws://api.example.com/x", "https:///x", ""] {
+            let detail = refused(request(url: url))
+            XCTAssertFalse(url.isEmpty ? false : (detail ?? "").contains(url), url)
+        }
+    }
+
+    func testAMalformedHeaderIsRefusedWithAFixedTextThatDoesNotQuoteItsValue() {
+        for header in [("Authorization", "Bearer s3cr3t\r\nX: y"), ("Bad Name", "x"), ("X-Nul", "a\0b"), ("", "x")] {
+            let detail = refused(request(headers: [header]))
+            XCTAssertFalse((detail ?? "").contains("s3cr3t"))
+        }
+    }
+
+    func testAResponseKeepsStatusBytesAndHeaders() throws {
+        let url = URL(string: "https://api.example.com/")!
+        let response = try XCTUnwrap(HTTPURLResponse(url: url, statusCode: 429, httpVersion: "HTTP/1.1", headerFields: ["Retry-After": "7", "WWW-Authenticate": "Bearer realm=\"a\", DPoP algs=\"ES256\""]))
+
+        let message = HttpResponseMessage(Data([0, 1, 2, 3]), response)
+
+        XCTAssertEqual(message.status, 429)
+        XCTAssertNil(message.reasonPhrase, "URLSession reports none")
+        XCTAssertEqual(message.body.data, Data([0, 1, 2, 3]))
+        XCTAssertEqual(Dictionary(uniqueKeysWithValues: message.headers.map { ($0.name.lowercased(), $0.value) }), [
+            "retry-after": "7", "www-authenticate": "Bearer realm=\"a\", DPoP algs=\"ES256\"",
+        ])
     }
 }

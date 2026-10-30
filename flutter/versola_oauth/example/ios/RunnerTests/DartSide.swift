@@ -117,6 +117,18 @@ final class DartSide: Sendable {
         remember("userInfo", try await call("userInfo", [handle]) as! UserInfoResult)
     }
 
+    /// `OAuthClient.httpClient().send(...)` as the Dart client sends it: one `httpRequest` call with the
+    /// request's method, URL, header pairs and bytes. `origins` nil is the configuration's.
+    func httpRequest(
+        _ url: String, method: String = "GET", headers: [(String, String)] = [], body: [UInt8]? = nil, origins: [String]? = nil
+    ) async throws -> HttpResult {
+        let request = HttpRequestMessage(
+            method: method, url: url, headers: headers.map { HttpHeaderMessage(name: $0.0, value: $0.1) },
+            body: body.map { FlutterStandardTypedData(bytes: Data($0)) }, origins: origins
+        )
+        return remember("httpRequest", try await call("httpRequest", [handle, request]) as! HttpResult)
+    }
+
     /// `SessionStateEvents.sessionStates()`: listens as Dart's `receiveBroadcastStream` does (a
     /// `listen` method call on the event channel the plugin registered for this handle) and
     /// collects what the plugin sends until `cancel()`.

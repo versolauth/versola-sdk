@@ -69,7 +69,9 @@ in `security.md`; what the platform SDKs do is in `android-kotlin.md` and `ios-s
 
 - Allowed: configuration values, session state, typed results and errors, the user's validated
   claims, and the short-lived access token, returned only from the call whose purpose is to hand
-  the app a token (issue #46 decision 7: Flutter apps call APIs through `dio` or `http`).
+  the app a token (issue #46 decision 7). Apps call their API through `OAuthClient.httpClient()`, a
+  `package:http` client that executes the request natively, so a DPoP-bound token is usable from Dart
+  with no proof-minting capability crossing; `dio` uses it through a small adapter.
 - Never: the refresh token, any private key, key material, a DPoP proof minting capability, the
   pending request, `state`, the PKCE verifier, or the ID token's raw form for storage. No secret
   in a `PlatformException` message, in `debugPrint`, in the example app's UI or in a test fixture.

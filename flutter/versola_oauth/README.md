@@ -50,7 +50,7 @@ client.sessionStates().listen((state) => print(state));
 
 try {
   await client.login();
-  final token = await client.accessToken(); // call your API with dio or http
+  final response = await client.httpClient().get(Uri.https('api.example.com', '/items'));
   await client.logout();
 } on StepUpError catch (e) {
   await client.stepUp(e);
@@ -62,6 +62,45 @@ try {
   // a deployment mistake: fix the configuration
 }
 ```
+
+### Calling your API
+
+`client.httpClient()` returns a `package:http` `Client` that runs each request **natively**, through
+the SDK's own authenticated client: the access token, the DPoP key and its proofs, the refresh on a
+401 and the origin allow-list (`protectedOrigins`) stay native, so a DPoP-bound token works from Dart
+and no token reaches your code. Add `http` (`>=1.6.0 <1.7.0`) to your own `pubspec.yaml` to import it.
+A request to an origin outside `protectedOrigins` goes out untouched; a 3xx is returned, not followed;
+a 403, 429 or 5xx comes back as the response; a step-up challenge throws `StepUpError`, which you
+answer with `client.stepUp(e)` and then repeat the request.
+
+Add your own interceptors by wrapping the client, with ours innermost: the DPoP proof depends on the
+final method and URL, so authentication must run after every rewrite of yours.
+
+```dart
+import 'package:http/http.dart' as http;
+import 'package:http/retry.dart';
+
+class RequestId extends http.BaseClient {
+  RequestId(this._inner);
+  final http.Client _inner;
+
+  @override
+  Future<http.StreamedResponse> send(http.BaseRequest request) {
+    request.headers['x-request-id'] = newId(); // your header, URL or logging changes go here
+    return _inner.send(request);
+  }
+}
+
+final api = RetryClient(RequestId(client.httpClient()));
+```
+
+For `dio`, a small adapter makes this client its transport; it is in the dartdoc of
+`OAuthClient.httpClient`. Things to know: bodies are buffered in memory in both directions (no
+streaming of large files); timeouts are the native client's own; there is no cancellation
+(`Abortable` is not honoured); a call with no HTTP response is a `ClientException`; an
+`Authorization` header you set for a protected origin is replaced by the SDK's, never sent beside it.
+`client.accessToken()` remains as an escape hatch for code that needs the raw value (a DPoP-bound token
+cannot be presented with it: use `httpClient()`).
 
 Errors are four categories (`RecoverableError`, `ReauthenticateError`, `StepUpError`,
 `ConfigurationError`). Declare the redirect URI in the app's Android manifest and iOS associated

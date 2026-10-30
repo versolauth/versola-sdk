@@ -75,9 +75,14 @@ notes: >
   Enclave. Where the platforms spell the option differently, Android's TokenBinding.Dpop(requireHardware = true)
   and iOS's TokenBinding.dpop(required: true) are the same assertion (the key must be hardware-backed,
   errors.md "Hardware key unavailable"); a Software key is refused by both before any authorization
-  request. Flutter runs this through its bridge with one difference: it has no authenticated client
-  (`spec/oauth-sdk-api.md` section 10) and no way to mint a proof, so the authenticated-call
-  assertions, the resource's nonce challenges and the replay of a proof the SDK itself sent are the
-  native facades'; the bridge makes the stolen-token requests with the token `accessToken()`
-  returned (token type DPoP) and asserts the binding, the refresh, userInfo(), logout(), the provider's
-  nonce challenges, the dpop_jkt refusal, the stolen-token refusals and requireHardware as the others do. A Flutter app that receives a DPoP-bound token cannot present it itself.
+  request. Flutter runs this through its bridge, and since it has the authenticated client
+  (`OAuthClient.httpClient()`, `spec/oauth-sdk-api.md` section 10) the authenticated-call assertions
+  and the resource's nonce challenges are asserted through it: the request is one `httpRequest`
+  call, the plugin runs it with the native client, and the proof, `ath`, the nonce and the replay of
+  the request are the native client's, on the wire and at the resource server, with the token never
+  handed to Dart. Flutter mints no proof itself, so the replay of a proof the SDK itself sent
+  needs the harness to reach the SDK's request and is the native facades' alone; the bridge makes
+  the stolen-token requests with the token `accessToken()` returned (token type DPoP, which a
+  Flutter app cannot present itself) and asserts the binding, the refresh, userInfo(), logout(), the
+  provider's nonce challenges, the dpop_jkt refusal, the stolen-token refusals and requireHardware
+  as the others do.

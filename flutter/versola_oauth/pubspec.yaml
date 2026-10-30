@@ -15,6 +15,10 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # The `Client` / `BaseClient` types of OAuthClient.httpClient(), so an app composes the
+  # authenticated client with its own interceptors. Dart-team package (dart.dev), BSD-3-Clause;
+  # pulls http_parser and web (same publisher). Pinned to one minor like every dependency.
+  http: ">=1.6.0 <1.7.0"
 
 dev_dependencies:
   flutter_test:

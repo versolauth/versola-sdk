@@ -263,8 +263,10 @@ fails at its first login. Scenario 33 skips itself on a provider that does not a
 proofs (Hydra), with that reason. Its DPoP key is software-tier in every run described here (the JVM
 and the iOS host or simulator have no secure element), so the Keystore's StrongBox and TEE tiers and the
 Secure Enclave remain the device tier's; the run says so, the PR says so. The counts to expect:
-Keycloak 41 tests on each native driver (27 + scenario 33's fourteen) and 38 through each Flutter bridge
-(the iOS one runs 3 wire-mapping tests more); Hydra 25 passed and 16 skipped natively.
+Keycloak 41 tests on each native driver (27 + scenario 33's fourteen), 71 through the Android Flutter
+bridge and 60 through the iOS one (which also runs 10 wire-mapping tests); Hydra 25 passed and 16
+skipped natively, and 53 passed through each bridge (18 skipped on Android, 17 on iOS: scenario 33 and
+the PAR tests Hydra does not advertise).
 
 A run takes about a minute per provider, most of it scenario 31 waiting for ten-second tokens
 to expire. `conformance/README.md` ("Providers") says how the proxy, the HTTP browser leg and the

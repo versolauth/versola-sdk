@@ -195,8 +195,14 @@ public class VersolaInterceptor(
     private suspend fun sign(request: Request, token: AccessToken): Request {
         val builder = request.newBuilder()
         val bound = token.isDpopBound && dpop != null
+        // `header` replaces every value of the name, so an `Authorization` the app put on a
+        // request to a protected origin is never sent beside ours.
         builder.header("Authorization", "${if (bound) "DPoP" else "Bearer"} ${token.value}")
-        if (bound) {
+        if (!bound) {
+            // A proof the app supplied would be a second credential nobody asked for, over a
+            // token it does not belong to. The iOS session drops it the same way.
+            builder.removeHeader("DPoP")
+        } else {
             builder.header(
                 "DPoP",
                 // `ath` over the token actually being sent, per §4.2. The factory derives

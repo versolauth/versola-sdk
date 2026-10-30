@@ -1,6 +1,9 @@
 import 'dart:async';
 
+import 'package:http/http.dart' as http;
+
 import 'errors.dart';
+import 'http_client.dart';
 import 'mapping.dart';
 import 'messages.g.dart' as bridge;
 import 'types.dart';
@@ -171,6 +174,120 @@ final class OAuthClient {
         throw errorFromMessage(error);
     }
   }
+
+  /// A `package:http` [http.Client] that executes each request **natively**, with the session
+  /// attached: the same authenticated client Android (`OAuthClient.call`) and iOS
+  /// (`authenticatedSession`) apps use (`spec/oauth-sdk-api.md` section 10). Dart describes the
+  /// request and receives the response; the access token, the DPoP key and its proofs, the
+  /// single-flight refresh and the origin allow-list stay native, so a DPoP-bound token is usable
+  /// from Dart without ever being handed to it.
+  ///
+  /// For a request to one of [origins] (default: the configuration's `protectedOrigins`; the
+  /// origin is `scheme://host[:port]`, any path) the SDK:
+  ///
+  /// * attaches `Authorization: Bearer` or, for a DPoP-bound token, `Authorization: DPoP` and a
+  ///   proof over the final method and URL;
+  /// * on a 401 that is neither a step-up nor a nonce demand, refreshes the token once and
+  ///   replays the request once (a second 401 is [ReauthenticateError], `sessionRejected`); on
+  ///   a DPoP nonce demand retries once with the nonce ([RecoverableError], `nonceLoop`, if the
+  ///   server keeps demanding);
+  /// * throws [StepUpError] on an RFC 9470 challenge, which the app answers with [stepUp] and
+  ///   then re-issues the request.
+  ///
+  /// A request to any other origin is sent as the app built it, no token and no proof, and its
+  /// 401 is returned as it is. Everything else is the response: a 3xx is **not followed**
+  /// (`followRedirects` and `maxRedirects` are ignored; `isRedirect` tells the two apart and the
+  /// app decides), and a 403, 404, 429 or 5xx comes back with its headers and is never repeated
+  /// by the SDK. Errors are [OAuthError]s, never a `PlatformException`; a request that produced no
+  /// HTTP response at all (no route, TLS, the native client's own timeout) is a
+  /// [http.ClientException].
+  ///
+  /// **Headers.** The client sets `Authorization` (and `DPoP`) itself on a protected origin: any
+  /// value the app supplied under those names is replaced, never sent alongside the SDK's. On
+  /// other origins the app's headers go out untouched. Request headers are single-valued, as
+  /// `package:http` has it (join a list-valued header with a comma). Response header names are
+  /// lower-cased and a repeated name is joined with a comma, so
+  /// `response.headersSplitValues` recovers the values; `Set-Cookie` cannot be split reliably
+  /// that way, which is `package:http`'s limit. Android reports each value of a repeated header
+  /// apart; iOS's `URLSession` already folds them into one, which is equivalent under RFC 9110
+  /// section 5.3 except for `Set-Cookie`.
+  ///
+  /// **Bodies are buffered in memory**, in both directions and in both runtimes (Dart, then the
+  /// native client): the bridge carries bytes, not streams, so do not send or fetch a large file
+  /// through this client. No limit is enforced beyond the process's memory; use a plain client
+  /// to a pre-signed URL for bulk transfer. `Content-Length` of a response may describe the
+  /// encoded body the platform has already decoded; `contentLength` is the buffered size.
+  ///
+  /// **Timeouts and cancellation.** Timeouts are the native client's own configuration (OkHttp's
+  /// defaults on Android, the `URLSession`'s on iOS); this plugin sets none. A Dart
+  /// `Future.timeout` stops waiting but does not cancel the native call, and `Abortable`
+  /// requests are not aborted: `package:http` offers no cancellation the bridge could carry, and
+  /// none is invented here.
+  ///
+  /// [origins] is validated natively on the first request, which fails before anything is sent
+  /// with [ConfigurationError] (`invalidConfiguration`) when the set (or, with none given, the
+  /// configured `protectedOrigins`) is empty, has a non-`https` origin (`http` is allowed on a
+  /// loopback host) or an entry with a path, query or fragment.
+  ///
+  /// **Composing.** This client is a `BaseClient`: wrap it with the app's own interceptors, and
+  /// keep it the *innermost* one, because the proof depends on the final method and URL:
+  ///
+  /// ```dart
+  /// class LoggingClient extends http.BaseClient {
+  ///   LoggingClient(this._inner);
+  ///   final http.Client _inner;
+  ///   @override
+  ///   Future<http.StreamedResponse> send(http.BaseRequest request) async {
+  ///     request.headers['x-request-id'] = newId(); // the app's rewrite runs first
+  ///     return _inner.send(request);
+  ///   }
+  /// }
+  ///
+  /// final client = RetryClient(LoggingClient(oauth.httpClient())); // package:http/retry.dart
+  /// try {
+  ///   final response = await client.get(Uri.https('api.example.com', '/items'));
+  /// } on StepUpError catch (challenge) {
+  ///   await oauth.stepUp(challenge); // then repeat the request
+  /// }
+  /// ```
+  ///
+  /// With `dio`, a small adapter makes this client dio's transport (dio's own interceptors then
+  /// wrap it, so the authentication step is still last; `package:dio` is the app's dependency,
+  /// not this plugin's). A thrown [OAuthError] arrives as the `error` of a `DioException`:
+  ///
+  /// ```dart
+  /// class VersolaAdapter implements HttpClientAdapter {
+  ///   VersolaAdapter(this._client);
+  ///   final http.Client _client;
+  ///
+  ///   @override
+  ///   Future<ResponseBody> fetch(RequestOptions options,
+  ///       Stream<Uint8List>? requestStream, Future<void>? cancelFuture) async {
+  ///     final request = http.Request(options.method, options.uri);
+  ///     options.headers.forEach((name, value) => request.headers[name] = '$value');
+  ///     if (requestStream != null) {
+  ///       request.bodyBytes = Uint8List.fromList(
+  ///           [for (final chunk in await requestStream.toList()) ...chunk]);
+  ///     }
+  ///     final response = await _client.send(request);
+  ///     return ResponseBody(response.stream.cast<Uint8List>(), response.statusCode,
+  ///         headers: {
+  ///           for (final entry in response.headers.entries) entry.key: [entry.value],
+  ///         },
+  ///         statusMessage: response.reasonPhrase,
+  ///         isRedirect: response.isRedirect);
+  ///   }
+  ///
+  ///   @override
+  ///   void close({bool force = false}) => _client.close();
+  /// }
+  ///
+  /// final dio = Dio()..httpClientAdapter = VersolaAdapter(oauth.httpClient());
+  /// ```
+  ///
+  /// Each call returns a new client; close it when done.
+  http.Client httpClient({Set<String>? origins}) =>
+      AuthenticatedHttpClient(_host, _handle, origins);
 
   /// Which key tier the DPoP key reached (`secureEnclave`, `strongBox`, `trustedEnvironment`,
   /// `software`), or null under bearer. Asking this generates the key natively, so under
