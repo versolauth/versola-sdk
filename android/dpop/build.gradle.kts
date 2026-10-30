@@ -13,6 +13,13 @@ android {
 
     defaultConfig {
         minSdk = 26
+        // What an app must compile against, which is not what this module builds with: compileSdk stays
+        // 37 for our build, but AGP would publish it as the AAR's minCompileSdk and force every app to 37.
+        // The highest platform API the AAR links against is KeyInfo.getSecurityLevel (31, behind SDK_INT);
+        // the public API names nothing newer than API 1. No AndroidX dependency asks for more, so 31 is
+        // this module's own demand; the app's check also applies OkHttp's value, which arrives through
+        // :oauth-core (37 today).
+        aarMetadata { minCompileSdk = 31 }
         // The instrumented tests under src/androidTest run against a real Android Keystore
         // on an emulator (#30, #37): the tier negotiation, the authentication window and the
         // exception mapping have no JVM equivalent, and Robolectric emulates none of them.

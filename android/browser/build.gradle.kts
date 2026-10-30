@@ -13,6 +13,11 @@ android {
 
     defaultConfig {
         minSdk = 26
+        // What an app must compile against, which is not what this module builds with (see :dpop).
+        // The highest platform API the AAR links against is Application.registerActivityLifecycleCallbacks
+        // (14); the public API names only Context and Activity. The app's own check also applies
+        // androidx.browser's value (36), which is the higher one.
+        aarMetadata { minCompileSdk = 14 }
         // No targetSdk on a library module: AGP requires libraries with a
         // targetSdk value to match consumers' compileSdk, which only tightens
         // things pointlessly here. Target 36 (#1 SS4) is the app's decision.

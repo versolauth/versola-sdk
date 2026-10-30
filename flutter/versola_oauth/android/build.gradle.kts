@@ -16,6 +16,10 @@ android {
     defaultConfig {
         // The SDK's floor (android/oauth): Keystore-wrapped stores and Auth Tab need API 26.
         minSdk = 26
+        // What an app must compile against, which is not compileSdk above (see android/dpop): the
+        // glue links only Context and Log (API 1). The app's check also applies the SDK's
+        // dependencies' values (OkHttp's 37 today), which are the higher ones.
+        aarMetadata { minCompileSdk = 1 }
     }
 
     compileOptions {
