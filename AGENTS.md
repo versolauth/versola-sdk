@@ -81,9 +81,10 @@ reporting the change as finished.
 - Stage files by explicit path, not by directory; check `git status --short` first so throwaway
   prototypes and build output never enter a commit.
 - Hooks in `.claude/hooks/` (registered in `.claude/settings.json`) enforce, among other things:
-  no force-push, no push to `main`, no hand edits of API dumps or generated bridge code, and no
-  `android.*` import in the protocol core. A hook that blocks you is right until the operator says
-  otherwise; do not work around it.
+  no force-push, no push to `main`, no push of a release tag (`X.Y.Z`, or `--tags`; the operator
+  lifts it with `VERSOLA_ALLOW_RELEASE_TAG_PUSH=1` in the session's environment), no hand edits of
+  API dumps or generated bridge code, and no `android.*` import in the protocol core. A hook that
+  blocks you is right until the operator says otherwise; do not work around it.
 - Pull request: follow `.github/pull_request_template.md`: what changed, which tests at which
   tier (ran / not run with the reason), any public API change (dump, Swift, Dart), any spec change,
   and any gap you left.
