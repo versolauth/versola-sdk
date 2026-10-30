@@ -12,6 +12,9 @@ source: this directory, [`spec/`](../spec/) and the per-platform READMEs.
 - [`migrating-from-appauth.md`](migrating-from-appauth.md): moving an app from AppAuth to the
   generic SDK.
 
+- [`releasing.md`](releasing.md): the maintainer's runbook for a release (Maven Central, Swift
+  Package Manager, pub.dev) and what has to exist before the first one.
+
 ## Decision records
 
 - [`adr/0001-generic-sdk-naming-and-layering.md`](adr/0001-generic-sdk-naming-and-layering.md):

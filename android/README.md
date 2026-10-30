@@ -11,8 +11,10 @@ source.
 Nothing is published: no Maven Central artefact and no release tag. The intended coordinates, from
 version 0.1.0, are `kz.versola:oauth-android` for the generic facade and
 `kz.versola:versola-android` for the Versola facade
-([ADR 0001](../docs/adr/0001-generic-sdk-naming-and-layering.md)). No module has publishing
-configured yet, and the release workflow is dormant. The repository is private.
+([ADR 0001](../docs/adr/0001-generic-sdk-naming-and-layering.md)). Publishing is configured and
+the release workflows are dormant: eight artefacts will be published under `kz.versola` (the table
+below), and [`docs/releasing.md`](../docs/releasing.md) is the maintainer's runbook. The repository
+is private.
 
 To use it today, include this repository's `android/` build in yours as a composite build and
 substitute the artefact with the project. This is the block the Flutter example uses
@@ -41,22 +43,22 @@ block once the artefact is on Maven Central.
 
 ## Modules
 
-| Module | Package | Role | Intended artefact |
+| Module | Package | Role | Artefact (from 0.1.0) |
 |---|---|---|---|
 | `:oauth` | `versola.oauth` | The generic `OAuthClient` facade | `kz.versola:oauth-android` |
 | `:sdk` | `versola.sdk` | The `Versola` facade for the Versola server | `kz.versola:versola-android` |
-| `:oauth-core` | `versola.oauth.core` | The protocol engine: discovery, PKCE, token client, ID-token validation, session coordinator, errors. Plain JVM, no `android.*` import | A dependency of the two facades, not an artefact an app adds |
-| `:core` | `versola.sdk.core` | What is Versola-specific: the edge back channel | A dependency of `:sdk` only |
-| `:dpop` | `versola.sdk.dpop` | Hardware-backed DPoP key and proofs | A dependency of the facades |
-| `:storage` | `versola.sdk.storage` | Keystore-wrapped credential and pending-request stores | A dependency of the facades |
-| `:browser` | `versola.sdk.browser` | Auth Tab, Custom Tabs and the redirect activity | A dependency of the facades; `:oauth` exposes it (see below) |
-| `:okhttp` | `versola.sdk.okhttp` | The authenticated OkHttp interceptor | A dependency of the facades |
+| `:oauth-core` | `versola.oauth.core` | The protocol engine: discovery, PKCE, token client, ID-token validation, session coordinator, errors. Plain JVM, no `android.*` import | `kz.versola:oauth-core` (JAR), pulled in by the facades |
+| `:core` | `versola.sdk.core` | What is Versola-specific: the edge back channel | `kz.versola:versola-core-android`, pulled in by `:sdk` |
+| `:dpop` | `versola.sdk.dpop` | Hardware-backed DPoP key and proofs | `kz.versola:dpop-android`, pulled in by the facades |
+| `:storage` | `versola.sdk.storage` | Keystore-wrapped credential and pending-request stores | `kz.versola:storage-android`, pulled in by the facades |
+| `:browser` | `versola.sdk.browser` | Auth Tab, Custom Tabs and the redirect activity | `kz.versola:browser-android`, pulled in by the facades; `:oauth` exposes it (see below) |
+| `:okhttp` | `versola.sdk.okhttp` | The authenticated OkHttp interceptor | `kz.versola:okhttp-android`, pulled in by the facades |
 | `:conformance-android`, `:conformance-oauth` | | Test drivers against a staged server or a provider container | Nothing is published |
 | `:samples:oauth` | | A minified sample app over the generic facade | Nothing is published |
 
-Where the artefacts of the dependency modules end up on Maven Central is not decided in this
-repository; which of them are separate artefacts is settled when publishing is wired. `:oauth`
-declares `:oauth-core`, `:okhttp`, `:browser` and `:dpop` as `api` dependencies because their types
+The dependency modules are separate artefacts because a facade's POM names them: a Gradle project
+dependency becomes a Maven dependency, so an app that adds `kz.versola:oauth-android` receives the
+rest transitively. `:oauth` declares `:oauth-core`, `:okhttp`, `:browser` and `:dpop` as `api` dependencies because their types
 are on its public surface (the state, the errors, the interceptor, `VersolaRedirectActivity` and
 `KeyAttestation`), so an app that depends on `:oauth` sees them.
 
