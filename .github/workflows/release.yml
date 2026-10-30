@@ -87,6 +87,26 @@ jobs:
           ORG_GRADLE_PROJECT_signingKey: ${{ secrets.MAVEN_SIGNING_KEY }}
           ORG_GRADLE_PROJECT_signingPassword: ${{ secrets.MAVEN_SIGNING_PASSWORD }}
 
+      # What a consumer would resolve, checked on the exact zip that is about to be uploaded: every
+      # module and every artefact file has its signature (presence only; the private key stays in
+      # the step above), and a throwaway app with mavenCentral() and google() builds against the
+      # unzipped bundle, which is listed first and is the only source of io.versola. The tag is
+      # not on Central yet, so the app cannot pass by finding the release there. A failure stops
+      # the job before anything reaches Central; this is what makes the later Publish click a
+      # click on a checked artefact. The scripts live at the repository root, hence the
+      # working-directory override.
+      - name: Check the bundle as a consumer would resolve it
+        working-directory: .
+        run: |
+          bundle="$RUNNER_TEMP/bundle"
+          rm -rf "$bundle"
+          mkdir "$bundle"
+          unzip -q "android/build/central-bundle/versola-${RELEASE_TAG}.zip" -d "$bundle"
+          tools/verify-consumer/check-bundle.sh "$bundle" "$RELEASE_TAG"
+          VERIFY_MAVEN_REPO="file://$bundle" tools/verify-consumer/android.sh "$RELEASE_TAG"
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+
       # Central Portal Publisher API (https://central.sonatype.com/api/v1/publisher/upload):
       # `Authorization: Bearer base64(user:password)` with a Portal user token, a multipart part
       # named `bundle`, `publishingType` USER_MANAGED or AUTOMATIC. The token goes to curl on stdin as a
