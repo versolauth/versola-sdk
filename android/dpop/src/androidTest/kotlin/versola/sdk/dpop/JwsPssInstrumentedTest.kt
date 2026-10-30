@@ -21,6 +21,8 @@ import versola.oauth.core.JwsSignatures
 class JwsPssInstrumentedTest {
 
     private val keys = KeyPairGenerator.getInstance("RSA").apply { initialize(2048) }.generateKeyPair()
+    // Synthetic header/payload only, no credential or signature. Owner: @goshacodes; review: 2027-01-30.
+    // nosemgrep: generic.secrets.security.detected-jwt-token.detected-jwt-token
     private val signingInput = "eyJhbGciOiJQUzI1NiJ9.eyJzdWIiOiJhbGljZSJ9".toByteArray(Charsets.US_ASCII)
 
     private fun pss(digest: String, bits: Int): Signature =
