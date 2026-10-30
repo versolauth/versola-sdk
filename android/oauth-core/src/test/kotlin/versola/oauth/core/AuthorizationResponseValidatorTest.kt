@@ -129,6 +129,32 @@ class AuthorizationResponseValidatorTest {
     }
 
     @Test
+    fun `a malformed redirect carries no cause and nothing of it in the error text`() {
+        // `URISyntaxException.message` is the whole URI and `URLDecoder`'s quotes part of the
+        // query: either, attached as a cause, would put a code or a state into a crash report.
+        for (redirect in listOf(
+            "https://app.example.com/oauth?code=SECRETCODE&state=SECRETSTATE a",
+            "https://app.example.com/oauth?code=SECRETCODE&state=SECRETSTATE%zz",
+        )) {
+            val error = assertThrows(VersolaError.Configuration::class.java) {
+                AuthorizationResponseValidator.validate(redirect, pending(), ISSUER, issParameterSupported = true)
+            }
+
+            assertEquals(VersolaError.Configuration.Detail.MalformedAuthorizationResponse, error.detail)
+            assertEquals(null, error.cause)
+            val text = error.toString() + error.message + error.detail
+            assertTrue(text, "SECRET" !in text)
+        }
+    }
+
+    @Test
+    fun `a pending request prints none of the values a redirect is matched against`() {
+        val text = pending(state = "SECRETSTATE").toString()
+
+        assertTrue(text, "SECRETSTATE" !in text && "the-nonce" !in text && "dBjftJeZ4CVP" !in text)
+    }
+
+    @Test
     fun `access_denied is Reauthenticate, not Configuration`() {
         val error = assertThrows(VersolaError.Reauthenticate::class.java) {
             AuthorizationResponseValidator.validate(

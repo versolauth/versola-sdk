@@ -59,7 +59,12 @@ public class PendingAuthorizationRequest public constructor(
     public fun isExpired(nowEpochMillis: Long): Boolean =
         nowEpochMillis - createdAtEpochMillis >= MAX_AGE_MILLIS
 
-    override fun toString(): String = "PendingAuthorizationRequest(state=$state, createdAt=$createdAtEpochMillis)"
+    /**
+     * Neither `state` nor `nonce` nor the verifier: the `state` is what a redirect is matched
+     * against and the verifier is the other half of the PKCE binding, and a log line or crash
+     * report that carries them gives an observer the half of the binding it lacks.
+     */
+    override fun toString(): String = "PendingAuthorizationRequest(redacted, createdAt=$createdAtEpochMillis)"
 
     public companion object {
         /** Ten minutes, per `spec/state-machine.md`. */
