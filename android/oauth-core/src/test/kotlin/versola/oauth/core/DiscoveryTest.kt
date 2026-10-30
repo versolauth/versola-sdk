@@ -313,6 +313,92 @@ class DiscoveryTest {
         assertEquals(1, server.requestCount)
     }
 
+    // ---- the cache expires: 24 hours in memory and on disk -------------------------------------
+
+    private val day = 24L * 60 * 60 * 1000
+
+    @Test
+    fun `a document older than 24 hours is fetched again, in memory and from the disk copy`() = runTest {
+        server.enqueue(MockResponse.Builder().code(200).body(document(issuer)).build())
+        server.enqueue(MockResponse.Builder().code(200).body(document(issuer)).build())
+        server.enqueue(MockResponse.Builder().code(200).body(document(issuer)).build())
+        var now = 1_000_000_000_000L
+        val file = File(folder.newFolder(), "provider-metadata.json")
+        val service = DiscoveryService(issuer, client, FileProviderMetadataCache(file)) { now }
+
+        service.metadata()
+        now += day - 1
+        service.metadata()
+        assertEquals("still fresh one millisecond before the day is out", 1, server.requestCount)
+
+        now += 1
+        service.metadata()
+        assertEquals("expired in memory", 2, server.requestCount)
+
+        // A new process finds the disk copy; its age is the file's, not the process's.
+        file.setLastModified(now - day - 1)
+        DiscoveryService(issuer, client, FileProviderMetadataCache(file)) { now }.metadata()
+        assertEquals("expired on disk", 3, server.requestCount)
+    }
+
+    @Test
+    fun `a disk copy younger than 24 hours is used by a new process, whatever its own start time`() = runTest {
+        server.enqueue(MockResponse.Builder().code(200).body(document(issuer)).build())
+        val now = 1_000_000_000_000L
+        val file = File(folder.newFolder(), "provider-metadata.json")
+        val cache = FileProviderMetadataCache(file)
+        cache.save(discoveryJson.decodeFromString(ProviderMetadata.serializer(), document(issuer)))
+        file.setLastModified(now - day + 60_000)
+
+        DiscoveryService(issuer, client, cache) { now }.metadata()
+
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
+    fun `a clock moved back past the fetch is an expired document, not one from tomorrow`() = runTest {
+        server.enqueue(MockResponse.Builder().code(200).body(document(issuer)).build())
+        server.enqueue(MockResponse.Builder().code(200).body(document(issuer)).build())
+        var now = 1_000_000_000_000L
+        val service = DiscoveryService(issuer, client, cache()) { now }
+
+        service.metadata()
+        now -= 60_000
+        service.metadata()
+
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun `an expired document is served once more when the provider cannot be reached`() = runTest {
+        server.enqueue(MockResponse.Builder().code(200).body(document(issuer)).build())
+        var now = 1_000_000_000_000L
+        val service = DiscoveryService(issuer, client, cache()) { now }
+        val first = service.metadata()
+
+        now += day
+        server.enqueue(MockResponse.Builder().code(503).build())
+        val second = service.metadata()
+
+        // Outside an operation there is no retry budget, so one request failed and the old
+        // document answered; the next call asks again.
+        assertEquals(first, second)
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun `an expired document is not served when the refetch is answered with something wrong`() = runTest {
+        server.enqueue(MockResponse.Builder().code(200).body(document(issuer)).build())
+        var now = 1_000_000_000_000L
+        val service = DiscoveryService(issuer, client, cache()) { now }
+        service.metadata()
+
+        now += day
+        server.enqueue(MockResponse.Builder().code(200).body(documentWith("token_endpoint" to "http://idp.example.com/token")).build())
+
+        assertTrue(failure { service.metadata() } is VersolaError.Configuration)
+    }
+
     // ---- scenario 34, unit tier: discovery is repeated under the operation's budget ----------
 
     @Test

@@ -24,6 +24,14 @@ public interface ProviderMetadataCache {
     public suspend fun load(): ProviderMetadata?
     public suspend fun save(metadata: ProviderMetadata)
     public suspend fun clear()
+
+    /**
+     * When the document [load] returns was fetched, in epoch milliseconds, or null when the cache
+     * does not know. [DiscoveryService] expires a document 24 hours after it was fetched
+     * (`spec/oauth-sdk-api.md` section 4); a cache that cannot say is read as fetched just now, so
+     * it is bounded by that many hours from each load rather than never.
+     */
+    public suspend fun savedAtEpochMillis(): Long? = null
 }
 
 @VersolaInternalApi
@@ -95,10 +103,18 @@ public class HttpDiscoveryClient(
     }
 }
 
-/** A plain JSON file. Not encrypted, by the same reasoning as [ProviderMetadataCache]. */
+/**
+ * A plain JSON file. Not encrypted, by the same reasoning as [ProviderMetadataCache]. The time it
+ * was fetched is the file's modification time, which the atomic write below sets to the moment of
+ * the save.
+ */
 public class FileProviderMetadataCache(
     private val file: File,
 ) : ProviderMetadataCache {
+
+    override suspend fun savedAtEpochMillis(): Long? = withContext(Dispatchers.IO) {
+        file.lastModified().takeIf { it > 0 }
+    }
 
     override suspend fun load(): ProviderMetadata? = withContext(Dispatchers.IO) {
         if (!file.exists()) return@withContext null
@@ -128,19 +144,42 @@ public class FileProviderMetadataCache(
 
 /**
  * Discovery with its cache in front. One fetch per process at most, unless the caller forces
- * a refresh.
+ * a refresh or what is held is older than 24 hours (`spec/oauth-sdk-api.md` section 4): a
+ * provider that moved its token endpoint, or withdrew a field, is picked up within a day without
+ * the integrator shipping anything, and neither memory nor the disk copy outlives that.
+ *
+ * Past that age the document is fetched again; if that fetch cannot reach the provider the old
+ * document is served once more rather than the failure. Unlike the key set (see [JwksClient]),
+ * this document is not what anything is verified against: every endpoint in it is held to the
+ * same checks again, and what it can do a stale copy of itself has already been trusted to do.
+ * Refusing instead would make a phone that was offline for a day unable even to finish a
+ * `logout()`, whose browser leg needs the document. Only an outage is forgiven: a document that
+ * is served but wrong is still a `Configuration` failure.
  */
-public class DiscoveryService(
+public class DiscoveryService internal constructor(
     private val issuer: String,
     private val client: DiscoveryClient,
     private val cache: ProviderMetadataCache,
+    private val clock: () -> Long,
 ) {
+    public constructor(
+        issuer: String,
+        client: DiscoveryClient,
+        cache: ProviderMetadataCache,
+    ) : this(issuer, client, cache, System::currentTimeMillis)
+
     private val mutex = Mutex()
     private var inMemory: ProviderMetadata? = null
+    private var inMemoryFetchedAt = 0L
 
     public suspend fun metadata(forceRefresh: Boolean = false): ProviderMetadata = mutex.withLock {
+        // What was held but has aged out: the fallback if the provider cannot be asked.
+        var stale: ProviderMetadata? = null
         if (!forceRefresh) {
-            inMemory?.let { return@withLock it }
+            inMemory?.let {
+                if (isFresh(inMemoryFetchedAt)) return@withLock it
+                stale = it
+            }
             cache.load()?.let { cached ->
                 // A cached document from a different issuer belongs to a previous
                 // configuration of this app, and one that no longer passes the checks a fetched
@@ -157,14 +196,30 @@ public class DiscoveryService(
                     false
                 }
                 if (usable) {
-                    inMemory = cached
-                    return@withLock cached
+                    val fetchedAt = cache.savedAtEpochMillis() ?: clock()
+                    if (isFresh(fetchedAt)) {
+                        inMemory = cached
+                        inMemoryFetchedAt = fetchedAt
+                        return@withLock cached
+                    }
+                    stale = stale ?: cached
                 }
             }
         }
-        val fetched = client.fetch(issuer)
+        val fetched = try {
+            client.fetch(issuer)
+        } catch (e: VersolaError.Recoverable) {
+            return@withLock stale ?: throw e
+        }
         cache.save(fetched)
         inMemory = fetched
+        inMemoryFetchedAt = clock()
         fetched
+    }
+
+    /** Within 24 hours, and not in the future: a device clock moved back is not a document from tomorrow. */
+    private fun isFresh(fetchedAtEpochMillis: Long): Boolean {
+        val age = clock() - fetchedAtEpochMillis
+        return age in 0 until CacheLifetime.MAX_MILLIS
     }
 }

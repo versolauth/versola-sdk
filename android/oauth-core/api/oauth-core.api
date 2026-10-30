@@ -172,6 +172,7 @@ public final class versola/oauth/core/FileProviderMetadataCache : versola/oauth/
 	public fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun load (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun save (Lversola/oauth/core/ProviderMetadata;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun savedAtEpochMillis (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class versola/oauth/core/HttpDiscoveryClient : versola/oauth/core/DiscoveryClient {
@@ -381,6 +382,11 @@ public abstract interface class versola/oauth/core/ProviderMetadataCache {
 	public abstract fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun load (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun save (Lversola/oauth/core/ProviderMetadata;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun savedAtEpochMillis (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class versola/oauth/core/ProviderMetadataCache$DefaultImpls {
+	public static fun savedAtEpochMillis (Lversola/oauth/core/ProviderMetadataCache;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class versola/oauth/core/PushedAuthorization : java/lang/Enum {
