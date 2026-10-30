@@ -417,6 +417,7 @@ final class OAuthClientTests: XCTestCase {
         let (client, cold) = try await coldStartedClient(redirect: "\(Self.redirect)?code=the-code&state=cold-state&iss=\(Self.issuer)")
         let before = await client.sessionState
         XCTAssertEqual(before, .authorizing)
+        for _ in 0..<200_000 where cold.awaited == 0 { await Task.yield() }
 
         // The redirect never comes. Logout (with the provider's end-session step, which needs the
         // flow's gate) must return rather than wait out the request's ten minutes.
@@ -435,6 +436,9 @@ final class OAuthClientTests: XCTestCase {
 
     func testForgettingAllClientsEndsTheResumesTheyStarted() async throws {
         let (_, cold) = try await coldStartedClient(redirect: "\(Self.redirect)?code=the-code&state=cold-state&iss=\(Self.issuer)")
+        // Cancelled before it ever reached the browser, a resume never waits and `cancelled` stays 0:
+        // the test must start from a resume that is waiting (a race this test had on its own).
+        for _ in 0..<200_000 where cold.awaited == 0 { await Task.yield() }
 
         await OAuthClient.forgetAll()
 
