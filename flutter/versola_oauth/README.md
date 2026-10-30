@@ -9,6 +9,10 @@ Works with any OpenID provider that supports the authorization code flow with PK
 clients, such as Keycloak and Ory Hydra. Requires Flutter 3.47 and Dart 3.13, Android `minSdk` 26
 and iOS 17.4, with Swift Package Manager integration enabled on iOS.
 
+The API is production ready. The major version is still 0, and interfaces change only when a
+change is required; a change to a public symbol is stated in its pull request and raises the minor
+version.
+
 Documentation: <https://docs.versola.io>. Overview, quick starts for all platforms and the
 frequently asked questions are in the
 [repository README](https://github.com/versolauth/versola-sdk#readme).
