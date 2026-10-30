@@ -211,7 +211,7 @@ jobs:
           api-level: 36
           arch: x86_64
           target: google_apis
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot -feature -Vulkan
           disable-animations: true
           disable-spellchecker: true
           working-directory: android
@@ -243,7 +243,7 @@ jobs:
           api-level: 36
           arch: x86_64
           target: google_apis
-          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot -feature -Vulkan
           disable-animations: true
           disable-spellchecker: true
           working-directory: android
