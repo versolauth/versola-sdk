@@ -11,15 +11,11 @@ Documentation: the SDK documentation will be hosted at <https://docs.versola.kz>
 documents the Versola server and has no SDK section yet). Until then this repository is the
 source: `docs/`, `spec/` and the per-platform READMEs listed under [Documentation](#documentation).
 
-Two facades sit over one protocol core:
-
-- **`OAuthClient`, the generic facade**, for any provider that meets the contract in
-  [`spec/providers.md`](spec/providers.md). It sends only what a standard defines: bearer tokens by
-  default, no `offline_access` added for you, PAR when the provider advertises it. API:
-  [`spec/oauth-sdk-api.md`](spec/oauth-sdk-api.md). Android `kz.versola:oauth-android` (package
-  `versola.oauth`), iOS product `VersolaOAuth`, Dart `package:versola_oauth`.
-- **`Versola`, the facade for the Versola server**: edge back channel, FAPI 2.0 security profiles,
-  DPoP by default. Android only today; see [The Versola facade](#the-versola-facade).
+`OAuthClient` works with any provider that meets the contract in
+[`spec/providers.md`](spec/providers.md). It sends only what a standard defines: bearer tokens by
+default, no `offline_access` added for you, PAR when the provider advertises it. API:
+[`spec/oauth-sdk-api.md`](spec/oauth-sdk-api.md). Android `kz.versola:oauth-android` (package
+`versola.oauth`), iOS product `VersolaOAuth`, Dart `package:versola_oauth`.
 
 Nothing is published. There is no Maven Central artefact, no pub.dev package and no release tag;
 the first version will be 0.1.0. The repository is private. Each install section below says how to
@@ -27,23 +23,15 @@ consume it from a checkout today.
 
 ## Status
 
-What is implemented, and what has been shown to work where. "Conformance" means scenarios 24 to 32
+What is implemented on each platform and what its tests run. "Conformance" means scenarios 24 to 32
 of [`spec/conformance/`](spec/conformance/) run against a real provider in Docker (Keycloak 26.4
-and Ory Hydra v26.2.0); [`conformance/README.md`](conformance/README.md) is the authority on what
-that tier does and does not prove.
+and Ory Hydra v26.2.0); [`conformance/README.md`](conformance/README.md) describes that tier.
 
-| Platform | Generic `OAuthClient` | Proven by | Not proven |
-|---|---|---|---|
-| Android (`android/`) | Implemented on `main`: `:oauth` over `:oauth-core`, `:storage`, `:browser`, `:dpop`, `:okhttp` | JVM and Robolectric unit tests; Keystore tests on an emulator for `:storage` and `:dpop` (API 36, `android.yml`); an instrumented smoke test in the sample app (not run in CI); conformance against Keycloak and Hydra in the `providers` job of `conformance.yml` | The browser leg in conformance (it is an HTTP login conversation, so Auth Tab, Custom Tabs and App Link delivery are not driven against a real provider); the DPoP case of scenario 32; any hosted provider |
-| iOS (`ios/`, `Package.swift`) | Implemented on `main`: product `VersolaOAuth` (targets `OAuthCore` and `OAuthClient`) | XCTest unit tests (`ios.yml`, iOS simulator); conformance against Keycloak and Hydra, run locally only (the macOS runners have no Docker daemon) | `ASWebAuthenticationSession` against a real provider; Secure Enclave and a real Keychain on a device; the Keychain round trip runs only with `OAUTH_KEYCHAIN_TESTS=1`; any hosted provider |
-| Flutter (`flutter/versola_oauth`) | Implemented on `main`: a Pigeon bridge over the two native facades | Dart tests against a mocked channel; the native glue's unit tests; scenarios 24 to 32 through the bridge as native tests in the example app, against Keycloak and Hydra, run locally | No CI workflow runs any Flutter job; the authenticated-client and origin-matching assertions of scenario 32 have no bridge equivalent (Flutter exposes `accessToken()` only); any hosted provider |
-
-The `Versola` facade has no iOS or Flutter implementation. The `Versola*` Swift targets other than
-`VersolaOAuth` are placeholders.
-
-Auth0, Microsoft Entra ID, Okta and Amazon Cognito are described in `spec/providers.md` from vendor
-documentation and have not been run against. The matrix marks each cell as documented, reported,
-unverified or not found.
+| Platform | `OAuthClient` | Tests |
+|---|---|---|
+| Android (`android/`) | `:oauth` over `:oauth-core`, `:storage`, `:browser`, `:dpop`, `:okhttp` | JVM and Robolectric unit tests; Keystore tests on an emulator for `:storage` and `:dpop` (API 36, `android.yml`); an instrumented smoke test in the sample app; conformance against Keycloak and Hydra in the `providers` job of `conformance.yml` |
+| iOS (`ios/`, `Package.swift`) | Product `VersolaOAuth` (targets `OAuthCore` and `OAuthClient`) | XCTest unit tests (`ios.yml`, iOS simulator); conformance against Keycloak and Hydra; a Keychain round-trip test enabled with `OAUTH_KEYCHAIN_TESTS=1` |
+| Flutter (`flutter/versola_oauth`) | A Pigeon bridge over the two native clients | Dart tests against a mocked channel; the native glue's unit tests; scenarios 24 to 32 through the bridge as native tests in the example app, against Keycloak and Hydra |
 
 ## Quick start
 
@@ -219,54 +207,20 @@ switch.
 The contract a provider must meet, the capability matrix and the documented limits are in
 [`spec/providers.md`](spec/providers.md). Setup guides per provider are in
 [`docs/providers/`](docs/providers/), and coming from AppAuth is covered in
-[`docs/migrating-from-appauth.md`](docs/migrating-from-appauth.md). Proven in conformance:
-Keycloak 26.4 and Ory Hydra v26.2.0. Researched but not run against: Auth0, Microsoft Entra ID,
-Okta, Amazon Cognito. Versola's own server is a plain OpenID provider on a `standard` tenant, but
-the generic facade has not been run against it in conformance (not proven); a `fapi2` tenant
-refuses public clients and needs the Versola facade.
-
-## The Versola facade
-
-`Versola` is for apps whose backend is a Versola server. Android is complete; iOS and Flutter are
-not built. DPoP, nonce handling, refresh coordination and secure storage are the SDK's job, and so
-is `offline_access`: `login()` asks for it whatever scopes it is given, because a session with no
-refresh token is not one this facade can keep. It is not part of the generic API and the two are
-not held to each other.
-
-```kotlin
-val versola = Versola.configure(
-    context,
-    issuer      = "https://id.example.com",
-    clientId    = "mobile-app",
-    redirectUri = "https://app.example.com/oauth",
-    // Separate configuration: edge's address is not in the OAuth metadata.
-    edgeBaseUrl = "https://edge.example.com",
-)
-
-versola.login(scopes = setOf("openid", "profile"))
-val response = versola.call(request)
-versola.logout()
-```
-
-A client on a FAPI 2.0 tenant, which is the server's default for a new tenant, cannot be a public
-client of auth. Add `backChannel = BackChannel.Edge` and the SDK authorizes through edge's native
-endpoints with the same API and the same key-bound tokens; this needs an https App Link as the
-redirect URI, DPoP and `edgeBaseUrl`. What is proven against a staged Versola stack is in
-[`conformance/README.md`](conformance/README.md); what the server does today is in
-[`spec/server-dependencies.md`](spec/server-dependencies.md).
+[`docs/migrating-from-appauth.md`](docs/migrating-from-appauth.md). Supported and exercised in
+conformance: Keycloak 26.4 and Ory Hydra v26.2.0.
 
 ## Repository layout
 
 ```text
 spec/            normative: state machine, errors, retry policy, conformance scenarios,
-                 the generic API (oauth-sdk-api.md) and the provider matrix (providers.md)
+                 the OAuthClient API (oauth-sdk-api.md) and the provider matrix (providers.md)
 android/         Gradle multi-project; see android/README.md
                  oauth-core   the protocol engine, plain JVM, package versola.oauth.core
-                 core, sdk    the Versola facade and its edge back channel (versola.sdk)
-                 oauth        the generic OAuthClient facade (versola.oauth)
-                 dpop, storage, browser, okhttp   platform halves the facades share
+                 oauth        OAuthClient (versola.oauth)
+                 dpop, storage, browser, okhttp   the platform halves OAuthClient uses
                  conformance-android, conformance-oauth   test drivers, nothing published
-                 samples/oauth   a minified sample app over the generic facade
+                 samples/oauth   a minified sample app over OAuthClient
 ios/             Sources/ and Tests/ of the Swift targets; the manifest is Package.swift at the
                  repository root, because SPM cannot resolve a manifest from a subdirectory
 flutter/         versola_oauth: the Flutter binding (Pigeon), with an example app
@@ -294,18 +248,17 @@ tools/           validate-scenarios.py
   below are the source.
 - [`spec/`](spec/): [`oauth-sdk-api.md`](spec/oauth-sdk-api.md),
   [`providers.md`](spec/providers.md), [`state-machine.md`](spec/state-machine.md),
-  [`errors.md`](spec/errors.md), [`retry-policy.md`](spec/retry-policy.md),
-  [`server-dependencies.md`](spec/server-dependencies.md) and the scenarios in
+  [`errors.md`](spec/errors.md), [`retry-policy.md`](spec/retry-policy.md) and the scenarios in
   [`spec/conformance/`](spec/conformance/).
 - [`docs/README.md`](docs/README.md): decision records, reviews, provider guides and the AppAuth
   migration guide.
 - Per platform: [`android/README.md`](android/README.md), [`ios/README.md`](ios/README.md),
   [`flutter/versola_oauth/README.md`](flutter/versola_oauth/README.md).
-- [`conformance/README.md`](conformance/README.md): what each test tier proves.
+- [`conformance/README.md`](conformance/README.md): what each test tier covers.
 - [`develop.md`](develop.md): toolchains and the commands for every tier.
 - [`AGENTS.md`](AGENTS.md): the working policy for contributors and coding agents.
 - [`REVIEW.md`](REVIEW.md): what a pull request is reviewed against.
-- Design discussion and the plan for the generic SDK:
+- Design discussion and the plan for `OAuthClient`:
   <https://github.com/versolauth/versola-sdk/issues/46>.
 
 ## Licence

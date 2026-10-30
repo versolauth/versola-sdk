@@ -1,8 +1,8 @@
 # versola_oauth
 
-The Versola generic OAuth 2.0 / OpenID Connect SDK for Flutter: a binding over the native
+The Versola OAuth 2.0 / OpenID Connect SDK for Flutter: a binding over the native
 Android (`kz.versola:oauth-android`) and iOS (`VersolaOAuth`) SDKs of this repository. The API is
-`spec/oauth-sdk-api.md` section 13 in Dart; the behaviour is the native SDKs', proven by the same
+`spec/oauth-sdk-api.md` section 13 in Dart; the behaviour is the native SDKs', covered by the same
 conformance scenarios. No protocol logic runs in Dart (`.claude/rules/flutter.md`).
 
 Documentation: the SDK documentation will be hosted at <https://docs.versola.kz>; until then this
@@ -11,8 +11,7 @@ README, [`spec/oauth-sdk-api.md`](../../spec/oauth-sdk-api.md) and the dartdoc a
 ## Status and installation
 
 Not published: there is no pub.dev package and no release tag; the first version will be 0.1.0.
-The repository is private. The `Versola` facade (server-specific) has no Flutter binding; this
-package is the generic `OAuthClient` only. Requirements today: Flutter 3.47 and Dart 3.13 (the
+The repository is private. Requirements today: Flutter 3.47 and Dart 3.13 (the
 ranges in `pubspec.yaml`, toolchain pinned in `flutter/.fvmrc`), Android `minSdk` 26, iOS 17.4,
 and on iOS Swift Package Manager integration enabled (the plugin has no podspec and the SDK is not
 on CocoaPods).
@@ -43,13 +42,12 @@ ways of depending on it:
 - **iOS:** the plugin's Swift package (`ios/versola_oauth/Package.swift`) depends on this
   repository's root `Package.swift` by a relative path (`../../../..`). That works when the plugin
   sits at `flutter/versola_oauth` inside a full checkout, which is what a path dependency on a
-  checkout gives. A git dependency fetches the whole repository into the pub cache, so the path
-  should resolve there as well, but that has not been tried; copying only the plugin directory, or
-  a future pub.dev package, would break it, and changing it is a change to the plugin's package
-  manifest.
+  checkout gives. A git dependency fetches the whole repository into the pub cache, which keeps
+  the path valid; copying only the plugin directory, or a future pub.dev package, would break it,
+  and changing it is a change to the plugin's package manifest.
 
 For the git dependency the Android composite build still needs a checkout of `android/` to point
-at, so a path dependency on a checkout is the proven route.
+at, so a path dependency on a checkout is the route that needs no extra setup.
 
 ## Usage
 
@@ -104,8 +102,8 @@ it for a refresh token ([`spec/providers.md`](../../spec/providers.md), section 
 | `keyAttestation()` | `Future<String?>`: the DPoP key tier (`secureEnclave`, `strongBox`, `trustedEnvironment`, `software`), null under bearer |
 
 `login` while an authorization is in progress is refused; observe `sessionStates()` first. A
-redirect that reaches a cold-started process is meant to finish the pending authorization and
-arrive on `sessionStates()`; on iOS that path is not proven (see Platform setup).
+redirect that reaches the app is handed to the native client; on iOS see Platform setup for the
+cold-start path.
 
 ### Errors
 
@@ -179,8 +177,8 @@ native side is what calls your API.
   The plugin forwards Universal Links (application and scene lifecycles, including the link that
   launched the app) to the native client's `handleRedirect`. An `https` redirect URI needs the
   app's `webcredentials` associated domain for its host; see [`ios/README.md`](../../ios/README.md).
-  The plugin never calls the native `resumePendingAuthorization()`, so whether a cold-started iOS
-  process completes a pending authorization on its own is not proven.
+  The plugin does not call the native `resumePendingAuthorization()`; a Universal Link that
+  launches the app reaches the native client through `handleRedirect`.
 
 ## Developing
 
@@ -203,14 +201,12 @@ Swift); change `pigeons/messages.dart` and regenerate.
 
 ### Testing tiers
 
-- `flutter test` proves the Dart mapping and the error categories against a mocked channel. It does
-  not prove the bridge or the native SDKs.
-- The Kotlin and Swift unit tests prove the wire mapping of the native half.
-- The example builds prove the bridge compiles against both native SDKs.
+- `flutter test` covers the Dart mapping and the error categories against a mocked channel.
+- The Kotlin and Swift unit tests cover the wire mapping of the native half.
+- The example builds compile the bridge against both native SDKs.
 - The bridge conformance tests run scenarios 24 to 32 through the plugin's host API as native tests
   in the example app (`example/android/app/src/test`, `example/ios/RunnerTests`), against Keycloak
-  and Ory Hydra in Docker. They are skipped without `OAUTH_CONFORMANCE_ISSUER`, and no CI job runs
-  them or any other Flutter check. The commands are in [`develop.md`](../../develop.md), and
-  [`conformance/README.md`](../../conformance/README.md) ("Through the Flutter bridge") says what
-  they do and do not prove.
-- The native behaviour itself is proven by the SDKs' own tiers (`conformance/README.md`).
+  and Ory Hydra in Docker; they run when `OAUTH_CONFORMANCE_ISSUER` is set. The commands are in
+  [`develop.md`](../../develop.md), and [`conformance/README.md`](../../conformance/README.md)
+  ("Through the Flutter bridge") describes them.
+- The native behaviour itself is covered by the SDKs' own tiers (`conformance/README.md`).

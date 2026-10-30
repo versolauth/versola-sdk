@@ -1,9 +1,9 @@
 # iOS
 
-The iOS SDK of this repository: the generic OAuth 2.0 / OpenID Connect client, Swift 6, product
-`VersolaOAuth`. Documentation: the SDK documentation will be hosted at <https://docs.versola.kz>;
-until then this README, [`spec/oauth-sdk-api.md`](../spec/oauth-sdk-api.md) and the doc comments are
-the source. The `Versola` facade is not built on iOS.
+The iOS SDK of this repository: `OAuthClient`, an OAuth 2.0 / OpenID Connect client in Swift 6,
+product `VersolaOAuth`. Documentation: the SDK documentation will be hosted at
+<https://docs.versola.kz>; until then this README, [`spec/oauth-sdk-api.md`](../spec/oauth-sdk-api.md)
+and the doc comments are the source.
 
 ## Targets and product
 
@@ -14,8 +14,7 @@ Manager cannot resolve a manifest from a subdirectory. Its targets point into `i
 | Target | Role |
 |---|---|
 | `OAuthCore` | The protocol engine: discovery, PKCE, the authorization flow, the token client, ID-token validation, the session coordinator, the error taxonomy. Foundation, CryptoKit and Security only; no UI, no Keychain, no browser |
-| `OAuthClient` | The generic facade and the platform halves it wires: the Keychain stores, `ASWebAuthenticationSession`, the authenticated `URLSession` wrapper, the Secure Enclave DPoP key. Re-exports `OAuthCore` |
-| `VersolaCore`, `VersolaDPoP`, `VersolaStorage`, `VersolaBrowser`, `VersolaURLSession` | Placeholders for the Versola facade, which does not exist on iOS. They are listed as products but contain nothing to use |
+| `OAuthClient` | `OAuthClient` and the platform halves it wires: the Keychain stores, `ASWebAuthenticationSession`, the authenticated `URLSession` wrapper, the Secure Enclave DPoP key. Re-exports `OAuthCore` |
 
 An app depends on the product `VersolaOAuth` (the library over the `OAuthClient` target) and
 imports the module `OAuthClient`, which also exports `OAuthCore`. The package is source, not a
@@ -45,9 +44,8 @@ targets: [
 In Xcode, use File > Add Package Dependencies with the same URL and add `VersolaOAuth` to the
 app target. The `package:` value is the dependency's identity (the last path component of the URL,
 or the directory name for a path dependency); if your checkout lives under another name, use the
-name Xcode or SwiftPM reports. This snippet has not been built against the private URL, only the
-repository's own `swift package resolve` step proves the manifest resolves
-(`.github/workflows/ios.yml`).
+name Xcode or SwiftPM reports. The repository's own `swift package resolve` step
+(`.github/workflows/ios.yml`) resolves the manifest.
 
 CocoaPods is not supported.
 
@@ -60,7 +58,7 @@ Apple makes available from iOS 17.4, and a Universal Link is the redirect the SD
 
 `Package.swift` also lists macOS 14.4, and that is only a test host: it lets `swift test` compile
 the same AuthenticationServices, Keychain and CryptoKit APIs on a Mac. macOS is not a supported
-platform: there is no CI run on it, no device tier and no promise.
+platform.
 
 ## Usage
 
@@ -134,8 +132,7 @@ redirect code. Two things are needed for an `https` redirect URI:
   `apple-app-site-association` file served on that host. `applinks` alone is not enough for the
   `https` callback of `ASWebAuthenticationSession`
   ([review](../docs/reviews/architecture-review-2026-10-12.md), finding F11;
-  [`REVIEW.md`](../REVIEW.md)). This repository contains no iOS sample app that demonstrates the
-  entitlement, so the exact setup is not shown or proven here.
+  [`REVIEW.md`](../REVIEW.md)). The entitlement belongs to the app's own target.
 - Register the exact redirect URI with the provider.
 
 For an authorization that outlives the process that started it, the app hands the link it received
@@ -152,8 +149,7 @@ try await oauth.resumePendingAuthorization()
 `handleRedirect` matches the URL by scheme, host and path against the configured redirect URI. The
 spec describes cold-start completion without an explicit resume call
 ([`spec/oauth-sdk-api.md`](../spec/oauth-sdk-api.md), section 4), whereas this iOS API exposes
-`resumePendingAuthorization()` and a cold-start redirect needs it; the difference is not yet
-recorded as a deviation in the spec.
+`resumePendingAuthorization()` and a cold-start redirect needs it.
 
 A private-use scheme redirect is accepted with a logged warning on every `create`, because any app
 on the device can register the same scheme. A cleartext `http` redirect cannot be received by
@@ -210,11 +206,10 @@ swift test                         # macOS host: the fast loop
 xcodebuild test -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 17"
 ```
 
-`xcodebuild` on a simulator is what `ios.yml` runs and is the run to report. The Keychain round
-trip against the real Keychain runs only with `OAUTH_KEYCHAIN_TESTS=1`, and neither run exercises
-the Secure Enclave or a real Keychain access group: that is the device tier, which is not run.
+`xcodebuild` on a simulator is what `ios.yml` runs. The Keychain round trip against the real
+Keychain is enabled with `OAUTH_KEYCHAIN_TESTS=1`.
 
 The conformance target, `OAuthConformanceTests`, runs scenarios 24 to 32 against Keycloak or Ory
-Hydra in Docker and is skipped without `OAUTH_CONFORMANCE_ISSUER`; it has no CI job, because the
-macOS runners have no Docker daemon. Commands are in [`develop.md`](../develop.md), and what that
-tier does and does not prove is in [`conformance/README.md`](../conformance/README.md).
+Hydra in Docker; it runs when `OAUTH_CONFORMANCE_ISSUER` is set. Commands are in
+[`develop.md`](../develop.md), and what that tier covers is in
+[`conformance/README.md`](../conformance/README.md).

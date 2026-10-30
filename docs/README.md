@@ -6,11 +6,10 @@ source: this directory, [`spec/`](../spec/) and the per-platform READMEs.
 
 ## Guides
 
-- [`providers/`](providers/): setup guides for each provider the generic `OAuthClient` is used
-  with. The capability matrix and the documented limits they rest on are in
+- [`providers/`](providers/): setup guides for each provider `OAuthClient` is used with. The capability matrix and the documented limits they rest on are in
   [`spec/providers.md`](../spec/providers.md).
-- [`migrating-from-appauth.md`](migrating-from-appauth.md): moving an app from AppAuth to the
-  generic SDK.
+- [`migrating-from-appauth.md`](migrating-from-appauth.md): moving an app from AppAuth to
+  `OAuthClient`.
 
 - [`releasing.md`](releasing.md): the maintainer's runbook for a release (Maven Central, Swift
   Package Manager, pub.dev) and what has to exist before the first one.
@@ -18,7 +17,7 @@ source: this directory, [`spec/`](../spec/) and the per-platform READMEs.
 ## Decision records
 
 - [`adr/0001-generic-sdk-naming-and-layering.md`](adr/0001-generic-sdk-naming-and-layering.md):
-  what the generic SDK is called on each registry, and which code the two facades share.
+  what the SDK is called on each registry, and how its code is layered.
 
 ## Reviews
 
@@ -35,6 +34,6 @@ source: this directory, [`spec/`](../spec/) and the per-platform READMEs.
   [`flutter/versola_oauth/README.md`](../flutter/versola_oauth/README.md).
 - [`spec/`](../spec/): the normative specification (API, state machine, errors, retry policy,
   provider matrix, conformance scenarios).
-- [`conformance/README.md`](../conformance/README.md): what each test tier proves.
+- [`conformance/README.md`](../conformance/README.md): what each test tier covers.
 - [`develop.md`](../develop.md), [`AGENTS.md`](../AGENTS.md), [`REVIEW.md`](../REVIEW.md) and
   [`SECURITY.md`](../SECURITY.md).

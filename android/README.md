@@ -1,7 +1,6 @@
 # Android
 
-The Android SDKs of this repository: the generic `OAuthClient` (module `:oauth`, package
-`versola.oauth`) and the `Versola` facade (module `:sdk`, package `versola.sdk`), over a shared
+The Android SDK of this repository: `OAuthClient` (module `:oauth`, package `versola.oauth`) over a
 protocol core. Documentation: the SDK documentation will be hosted at <https://docs.versola.kz>;
 until then this README, [`spec/oauth-sdk-api.md`](../spec/oauth-sdk-api.md) and the KDoc are the
 source.
@@ -9,12 +8,11 @@ source.
 ## Status and installation
 
 Nothing is published: no Maven Central artefact and no release tag. The intended coordinates, from
-version 0.1.0, are `kz.versola:oauth-android` for the generic facade and
-`kz.versola:versola-android` for the Versola facade
+version 0.1.0, are `kz.versola:oauth-android`
 ([ADR 0001](../docs/adr/0001-generic-sdk-naming-and-layering.md)). Publishing is configured and
-the release workflows are dormant: eight artefacts will be published under `kz.versola` (the table
-below), and [`docs/releasing.md`](../docs/releasing.md) is the maintainer's runbook. The repository
-is private.
+the release workflows are dormant: the artefacts in the table below will be published under
+`kz.versola`, and [`docs/releasing.md`](../docs/releasing.md) is the maintainer's runbook. The
+repository is private.
 
 To use it today, include this repository's `android/` build in yours as a composite build and
 substitute the artefact with the project. This is the block the Flutter example uses
@@ -45,24 +43,22 @@ block once the artefact is on Maven Central.
 
 | Module | Package | Role | Artefact (from 0.1.0) |
 |---|---|---|---|
-| `:oauth` | `versola.oauth` | The generic `OAuthClient` facade | `kz.versola:oauth-android` |
-| `:sdk` | `versola.sdk` | The `Versola` facade for the Versola server | `kz.versola:versola-android` |
-| `:oauth-core` | `versola.oauth.core` | The protocol engine: discovery, PKCE, token client, ID-token validation, session coordinator, errors. Plain JVM, no `android.*` import | `kz.versola:oauth-core` (JAR), pulled in by the facades |
-| `:core` | `versola.sdk.core` | What is Versola-specific: the edge back channel | `kz.versola:versola-core-android`, pulled in by `:sdk` |
-| `:dpop` | `versola.sdk.dpop` | Hardware-backed DPoP key and proofs | `kz.versola:dpop-android`, pulled in by the facades |
-| `:storage` | `versola.sdk.storage` | Keystore-wrapped credential and pending-request stores | `kz.versola:storage-android`, pulled in by the facades |
-| `:browser` | `versola.sdk.browser` | Auth Tab, Custom Tabs and the redirect activity | `kz.versola:browser-android`, pulled in by the facades; `:oauth` exposes it (see below) |
-| `:okhttp` | `versola.sdk.okhttp` | The authenticated OkHttp interceptor | `kz.versola:okhttp-android`, pulled in by the facades |
+| `:oauth` | `versola.oauth` | `OAuthClient` | `kz.versola:oauth-android` |
+| `:oauth-core` | `versola.oauth.core` | The protocol engine: discovery, PKCE, token client, ID-token validation, session coordinator, errors. Plain JVM, no `android.*` import | `kz.versola:oauth-core` (JAR), pulled in by `:oauth` |
+| `:dpop` | `versola.sdk.dpop` | Hardware-backed DPoP key and proofs | `kz.versola:dpop-android`, pulled in by `:oauth` |
+| `:storage` | `versola.sdk.storage` | Keystore-wrapped credential and pending-request stores | `kz.versola:storage-android`, pulled in by `:oauth` |
+| `:browser` | `versola.sdk.browser` | Auth Tab, Custom Tabs and the redirect activity | `kz.versola:browser-android`, pulled in by `:oauth`; `:oauth` exposes it (see below) |
+| `:okhttp` | `versola.sdk.okhttp` | The authenticated OkHttp interceptor | `kz.versola:okhttp-android`, pulled in by `:oauth` |
 | `:conformance-android`, `:conformance-oauth` | | Test drivers against a staged server or a provider container | Nothing is published |
-| `:samples:oauth` | | A minified sample app over the generic facade | Nothing is published |
+| `:samples:oauth` | | A minified sample app over `OAuthClient` | Nothing is published |
 
-The dependency modules are separate artefacts because a facade's POM names them: a Gradle project
+The dependency modules are separate artefacts because `:oauth`'s POM names them: a Gradle project
 dependency becomes a Maven dependency, so an app that adds `kz.versola:oauth-android` receives the
-rest transitively. `:oauth` declares `:oauth-core`, `:okhttp`, `:browser` and `:dpop` as `api` dependencies because their types
-are on its public surface (the state, the errors, the interceptor, `VersolaRedirectActivity` and
+rest transitively. `:oauth` declares `:oauth-core`, `:okhttp`, `:browser` and `:dpop` as `api`
+dependencies because their types are on its public surface (the state, the errors, the interceptor, `VersolaRedirectActivity` and
 `KeyAttestation`), so an app that depends on `:oauth` sees them.
 
-## Using the generic facade
+## Using `OAuthClient`
 
 Floors: `minSdk` 26, `compileSdk` 36. The libraries declare no `targetSdk`; that is the app's
 decision.
@@ -196,12 +192,6 @@ The SDK needs no consumer keep rules. `android/samples/oauth` builds a release v
 `proguard-rules.pro`; serialization is reflection-free. A missing-class warning from R8 is a bug
 in the SDK, not a reason to add rules in your app.
 
-## The Versola facade
-
-`:sdk` is `Versola.configure(...)`, with the edge back channel and DPoP by default. Its example is
-in the [root README](../README.md#the-versola-facade); its sources and KDoc are in `android/sdk`.
-It shares `:oauth-core` with the generic facade and is not held to the generic API.
-
 ## Building
 
 Gradle 9.8.2 through the wrapper (never a system Gradle). Build with JDK 21: Robolectric's
@@ -228,12 +218,12 @@ test on an emulator is in [`samples/oauth/README.md`](samples/oauth/README.md).
 
 ## Tests
 
-| Tier | Command or place | Proves |
+| Tier | Command or place | Covers |
 |---|---|---|
 | Unit | `./gradlew test` (JUnit, Robolectric, MockWebServer) | A rule, against stubs |
 | Device | `./gradlew :storage:connectedDebugAndroidTest :dpop:connectedDebugAndroidTest`, needs an emulator | The real Keystore, key tiers, GCM wrapping |
-| Conformance | `:conformance-oauth` against Keycloak or Hydra in Docker; `:conformance-android` against a staged Versola stack | The wiring against a real provider; the browser leg is an HTTP conversation, not an Auth Tab |
+| Conformance | `:conformance-oauth` against Keycloak or Hydra in Docker | The wiring against a real provider: headers, form encoding, error bodies |
 
 The exact emulator, `adb reverse` and provider-container commands are in
-[`develop.md`](../develop.md), and what the conformance tier does not prove is in
+[`develop.md`](../develop.md), and what the conformance tier covers is in
 [`conformance/README.md`](../conformance/README.md).
