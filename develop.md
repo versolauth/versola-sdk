@@ -97,6 +97,24 @@ destination is what CI runs and is the run to report. The simulator name is what
 Xcode upgrades (it moved from "iPhone 16" to "iPhone 17"); list yours with
 `xcrun simctl list devices available` and use the same name if it exists.
 
+The package must stay usable from an app extension (a notification service extension that
+refreshes a token, a widget): no `UIApplication.shared`, nothing else marked unavailable there.
+`-application-extension` is the flag Xcode's `APPLICATION_EXTENSION_API_ONLY=YES` passes to the
+compiler, and SwiftPM takes it directly, so this check needs no Xcode project:
+
+```bash
+swift build --sdk "$(xcrun --sdk iphonesimulator --show-sdk-path)" --triple arm64-apple-ios17.4-simulator -Xswiftc -application-extension
+```
+
+The same SwiftPM cross-build runs the unit tests inside a simulator without `xcodebuild` (useful
+when Xcode cannot load the workspace): build with `--build-tests` and the same `--sdk`/`--triple`,
+copy `.build/arm64-apple-ios-simulator/debug/VersolaPackageTests.xctest/Contents/MacOS/VersolaPackageTests`
+into a flat `VersolaPackageTests.xctest` bundle with a minimal `Info.plist`, and run it with
+`xcrun simctl spawn <udid> "$(xcrun --sdk iphonesimulator --show-sdk-platform-path)"/Developer/Library/Xcode/Agents/xctest`
+(`SIMCTL_CHILD_DYLD_FRAMEWORK_PATH` pointing at the platform's `Developer/Library/Frameworks`). That
+process has no app host, so the real-Keychain tests still answer `-34018` there; they need an app
+(device tier).
+
 ### Flutter
 
 Run from `flutter/versola_oauth/`. Flutter is pinned in `flutter/.fvmrc`; `fvm install` in
