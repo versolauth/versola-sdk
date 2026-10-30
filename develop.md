@@ -238,3 +238,11 @@ written so they keep holding after the planned `versola.*` package move (#46).
 
 Work on a `feat/`, `fix/` or `chore/` branch, never on `main`. Commit messages are a short
 imperative sentence in sentence case with no `feat:` prefix. Do not force-push.
+
+## Security scans
+
+The Security workflow runs on PRs, pushes to `main`, weekly on Monday at 05:00 UTC, and from
+Actions → Security → Run workflow. TruffleHog checks PR/push ranges; Trivy and Semgrep also scan
+on scheduled/manual runs. CodeQL covers Kotlin and Swift, and dependency review checks PRs.
+See `SECURITY.md` for coverage limits and triage deadlines. Scanner failures must be investigated;
+a skipped scanner is not a clean result.

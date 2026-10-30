@@ -102,7 +102,7 @@ a vulnerability in every app that embeds it, not a bug. Platform specifics are i
 - Scanners (secret scan, dependency review, CodeQL) say next to each job whether they gate or only
   report. Do not change that without being asked, and never suppress a finding silently: a
   suppression names the reason, an owner and a re-evaluation date.
-- The repository is private today, so CodeQL and dependency review run only when it is public
+- CodeQL and dependency review run only when the repository is public
   (`ci-release.md`); that is not a reason to skip the manual review they would have done.
 
 ## Review

@@ -9,11 +9,6 @@ Report it privately through GitHub: the repository's **Security** tab →
 reproduce it, the affected package and version or commit, the platform (Android API level, iOS
 version) and the impact you expect.
 
-Private vulnerability reporting is not switched on today (the repository is private and has no
-security policy enabled). Switching it on under Settings → Code security is the maintainer's
-act and has to happen before this policy can be followed; until then report to the maintainer
-directly and do not post the details anywhere public.
-
 Targets we hold ourselves to (best effort until a response process is formalised; the same
 numbers as the server's [policy](https://github.com/versolauth/versola/blob/main/SECURITY.md)):
 
@@ -55,12 +50,19 @@ and do not take action against good-faith research that follows this policy.
 
 ## Vulnerability management
 
-Dependabot proposes updates for Gradle, Swift Package Manager, pub and GitHub Actions
+Dependabot proposes updates for Gradle, Swift Package Manager, pub, Python tooling and GitHub Actions
 (`.github/dependabot.yml`).
 
-Scanning runs in `.github/workflows/security.yml`: verified secrets (TruffleHog) and dependency
-review on pull requests, and CodeQL for Kotlin and Swift. The last two need GitHub Advanced
-Security while the repository is private and switch on by themselves when it goes public.
+Scanning runs in `.github/workflows/security.yml` on pull requests, pushes to `main`, weekly
+and on demand. TruffleHog checks verified secrets in PR/push commit ranges. Trivy scans the
+working tree for secrets and known high/critical vulnerabilities with available fixes, and
+Semgrep gates on ERROR findings. CodeQL analyzes Kotlin and Swift; dependency review gates
+PRs introducing high/critical vulnerable dependencies. CodeQL and Semgrep findings appear in
+the Security tab. CodeQL and dependency review require a license if the repo becomes private.
+
+Trivy only covers supported manifests present in the checkout; it does not resolve Gradle's
+transitive graph. No scanner proves the absence of vulnerabilities. Dependabot alerts and
+security updates, GitHub secret scanning and push protection are enabled in repository settings.
 
 | Severity | Fix or accept within |
 |---|---|
