@@ -17,13 +17,14 @@ final class AuthorizationFlowTests: XCTestCase {
         tokenBinding: TokenBinding = .bearer,
         dpopKey: DpopProofSource? = nil,
         starter: AuthorizationStarter? = nil,
-        now: Date = AuthzKit.now
+        now: Date = AuthzKit.now,
+        configuration: CoreConfiguration = AuthzKit.configuration
     ) -> Fixture {
         let hub = SessionStateHub()
         let discovery = DiscoveryService(
             issuer: AuthzKit.issuer, client: StaticDiscoveryClient(metadata: metadata), cache: MemoryMetadataCache())
         let flow = AuthorizationFlow(
-            configuration: AuthzKit.configuration, discovery: discovery, pendingStore: store, browser: browser,
+            configuration: configuration, discovery: discovery, pendingStore: store, browser: browser,
             states: hub, tokenBinding: tokenBinding, dpopKey: dpopKey, clock: Clock(now: { now }),
             hasStoredGrant: grantProbe ?? { hasStoredGrant }, starter: starter
         )
@@ -680,10 +681,34 @@ final class AuthorizationFlowTests: XCTestCase {
         XCTAssertTrue(uri.absoluteString.hasPrefix("https://id.example.com/logout?"))
         XCTAssertEqual(query["id_token_hint"], "id-token-hint-value")
         XCTAssertEqual(query["post_logout_redirect_uri"], AuthzKit.postLogout)
+        XCTAssertEqual(query["client_id"], "client-123", "RP-Initiated Logout 1.0: names the client when the hint alone could be missing or expired")
         XCTAssertGreaterThanOrEqual(query["state"]?.count ?? 0, 43)
         let options = await browser.options[0]
         XCTAssertFalse(options.ephemeral)
         XCTAssertEqual(options.redirectURI, URL(string: AuthzKit.postLogout))
+    }
+
+    /// With no `postLogoutRedirectUri` configured the provider is told of none, but the page is
+    /// still opened: skipping it left the provider's single sign-on session alive on a shared
+    /// device with `sessionEnded = false` and no word to anyone. The session still needs a callback
+    /// to be created; the login redirect is the one the app already has.
+    func testEndSessionWithoutAPostLogoutRedirectUriStillOpensThePageAndSendsNoRedirect() async throws {
+        let configuration = CoreConfiguration(issuer: AuthzKit.issuer, clientId: "client-123", redirectUri: URL(string: AuthzKit.redirect)!)
+        let browser = ScriptedBrowser { _, _ in .userCancelled }
+        let f = fixture(browser: browser, configuration: configuration)
+
+        let ended = try await f.flow.endSession(idTokenHint: "hint")
+
+        XCTAssertFalse(ended, "nothing acknowledged: the redirect cannot come back")
+        let opened = await browser.opened
+        XCTAssertEqual(opened.count, 1, "the end-session page was opened")
+        let query = AuthorizationResponseValidator.parseQuery(opened[0])
+        XCTAssertNil(query["post_logout_redirect_uri"])
+        XCTAssertEqual(query["client_id"], "client-123")
+        XCTAssertEqual(query["id_token_hint"], "hint")
+        let options = await browser.options[0]
+        XCTAssertEqual(options.redirectURI, URL(string: AuthzKit.redirect))
+        XCTAssertFalse(options.ephemeral)
     }
 
     func testEndSessionIsFalseForAWrongOrMissingState() async throws {

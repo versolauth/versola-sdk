@@ -56,7 +56,7 @@ construction, never behind a login screen.
 | `endpoints` | `ProviderEndpoints` | none | for a provider without discovery: `authorizationEndpoint`, `tokenEndpoint`, `issuer`, optional `jwksUri`, `userinfoEndpoint`, `revocationEndpoint`, `endSessionEndpoint`, `pushedAuthorizationRequestEndpoint`, `idTokenSigningAlgValuesSupported`; all `https`; mutually exclusive with discovery, and the SDK then treats unlisted capabilities as absent |
 | `clientId` | string | required | non-blank |
 | `redirectUri` | URI | required | absolute, no fragment; `https` (verified link, preferred), loopback, or a private-use scheme (accepted with a logged warning on every `create()`); cleartext `http` to a non-loopback host refused |
-| `postLogoutRedirectUri` | URI | none | same rules as `redirectUri`; when absent `post_logout_redirect_uri` is not sent. Android, under Auth Tab: the tab intercepts this URI, so an `https` host must be a verified App Link of the app like `redirectUri`'s, or the tab closes unverified and `logout()` reports `sessionEnded = false` (a Custom Tab would have shown the page instead) |
+| `postLogoutRedirectUri` | URI | none | same rules as `redirectUri`; when absent `post_logout_redirect_uri` is not sent, and the end-session page is still opened: the provider's session ends, nothing can come back, `sessionEnded` is `false` and the user dismisses the page (iOS has to give `ASWebAuthenticationSession` a callback, so it matches the login `redirectUri`, which the provider is not told of). Android, under Auth Tab: the tab intercepts this URI, so an `https` host must be a verified App Link of the app like `redirectUri`'s, or the tab closes unverified and `logout()` reports `sessionEnded = false` (a Custom Tab would have shown the page instead) |
 | `scopes` | set of strings | `{"openid"}` | the default scope set for `login()`; `openid` is added if missing (this is an OIDC SDK); nothing else is added silently, including `offline_access` (see section 8) |
 | `tokenBinding` | `Bearer` or `Dpop(required: Boolean = false)` | `Bearer` | section 9 |
 | `pushedAuthorization` | `Never`, `WhenAdvertised`, `Required` | `WhenAdvertised` | section 7 |
@@ -271,7 +271,9 @@ the same key set; a response whose `sub` differs is `Configuration(UserInfoRejec
    sends `client_id` only). Best effort; a failure is logged and `tokenRevoked = false`.
 2. End the server session through the system browser at `end_session_endpoint` when advertised
    (RP-Initiated Logout 1.0): `id_token_hint`, `client_id`, `post_logout_redirect_uri` when
-   configured, `state`. Best effort; dismissed or failed is `sessionEnded = false`.
+   configured, `state`. Best effort; dismissed or failed is `sessionEnded = false`. The page is
+   opened whether or not a `postLogoutRedirectUri` is configured: skipping it would leave the
+   provider's single sign-on session alive and tell no one.
 3. Wipe everything credential-shaped: refresh token, raw ID token, pending request, rotation slot,
    nonce caches, DPoP key. Unconditional; `Unauthenticated` is published even if 1 or 2 failed.
 

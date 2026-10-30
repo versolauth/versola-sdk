@@ -377,8 +377,10 @@ package actor AuthorizationFlow {
     /// with `id_token_hint` so the session ends without a confirmation page, and
     /// `post_logout_redirect_uri` so the browser comes back once it has.
     ///
-    /// Returns whether the provider acknowledged: the redirect came back carrying the `state`
-    /// that was sent. False covers everything else (no endpoint advertised, the user dismissed
+    /// Without a `post_logout_redirect_uri` the page is still opened (the provider's session is
+    /// what ends, and the user may be on a shared device) but cannot report back, so the result is
+    /// false by construction. Returns whether the provider acknowledged: the redirect came back
+    /// carrying the `state` that was sent. False covers everything else (no endpoint advertised, the user dismissed
     /// the page, the browser failed, a wrong `state`), and none of it is thrown, because only the
     /// local teardown is unconditional and the caller wipes regardless. Never ephemeral: the
     /// point is to end the session the shared browser holds.
@@ -394,13 +396,22 @@ package actor AuthorizationFlow {
             let expectedState = SecureTokens.generate(random)
             var pairs: [(String, String)] = []
             if let idTokenHint { pairs.append(("id_token_hint", idTokenHint)) }
+            // `client_id` beside the hint (`spec/oauth-sdk-api.md` section 12): the hint of a
+            // session that has not refreshed within one access-token lifetime is expired, and a
+            // provider then has only this to know whose session, and whose post-logout URI, it is.
+            pairs.append(("client_id", configuration.clientId))
             if let postLogoutRedirectUri { pairs.append(("post_logout_redirect_uri", postLogoutRedirectUri.absoluteString)) }
             pairs.append(("state", expectedState))
             guard let uri = try? FormEncoding.withQuery(endpoint, pairs) else { return false }
 
             let outcome: BrowserOutcome
             do {
-                outcome = try await OperationBudget.paused { try await browser.authorize(uri, options: BrowserSessionOptions(redirectURI: postLogoutRedirectUri)) }
+                // A browser session needs a callback to be created at all (`ASWebAuthenticationSession`),
+                // so with no post-logout URI configured the login redirect stands in as the one to
+                // match. The provider is not told of it, so nothing is expected to arrive there: the
+                // page ends the provider's session, the user dismisses it, `sessionEnded` is false.
+                let callback = postLogoutRedirectUri ?? configuration.redirectUri
+                outcome = try await OperationBudget.paused { try await browser.authorize(uri, options: BrowserSessionOptions(redirectURI: callback)) }
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
