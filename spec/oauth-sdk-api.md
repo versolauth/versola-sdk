@@ -160,9 +160,9 @@ code exchange has not finished (the end-session page is open too). A **resume th
 its redirect** is not in flight: `login()` and `stepUp()` end the wait and take its place. A
 pending request that nobody awaits is not in flight either, even though the state reads
 `Authorizing` (a system cancel kept it for a resume the app has not asked for, a cancelled caller
-did, or a cold start restored it and nothing was started): `login()` **supersedes** it, and
-remembers its `state` so that a redirect the old tab still delivers is stepped over instead of
-failing the new login as a mismatch.
+did, or a cold start restored it and nothing was started): `login()` **supersedes** it, and a
+redirect the old tab still delivers carries a `state` that is not the new request's, so it is
+ignored like any redirect that is not the awaited response (`state-machine.md`, scenario 15).
 
 ## 6. `login()` options
 

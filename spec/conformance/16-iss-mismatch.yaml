@@ -16,4 +16,4 @@ assertions:
   - No request reaches the token endpoint.
   - Configuration surfaces.
   - A redirect omitting iss entirely, from a deployment that advertises authorization_response_iss_parameter_supported, is rejected identically.
-  - The failure is reported distinctly from a state mismatch in logs, though both share the category.
+  - The failure is reported as an issuer mismatch, distinctly from a malformed or rejected response, in logs.

@@ -172,7 +172,7 @@ Not every error comes from a server.
 
 | Condition | Category | Notes |
 |---|---|---|
-| `state` mismatch on redirect | `Configuration` | Hard failure. **No token request is made.** Either a bug or an injection attempt; both are unsafe to continue from. |
+| `state` of a redirect is not the pending request's, while a login waits for its redirect | none: the redirect is **ignored** | Not a response to this request, so not an error of it: no token request, the pending request and `Authorizing` kept, the wait continues (`state-machine.md`, "A redirect that is not the awaited response"; scenario 15). Exception: when the browser surface that carried it has itself ended (an Auth Tab result, an `ASWebAuthenticationSession` completion), the login ends as `Recoverable`, cause `UserCancelled`, and the request is wiped. `Configuration(StateMismatch)` is no longer produced for a waiting login; it stays a case of the error type, reported by `AuthorizationResponseValidator.validate` for a redirect handed to it directly. |
 | `iss` mismatch on redirect (RFC 9207) | `Configuration` | Same treatment. |
 | Missing `code` and missing `error` on redirect | `Configuration` | |
 | User cancelled the browser | `Recoverable`, cause `UserCancelled` | Pending request wiped. Never retried automatically. |
