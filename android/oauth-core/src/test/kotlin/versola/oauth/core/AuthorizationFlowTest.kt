@@ -274,6 +274,26 @@ class AuthorizationFlowTest {
     }
 
     @Test
+    fun `iss is held to the issuer discovery announces, trailing slash included`() = runTest {
+        // The configured issuer is stored without its slash, but the provider signs the
+        // redirect with the value its metadata carries (Auth0 announces one): byte for byte.
+        val announced = metadata.copy(issuer = "$ISSUER/")
+
+        val matching = RecordingStore()
+        val grant = flow(matching, FakeBrowser(redirectFor(matching, extra = "&iss=$ISSUER/"), matching), metadata = announced)
+            .authorize(setOf("openid"))
+        assertEquals("$ISSUER/", grant.iss)
+
+        val unslashed = RecordingStore()
+        val error = failure {
+            flow(unslashed, FakeBrowser(redirectFor(unslashed, extra = "&iss=$ISSUER"), unslashed), metadata = announced)
+                .authorize(setOf("openid"))
+        } as VersolaError.Configuration
+        assertEquals(VersolaError.Configuration.Detail.IssuerMismatch("$ISSUER/", ISSUER), error.detail)
+        assertNull(unslashed.stored)
+    }
+
+    @Test
     fun `a cold start with a pending request observes Authorizing, never Unauthenticated`() = runTest {
         // Scenario 12: the app was killed while the browser was foreground. The first value
         // the app sees must already be Authorizing.

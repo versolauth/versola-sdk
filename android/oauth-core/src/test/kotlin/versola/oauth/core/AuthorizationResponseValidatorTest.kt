@@ -111,15 +111,21 @@ class AuthorizationResponseValidatorTest {
     }
 
     @Test
-    fun `a trailing slash on iss is not a mismatch`() {
-        val grant = AuthorizationResponseValidator.validate(
-            redirect = "https://app.example.com/oauth?code=c&state=the-state&iss=$ISSUER/",
-            pending = pending(),
-            issuer = ISSUER,
-            issParameterSupported = true,
-        )
-
-        assertEquals("c", grant.code)
+    fun `iss is compared as a string, so a trailing slash or another case is a mismatch`() {
+        // RFC 9207 section 2.4: simple string comparison, no normalisation. A tolerance here is
+        // the mix-up attack's room: `https://id.example.com/` and `https://id.example.com` are
+        // two issuers.
+        for (iss in listOf("$ISSUER/", ISSUER.uppercase(), "$ISSUER ", "${ISSUER}%2F")) {
+            val error = assertThrows(VersolaError.Configuration::class.java) {
+                AuthorizationResponseValidator.validate(
+                    redirect = "https://app.example.com/oauth?code=c&state=the-state&iss=" + java.net.URLEncoder.encode(iss, "UTF-8"),
+                    pending = pending(),
+                    issuer = ISSUER,
+                    issParameterSupported = true,
+                )
+            }
+            assertTrue(iss, error.detail is VersolaError.Configuration.Detail.IssuerMismatch)
+        }
     }
 
     @Test

@@ -185,15 +185,28 @@ class OAuthClientTest {
     @Test
     fun `the ID token's iss is held to the issuer discovery announces, trailing slash included`() = runTest {
         // Auth0 announces `https://tenant/` and signs tokens with that `iss`; the configured
-        // issuer has no slash. Discovery tolerates the one slash; the ID token must match
-        // what discovery said, not what was configured.
+        // issuer has no slash. Discovery tolerates the one slash; the ID token, and the redirect's
+        // RFC 9207 `iss`, must match what discovery said, not what was configured.
         provider.announcedIssuer = provider.issuer + "/"
+        browser = FakeBrowser(provider.issuer + "/")
         val client = client()
 
         client.login()
 
         assertEquals(provider.issuer + "/", client.claims?.issuer)
         assertEquals(SessionState.Authenticated, client.sessionState.first())
+    }
+
+    @Test
+    fun `a redirect iss that differs from the announced issuer by the trailing slash is refused`() = runTest {
+        provider.announcedIssuer = provider.issuer + "/"
+        browser = FakeBrowser(provider.issuer)
+        val client = client()
+
+        val error = runCatching { client.login() }.exceptionOrNull() as VersolaError.Configuration
+
+        assertEquals(VersolaError.Configuration.Detail.IssuerMismatch(provider.issuer + "/", provider.issuer), error.detail)
+        assertEquals(SessionState.Unauthenticated, client.sessionState.first())
     }
 
     @Test

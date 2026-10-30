@@ -394,7 +394,10 @@ public class AuthorizationFlow(
                 AuthorizationResponseValidator.validate(
                     redirect = outcome.uri,
                     pending = pending,
-                    issuer = configuration.issuer,
+                    // The issuer the provider announces, not the configured one: the configured
+                    // value has lost a trailing slash the provider's `iss` keeps (RFC 9207 section
+                    // 2.4 compares the strings as they are).
+                    issuer = metadata.issuer,
                     issParameterSupported = metadata.authorizationResponseIssParameterSupported,
                 )
                 // Deliberately still Authorizing, and the pending request deliberately still

@@ -75,7 +75,9 @@ the device in this mode, and the browser opens on discovery's `authorization_end
 On redirect, in this order, all before any network call:
 
 1. `state` matches the persisted value, compared in constant time
-2. `iss` matches the configured issuer (RFC 9207) if present; if absent, this is only a failure
+2. `iss` equals the issuer the provider's metadata announces (RFC 9207), by simple string
+   comparison with no normalisation (section 2.4: a trailing slash or a case difference is a
+   different issuer), if present; if absent, this is only a failure
    when discovery advertises `authorization_response_iss_parameter_supported` — a deployment
    that does not advertise it may legitimately omit `iss`
 3. the response carries `code`
