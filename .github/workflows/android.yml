@@ -25,13 +25,18 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      # compileSdk 36 across every module (#4's package-coordinates decision, #1 §4's
-      # API 26 / target 36 floor). Installed explicitly rather than trusting whatever
-      # the runner image happens to ship.
+      # compileSdk 37 across every module (minSdk 26), so the build needs platform 37.0.
+      # Installed explicitly rather than trusting whatever the runner image happens to ship:
+      # a missing platform is otherwise left to AGP to download in the middle of the build,
+      # which hides the dependency. The
+      # sdkmanager id is `platforms;android-37.0` (Google names API 37 with its minor
+      # version; `platforms;android-37` does not exist), and build-tools 36.0.0 is the version
+      # AGP 9.5.0 uses by default. Every workflow that builds Android installs the same pair.
+      # API 36 below is something else: the emulator image and the Robolectric API level.
       - name: Install Android SDK platform
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            "platforms;android-36" "build-tools;36.0.0" > /dev/null
+            "platforms;android-37.0" "build-tools;36.0.0" > /dev/null
 
       - uses: gradle/actions/setup-gradle@v5
 
@@ -89,7 +94,7 @@ jobs:
       - name: Install Android SDK platform
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            "platforms;android-36" "build-tools;36.0.0" > /dev/null
+            "platforms;android-37.0" "build-tools;36.0.0" > /dev/null
 
       - uses: gradle/actions/setup-gradle@v5
 
