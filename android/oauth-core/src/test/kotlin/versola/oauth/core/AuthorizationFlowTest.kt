@@ -22,12 +22,18 @@ private class RecordingStore(var stored: PendingAuthorizationRequest? = null) : 
     var saves = 0
     var clears = 0
 
+    /** Thrown by [load] while set: what a store does when the slot is out of reach, not gone. */
+    var loadFailure: VersolaError? = null
+
     override suspend fun save(request: PendingAuthorizationRequest) {
         saves++
         stored = request
     }
 
-    override suspend fun load(): PendingAuthorizationRequest? = stored
+    override suspend fun load(): PendingAuthorizationRequest? {
+        loadFailure?.let { throw it }
+        return stored
+    }
 
     override suspend fun clear() {
         clears++
@@ -294,6 +300,37 @@ class AuthorizationFlowTest {
         val first = flow(store, browser, now = 1_000).sessionState.first()
 
         assertSame(SessionState.Authorizing, first)
+    }
+
+    @Test
+    fun `a pending slot that is out of reach on a cold start neither crashes the state nor is discarded`() = runTest {
+        val restored = PendingAuthorizationRequest(
+            state = "restored-state",
+            nonce = "restored-nonce",
+            codeVerifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+            scopes = listOf("openid"),
+            redirectUri = "https://app.example.com/oauth",
+            acrValues = emptyList(),
+            maxAge = null,
+            createdAtEpochMillis = 0,
+        )
+        val store = RecordingStore(restored)
+        store.loadFailure = VersolaError.Recoverable(VersolaError.Recoverable.Cause.UnlockRequired)
+        val browser = FakeBrowser(
+            { BrowserOutcome.Redirect("https://app.example.com/oauth?code=c&state=restored-state&iss=$ISSUER") },
+            store,
+        )
+        val flow = flow(store, browser, now = 1_000)
+
+        // The state collector is not handed the storage failure, and nothing is deleted on its
+        // account: the slot is a login the user may be in the middle of.
+        assertSame(SessionState.Unauthenticated, flow.sessionState.first())
+        assertEquals(0, store.clears)
+        assertEquals(restored, store.stored)
+
+        // Once the slot can be read again it still resumes.
+        store.loadFailure = null
+        assertEquals("c", flow.resumePendingAuthorization()!!.code)
     }
 
     @Test

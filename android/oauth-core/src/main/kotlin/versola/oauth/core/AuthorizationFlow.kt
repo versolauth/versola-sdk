@@ -443,7 +443,16 @@ public class AuthorizationFlow(
         if (restored) return
         restoreLock.withLock {
             if (restored) return
-            val pending = pendingStore.load()
+            // A slot that is out of reach (a locked key, a keystore fault) is neither read nor
+            // discarded here: the restore must not hand the collector a storage failure, and
+            // the slot may be a login the user is in the middle of. It stays on disk, and
+            // `resumePendingAuthorization()` reads it again and surfaces the failure to a
+            // caller that can act on it. Cancellation is not a `Recoverable` and passes through.
+            val pending = try {
+                pendingStore.load()
+            } catch (e: VersolaError.Recoverable) {
+                null
+            }
             state.value = when {
                 // A stored grant outranks whatever the browser leg left behind, and it is
                 // read first for both directions of that: without it a returning session

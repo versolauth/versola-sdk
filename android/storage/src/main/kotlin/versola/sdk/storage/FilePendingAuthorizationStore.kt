@@ -1,12 +1,14 @@
 package versola.sdk.storage
 
 import java.io.File
+import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import versola.oauth.core.CredentialKeyProvider
 import versola.oauth.core.PendingAuthorizationCodec
 import versola.oauth.core.PendingAuthorizationRequest
 import versola.oauth.core.PendingAuthorizationStore
+import versola.oauth.core.VersolaError
 
 /**
  * The pending authorization request, wrapped by a [CredentialKeyProvider] and written to one
@@ -45,15 +47,39 @@ public class FilePendingAuthorizationStore(
             if (file.exists()) file.readBytes() else null
         } ?: return null
 
-        return try {
-            PendingAuthorizationCodec.decode(keyProvider.unwrap(wrapped))
+        // Discarded only when nothing can ever be made of it. The slot is a login the user may
+        // be in the middle of, and a failure that says nothing about the bytes (a locked key, a
+        // keystore hiccup, a cancelled caller) must not cost them the redirect that is on its
+        // way: those surface, with the slot left where it is.
+        val plaintext = try {
+            keyProvider.unwrap(wrapped)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: VersolaError.Reauthenticate) {
+            // The key that wrote it is gone for good.
+            clear()
+            return null
+        } catch (e: VersolaError) {
+            throw e
         } catch (e: Exception) {
-            // A slot that cannot be unwrapped or decoded is a slot that cannot complete a
-            // flow. Nothing is recoverable from it, so it is discarded rather than surfaced:
-            // the user simply logs in again. Distinct from the key being invalidated with
-            // *credentials* behind it, which #7 surfaces as Reauthenticate.
+            if (StorageFailure.isPermanent(e)) {
+                clear()
+                return null
+            }
+            throw StorageFailure.toError(e)
+        }
+
+        return try {
+            PendingAuthorizationCodec.decode(plaintext)
+        } catch (e: Exception) {
+            // It opened and is not a pending request: a slot that cannot complete a flow, with
+            // nothing recoverable in it. Discarded rather than surfaced: the user logs in
+            // again. Distinct from the key being invalidated with *credentials* behind it,
+            // which #7 surfaces as Reauthenticate.
             clear()
             null
+        } finally {
+            plaintext.fill(0)
         }
     }
 
