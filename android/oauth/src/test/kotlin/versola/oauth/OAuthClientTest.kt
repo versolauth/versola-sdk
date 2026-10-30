@@ -210,6 +210,25 @@ class OAuthClientTest {
     }
 
     @Test
+    fun `cancelPendingAuthorization ends a login whose browser is gone and lets the next one start`() = runTest {
+        browser.hold = kotlinx.coroutines.CompletableDeferred()
+        val client = client()
+        val first = async(start = CoroutineStart.UNDISPATCHED) { runCatching { client.login() } }
+        browser.opened.await()
+        assertEquals(SessionState.Authorizing, client.sessionState.first())
+
+        client.cancelPendingAuthorization()
+
+        val error = first.await().exceptionOrNull() as VersolaError.Recoverable
+        assertEquals(VersolaError.Recoverable.Cause.UserCancelled, error.reason)
+        assertEquals(SessionState.Unauthenticated, client.sessionState.first())
+        // The abandoned tab is still "open"; the next login must not wait for it.
+        browser.hold = null
+        client.login()
+        assertEquals(SessionState.Authenticated, client.sessionState.first())
+    }
+
+    @Test
     fun `ephemeralBrowser reaches the browser session and is off by default`() = runTest {
         val client = client()
 

@@ -112,6 +112,23 @@ public class OAuthClient private constructor(
     }
 
     /**
+     * Gives up an authorization whose browser is gone, so that [login] can be called again now
+     * instead of being refused while [sessionState] stays `Authorizing` for the rest of the pending
+     * request's ten minutes. The case is the app killed while the browser was open and the user
+     * coming back to the app itself, not through the redirect: nothing else tells the SDK the
+     * redirect is not coming.
+     *
+     * A [login] or [stepUp] that is still waiting on the browser ends with
+     * `Recoverable(UserCancelled)`; the pending request is discarded and the state settles as for a
+     * user cancel (`Authenticated` over a stored grant, otherwise `Unauthenticated`). A tab that is
+     * still open may yet redirect, and that redirect is ignored. Does nothing when no authorization
+     * is pending, so it is safe to call without checking [sessionState] first.
+     */
+    public suspend fun cancelPendingAuthorization() {
+        flow.cancelPendingAuthorization()
+    }
+
+    /**
      * Answers a [VersolaError.StepUp] by re-authorizing at the authentication context the
      * resource server asked for, then leaves the app to re-issue the refused call. The scopes
      * are the configured ones unless [options] says otherwise.

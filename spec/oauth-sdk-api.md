@@ -117,6 +117,7 @@ val oauth = OAuthClient.create(context, configuration)
 | `logout(options)` | the local wipe is done; server-side steps are best effort | `LogoutOutcome(sessionEnded: Boolean, tokenRevoked: Boolean)`; `Unauthenticated` published unconditionally | never throws for a server-side failure; `Configuration` only for a misuse |
 | `accessToken()` | a token not within its refresh skew is available, refreshing once if needed (single-flight) | `AccessToken(value, type: Bearer or DPoP, expiresAt, scopes)` | `Reauthenticate(GrantRejected, SessionExpired)`, `Recoverable(Network, UnlockRequired)` |
 | `refresh()` | the refresh completed | nothing | as `accessToken()` |
+| `cancelPendingAuthorization()` | the pending authorization is discarded | nothing | never throws; does nothing when none is pending. A waiting `login()` or `stepUp()` ends with `Recoverable(UserCancelled)`. **Android only for now**; iOS and Flutter follow with the same semantics (`state-machine.md`, app cancel) |
 | `claims` | — (property, memory) | `IdTokenClaims?` of the last validated ID token; null when unauthenticated. After a cold start the stored ID token is read back by the first operation (`accessToken()`, `userInfo()`, a refresh), without re-verifying it: it was validated before it was stored | — |
 | `userInfo()` | the UserInfo response is validated | `UserInfo` (the standard claims typed, the rest as a read-only map); `sub` must equal the ID token's `sub` (OIDC Core 5.3.2) | `Configuration(ProviderUnsupported)` when no endpoint, `Recoverable`, `Reauthenticate` |
 | `stepUp(challenge, options)` | as `login()` | re-authorizes with the challenge's `acr_values` and `max_age` and the configured scopes (or the options'); the app re-issues the refused call | as `login()` |
@@ -128,7 +129,8 @@ val oauth = OAuthClient.create(context, configuration)
 grant; on cancel or failure the existing session stays (`state-machine.md`, settle on
 `Authenticated`). `login()` while `Authorizing` is refused with
 `Configuration(InvalidConfiguration("an authorization is already in progress"))`; the app observes
-the state before asking.
+the state before asking, and gives up one whose browser is gone with `cancelPendingAuthorization()`
+rather than waiting out its ten minutes.
 
 ## 6. `login()` options
 
@@ -339,6 +341,9 @@ refresh token issued, `offline_access` advertised but not configured, a response
 1. `IdTokenRejected` as `Configuration` (section 11) versus a fifth category; the spec's
    four-category rule argues for `Configuration`.
 2. `login()` while `Authorizing` refused (section 5) versus cancelling the outstanding request.
+   Refusal stays, with an explicit `cancelPendingAuthorization()` as the way out: superseding on
+   its own would discard a request whose redirect may still be coming, and a gone browser cannot
+   be told from a slow one.
 3. `stepUp()` takes the configured scopes by default (section 5); the Versola facade requires
    them as a parameter. The two differ in signature, not in what is sent.
 4. The 24-hour discovery cache age (and the key set's bounds of 5 minutes to 24 hours) and the 30-second refresh skew: all fixed, not configurable.

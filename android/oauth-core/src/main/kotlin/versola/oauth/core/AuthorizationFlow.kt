@@ -1,6 +1,10 @@
 package versola.oauth.core
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emitAll
@@ -131,6 +135,68 @@ public class AuthorizationFlow(
     internal suspend fun abandonLogin() {
         pendingStore.clear()
         state.value = settledState()
+    }
+
+    /**
+     * Completed by [cancelPendingAuthorization] to wake the call that is waiting for the browser
+     * (a [authorize] or a [resumePendingAuthorization]); null when none is. Written under
+     * [AUTHORIZE_LOCK] by the waiter, read without it by the canceller, which is the point: the
+     * canceller must be able to reach a waiter that is holding the lock.
+     */
+    @Volatile
+    private var cancelSignal: CompletableDeferred<Unit>? = null
+
+    /**
+     * `Authorizing → Unauthenticated` on the app's say-so, for the case nothing else ends: a
+     * browser that is gone — the app was killed while it was open and the user returned to the app
+     * rather than through the redirect, or closed the tab in a way that reported nothing — leaves a
+     * pending request that would otherwise hold the session in `Authorizing`, and `login()` refused
+     * or queued behind it, for the rest of its ten minutes.
+     *
+     * Wakes a [authorize] or [resumePendingAuthorization] that is waiting (it ends with
+     * `Recoverable(UserCancelled)`), discards the pending request and settles the state the way a
+     * user cancel does: `Authenticated` over a stored grant, otherwise `Unauthenticated`. A tab
+     * that is still open may yet redirect; that redirect is discarded rather than allowed to fail
+     * the next login as a mismatch. Does nothing when no authorization is pending, so an app may
+     * call it without looking first. Waits for the authorize lock when it is held by something that
+     * is not waiting for a browser (a sign-out's own browser leg).
+     */
+    public suspend fun cancelPendingAuthorization() {
+        cancelSignal?.complete(Unit)
+        AUTHORIZE_LOCK.withLock {
+            ensureRestored()
+            val pending = pendingStore.load()
+            if (pending != null) rememberAbandoned(pending.state)
+            // Nothing pending and not `Authorizing`: nothing to cancel. A live session in
+            // `Refreshing`, `Locked` or `StepUpRequired` must not be rewritten to `Authenticated`.
+            if (pending == null && state.value != SessionState.Authorizing) return@withLock
+            pendingStore.clear()
+            state.value = settledState()
+        }
+    }
+
+    /**
+     * Waits for [block], the browser leg, until [cancelPendingAuthorization] says otherwise: then
+     * [block] is cancelled and the answer is null. The caller's own cancellation is not this: it
+     * propagates, and leaves the slot as a process death would (see [authorize]).
+     */
+    private suspend fun awaitUnlessCancelled(block: suspend () -> BrowserOutcome): BrowserOutcome? {
+        val signal = CompletableDeferred<Unit>()
+        cancelSignal = signal
+        return try {
+            coroutineScope {
+                val work = async { block() }
+                select {
+                    work.onAwait { it }
+                    signal.onAwait {
+                        work.cancel()
+                        null
+                    }
+                }
+            }
+        } finally {
+            cancelSignal = null
+        }
     }
 
     /** `Authenticated → StepUpRequired`; nothing else moves, the grant is intact. */
@@ -281,7 +347,9 @@ public class AuthorizationFlow(
 
         val browserOptions = BrowserSessionOptions(ephemeral = ephemeralBrowser, redirectUri = configuration.redirectUri.value)
         val outcome = try {
-            belongingTo(pending, outsideRetryBudget { browser.authorize(uri, browserOptions) })
+            awaitUnlessCancelled {
+                belongingTo(pending, outsideRetryBudget { browser.authorize(uri, browserOptions) })
+            } ?: return@withLock abandonedByApp(pending)
         } catch (e: CancellationException) {
             // The *caller* was cancelled, not the authorization. The browser may already be
             // in the foreground and its redirect may still arrive, so the slot and the
@@ -340,13 +408,19 @@ public class AuthorizationFlow(
         // before the process died — and an unbounded wait here holds the authorize lock, and
         // with it every later `login()`, for as long as the app lives.
         val remaining = PendingAuthorizationRequest.MAX_AGE_MILLIS - (clock() - pending.createdAtEpochMillis)
-        val outcome = withTimeoutOrNull(remaining) { belongingTo(pending, outsideRetryBudget { browser.awaitPendingRedirect() }) }
+        var cancelled = false
+        val outcome = withTimeoutOrNull(remaining) {
+            awaitUnlessCancelled { belongingTo(pending, outsideRetryBudget { browser.awaitPendingRedirect() }) }
+                .also { if (it == null) cancelled = true }
+        }
+        if (cancelled) abandonedByApp(pending)
+        val answered = outcome
             ?: run {
                 pendingStore.clear()
                 state.value = settledState()
                 throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.PendingRequestExpired)
             }
-        complete(outcome, pending, discovery.metadata())
+        complete(answered, pending, discovery.metadata())
     }
 
     /**
@@ -373,6 +447,14 @@ public class AuthorizationFlow(
         val redirect = outcome as? BrowserOutcome.Redirect ?: return false
         val state = AuthorizationResponseValidator.stateOf(redirect.uri) ?: return false
         return state != pending.state && forgetAbandoned(state)
+    }
+
+    /** The end of an authorization that [cancelPendingAuthorization] cut short: a user cancel, with the tab possibly still open. */
+    private suspend fun abandonedByApp(pending: PendingAuthorizationRequest): Nothing {
+        rememberAbandoned(pending.state)
+        pendingStore.clear()
+        state.value = settledState()
+        throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.UserCancelled)
     }
 
     private suspend fun complete(
