@@ -457,24 +457,23 @@ public class AuthorizationFlow(
         if (restored) return
         restoreLock.withLock {
             if (restored) return
-            // The grant is read before the pending request, and asked without the key. With a
-            // grant the pending slot is residue (below): it is cleared unread, so an unreadable
-            // one cannot matter. With no grant a slot that is out of reach (a locked key, a
-            // keystore fault) has not said there is nothing in it, so it must not be read as
+            // The grant is read before the pending request, and asked without the key. A pending
+            // slot that is out of reach (a locked key, a keystore fault) has not said there is
+            // nothing in it, so with no grant to decide the state it must not be read as
             // `Unauthenticated`: the state is `Locked`, the operation that asked fails with the
-            // storage error, and nothing is remembered (`restored` stays false), so the next
-            // call reads again. The slot is never discarded on that account. Cancellation is
-            // not a `Recoverable` and passes through.
+            // storage error, and nothing is remembered (`restored` stays false), so the next call
+            // reads again. The slot is never discarded on its account. With a grant the slot is
+            // only residue and the state does not depend on it. Cancellation is not a
+            // `Recoverable` and passes through.
             val granted = hasStoredGrant()
-            val pending = if (granted) {
-                null
-            } else {
-                try {
-                    pendingStore.load()
-                } catch (e: VersolaError.Recoverable) {
+            val pending = try {
+                pendingStore.load()
+            } catch (e: VersolaError.Recoverable) {
+                if (!granted) {
                     state.value = SessionState.Locked
                     throw e
                 }
+                null
             }
             state.value = when {
                 // A stored grant outranks whatever the browser leg left behind, and it is
@@ -492,7 +491,7 @@ public class AuthorizationFlow(
                 // a pending request that may or may not have been redeemed — has no way to
                 // tell the two apart.
                 granted -> {
-                    pendingStore.clear()
+                    if (pending != null) pendingStore.clear()
                     SessionState.Authenticated
                 }
                 pending == null -> SessionState.Unauthenticated

@@ -343,14 +343,13 @@ class AuthorizationFlowTest {
     }
 
     @Test
-    fun `a stored grant decides the state and clears the pending slot unread`() = runTest {
+    fun `a stored grant decides the state even when the pending slot cannot be read`() = runTest {
         val store = RecordingStore(restoredRequest())
         store.loadFailure = VersolaError.Recoverable(VersolaError.Recoverable.Cause.UnlockRequired)
         val flow = flow(store, FakeBrowser({ BrowserOutcome.UserCancelled }, store), now = 1_000, hasStoredGrant = { true })
 
         assertSame(SessionState.Authenticated, flow.sessionState.first())
-        assertEquals("the slot is residue: cleared unread, so being unreadable cannot matter", 1, store.clears)
-        assertNull(store.stored)
+        assertEquals("the unreadable slot is residue and is left", 0, store.clears)
     }
 
     @Test
