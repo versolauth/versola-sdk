@@ -133,6 +133,13 @@ waits for can no longer be spent. The request is discarded and the SDK restores
 `Authenticated`. Asked without the storage key (`hasGrant`), so a cold start does not become an
 unlock prompt under `OnAppUnlock`.
 
+A store that cannot be read yet (the device was never unlocked since boot; iOS answers
+`errSecInteractionNotAllowed`) has not said there is nothing in it. The restore then publishes
+`Locked`, never `Unauthenticated`, fails the operation that asked with
+`Recoverable(UnlockRequired)`, and is **not** remembered: the next call, once the app has asked
+the user to unlock, reads again. The grant is read before the pending request for this reason
+too: an unreadable pending slot must not decide what a returning user sees.
+
 The cost is a re-authorization started over a live session — a step-up, an account switch — and
 then killed mid-browser: it resolves in favour of the session that already exists rather than
 resuming. Nothing is lost that the next 401 does not ask for again, and the two cases are

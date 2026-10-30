@@ -100,14 +100,14 @@ public final class OAuthClient: Sendable {
     /// The state machine of `spec/state-machine.md`, one stream per observer. The first value
     /// is the restored state: an app killed mid-browser observes `authorizing` on cold start.
     public func sessionStates() async -> AsyncStream<SessionState> {
-        try? await flow.ensureRestored()
+        await restoreForObservers()
         return await flow.states.stream()
     }
 
     /// The current state, restored first.
     public var sessionState: SessionState {
         get async {
-            try? await flow.ensureRestored()
+            await restoreForObservers()
             return await flow.states.current
         }
     }
@@ -256,6 +256,19 @@ public final class OAuthClient: Sendable {
     private static func path(_ components: URLComponents, scheme: String) -> String {
         let path = components.percentEncodedPath
         return path.isEmpty && (scheme == "https" || scheme == "http") ? "/" : path
+    }
+
+    /// What an observer's first look does: read the stored session. A store that needs the device
+    /// unlocked has already published `locked` (`AuthorizationFlow.ensureRestored`); any other
+    /// failure cannot be thrown from a property, so it is logged, and the next look reads again.
+    private func restoreForObservers() async {
+        do {
+            try await flow.ensureRestored()
+        } catch OAuthError.recoverable(.unlockRequired) {
+            // Published as `locked`; not a warning.
+        } catch {
+            configuration.logger.warn("restoring the stored session failed: \(error is OAuthError ? String(describing: error) : String(describing: type(of: error)))")
+        }
     }
 
     private func refuseWhileAuthorizing() async throws {

@@ -13,6 +13,7 @@ final class AuthorizationFlowTests: XCTestCase {
         metadata: ProviderMetadata = AuthzKit.metadata(),
         store: MemoryPendingStore = MemoryPendingStore(),
         hasStoredGrant: Bool = false,
+        grantProbe: (@Sendable () async throws -> Bool)? = nil,
         tokenBinding: TokenBinding = .bearer,
         dpopKey: DpopProofSource? = nil,
         starter: AuthorizationStarter? = nil,
@@ -24,7 +25,7 @@ final class AuthorizationFlowTests: XCTestCase {
         let flow = AuthorizationFlow(
             configuration: AuthzKit.configuration, discovery: discovery, pendingStore: store, browser: browser,
             states: hub, tokenBinding: tokenBinding, dpopKey: dpopKey, clock: Clock(now: { now }),
-            hasStoredGrant: { hasStoredGrant }, starter: starter
+            hasStoredGrant: grantProbe ?? { hasStoredGrant }, starter: starter
         )
         return Fixture(flow: flow, store: store, hub: hub)
     }
@@ -391,6 +392,81 @@ final class AuthorizationFlowTests: XCTestCase {
         let stored = await store.stored
         XCTAssertEqual(state, .authenticated)
         XCTAssertNil(stored)
+    }
+
+    /// A store behind a key that is not available: every read fails the way a locked Keychain does.
+    private actor LockedPendingStore: PendingAuthorizationStore {
+        var loads = 0
+        var clears = 0
+        func save(_ request: PendingAuthorizationRequest) async throws { throw OAuthError.recoverable(.unlockRequired) }
+        func load() async throws -> PendingAuthorizationRequest? {
+            loads += 1
+            throw OAuthError.recoverable(.unlockRequired)
+        }
+        func clear() async throws { clears += 1 }
+    }
+
+    func testTheStoredGrantIsReadBeforeThePendingRequestSoALockedPendingSlotCannotHideIt() async throws {
+        let store = LockedPendingStore()
+        let hub = SessionStateHub()
+        let discovery = DiscoveryService(issuer: AuthzKit.issuer, client: StaticDiscoveryClient(metadata: AuthzKit.metadata()), cache: MemoryMetadataCache())
+        let flow = AuthorizationFlow(configuration: AuthzKit.configuration, discovery: discovery, pendingStore: store, browser: ScriptedBrowser.answering(), states: hub, clock: Clock(now: { AuthzKit.now }), hasStoredGrant: { true })
+
+        try await flow.ensureRestored()
+
+        let state = await hub.current
+        XCTAssertEqual(state, .authenticated, "a returning user is not made to wait on, or be hidden by, the slot of a login that never finished")
+        let loads = await store.loads
+        XCTAssertEqual(loads, 0, "with a grant the pending request is discarded unread")
+    }
+
+    func testAGrantProbeThatNeedsTheUnlockPublishesLockedAndRestoresAfterwards() async throws {
+        let locked = Box(true)
+        let f = fixture(browser: ScriptedBrowser.answering(), grantProbe: {
+            if await locked.value { throw OAuthError.recoverable(.unlockRequired) }
+            return true
+        })
+
+        do {
+            try await f.flow.ensureRestored()
+            XCTFail("the failure was swallowed")
+        } catch {
+            XCTAssertEqual(error as? OAuthError, .recoverable(.unlockRequired))
+        }
+        let during = await f.hub.current
+        XCTAssertEqual(during, .locked, "not a false unauthenticated: credentials may well be there")
+
+        await locked.set(false)
+        try await f.flow.ensureRestored()
+        let after = await f.hub.current
+        XCTAssertEqual(after, .authenticated, "the failed restore is retried, not remembered")
+    }
+
+    func testAPendingSlotThatNeedsTheUnlockPublishesLockedNotUnauthenticated() async throws {
+        let hub = SessionStateHub()
+        let discovery = DiscoveryService(issuer: AuthzKit.issuer, client: StaticDiscoveryClient(metadata: AuthzKit.metadata()), cache: MemoryMetadataCache())
+        let flow = AuthorizationFlow(configuration: AuthzKit.configuration, discovery: discovery, pendingStore: LockedPendingStore(), browser: ScriptedBrowser.answering(), states: hub, clock: Clock(now: { AuthzKit.now }), hasStoredGrant: { false })
+
+        do {
+            try await flow.ensureRestored()
+            XCTFail("the failure was swallowed")
+        } catch {
+            XCTAssertEqual(error as? OAuthError, .recoverable(.unlockRequired))
+        }
+        let state = await hub.current
+        XCTAssertEqual(state, .locked)
+    }
+
+    func testAnUnreadableStoreOtherThanLockedIsThrownAndPublishesNothing() async throws {
+        let f = fixture(browser: ScriptedBrowser.answering(), grantProbe: { throw OAuthError.configuration(.invalidConfiguration(detail: "keychain error -1")) })
+        do {
+            try await f.flow.ensureRestored()
+            XCTFail("the failure was swallowed")
+        } catch {
+            XCTAssertEqual(error as? OAuthError, .configuration(.invalidConfiguration(detail: "keychain error -1")))
+        }
+        let state = await f.hub.current
+        XCTAssertEqual(state, .unauthenticated, "the hub's initial value stands; the failure is the caller's to see")
     }
 
     func testRestoreWithNothingStoredPublishesUnauthenticatedAndRunsOnce() async throws {

@@ -98,7 +98,8 @@ package actor AuthorizationFlow {
     /// A stored grant outranks a pending request, and is read first (`spec/state-machine.md`):
     /// the request beside it is the residue of a login killed between persisting the token and
     /// clearing the slot, its code already redeemed, so resuming it could only fail as
-    /// `invalid_grant`. A pending request older than ten minutes is discarded and remembered, so
+    /// `invalid_grant`. A store that is not readable yet (locked device, `onAppUnlock`) publishes
+    /// `locked` and throws `recoverable(.unlockRequired)`; the restore is retried by the next call. A pending request older than ten minutes is discarded and remembered, so
     /// that `resumePendingAuthorization()` can say it expired rather than that nothing was there.
     package func ensureRestored() async throws {
         if restored { return }
@@ -110,21 +111,34 @@ package actor AuthorizationFlow {
 
     private func restore() async throws {
         defer { restoreTask = nil }
-        let pending = try await pendingStore.load()
         let next: SessionState
-        if try await hasStoredGrant() {
-            if pending != nil { try await pendingStore.clear() }
-            next = .authenticated
-        } else if let pending {
-            if pending.isExpired(at: clock.now()) {
+        do {
+            // The grant first, then the pending request only when there is no grant: a slot
+            // that cannot be read (a Keychain item of a locked device) must neither hide a
+            // returning user's session nor stand between it and `authenticated`.
+            if try await hasStoredGrant() {
+                // The residue of a login killed between persisting the token and clearing the
+                // slot; discarded unread.
                 try await pendingStore.clear()
-                expiredOnRestore = true
-                next = .unauthenticated
+                next = .authenticated
+            } else if let pending = try await pendingStore.load() {
+                if pending.isExpired(at: clock.now()) {
+                    try await pendingStore.clear()
+                    expiredOnRestore = true
+                    next = .unauthenticated
+                } else {
+                    next = .authorizing
+                }
             } else {
-                next = .authorizing
+                next = .unauthenticated
             }
-        } else {
-            next = .unauthenticated
+        } catch let error as OAuthError {
+            // A store that needs the device unlocked has not said there is nothing in it: the
+            // state is `locked`, never a false `unauthenticated`, and the restore is not
+            // remembered, so the next call (once the app has asked the user to unlock) reads
+            // again. Any other failure is the caller's to see; the hub is left as it was.
+            if case .recoverable(.unlockRequired) = error { await states.set(.locked) }
+            throw error
         }
         await states.set(next)
         restored = true
