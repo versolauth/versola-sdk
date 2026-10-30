@@ -79,3 +79,9 @@ apiValidation {
     // review F6).
     nonPublicMarkers.add("versola.oauth.core.VersolaInternalApi")
 }
+
+// Published (gradle/publishing.gradle.kts): the coordinates are io.versola:storage-android.
+extra["publishing.artifactId"] = "storage-android"
+extra["publishing.name"] = "Versola secure storage (Android)"
+extra["publishing.description"] = "Keystore-wrapped storage of the refresh token, ID token and pending authorization request for the Versola OAuth SDKs on Android."
+apply(from = rootProject.file("gradle/publishing.gradle.kts"))

@@ -25,13 +25,13 @@ plugins {
     id("org.jetbrains.kotlin.android") version "2.4.21" apply false
 }
 
-// kz.versola:oauth-android is not published yet: the plugin's dependency on it is satisfied by
+// io.versola:oauth-android is not published yet: the plugin's dependency on it is satisfied by
 // the repository's own Android build, included here with the artefact substituted by the
 // :oauth project. An app outside this repository drops this block once the artefact is on
 // Maven Central.
 includeBuild("../../../../android") {
     dependencySubstitution {
-        substitute(module("kz.versola:oauth-android")).using(project(":oauth"))
+        substitute(module("io.versola:oauth-android")).using(project(":oauth"))
     }
 }
 

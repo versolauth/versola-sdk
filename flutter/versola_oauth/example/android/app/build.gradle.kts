@@ -7,7 +7,7 @@ plugins {
 }
 
 android {
-    namespace = "kz.versola.versola_oauth_example"
+    namespace = "io.versola.versola_oauth_example"
     // Not flutter.compileSdkVersion (36 under the pinned Flutter): the repository's own libraries
     // (:oauth, :browser, ...) compile against 37 for OkHttp 5.5.1, and an application that depends on
     // them must compile against at least that (checkDebugAarMetadata fails otherwise). Follows
@@ -21,7 +21,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "kz.versola.versola_oauth_example"
+        applicationId = "io.versola.versola_oauth_example"
         // The SDK's floor (android/oauth), above Flutter's default of 24.
         minSdk = 26
         targetSdk = flutter.targetSdkVersion
@@ -95,7 +95,7 @@ tasks.withType<KotlinCompile>().configureEach {
 dependencies {
     // The generic facade itself, for the driver's wiring (the opt-in create); the composite
     // build in settings.gradle.kts substitutes the repository's :oauth for these coordinates.
-    testImplementation("kz.versola:oauth-android:0.1.0")
+    testImplementation("io.versola:oauth-android:0.1.0")
     // The six pins below are a second copy of android/conformance-oauth/build.gradle.kts, whose
     // support classes are compiled into this module too: keep them equal, in the same change.
     // Dependabot watches /android only, so a bump there does not reach this file by itself.

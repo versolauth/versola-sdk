@@ -110,7 +110,7 @@ jobs:
           git diff --exit-code -- . || { echo "::error::regenerate with: dart run pigeon --input pigeons/messages.dart && dart format ." ; exit 1; }
 
   # The Android half: the plugin compiles against the repository's own generic facade through the
-  # example's composite build (kz.versola:oauth-android is not published, so :oauth is substituted),
+  # example's composite build (io.versola:oauth-android is not published, so :oauth is substituted),
   # the Kotlin glue's unit tests run, and the example APK builds.
   android:
     runs-on: ubuntu-latest

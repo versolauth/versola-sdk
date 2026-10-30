@@ -1,0 +1,78 @@
+name: publish-pubdev
+
+# versola_oauth on pub.dev. Dormant (`if: false`): the first publish is by hand and flipping this on
+# is the maintainer's pull request; docs/releasing.md says what has to exist first.
+#
+# A separate file because pub.dev authenticates a workflow by the tag push that triggered it
+# ("automated publishing" on the package's admin page, tag pattern `{{version}}`), and rejects a
+# run that was not triggered by a tag. release.yml runs on the same tag; the two are independent.
+#
+# Two things this file cannot settle from here, both for the maintainer's first run:
+#  - The automated-publishing switch exists only after a package has been published once, so the
+#    first release of 0.1.0 is a manual `flutter pub publish` from the maintainer's machine
+#    (docs/releasing.md), and this workflow takes over from 0.1.1.
+#  - pub.dev's documentation describes the OIDC login for `dart-lang/setup-dart` and `dart pub`;
+#    it does not cover Flutter packages. Whether `flutter pub publish` picks up the same token
+#    without the Dart setup action is unverified: try it on a tag in a fork first.
+
+on:
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    if: false
+    runs-on: ubuntu-latest
+    # The environment gate pub.dev can require (admin page, "Require GitHub Actions environment"),
+    # with required reviewers on it, so that pushing a tag is not enough to publish.
+    environment: pub.dev
+    permissions:
+      contents: read
+      id-token: write # pub.dev's OIDC authentication
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Tag, pubspec, plugin pin and changelog agree
+        run: tools/check-release-version.sh "$RELEASE_TAG"
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+
+      - name: Read the pinned Flutter version
+        id: flutter
+        working-directory: flutter
+        run: |
+          version="$(jq -r .flutter .fvmrc)"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected Flutter version: $version" >&2; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+        with:
+          flutter-version: ${{ steps.flutter.outputs.version }}
+          channel: stable
+          cache: true
+
+      # The iOS half depends on the repository's Swift package by path inside a checkout; a
+      # published plugin has to name the tag (tools/flutter-prepare-publish.sh). The change is
+      # this job's working copy only, never committed.
+      - name: Point the iOS half at the release tag
+        run: tools/flutter-prepare-publish.sh "$RELEASE_TAG"
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+
+      - run: flutter pub get
+        working-directory: flutter/versola_oauth
+
+      # The checks every pull request passes (flutter.yml), then the upload.
+      - name: Analyze and test
+        run: |
+          flutter analyze
+          flutter test
+        working-directory: flutter/versola_oauth
+
+      - name: Publish
+        run: flutter pub publish --force
+        working-directory: flutter/versola_oauth

@@ -16,7 +16,7 @@ Documentation: <https://docs.versola.io> (the SDK section is being added to this
 |---|---|
 | What it is | An OAuth 2.0 / OpenID Connect client SDK for native apps (public clients) |
 | Platforms | Android (Kotlin, `minSdk` 26), iOS (Swift 6, iOS 17.4 and later), Flutter (Dart 3.13, Flutter 3.47) |
-| Names | Android `kz.versola:oauth-android` (package `versola.oauth`), iOS product `VersolaOAuth`, Dart `package:versola_oauth` |
+| Names | Android `io.versola:oauth-android` (package `versola.oauth`), iOS product `VersolaOAuth`, Dart `package:versola_oauth` |
 | Flow | Authorization code with PKCE `S256`, in the system browser only (Auth Tab or Custom Tabs, `ASWebAuthenticationSession`); no web view |
 | Providers | Any OpenID provider that meets the [contract](spec/providers.md); run in the SDK's tests against Keycloak 26.4 and Ory Hydra v26.2.0 |
 | Optional | DPoP (RFC 9449), pushed authorization requests (RFC 9126), refresh-token rotation, RP-initiated logout, token revocation |

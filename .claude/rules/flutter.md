@@ -20,7 +20,7 @@ in `security.md`; what the platform SDKs do is in `android-kotlin.md` and `ios-s
   SDK's public API (not its `@VersolaInternalApi` wiring) and converts types. It contains no
   protocol logic either, and it adds no second copy of the Android or iOS rules.
 - The native SDKs are consumed as this repository's own builds: the Android half depends on
-  `kz.versola:oauth-android`, which the example app's `settings.gradle.kts` substitutes with the
+  `io.versola:oauth-android`, which the example app's `settings.gradle.kts` substitutes with the
   `:oauth` project through a composite build until the artefact is published; the iOS half depends
   on the root `Package.swift` by path (SwiftPM only, no podspec: CocoaPods is dormant). Both pins
   (AGP and Kotlin in the example, the iOS floor in the plugin's `Package.swift`) follow the
@@ -107,6 +107,9 @@ cd example && flutter build ios --no-codesign   # and on iOS
   Kotlin and Swift glue tests and both example builds. The example's AGP and Kotlin plugin versions
   equal `android/build.gradle.kts` (an included build cannot load two); when Dependabot bumps the
   latter, that workflow fails on the PR until `example/android/settings.gradle.kts` follows.
-- Publishing to pub.dev from the monorepo subdirectory is dormant: the `pub-dev` job in
-  `release.yml` is `if: false` until credentials exist. Do not run `flutter pub publish`, do not
-  remove the dormancy, and do not add a `publish_to` that would enable it by accident.
+- Publishing to pub.dev is dormant: `publish-pubdev.yml` is `if: false` and the first release is a
+  manual `flutter pub publish` by the maintainer (`docs/releasing.md`). Do not run `flutter pub
+  publish`, with or without `--dry-run`, do not remove the dormancy, and do not add a `publish_to`
+  that would enable it by accident. The published plugin cannot use the path dependency its iOS
+  `Package.swift` has inside a checkout: `tools/flutter-prepare-publish.sh` rewrites it to the release
+  tag in the publishing job's working copy, and the rewrite is never committed.

@@ -1,73 +1,176 @@
 name: release
 
-# Wired but dormant per #4: every job below is gated off with `if: false` until phase 1
-# (Android) actually ships something worth publishing. Flip a job's condition on when
-# its platform is ready, once the corresponding publishing credentials exist as repo
-# secrets — none are configured yet.
+# A release is a tag. Pushing a tag `X.Y.Z` (0.1.0, no `v`: the tag is the version) runs this file:
+# the three platforms are checked against the tag, the Android artefacts are signed and uploaded to
+# the Maven Central Portal, the Swift package is proven to resolve and build at the tag, and a
+# GitHub release is created with generated notes. docs/releasing.md has the runbook and what has
+# to exist first (the Central namespace, the signing key and the four secrets).
+#
+# Nothing in this file has run on GitHub yet: the first tag is its first run, which is why the
+# Central upload is USER_MANAGED (a deployment that waits in the Portal for a click and can be
+# dropped there) and why docs/releasing.md has the maintainer look at a local bundle first.
+#
+# The pub.dev job lives in publish-pubdev.yml (it is dormant: the first publish is by hand).
+# CocoaPods and npm below are dormant too: there is no podspec and no React Native package.
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: read
 
 jobs:
-  maven-central:
-    # kz.versola:versola-android (#4's package-coordinates decision — reverse-DNS,
-    # forced by Maven Central's namespace verification).
-    if: false
+  # The tag is the version, and the three platforms must agree with it before anything is built:
+  # the Android artefacts take it from the tag, SwiftPM resolves the tag, pub.dev publishes the
+  # pubspec's. tools/check-release-version.sh reads files only.
+  verify-version:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The whole history, so the next step can ask whether the tagged commit is on main.
+          fetch-depth: 0
+      # Anyone who can push a tag would otherwise be able to publish any branch. A release is cut
+      # from main; a tag on a commit that main does not contain is refused before anything is built.
+      - name: The tagged commit is on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - name: Tag, pubspec, plugin pin and changelog agree
+        run: tools/check-release-version.sh "$RELEASE_TAG"
+        env:
+          # Through env, never interpolated into the script: a tag name is attacker-shaped input
+          # to anything that runs it as shell (ci-release.md). The script matches X.Y.Z only.
+          RELEASE_TAG: ${{ github.ref_name }}
+
+  # Six artefacts under io.versola (docs/releasing.md has the list and why each exists):
+  # `oauth-android` and the five modules its POM names. The Central Portal takes one signed zip in
+  # Maven layout; this job builds it and uploads it as USER_MANAGED, so the deployment waits in the
+  # Portal for the maintainer's click and can be dropped there. Central releases are immutable, and
+  # this upload has never run, so the first release is not AUTOMATIC; switching is a later decision.
+  maven-central:
+    needs: verify-version
+    runs-on: ubuntu-latest
+    # The signing key and the Portal token are secrets of this environment (or of the repository).
+    # GitHub creates the environment on first use; adding required reviewers to it (Settings,
+    # Environments) puts a human between a pushed tag and the upload.
+    environment: maven-central
     defaults:
       run:
         working-directory: android
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-java@v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
           java-version: "21"
-      - uses: gradle/actions/setup-gradle@v5
-      - name: Publish
-        run: ./gradlew publish
+      - name: Install Android SDK platform
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-36" "build-tools;36.0.0" > /dev/null
+      - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
+
+      # The gate before anything is signed: what the release would ship has to pass what every
+      # pull request passes (android.yml).
+      - name: Test, lint and API check
+        run: ./gradlew test lint apiCheck
+
+      - name: Build the signed bundle
+        run: ./gradlew centralBundle -PreleaseVersion="$RELEASE_TAG"
         env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          # The armoured private key and its passphrase, read in memory by the signing plugin; no
+          # key file is written to the runner.
           ORG_GRADLE_PROJECT_signingKey: ${{ secrets.MAVEN_SIGNING_KEY }}
           ORG_GRADLE_PROJECT_signingPassword: ${{ secrets.MAVEN_SIGNING_PASSWORD }}
-          ORG_GRADLE_PROJECT_sonatypeUsername: ${{ secrets.SONATYPE_USERNAME }}
-          ORG_GRADLE_PROJECT_sonatypePassword: ${{ secrets.SONATYPE_PASSWORD }}
 
-  swiftpm-cocoapods:
-    # SwiftPM consumers resolve the release tag directly — no publish step needed
-    # beyond the tag itself. CocoaPods trunk still needs an explicit push.
+      # Central Portal Publisher API (https://central.sonatype.com/api/v1/publisher/upload):
+      # `Authorization: Bearer base64(user:password)` with a Portal user token, a multipart part
+      # named `bundle`, `publishingType=USER_MANAGED`. The token goes to curl on stdin as a
+      # config file, so it never appears in a process list or in the log, and is masked anyway.
+      - name: Upload the bundle (USER_MANAGED)
+        run: |
+          token="$(printf '%s:%s' "$SONATYPE_USERNAME" "$SONATYPE_PASSWORD" | base64 | tr -d '\n')"
+          echo "::add-mask::$token"
+          version="$RELEASE_TAG"
+          id="$(printf 'header = "Authorization: Bearer %s"\n' "$token" | curl --fail --silent --show-error \
+            --config - -X POST \
+            -F "bundle=@build/central-bundle/versola-${version}.zip" \
+            "https://central.sonatype.com/api/v1/publisher/upload?name=versola-${version}&publishingType=USER_MANAGED")"
+          echo "deployment id: $id"
+          # Validation takes a minute or two; wait for it so a rejected bundle fails this job
+          # instead of sitting unnoticed in the Portal.
+          for _ in $(seq 1 30); do
+            state="$(printf 'header = "Authorization: Bearer %s"\n' "$token" | curl --fail --silent --show-error \
+              --config - -X POST "https://central.sonatype.com/api/v1/publisher/status?id=${id}" \
+              | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["deploymentState"])')"
+            echo "state: $state"
+            case "$state" in
+              VALIDATED|PUBLISHING|PUBLISHED) exit 0 ;;
+              FAILED) echo "::error::Central rejected the bundle; see the deployment in the Portal"; exit 1 ;;
+            esac
+            sleep 20
+          done
+          echo "::error::the deployment did not validate within ten minutes"
+          exit 1
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          # A Central Portal user token (central.sonatype.com/account), not a login.
+          SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
+          SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
+
+  # SwiftPM consumers resolve the release tag itself: there is nothing to publish. What this job
+  # proves is that the tagged tree resolves and builds from a clean checkout, which is what a
+  # consumer's `.package(url:, from:)` will do. The simulator name drifts with the runner's Xcode
+  # (ios.yml says so).
+  swiftpm:
+    needs: verify-version
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: swift package resolve
+      - run: xcodebuild build -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 17"
+
+  # The GitHub release for the tag, with notes generated from the merged pull requests. Created
+  # only after the Android bundle validated and the Swift package built at the tag, so a failed
+  # run leaves a tag and no release. `gh` ships on the runner; no third-party action receives the
+  # write token. The Central deployment is USER_MANAGED, so the artefacts reach Central when the
+  # maintainer publishes the validated deployment in the Portal, not when this job ends.
+  github-release:
+    needs: [maven-central, swiftpm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create the release
+        run: gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$RELEASE_TAG" --generate-notes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+
+  # CocoaPods is dormant (ios-swift.md): there is no podspec, and the plugin's iOS half is SwiftPM
+  # only. Kept so the pipeline shape exists if the maintainer ever wants it.
+  cocoapods:
     if: false
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Push podspec to CocoaPods trunk
         run: pod trunk push Versola.podspec --allow-warnings
         env:
           COCOAPODS_TRUNK_TOKEN: ${{ secrets.COCOAPODS_TRUNK_TOKEN }}
 
-  pub-dev:
-    # versola on pub.dev (#4's package-coordinates decision). Phase 3 per README.
-    if: false
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: flutter
-    steps:
-      - uses: actions/checkout@v7
-      - uses: subosito/flutter-action@v2
-      - run: flutter pub publish --force
-
   npm:
-    # @versola/react-native. #20 may never be built — see #1 §1 (React Native is
-    # last, conditional on demand). Kept here only so the pipeline shape exists.
+    # @versola/react-native. #20 may never be built, see #1 section 1 (React Native is last,
+    # conditional on demand). Kept here only so the pipeline shape exists.
     if: false
     runs-on: ubuntu-latest
     defaults:
       run:
         working-directory: react-native
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
