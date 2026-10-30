@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Security
 
@@ -28,6 +29,35 @@ enum KeychainAccessibility: Sendable, Equatable {
     }
 }
 
+/// Which Keychain and Secure Enclave failures are the store being out of reach, not broken.
+enum KeychainFailure {
+    /// The statuses of a store that cannot be used right now and will be later, none of which
+    /// says anything about the item:
+    /// - `errSecInteractionNotAllowed` (-25308): the device is locked, or has not been unlocked
+    ///   since boot (an `AfterFirstUnlock` item before that first unlock, a `WhenUnlocked` one
+    ///   while locked).
+    /// - `errSecNotAvailable` (-25291): the Keychain is not available yet, which is early boot and
+    ///   the same wait.
+    /// - `errSecAuthFailed` (-25293): authentication to the store failed or was withheld, which on a
+    ///   locked device is the lock again; the app unlocks and retries.
+    /// Everything else (a missing entitlement, a malformed query, a corrupt item) is permanent and
+    /// stays `invalidConfiguration`: signing the user out for the first and calling the second
+    /// "retry later" would each be the wrong answer.
+    static func isUnavailableForNow(_ status: OSStatus) -> Bool {
+        status == errSecInteractionNotAllowed || status == errSecNotAvailable || status == errSecAuthFailed
+    }
+
+    /// The `OSStatus` inside an error that crossed CryptoKit or Security, when it carries one.
+    /// CryptoKit reports the Secure Enclave's refusals as `underlyingCoreCryptoError`; Security
+    /// bridged errors are an `NSError` in the OSStatus domain.
+    static func status(of error: Error) -> OSStatus? {
+        if let crypto = error as? CryptoKitError, case .underlyingCoreCryptoError(let status) = crypto { return status }
+        let bridged = error as NSError
+        if bridged.domain == NSOSStatusErrorDomain { return OSStatus(truncatingIfNeeded: bridged.code) }
+        return nil
+    }
+}
+
 /// One generic-password item, and the only code that talks to `SecItem*`. Value type with no
 /// state: the stores serialise their own calls as actors.
 struct KeychainItem: Sendable {
@@ -35,8 +65,11 @@ struct KeychainItem: Sendable {
     let account: String
     let accessibility: KeychainAccessibility
     let accessGroup: String?
+    /// Told when a status that is *probably* a lock is mapped to `unlockRequired` (see `failure`).
+    let logger: (any OAuthLogger)?
 
-    init(service: String, account: String, accessibility: KeychainAccessibility, accessGroup: String? = nil) {
+    init(service: String, account: String, accessibility: KeychainAccessibility, accessGroup: String? = nil, logger: (any OAuthLogger)? = nil) {
+        self.logger = logger
         self.service = service
         self.account = account
         self.accessibility = accessibility
@@ -46,10 +79,23 @@ struct KeychainItem: Sendable {
     static func service(forStorageKey storageKey: String) -> String { "versola.oauth.\(storageKey)" }
 
     /// The statuses that mean something to the SDK; the code never reaches for the data of a
-    /// failure, and the detail is the number only.
+    /// failure, and the detail is the number only. A status that says the store is out of reach
+    /// for now (`KeychainFailure.isUnavailableForNow`) is `unlockRequired`, the grant intact; any
+    /// other is a fault no retry changes.
     static func error(for status: OSStatus) -> OAuthError {
-        if status == errSecInteractionNotAllowed { return .recoverable(.unlockRequired) }
+        if KeychainFailure.isUnavailableForNow(status) { return .recoverable(.unlockRequired) }
         return .configuration(.invalidConfiguration(detail: "keychain error \(status)"))
+    }
+
+    /// `error(for:)`, with a warning when the status is `errSecNotAvailable` or `errSecAuthFailed`:
+    /// those read as "out of reach for now", but a persistent one is an access control the process
+    /// is refused rather than a lock, and `unlockRequired` would then hide a permanent fault. The
+    /// warning carries the account and the number, nothing from the item.
+    func failure(_ status: OSStatus) -> OAuthError {
+        if status == errSecNotAvailable || status == errSecAuthFailed {
+            logger?.warn("keychain status \(status) on item \(account) is treated as unlockRequired; if it persists after the device is unlocked it is an access refusal, not a lock")
+        }
+        return Self.error(for: status)
     }
 
     private var query: [String: Any] {
@@ -75,7 +121,7 @@ struct KeychainItem: Sendable {
         switch status {
         case errSecSuccess: return result as? Data
         case errSecItemNotFound: return nil
-        default: throw Self.error(for: status)
+        default: throw failure(status)
         }
     }
 
@@ -90,7 +136,7 @@ struct KeychainItem: Sendable {
         switch status {
         case errSecSuccess: return true
         case errSecItemNotFound: return false
-        default: throw Self.error(for: status)
+        default: throw failure(status)
         }
     }
 
@@ -109,12 +155,78 @@ struct KeychainItem: Sendable {
                 status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
             }
         }
-        if status != errSecSuccess { throw Self.error(for: status) }
+        if status != errSecSuccess { throw failure(status) }
+    }
+
+    /// The query that deletes every item of a client's service, whatever its account, inside one
+    /// access group. Without `kSecAttrAccessGroup`, `SecItemDelete` reaches every group the process
+    /// is entitled to, which is how a delete meant for this app's items would take a sibling's.
+    static func deleteQuery(service: String, accessGroup: String) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccessGroup as String: accessGroup,
+            kSecAttrSynchronizable as String: false,
+            kSecUseDataProtectionKeychain as String: true,
+        ]
+    }
+
+    static func deleteAll(service: String, accessGroup: String) throws {
+        let status = SecItemDelete(deleteQuery(service: service, accessGroup: accessGroup) as CFDictionary)
+        if status != errSecSuccess && status != errSecItemNotFound { throw error(for: status) }
+    }
+
+    /// What `FirstLaunchGuard` runs: every item of the client's service in this process's own
+    /// default access group, which is where the stores write when no group is configured (the
+    /// generic facade configures none). Never the other groups the process may be entitled to.
+    /// If the default group cannot be learned nothing is deleted: an unscoped delete is the
+    /// failure this exists to avoid, and a leftover session is the lesser one.
+    static func deleteAllInOwnGroup(service: String) throws {
+        guard let group = try defaultAccessGroup() else { return }
+        try deleteAll(service: service, accessGroup: group)
+    }
+
+    /// The access group an item written without one lands in, read back from a throwaway item
+    /// (the only way Security reports it). Nil when the item carries no group attribute.
+    static func defaultAccessGroup() throws -> String? {
+        let probe: [String: Any] = [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "versola.oauth.probe",
+            kSecAttrAccount as String: UUID().uuidString,
+            kSecAttrSynchronizable as String: false,
+            kSecUseDataProtectionKeychain as String: true,
+            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            kSecReturnAttributes as String: true,
+        ]
+        var result: CFTypeRef?
+        let added = SecItemAdd(probe as CFDictionary, &result)
+        if added != errSecSuccess { throw error(for: added) }
+        var removal = probe
+        removal[kSecReturnAttributes as String] = nil
+        SecItemDelete(removal as CFDictionary)
+        return (result as? [String: Any])?[kSecAttrAccessGroup as String] as? String
     }
 
     func delete() throws {
         let status = SecItemDelete(query as CFDictionary)
-        if status != errSecSuccess && status != errSecItemNotFound { throw Self.error(for: status) }
+        if status != errSecSuccess && status != errSecItemNotFound { throw failure(status) }
+    }
+}
+
+extension KeychainItem {
+    /// Runs every deletion whether or not an earlier one failed, then throws one error for all of
+    /// them: `unlockRequired` when each failure was the store being out of reach (retrying after
+    /// the unlock finishes the job), `invalidConfiguration` naming the accounts and statuses
+    /// otherwise. Nothing credential-shaped is in the detail, only account names and numbers.
+    static func deleteAll(_ deletions: [(account: String, run: () throws -> Void)]) throws {
+        var failures: [(account: String, error: OAuthError)] = []
+        for deletion in deletions {
+            do { try deletion.run() } catch let error as OAuthError { failures.append((deletion.account, error)) }
+        }
+        if failures.isEmpty { return }
+        if failures.allSatisfy({ $0.error == .recoverable(.unlockRequired) }) { throw OAuthError.recoverable(.unlockRequired) }
+        let named = failures.map { "\($0.account): \($0.error)" }.joined(separator: "; ")
+        throw OAuthError.configuration(.invalidConfiguration(detail: "keychain: \(failures.count) of \(deletions.count) items could not be deleted (\(named))"))
     }
 }
 
@@ -127,25 +239,37 @@ package actor KeychainCredentialStore: CredentialStore {
     private let refreshItem: KeychainItem
     private let idTokenItem: KeychainItem
     private let rotationItem: KeychainItem
+    private let firstLaunch: FirstLaunchGuard?
 
-    package init(storageKey: String, unlockPolicy: UnlockPolicy, accessGroup: String? = nil) {
+    package init(storageKey: String, unlockPolicy: UnlockPolicy, accessGroup: String? = nil, firstLaunch: FirstLaunchGuard? = nil, logger: (any OAuthLogger)? = nil) {
+        self.firstLaunch = firstLaunch
         let service = KeychainItem.service(forStorageKey: storageKey)
         let accessibility = KeychainAccessibility(unlockPolicy)
-        refreshItem = KeychainItem(service: service, account: "refresh-token", accessibility: accessibility, accessGroup: accessGroup)
-        idTokenItem = KeychainItem(service: service, account: "id-token", accessibility: accessibility, accessGroup: accessGroup)
-        rotationItem = KeychainItem(service: service, account: "pending-rotation", accessibility: accessibility, accessGroup: accessGroup)
+        refreshItem = KeychainItem(service: service, account: "refresh-token", accessibility: accessibility, accessGroup: accessGroup, logger: logger)
+        idTokenItem = KeychainItem(service: service, account: "id-token", accessibility: accessibility, accessGroup: accessGroup, logger: logger)
+        rotationItem = KeychainItem(service: service, account: "pending-rotation", accessibility: accessibility, accessGroup: accessGroup, logger: logger)
     }
 
     /// Attributes only: a cold start must not turn into an unlock prompt under `onAppUnlock`.
-    package func hasGrant() async throws -> Bool { try refreshItem.exists() }
+    package func hasGrant() async throws -> Bool {
+        try firstLaunch?.ensure()
+        return try refreshItem.exists()
+    }
 
-    package func refreshToken() async throws -> String? { try refreshItem.read().flatMap { String(data: $0, encoding: .utf8) } }
+    package func refreshToken() async throws -> String? {
+        try firstLaunch?.ensure()
+        return try refreshItem.read().flatMap { String(data: $0, encoding: .utf8) }
+    }
 
-    package func rawIdToken() async throws -> String? { try idTokenItem.read().flatMap { String(data: $0, encoding: .utf8) } }
+    package func rawIdToken() async throws -> String? {
+        try firstLaunch?.ensure()
+        return try idTokenItem.read().flatMap { String(data: $0, encoding: .utf8) }
+    }
 
     /// The refresh token first, then the ID token: if the process dies between the two the
     /// grant is the new one, which is the part that cannot be recovered.
     package func save(refreshToken: String, rawIdToken: String?) async throws {
+        try firstLaunch?.ensure()
         try refreshItem.write(Data(refreshToken.utf8))
         if let rawIdToken {
             try idTokenItem.write(Data(rawIdToken.utf8))
@@ -155,7 +279,14 @@ package actor KeychainCredentialStore: CredentialStore {
         }
     }
 
+    package func saveRefreshed(refreshToken: String?, rawIdToken: String?) async throws {
+        try firstLaunch?.ensure()
+        if let refreshToken { try refreshItem.write(Data(refreshToken.utf8)) }
+        if let rawIdToken { try idTokenItem.write(Data(rawIdToken.utf8)) }
+    }
+
     package func savePendingRotation(_ idempotencyKey: String?) async throws {
+        try firstLaunch?.ensure()
         if let idempotencyKey {
             try rotationItem.write(Data(idempotencyKey.utf8))
         } else {
@@ -163,12 +294,21 @@ package actor KeychainCredentialStore: CredentialStore {
         }
     }
 
-    package func pendingRotation() async throws -> String? { try rotationItem.read().flatMap { String(data: $0, encoding: .utf8) } }
+    package func pendingRotation() async throws -> String? {
+        try firstLaunch?.ensure()
+        return try rotationItem.read().flatMap { String(data: $0, encoding: .utf8) }
+    }
 
+    /// Every item is attempted, the refresh token first, and the failures come back together: a
+    /// delete that fails (a locked device) must not leave the other two behind, and the caller
+    /// must not be told the wipe succeeded while a credential remains.
     package func clear() async throws {
-        try refreshItem.delete()
-        try idTokenItem.delete()
-        try rotationItem.delete()
+        try firstLaunch?.ensure()
+        try KeychainItem.deleteAll([
+            (refreshItem.account, refreshItem.delete),
+            (idTokenItem.account, idTokenItem.delete),
+            (rotationItem.account, rotationItem.delete),
+        ])
     }
 }
 
@@ -178,19 +318,23 @@ package actor KeychainCredentialStore: CredentialStore {
 /// it is a credential and gets the same class as the refresh token).
 package actor KeychainPendingAuthorizationStore: PendingAuthorizationStore {
     private let item: KeychainItem
+    private let firstLaunch: FirstLaunchGuard?
 
-    package init(storageKey: String, unlockPolicy: UnlockPolicy, accessGroup: String? = nil) {
+    package init(storageKey: String, unlockPolicy: UnlockPolicy, accessGroup: String? = nil, firstLaunch: FirstLaunchGuard? = nil, logger: (any OAuthLogger)? = nil) {
+        self.firstLaunch = firstLaunch
         item = KeychainItem(
             service: KeychainItem.service(forStorageKey: storageKey), account: "pending-authorization",
-            accessibility: KeychainAccessibility(unlockPolicy), accessGroup: accessGroup
+            accessibility: KeychainAccessibility(unlockPolicy), accessGroup: accessGroup, logger: logger
         )
     }
 
     package func save(_ request: PendingAuthorizationRequest) async throws {
+        try firstLaunch?.ensure()
         try item.write(try PendingRequestCoding.encode(request))
     }
 
     package func load() async throws -> PendingAuthorizationRequest? {
+        try firstLaunch?.ensure()
         guard let data = try item.read() else { return nil }
         // A record this version cannot read is no record: the flow starts over rather than
         // failing every launch. It is removed so the next save is not an update of garbage.
@@ -201,7 +345,10 @@ package actor KeychainPendingAuthorizationStore: PendingAuthorizationStore {
         return request
     }
 
-    package func clear() async throws { try item.delete() }
+    package func clear() async throws {
+        try firstLaunch?.ensure()
+        try item.delete()
+    }
 }
 
 enum PendingRequestCoding {
@@ -236,6 +383,11 @@ package actor InMemoryCredentialStore: CredentialStore {
     package func save(refreshToken: String, rawIdToken: String?) async throws {
         refresh = refreshToken
         idToken = rawIdToken
+    }
+
+    package func saveRefreshed(refreshToken: String?, rawIdToken: String?) async throws {
+        if let refreshToken { refresh = refreshToken }
+        if let rawIdToken { idToken = rawIdToken }
     }
 
     package func savePendingRotation(_ idempotencyKey: String?) async throws { rotation = idempotencyKey }

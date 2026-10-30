@@ -157,6 +157,19 @@ do {
 
 The Swift package product is `VersolaOAuth`; the module you import is `OAuthClient`.
 
+iOS notes for integrators:
+
+- **Scenes.** Whether the app is in the background when the browser sheet is cancelled is read from
+  the scene of the `presentationAnchor` window (`UIApplication.shared` is unavailable to app
+  extensions). A window attached to no scene, as in an app that has not adopted UIScene, counts as
+  foreground: a system cancel while backgrounded is then read as the user's, and the pending
+  request is dropped instead of kept. Adopt UIScene, or expect the user to start the sign-in again.
+- **Reinstall.** The Keychain outlives the app, so on the first launch of a fresh install the SDK
+  deletes the Keychain items of the client from the app's own access group. An app upgraded from
+  0.1.0 keeps its session. The check does not run inside an app extension.
+- **Extensions.** The package builds with `-application-extension`. The SDK configures no Keychain
+  access group, so an extension has Keychain items of its own unless you share a group yourself.
+
 ### Flutter (Dart)
 
 ```dart

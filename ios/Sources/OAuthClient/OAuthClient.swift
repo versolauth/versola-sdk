@@ -361,18 +361,23 @@ public final class OAuthClient: Sendable {
             )
         }
 
+        // The Keychain outlives the app: a reinstall must not open signed in as the previous
+        // install's user (`FirstLaunchGuard`). One guard for every Keychain store of this client.
+        let storageKey = configuration.storageKey
+        let firstLaunch = FirstLaunchGuard(directory: directory, deleteAll: { try KeychainItem.deleteAllInOwnGroup(service: KeychainItem.service(forStorageKey: storageKey)) })
+
         let dpopKey: SecureEnclaveDpopKey?
         if case .dpop(let required) = configuration.tokenBinding {
-            dpopKey = makeDpopKey?(required, logger) ?? SecureEnclaveDpopKey(storageKey: configuration.storageKey, requireHardware: required, logger: logger)
+            dpopKey = makeDpopKey?(required, logger) ?? SecureEnclaveDpopKey(storageKey: configuration.storageKey, requireHardware: required, logger: logger, firstLaunch: firstLaunch)
         } else {
             dpopKey = nil
         }
         let proofs: DpopProofFactory? = dpopKey.map { DpopProofFactory(key: $0) }
 
-        let credentialStore: CredentialStore = injectedCredentials ?? KeychainCredentialStore(storageKey: configuration.storageKey, unlockPolicy: configuration.unlockPolicy)
-        let pendingStore: PendingAuthorizationStore = injectedPending ?? KeychainPendingAuthorizationStore(storageKey: configuration.storageKey, unlockPolicy: configuration.unlockPolicy)
+        let credentialStore: CredentialStore = injectedCredentials ?? KeychainCredentialStore(storageKey: configuration.storageKey, unlockPolicy: configuration.unlockPolicy, firstLaunch: firstLaunch, logger: logger)
+        let pendingStore: PendingAuthorizationStore = injectedPending ?? KeychainPendingAuthorizationStore(storageKey: configuration.storageKey, unlockPolicy: configuration.unlockPolicy, firstLaunch: firstLaunch, logger: logger)
         let webBrowser: WebAuthenticationBrowser? = injectedBrowser == nil
-            ? WebAuthenticationBrowser(presentationAnchor: presentationAnchor!, appState: Self.isForeground, logger: logger)
+            ? WebAuthenticationBrowser(presentationAnchor: presentationAnchor!, appState: { Self.isForeground(window: presentationAnchor!()) }, logger: logger)
             : nil
         let states = SessionStateHub()
         let resumeFlight = ResumeFlight()
@@ -458,14 +463,20 @@ public final class OAuthClient: Sendable {
 
     /// Whether the app is in the foreground at the moment the browser reports a cancel: the
     /// pairing `spec/state-machine.md`'s cancel table requires. Foreground in UIKit's own terms,
-    /// `.active` or `.inactive`: the system sheet the session presents makes the app
-    /// `.inactive` for as long as it is up, and the completion runs before the app is active
+    /// `.foregroundActive` or `.foregroundInactive`: the system sheet the session presents makes
+    /// the scene inactive for as long as it is up, and the completion runs before it is active
     /// again, so "active" alone would read every user cancel as a system one and strand the
     /// pending request. Only `.background` is the system's doing. macOS has no such state.
+    ///
+    /// Read from the scene of the anchor window the app supplied, not from `UIApplication.shared`,
+    /// which is unavailable to an app extension and would stop this package from building into
+    /// one. A window attached to no scene (an app that has not adopted UIScene) is read as
+    /// foreground: the cancel is then a user's, and the pending request is wiped rather than kept.
     @MainActor
-    private static func isForeground() -> Bool {
+    private static func isForeground(window: ASPresentationAnchor) -> Bool {
         #if canImport(UIKit)
-        return UIApplication.shared.applicationState != .background
+        guard let scene = window.windowScene else { return true }
+        return scene.activationState != .background
         #else
         return true
         #endif
