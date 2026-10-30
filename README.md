@@ -21,7 +21,7 @@ Documentation: <https://docs.versola.io> (the SDK section is being added to this
 | Providers | Any OpenID provider that meets the [contract](spec/providers.md); run in the SDK's tests against Keycloak 26.4 and Ory Hydra v26.2.0 |
 | Optional | DPoP (RFC 9449), pushed authorization requests (RFC 9126), refresh-token rotation, RP-initiated logout, token revocation |
 | Licence | Apache-2.0 |
-| Availability | Pre-release: no Maven Central artefact, pub.dev package or release tag yet; the first version will be 0.1.0 |
+| Version | 0.1.0 (`0.x`: the API may still change between minor versions) |
 
 ## Features
 
@@ -46,8 +46,15 @@ Documentation: <https://docs.versola.io> (the SDK section is being added to this
 The examples use placeholder values on `example.com`. Register the redirect URI with your provider;
 use a verified link the app owns (an Android App Link, an iOS Universal Link). The SDK never adds
 `offline_access` to the scopes, so put it in `scopes` if your provider needs it for a refresh
-token. Nothing is published yet: use the repository from a checkout (Android as a composite build,
-iOS by Swift Package Manager URL or path, Flutter by path) until 0.1.0.
+token.
+
+### Install
+
+- **Android:** `implementation("io.versola:oauth-android:0.1.0")` from `mavenCentral()` (and
+  `google()`).
+- **iOS:** Swift Package Manager, `.package(url: "https://github.com/versolauth/versola-sdk", from: "0.1.0")`,
+  product `VersolaOAuth`.
+- **Flutter:** `flutter pub add versola_oauth`, with Swift Package Manager integration enabled for iOS.
 
 ### Android (Kotlin)
 
@@ -231,8 +238,8 @@ guide is on the documentation website.
 
 ### Is it ready to use?
 
-It is a pre-release. The code is implemented on all three platforms, but there is no Maven Central
-artefact, pub.dev package or release tag yet. Use it from a checkout until 0.1.0.
+It is at version 0.1.0, implemented on all three platforms. While the major version is 0, a minor
+release may change the public API; each release says what changed.
 
 ### What licence is it under?
 
