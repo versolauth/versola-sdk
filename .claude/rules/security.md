@@ -22,7 +22,8 @@ a vulnerability in every app that embeds it, not a bug. Platform specifics are i
 
 - Keys are non-exportable and stay in hardware where the device has it. Android: DPoP keys are
   generated StrongBox first and fall through to the TEE at runtime (`KeystoreDpopKey`, catching
-  `StrongBoxUnavailableException`), and the tier actually obtained is read back from the key's
+  `ProviderException`, of which `StrongBoxUnavailableException` is one: a StrongBox that is present
+  but faulty fails with a plain one), and the tier actually obtained is read back from the key's
   security level and surfaced as `KeyAttestation` (`StrongBox`, `TrustedEnvironment`, `Software`).
   `setIsStrongBoxBacked(true)` succeeding is not proof of where the key landed; do not report a
   tier you did not read back.

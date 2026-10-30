@@ -243,7 +243,8 @@ Platform lifecycle facts the protocol code cannot see; judge against the platfor
   `resumePendingAuthorization()`; API 36 is in the instrumented matrix when browser behaviour
   changes.
 - **Keystore tiers.** StrongBox, then TEE, then software, read back from `KeyInfo`;
-  `StrongBoxUnavailableException` falls back. `KeyPermanentlyInvalidatedException` after a biometric
+  a `ProviderException` from the StrongBox attempt
+  (`StrongBoxUnavailableException` is one) falls back. `KeyPermanentlyInvalidatedException` after a biometric
   enrolment change deletes and regenerates the key, or every `login()` fails forever.
   `UnlockPolicy.OnAppUnlock` is reachable from `configure()`.
 - **API 26 floor and R8.** No API above 26 without a `Build.VERSION` guard; a new reflective use
