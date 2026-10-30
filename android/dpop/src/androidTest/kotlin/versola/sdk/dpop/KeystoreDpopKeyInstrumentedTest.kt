@@ -71,7 +71,7 @@ class KeystoreDpopKeyInstrumentedTest {
         val key = KeystoreDpopKey(alias, logger = logger)
         val factory = DpopProofFactory(key)
 
-        val proof = factory.proof("POST", "https://id.versola.kz/token?x=1")
+        val proof = factory.proof("POST", "https://id.versola.io/token?x=1")
 
         val (header, payload, signature) = proof.split('.')
         val signingInput = "$header.$payload".toByteArray(Charsets.US_ASCII)
@@ -84,7 +84,7 @@ class KeystoreDpopKeyInstrumentedTest {
 
         val claims = String(Base64.getUrlDecoder().decode(payload), Charsets.UTF_8)
         assertTrue(claims.contains("\"htm\":\"POST\""))
-        assertTrue(claims.contains("\"htu\":\"https://id.versola.kz/token\""))
+        assertTrue(claims.contains("\"htu\":\"https://id.versola.io/token\""))
         assertFalse(claims.contains("ath"))
         val headerJson = String(Base64.getUrlDecoder().decode(header), Charsets.UTF_8)
         assertTrue(headerJson.contains("\"alg\":\"ES256\""))

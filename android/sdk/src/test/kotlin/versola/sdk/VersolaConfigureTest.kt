@@ -38,7 +38,7 @@ class VersolaConfigureTest {
     private val application = ApplicationProvider.getApplicationContext<Application>()
 
     private fun configure(
-        issuer: String = "https://id.versola.kz",
+        issuer: String = "https://id.versola.io",
         clientId: String = "mobile-app",
         redirectUri: String = "https://app.example.com/oauth",
         tokenBinding: TokenBinding = TokenBinding.Dpop(),
@@ -49,7 +49,7 @@ class VersolaConfigureTest {
     fun `configure keeps the validated configuration`() {
         val versola = configure()
 
-        assertEquals("https://id.versola.kz", versola.configuration.issuer)
+        assertEquals("https://id.versola.io", versola.configuration.issuer)
         assertEquals("mobile-app", versola.configuration.clientId)
         assertEquals("https://app.example.com/oauth", versola.configuration.redirectUri.value)
     }
@@ -77,7 +77,7 @@ class VersolaConfigureTest {
 
     @Test
     fun `a bad issuer fails at configure time rather than behind a login screen`() {
-        assertThrows(VersolaError.Configuration::class.java) { configure(issuer = "http://id.versola.kz") }
+        assertThrows(VersolaError.Configuration::class.java) { configure(issuer = "http://id.versola.io") }
         assertThrows(VersolaError.Configuration::class.java) { configure(clientId = "") }
         assertThrows(VersolaError.Configuration::class.java) { configure(redirectUri = "/relative") }
     }
@@ -106,14 +106,14 @@ class VersolaConfigureTest {
     @Test
     fun `a post-logout redirect is validated at configure time like the login redirect`() {
         val versola = Versola.configure(
-            application, "https://id.versola.kz", "mobile-app", "https://app.example.com/oauth",
+            application, "https://id.versola.io", "mobile-app", "https://app.example.com/oauth",
             postLogoutRedirectUri = "https://app.example.com/signed-out",
         )
         assertEquals("https://app.example.com/signed-out", versola.configuration.postLogoutRedirectUri?.value)
 
         assertThrows(VersolaError.Configuration::class.java) {
             Versola.configure(
-                application, "https://id.versola.kz", "mobile-app", "https://app.example.com/oauth",
+                application, "https://id.versola.io", "mobile-app", "https://app.example.com/oauth",
                 postLogoutRedirectUri = "signed-out",
             )
         }
@@ -122,14 +122,14 @@ class VersolaConfigureTest {
     @Test
     fun `BackChannel Edge needs edge, DPoP and an App Link, each refused at configure time`() {
         val viaEdge = Versola.configure(
-            application, "https://id.versola.kz", "mobile-app", "https://app.example.com/oauth",
-            edgeBaseUrl = "https://versola.kz", backChannel = BackChannel.Edge,
+            application, "https://id.versola.io", "mobile-app", "https://app.example.com/oauth",
+            edgeBaseUrl = "https://versola.io", backChannel = BackChannel.Edge,
         )
         assertNotNull(viaEdge.dpop)
 
         val withoutEdge = assertThrows(VersolaError.Configuration::class.java) {
             Versola.configure(
-                application, "https://id.versola.kz", "mobile-app", "https://app.example.com/oauth",
+                application, "https://id.versola.io", "mobile-app", "https://app.example.com/oauth",
                 backChannel = BackChannel.Edge,
             )
         }
@@ -137,14 +137,14 @@ class VersolaConfigureTest {
 
         assertThrows(VersolaError.Configuration::class.java) {
             Versola.configure(
-                application, "https://id.versola.kz", "mobile-app", "https://app.example.com/oauth",
-                tokenBinding = TokenBinding.Bearer, edgeBaseUrl = "https://versola.kz", backChannel = BackChannel.Edge,
+                application, "https://id.versola.io", "mobile-app", "https://app.example.com/oauth",
+                tokenBinding = TokenBinding.Bearer, edgeBaseUrl = "https://versola.io", backChannel = BackChannel.Edge,
             )
         }
         assertThrows(VersolaError.Configuration::class.java) {
             Versola.configure(
-                application, "https://id.versola.kz", "mobile-app", "com.example.app:/oauth",
-                edgeBaseUrl = "https://versola.kz", backChannel = BackChannel.Edge,
+                application, "https://id.versola.io", "mobile-app", "com.example.app:/oauth",
+                edgeBaseUrl = "https://versola.io", backChannel = BackChannel.Edge,
             )
         }
     }

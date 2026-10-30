@@ -11,7 +11,7 @@ import versola.oauth.core.VersolaError
  * to edge, which answers `use_dpop_nonce` again, which is the loop
  * [DpopNonceRetry] exists to bound (#1 §2.1, scenario 04).
  *
- * The port is part of the key even though `id.versola.kz` and `versola.kz` already differ by
+ * The port is part of the key even though `id.versola.io` and `versola.io` already differ by
  * host: a staged stack (#15) runs both on one host and separates them by port alone.
  */
 internal data class Origin(val value: String) {

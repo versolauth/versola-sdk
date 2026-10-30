@@ -16,7 +16,7 @@ import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-private const val ISSUER = "https://id.versola.kz"
+private const val ISSUER = "https://id.versola.io"
 
 private class RecordingStore(var stored: PendingAuthorizationRequest? = null) : PendingAuthorizationStore {
     var saves = 0
