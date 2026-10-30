@@ -13,6 +13,8 @@ on:
   push:
     branches: [main]
   schedule:
+    - cron: "17 4 * * 1"
+  schedule:
     # Recheck existing code against newly published findings every Monday.
     - cron: "0 5 * * 1"
   workflow_dispatch:
@@ -68,11 +70,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - language: java-kotlin
-            runner: ubuntu-latest
-          - language: swift
-            runner: macos-latest
+        # Swift is a ~15 minute traced xcodebuild on macOS and the iOS code changes rarely, so it
+        # runs on main and weekly, not on every PR.
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"language":"java-kotlin","runner":"ubuntu-latest"}]' || '[{"language":"java-kotlin","runner":"ubuntu-latest"},{"language":"swift","runner":"macos-latest"}]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Match ios.yml: resolve the package before CodeQL instruments xcodebuild.
@@ -95,7 +95,7 @@ jobs:
         run: ./gradlew assemble
       - name: Build Swift targets
         if: ${{ matrix.language == 'swift' }}
-        run: xcodebuild build -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 17"
+        run: xcodebuild build -scheme Versola-Package -sdk iphonesimulator -destination "generic/platform=iOS Simulator" ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO
       - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           category: /language:${{ matrix.language }}
