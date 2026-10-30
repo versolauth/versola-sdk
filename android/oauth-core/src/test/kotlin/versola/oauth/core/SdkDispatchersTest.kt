@@ -107,21 +107,60 @@ class SdkDispatchersTest {
 
         val offenders = sources
             .filterNot { it.name == "SdkDispatchers.kt" }
-            .flatMap { file ->
-                file.readLines().mapIndexedNotNull { index, line ->
-                    val code = line.trim()
-                    val isComment = code.startsWith("//") || code.startsWith("*") || code.startsWith("/*")
-                    if (!isComment && code.substringBefore("//").contains("Dispatchers.IO")) {
-                        "${file.relativeTo(root)}:${index + 1}: $code"
-                    } else {
-                        null
-                    }
-                }
-            }
+            .filter { DirectIoScan.dispatchesToIo(it.readText()) }
+            .map { it.relativeTo(root).path }
 
         assertTrue(
             "blocking SDK work goes through SdkDispatchers.blocking, never Dispatchers.IO:\n${offenders.joinToString("\n")}",
             offenders.isEmpty(),
         )
+    }
+
+    @Test
+    fun `the scan sees a direct use of IO however it is spelled`() {
+        listOf(
+            "withContext(Dispatchers.IO) { work() }",
+            "withContext(Dispatchers\n    .IO) { work() }",
+            "withContext(kotlinx.coroutines.Dispatchers.IO) { work() }",
+            "withContext(Dispatchers .\n IO) { work() }",
+            "import kotlinx.coroutines.Dispatchers.IO\nfun f() = withContext(IO) { }",
+            "import kotlinx.coroutines.Dispatchers.*\nfun f() = withContext(IO) { }",
+            "import kotlinx.coroutines.Dispatchers as D\nfun f() = withContext(D.IO) { }",
+            "val x = 1 // fine\nval d = CoroutineScope(Dispatchers.IO + SupervisorJob())",
+            "val url = \"https://example.com\"; val d = Dispatchers.IO",
+        ).forEach { assertTrue("not seen: $it", DirectIoScan.dispatchesToIo(it)) }
+    }
+
+    @Test
+    fun `the scan leaves comments and other dispatchers alone`() {
+        listOf(
+            "// withContext(Dispatchers.IO) is what this does not do",
+            "/** Not on `Dispatchers.IO`: see [SdkDispatchers]. */\nfun f() {}",
+            "/*\n * Dispatchers\n * .IO is named here in prose\n */",
+            "val d = Dispatchers.Default",
+            "val d = Dispatchers.IOExecutor",
+            "import kotlinx.coroutines.Dispatchers\nval d = Dispatchers.Default",
+            "val d = SdkDispatchers.blocking",
+            "val d = MyDispatchers.IO",
+        ).forEach { assertFalse("seen where there is none: $it", DirectIoScan.dispatchesToIo(it)) }
+    }
+}
+
+/**
+ * Whether a Kotlin source dispatches to `Dispatchers.IO`: the whole text, comments removed, not line
+ * by line, so a `Dispatchers` and its `.IO` split over two lines are still one use; and an import of
+ * `Dispatchers.IO`, of `Dispatchers.*` or of `Dispatchers` under another name is a use too, because
+ * a bare `IO` or an alias then needs no `Dispatchers.IO` in the text at all.
+ */
+internal object DirectIoScan {
+    private val blockComment = Regex("/\\*[\\s\\S]*?\\*/")
+    private val lineComment = Regex("(?m)(^|\\s)//[^\\n]*")
+    private val direct = Regex("(?<!\\w)Dispatchers\\s*\\.\\s*IO\\b")
+    private val importOfIo = Regex("import\\s+kotlinx\\.coroutines\\.Dispatchers\\s*\\.\\s*(IO\\b|\\*)")
+    private val importAlias = Regex("import\\s+kotlinx\\.coroutines\\.Dispatchers\\s+as\\b")
+
+    fun dispatchesToIo(source: String): Boolean {
+        val code = source.replace(blockComment, " ").replace(lineComment, "$1")
+        return direct.containsMatchIn(code) || importOfIo.containsMatchIn(code) || importAlias.containsMatchIn(code)
     }
 }

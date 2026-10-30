@@ -32,6 +32,12 @@ import okhttp3.Response
  * Constructed by `Versola.interceptor()` for the ordinary case. The constructor is public for
  * the wiring that does not go through the facade — a conformance harness, an app assembling the
  * modules itself — and takes exactly the three things the behaviour needs.
+ *
+ * It blocks the calling thread while [tokens] answers, a refresh included. Whether many callers may
+ * do that from `Dispatchers.IO` depends on [tokens]: the generic `OAuthClient`'s runs everything the
+ * refresh waits on on the SDK's own dispatcher, so it may; a source of an app's own, or the Versola
+ * facade's edge back channel, that dispatches to `Dispatchers.IO` itself can be starved by callers
+ * that have parked every thread of it here.
  */
 @OptIn(VersolaInternalApi::class)
 public class VersolaInterceptor(

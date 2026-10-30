@@ -4,6 +4,7 @@ import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -23,12 +24,14 @@ import org.robolectric.RobolectricTestRunner
 
 /**
  * An app that runs `authenticatedClient().newCall().execute()` itself, from coroutines on
- * `Dispatchers.IO`, with the access token stale. [CALLERS] callers hold every thread of that
- * dispatcher's default view (and 16 queue behind them), each blocked in the interceptor on the one
+ * `Dispatchers.IO` (or on `Dispatchers.Default`, which has only a core count of threads, 4 to 8 on a
+ * phone, and so is the easier of the two to exhaust), with the access token stale. The callers hold
+ * every thread of that dispatcher (and 16 or more queue behind them), each blocked in the interceptor on the one
  * refresh they share; the refresh, the discovery and key-set caches and the DataStore behind it
  * need threads of their own to run, and they get them from the SDK's own dispatcher rather than
- * from the dispatcher the app has just exhausted. Were they dispatched to `Dispatchers.IO`, the
- * refresh would never start and the process would hang.
+ * from the dispatcher the app has just exhausted. Were they dispatched to it, the refresh would never
+ * start and the process would hang. The `Default` case guards the other dispatcher a refresh could
+ * come to depend on by mistake; nothing on the refresh path uses it today.
  *
  * Unlike [OAuthClientConcurrencyTest], which goes through `OAuthClient.call()`, nothing here
  * protects the callers: this is the path of an app that owns its own call sites.
@@ -43,8 +46,12 @@ class OAuthClientIoSaturationTest {
     private lateinit var provider: TestProvider
     private lateinit var browser: FakeBrowser
 
-    /** The first [IO_THREADS] requests wait here until all have arrived, so every thread of the default view of IO holds a caller when its 401 comes. */
-    private val allArrived = CountDownLatch(IO_THREADS)
+    /**
+     * The first requests, as many as the dispatcher under test has threads, wait here until all have
+     * arrived, so every one of its threads holds a caller when its 401 comes.
+     */
+    @Volatile
+    private var allArrived = CountDownLatch(IO_THREADS)
     private val refreshes = java.util.concurrent.atomic.AtomicInteger()
 
     @Before
@@ -84,6 +91,17 @@ class OAuthClientIoSaturationTest {
 
     @Test
     fun `callers that hold every thread of IO on a stale token do not starve the refresh they wait for`() {
+        saturate(Dispatchers.IO, threads = IO_THREADS)
+    }
+
+    @Test
+    fun `callers that hold every thread of Default on a stale token do not starve the refresh they wait for`() {
+        saturate(Dispatchers.Default, threads = DEFAULT_THREADS)
+    }
+
+    private fun saturate(callersOn: CoroutineDispatcher, threads: Int) {
+        val callers = maxOf(CALLERS, threads + 16)
+        allArrived = CountDownLatch(threads)
         val client = OAuthClient.create(
             application,
             OAuthConfiguration(
@@ -103,8 +121,8 @@ class OAuthClientIoSaturationTest {
             runBlocking {
                 client.login()
                 val http = client.authenticatedClient()
-                List(CALLERS) {
-                    async(Dispatchers.IO) { http.newCall(Request.Builder().url("${provider.issuer}/api").build()).execute().use { it.code } }
+                List(callers) {
+                    async(callersOn) { http.newCall(Request.Builder().url("${provider.issuer}/api").build()).execute().use { it.code } }
                 }.awaitAll()
             }
         }
@@ -115,13 +133,16 @@ class OAuthClientIoSaturationTest {
         }
 
         assertNotNull("the calls never finished: the refresh was starved of a thread", codes)
-        assertEquals(List(CALLERS) { 200 }, codes)
+        assertEquals(List(callers) { 200 }, codes)
         assertEquals("one refresh for all of them", 1, refreshes.get())
     }
 
     private companion object {
         /** The size of `Dispatchers.IO`'s default view: 64, or the core count when that is larger. */
         val IO_THREADS: Int = maxOf(64, Runtime.getRuntime().availableProcessors())
+
+        /** The size of `Dispatchers.Default`: the core count, and at least two. */
+        val DEFAULT_THREADS: Int = maxOf(2, Runtime.getRuntime().availableProcessors())
 
         /** More callers than threads, so that some are queued behind the ones that hold them. */
         val CALLERS: Int = IO_THREADS + 16
