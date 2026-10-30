@@ -111,5 +111,40 @@ public data class ProviderMetadata(
                 VersolaError.Configuration.Detail.DiscoveryFieldMissing("token_endpoint"),
             )
         }
+        // Every URL the SDK will send a code, a refresh token, a proof or the user to. Held to the
+        // issuer's own rule (https, or cleartext on loopback for a staged stack) but not to the
+        // issuer's origin: Cognito's OAuth endpoints live on the user-pool domain and Entra's
+        // UserInfo on Microsoft Graph, so a cross-origin endpoint is legitimate (`providers.md`).
+        // Without this a document announcing `http://…/token` has refresh tokens POSTed to it in
+        // the clear.
+        requireSecure("authorization_endpoint", authorizationEndpoint)
+        requireSecure("token_endpoint", tokenEndpoint)
+        requireSecure("userinfo_endpoint", userinfoEndpoint)
+        requireSecure("revocation_endpoint", revocationEndpoint)
+        requireSecure("end_session_endpoint", endSessionEndpoint)
+        requireSecure("jwks_uri", jwksUri)
+        requireSecure("pushed_authorization_request_endpoint", pushedAuthorizationRequestEndpoint)
+        requireSecure("mtls_endpoint_aliases.token_endpoint", mtlsEndpointAliases?.tokenEndpoint)
+        requireSecure("mtls_endpoint_aliases.revocation_endpoint", mtlsEndpointAliases?.revocationEndpoint)
+    }
+
+    /** Absent or blank is "not advertised", which the callers already read as such; anything else must be secure. */
+    private fun requireSecure(member: String, url: String?) {
+        if (url.isNullOrBlank()) return
+        val parsed = try {
+            java.net.URI(url)
+        } catch (e: java.net.URISyntaxException) {
+            null
+        }
+        val scheme = parsed?.scheme?.lowercase()
+        val acceptable = !parsed?.host.isNullOrEmpty() &&
+            (scheme == "https" || (scheme == "http" && isLoopbackHost(parsed?.host)))
+        if (!acceptable) {
+            // The member's name and nothing of its value: the document is the provider's, but the
+            // value could carry a credential in its query, and the name is what a developer needs.
+            throw VersolaError.Configuration(
+                VersolaError.Configuration.Detail.DiscoveryMalformed("$member must be an https URL (http only on loopback)"),
+            )
+        }
     }
 }

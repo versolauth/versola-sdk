@@ -34,7 +34,8 @@ A provider works with the generic facade when it offers all of the following:
 
 - A discovery document at the well-known path of its issuer (OpenID Connect Discovery 1.0, RFC
   8414), or explicit endpoints given through `ProviderEndpoints` (API 3). Discovery's `issuer` must
-  equal the configured one, a single trailing slash ignored.
+  equal the configured one, a single trailing slash ignored. Every endpoint it announces is `https`
+  (cleartext only on the loopback hosts the issuer may use), on the issuer's origin or another.
 - The authorization code flow with PKCE `S256` (RFC 7636, RFC 8252) for a **public client**:
   `token_endpoint_auth_method` `none`, `client_id` in the token request body, no secret anywhere.
 - `response_type=code` with the `state` parameter echoed on the redirect (RFC 6749 section 4.1.2).
@@ -111,7 +112,7 @@ tenant here, and "documented" there means documented in that file.
 | Clock skew | All | No vendor documents a server tolerance for client-side JWT validation. `clockSkewTolerance` defaults to 60 s, maximum 5 minutes; this is the SDK's own choice (API 3, 11) | Raise it only for a device clock known to drift; guide figures of 2 to 5 minutes (Okta, reported) are examples, not a server contract |
 | ID-token algorithm | Auth0 lets the app pick HS256 or RS256; Cognito RS256 only; others RS256 or unspecified | Verification uses the closed asymmetric set and `id_token_signing_alg_values_supported` when advertised; HS256 is refused as `IdTokenRejected(Algorithm)` (API 11) | Set the Auth0 application to RS256 |
 | `code_challenge_methods_supported` missing | Entra (regional documents reportedly missing it, Q&A, unverified) | The SDK always sends `S256`. `ProviderUnsupported("S256")` is raised only when the member is present and lacks `S256`; an absent member is treated as unknown, not as "no PKCE", because providers that omit it accept `S256` in practice (API 6, `errors.md`) | None; B4 tests it against Entra |
-| OAuth endpoints on another host than the issuer | Cognito (user-pool domain); Entra's UserInfo is on Microsoft Graph | Follows discovered metadata; issuer equality concerns only the issuer (API 3). Whether Cognito's discovery document lists the domain-host endpoints was not read | Verify at B4 |
+| OAuth endpoints on another host than the issuer | Cognito (user-pool domain); Entra's UserInfo is on Microsoft Graph | Follows discovered metadata, which must be `https` for every endpoint but may name another origin; issuer equality concerns only the issuer (API 3). Whether Cognito's discovery document lists the domain-host endpoints was not read | Verify at B4 |
 
 ## 4. Running each provider in CI
 

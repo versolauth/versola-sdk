@@ -238,6 +238,81 @@ class DiscoveryTest {
         assertEquals(2, server.requestCount)
     }
 
+    // ---- endpoints are https (or cleartext on the developer's own machine), wherever they are hosted ----
+
+    /** The test document with [overrides] replacing or adding members; a value of null removes one. */
+    private fun documentWith(vararg overrides: Pair<String, String?>): String {
+        val members = linkedMapOf(
+            "issuer" to issuer,
+            "authorization_endpoint" to "$issuer/authorize",
+            "token_endpoint" to "$issuer/token",
+        )
+        overrides.forEach { (name, value) -> if (value == null) members.remove(name) else members[name] = value }
+        return members.entries.joinToString(",", "{", "}") { (name, value) -> "\"$name\":\"$value\"" }
+    }
+
+    @Test
+    fun `an endpoint that is not https is refused wherever it points, naming the member`() = runTest {
+        for (field in listOf(
+            "authorization_endpoint", "token_endpoint", "userinfo_endpoint", "revocation_endpoint",
+            "end_session_endpoint", "jwks_uri", "pushed_authorization_request_endpoint",
+        )) {
+            for (bad in listOf("http://idp.example.com/x", "ftp://idp.example.com/x", "/relative", "javascript:alert(1)", "https:///nohost")) {
+                server.enqueue(MockResponse.Builder().code(200).body(documentWith(field to bad)).build())
+
+                val error = failure { client.fetch(issuer) } as VersolaError.Configuration
+
+                val detail = error.detail as VersolaError.Configuration.Detail.DiscoveryMalformed
+                assertTrue("$field=$bad: ${detail.detail}", field in detail.detail)
+            }
+        }
+    }
+
+    @Test
+    fun `an mTLS alias that is not https is refused too`() = runTest {
+        val body = documentWith().dropLast(1) + ""","mtls_endpoint_aliases":{"token_endpoint":"http://idp.example.com/token"}}"""
+        server.enqueue(MockResponse.Builder().code(200).body(body).build())
+
+        val error = failure { client.fetch(issuer) } as VersolaError.Configuration
+
+        assertTrue((error.detail as VersolaError.Configuration.Detail.DiscoveryMalformed).detail.contains("token_endpoint"))
+    }
+
+    @Test
+    fun `https endpoints on another origin than the issuer are legitimate and accepted`() = runTest {
+        server.enqueue(
+            MockResponse.Builder().code(200).body(
+                documentWith("token_endpoint" to "https://login.other.example/token", "jwks_uri" to "https://keys.other.example/jwks"),
+            ).build(),
+        )
+
+        val metadata = client.fetch(issuer)
+
+        assertEquals("https://login.other.example/token", metadata.tokenEndpoint)
+    }
+
+    @Test
+    fun `cleartext is accepted only on the loopback hosts the issuer may use`() = runTest {
+        for (host in listOf("localhost", "127.0.0.1", "[::1]", "10.0.2.2")) {
+            server.enqueue(MockResponse.Builder().code(200).body(documentWith("token_endpoint" to "http://$host:9003/token")).build())
+            assertEquals("http://$host:9003/token", client.fetch(issuer).tokenEndpoint)
+        }
+        server.enqueue(MockResponse.Builder().code(200).body(documentWith("token_endpoint" to "http://192.168.0.2:9003/token")).build())
+        assertTrue(failure { client.fetch(issuer) } is VersolaError.Configuration)
+    }
+
+    @Test
+    fun `a cached document whose endpoint is no longer acceptable is a miss and is fetched again`() = runTest {
+        val cache = cache()
+        cache.save(discoveryJson.decodeFromString(ProviderMetadata.serializer(), documentWith("token_endpoint" to "http://idp.example.com/token")))
+        server.enqueue(MockResponse.Builder().code(200).body(document(issuer)).build())
+
+        val metadata = DiscoveryService(issuer, client, cache).metadata()
+
+        assertEquals("$issuer/token", metadata.tokenEndpoint)
+        assertEquals(1, server.requestCount)
+    }
+
     // ---- scenario 34, unit tier: discovery is repeated under the operation's budget ----------
 
     @Test

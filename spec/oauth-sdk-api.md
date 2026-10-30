@@ -87,7 +87,10 @@ val oauth = OAuthClient.create(context, configuration)
   grant yields `Authenticated`; a pending authorization request younger than ten minutes yields
   `Authorizing`; otherwise `Unauthenticated`. Discovery runs lazily on the first operation that
   needs it and is cached on disk; the cache is refetched when it is older than 24 hours or when a
-  request fails in a way a changed endpoint could explain.
+  request fails in a way a changed endpoint could explain. Every endpoint the document announces
+  must be `https` (cleartext only on the loopback hosts the issuer may use) and may sit on another
+  origin than the issuer; otherwise `Configuration(DiscoveryMalformed)`, and a cached copy that
+  fails the same check is discarded.
 - `sessionState` is the source of truth. Every operation below publishes through it, including an
   authorization that finishes in a process other than the one that started it.
 - The redirect reaches the SDK without app code on Android (the SDK's redirect activity, declared

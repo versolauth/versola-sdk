@@ -143,11 +143,20 @@ public class DiscoveryService(
             inMemory?.let { return@withLock it }
             cache.load()?.let { cached ->
                 // A cached document from a different issuer belongs to a previous
-                // configuration of this app; treat it as absent rather than trusting it.
-                // Trailing-slash-insensitive, matching `ProviderMetadata.validate` — otherwise
-                // metadata saved as "<issuer>/" would pass validation on first fetch but never
-                // be recognised as a cache hit again, silently defeating the disk cache.
-                if (cached.issuer.trimEnd('/') == issuer.trimEnd('/')) {
+                // configuration of this app, and one that no longer passes the checks a fetched
+                // one must (an endpoint that is not https) was written by an earlier SDK or by
+                // something else: either is treated as absent rather than trusted. The same
+                // `validate` as on fetch, so the issuer comparison stays trailing-slash-
+                // insensitive — otherwise metadata saved as "<issuer>/" would pass validation on
+                // first fetch but never be recognised as a cache hit again, silently defeating
+                // the disk cache.
+                val usable = try {
+                    cached.validate(issuer)
+                    true
+                } catch (e: VersolaError.Configuration) {
+                    false
+                }
+                if (usable) {
                     inMemory = cached
                     return@withLock cached
                 }
