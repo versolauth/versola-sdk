@@ -21,6 +21,7 @@ Documentation: <https://docs.versola.io>.
 | Providers | Any OpenID provider that meets the [contract](spec/providers.md); run in the SDK's tests against Keycloak 26.4 and Ory Hydra v26.2.0 |
 | Optional | DPoP (RFC 9449), pushed authorization requests (RFC 9126), refresh-token rotation, RP-initiated logout, token revocation |
 | Licence | Apache-2.0 |
+| Stability | The API is production ready. The major version is still 0, and interfaces change only when a change is required |
 
 ## Features
 
@@ -250,6 +251,13 @@ key, and pushed authorization requests (RFC 9126).
 For public clients that use the system browser, yes. It adds ID-token signature validation, secure
 storage and refresh coordination, and drops client secrets and embedded browsers. The migration
 guide is on the documentation website.
+
+### Is the API production ready?
+
+Yes. The Versola OAuth SDK treats its public API as production ready on Android, iOS and Flutter,
+even though the major version is still 0. We won't change an interface unless a change is
+required. When one is, the pull request that makes it says so and carries the regenerated API
+dump, and the minor version goes up; compatible additions and fixes raise only the patch version.
 
 ### How do I add it to my project?
 
