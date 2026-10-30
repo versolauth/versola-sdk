@@ -168,13 +168,16 @@ jobs:
           for _ in $(seq 1 90); do curl -fs http://localhost:8080/realms/conformance/.well-known/openid-configuration && exit 0; sleep 2; done
           echo "keycloak not ready after 180 s" >&2; docker compose logs --no-color | tail -50; exit 1
 
-      # What a lost emulator leaves behind. Many runs end in `adb: device 'emulator-5554'
-      # not found` a minute or two into the instrumented run, with nothing in the step log that
-      # says why (the emulator process simply goes away), so the runner is sampled from here
-      # to the end of the job: memory and the biggest processes every few seconds, Keycloak's
-      # container, and the emulator's logcat (re-attached after a restart, so the second attempt
-      # below is in the same file). The `device offline` lines the emulator action prints while
-      # the AVD boots are its own poll and appear in green runs too; they are not the failure.
+      # What a hung emulator leaves behind. Some runs end in `adb: device 'emulator-5554' not
+      # found` (or `device offline`) a minute or two into the instrumented run, always right after
+      # the test force-stops the host app: the guest stops logging, the emulator process stays,
+      # uses no CPU and holds its memory until the emulator action kills it, and only then does
+      # adb drop the device. Memory, load and the kernel log show nothing at that moment, and the
+      # GPU mode does not change it, so the cause is open; the runner is sampled from here to the
+      # end of the job (memory, CPU time of the biggest processes, Keycloak's container, the
+      # emulator's logcat and the device state; the second attempt below is in the same files)
+      # so that the next run that hangs says more. The `device offline` lines the emulator
+      # action prints while the AVD boots are its own poll and appear in green runs too.
       - name: Sample the runner while the emulator runs
         run: |
           mkdir -p "$RUNNER_TEMP/diag"
@@ -217,12 +220,13 @@ jobs:
           nohup bash "$RUNNER_TEMP/sample.sh" > /dev/null 2>&1 &
           nohup bash "$RUNNER_TEMP/logcat.sh" > /dev/null 2>&1 &
 
-      # Two attempts, the first allowed to fail. The emulator on a hosted runner is lost
-      # often enough that the red runs were the emulator and not the SDK; a fresh
-      # emulator is the only recovery, so the same step runs again, once, and the job is red only
-      # if both attempts are. The retry cannot hide a real regression: a deterministic failure
-      # fails both attempts and the job stays red (at twice the time). `outcome` is the result
-      # before `continue-on-error` turns it into a pass.
+      # Two attempts, the first allowed to fail. The emulator on a hosted runner hangs often
+      # enough (see above) that red runs were the emulator and not the SDK; a fresh emulator is
+      # the only recovery, so the same step runs again, once, and the job is red only if both
+      # attempts are. The retry cannot hide a deterministic failure: it fails both attempts and
+      # the job stays red (at twice the time); a test that fails one run in ten is hidden by
+      # it, which is its price. `outcome` is the result before `continue-on-error` turns it
+      # into a pass.
       - name: The browser leg on an emulator
         id: leg1
         continue-on-error: true
