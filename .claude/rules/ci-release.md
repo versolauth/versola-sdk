@@ -17,7 +17,7 @@ paths: [".github/**", "conformance/**", "tools/**"]
 | `spec.yml` | every PR and push to `main` | `tools/validate-scenarios.py` (schema, `id` = file name, index rows) and markdownlint over `**/*.md` | that a scenario's states exist on every platform |
 | `conformance.yml` `scenarios` | on demand (nightly once the checkout token exists) | scenarios against a staged `auth` + `central` + `edge` from `versolauth/versola`, driven from an emulator | everything the driver does not yet run (`conformance/README.md`, order of work) |
 | `conformance.yml` `providers` | PRs touching the generic facade, the modules under it or the drivers, nightly, on demand | scenarios 24 to 32 of the generic facade against Keycloak and Ory Hydra in Docker (`android/conformance-oauth`), one matrix row each | the device tier, the iOS driver (local only: the macOS runners have no Docker daemon) and what `conformance/README.md` ("Providers") lists as not proven |
-| `security.yml` | every PR and push to `main` | verified-secret scan (gates); dependency review and CodeQL only while the repository is public, each job commented with whether it gates or reports | a scanner that was skipped because the repository is private |
+| `security.yml` | every PR, push to `main`, weekly and on demand | TruffleHog on PR/push, Trivy, Semgrep (gate); dependency review on PRs and CodeQL while public | Gradle transitive coverage from Trivy; a skipped scanner |
 | `release.yml` | `release: published`, but every job is `if: false` | nothing today: it is dormant | |
 
 - A green check is exactly what is in its row. "CI is green" does not mean the scenario catalogue
@@ -78,7 +78,7 @@ paths: [".github/**", "conformance/**", "tools/**"]
 
 ## Scanners and the private repository
 
-- The repository is private today. CodeQL and dependency review need GitHub Advanced Security on a
+- CodeQL and dependency review need GitHub Advanced Security on a
   private repository, so those jobs are wired but conditional on the repository being public
   (`if: github.event.repository.private == false` or equivalent), each commented with whether it
   gates or reports. Do not delete a conditional scanner because it is skipped, and do not make it
@@ -91,7 +91,7 @@ paths: [".github/**", "conformance/**", "tools/**"]
 `.github/dependabot.yml` covers `gradle` (`/android`, and the Flutter example's own build at
 `/flutter/versola_oauth/example/android`, which ignores the two plugins that must equal
 `android/build.gradle.kts`), `swift` (`/`), `pub` (`/flutter/versola_oauth`, with `pigeon` ignored:
-its bump comes with the regeneration) and `github-actions`. Minor and patch updates are grouped into one PR per ecosystem
+its bump comes with the regeneration), `github-actions` and `pip` (`/tools`). Minor and patch updates are grouped into one PR per ecosystem
 per week; majors are separate so a breaking major blocks only itself. A Dependabot PR is reviewed
 like any other dependency change: licence, maintenance, what the release notes say. Known holds are
 documented where they live (OkHttp 5.4.0 pinned below 5.5.0, `android/okhttp/build.gradle.kts`).

@@ -86,8 +86,12 @@ cd example && flutter build ios --no-codesign   # and on iOS
 - The example app builds on both platforms and exercises sign-in, refresh, sign-out and the error
   categories; a change to the Pigeon definition is not done until both example builds pass. Use
   `example.com` configuration and no real client ids.
-- When the generic SDK's scenarios run through the bridge (issue #46, B6), a scenario that passes
-  natively but fails through the bridge is a finding in the bridge.
+- The generic SDK's scenarios 24 to 32 run through the bridge as native tests in the example app
+  (`example/android/app/src/test`, `example/ios/RunnerTests`; `conformance/README.md`, "Through the
+  Flutter bridge"), against the same provider containers as the native drivers. A scenario that
+  passes natively but fails through the bridge is a finding in the bridge. The driver's wiring is
+  never added to the plugin: the tests reach it by creating the native client first and letting
+  the plugin's `create` resolve the same configuration.
 
 ## Packages and dependencies
 

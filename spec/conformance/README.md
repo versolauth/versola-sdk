@@ -61,6 +61,11 @@ generic facade does (explicit endpoints, PAR policy, providers without an `end_s
 or without refresh tokens, protected origins) and for ID-token validation, which both facades
 share.
 
+`applies_to` lists the platforms that meet every assertion of a scenario. A platform that lacks a
+surface the assertions need leaves it out (scenario 32 and Flutter, which has no authenticated
+client: `../oauth-sdk-api.md` section 10), or, when only part of a scenario needs the surface, the
+scenario's `notes` say which part is the native facades' (scenario 24).
+
 ## Fault injection
 
 Most scenarios are unreachable without the harness being able to misbehave on purpose.

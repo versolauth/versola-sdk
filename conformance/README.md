@@ -187,6 +187,73 @@ than a moved device clock; and the comparison with a reference transcript. Keycl
 `Date` header on its token response, so the server-time path is exercised through the
 proxy's header only.
 
+### Through the Flutter bridge
+
+The Flutter plugin (`flutter/versola_oauth`) is a binding over the native generic facades, so
+scenarios 24 to 32 run once more through it: a scenario that passes natively and fails through the
+bridge is a finding in the bridge (`.claude/rules/flutter.md`). Dart cannot reach the driver's
+wiring (the replaced browser leg and stores sit behind `@VersolaInternalApi` on Android and
+`package` access on iOS), so the drivers live natively in the example app's test targets and send
+every operation through the plugin's generated Pigeon host API the way Dart does:
+
+- **Android**: Robolectric tests in `flutter/versola_oauth/example/android/app/src/test`. The
+  plugin's `VersolaOAuthPlugin` is attached to a fake `BinaryMessenger`; `DartSide` encodes each
+  call with the plugin's own codec on the channel name the generator derives, and decodes the typed
+  result. The state stream is subscribed through the event channel with the `listen` and `cancel`
+  calls Dart makes.
+- **iOS**: XCTest in `flutter/versola_oauth/example/ios/RunnerTests`, the same shape over a fake
+  `FlutterBinaryMessenger` and `FlutterPluginRegistrar`, run on a simulator.
+
+**Shared, not copied.** The support classes of the native drivers (`Provider`, `ProviderProxy` /
+`VirtualNetwork`, `HttpLoginBrowser`, `Transcript`, `ResourceServer`, `HarnessSigner`,
+`ProviderConformance`) are compiled from `android/conformance-oauth/src/test/kotlin` and
+`ios/Tests/OAuthConformanceTests` where they live: the Gradle test source set of the example app
+names that directory and filters out its `Scenario*` files, and `RunnerTests` references the Swift
+files in place. A support module or symlinks would move or alias the native driver's files, which other changes
+are editing. A file added to or removed
+from `ios/Tests/OAuthConformanceTests` must also be added to or removed from the `RunnerTests`
+target (the project lists the files by name; the Scenario files stay out), and the example's Gradle
+test pins and plugin versions follow `android/conformance-oauth` and `android/build.gradle.kts`
+(`develop.md`). The bridge scenarios are the native ones, test for test (27 on each platform), so the
+pass counts are comparable; the tests whose assertions differ from their native twin (24, 31's second
+test and 32) carry `bridge` in their names, and the next paragraphs say how.
+
+**How the wiring gets in.** The test builds the native client first, with the driver's browser,
+key provider or stores, and then calls the plugin's `create` through the host API with the
+equivalent `ConfigurationMessage`. The SDK keeps one instance per configuration and returns the
+first to a second `create` with the same configuration, so the plugin ends up holding the driver's
+client. A message that converts any field differently from the native configuration is not found
+there and `create` is refused, which fails the test at its first line. What the bridge does not
+carry (`metadata()`, the retry policy) is read off the native instance and never used to drive.
+The plugin itself is unmodified and never calls the opt-in wiring. Every test also checks that no
+refresh token, raw ID token, authorization code or PKCE verifier appeared in any reply or event,
+and that the access token appeared only in the reply of `accessToken()`.
+
+**What is not the same as natively.** Flutter has no authenticated client (`spec/oauth-sdk-api.md`
+section 10: `accessToken()` only), so where a native test called through the SDK's interceptor or
+session the bridge test makes the call as a Flutter app does, with the token `accessToken()`
+returned, and the origin-matching and redirect assertions of scenario 32 (and the "no
+`Authorization` elsewhere" half of scenario 24) have no bridge equivalent and are the native
+drivers' alone. Scenario 32 asserts what does cross: the token is accepted at a protected origin,
+the SDK sends nothing there by itself, and `create` refuses a `protectedOrigins` entry that is not
+an origin. Scenario 31's second test waits for the expiry through `userInfo()` instead of the
+authenticated client. The spec follows: `32-protected-origins.yaml` lists
+`android` and `ios` only, and `24-generic-happy-path.yaml` notes which of its assertions are the
+native facades'. An empty `protectedOrigins` is accepted by `create` (no authenticated client needs
+origins), which is why the scenario's "empty set is refused" assertion has no bridge test.
+
+Two things about what the state-stream check can see. Its `cancel` assertion reads the native
+side, not Dart's receipts: the messenger counts every message the plugin sends on the channel, kept
+after the test's own listener is gone. On Android the engine's event channel itself drops what a
+cancelled sink is sent, so the count alone could not tell a cancelled collection from a live one;
+the Android test also reads how many collections the plugin's scope has running (its private
+`scope`, so a rename fails the test).
+
+Run commands are in `develop.md` ("Provider containers"). Like the native drivers, both skip
+without `OAUTH_CONFORMANCE_ISSUER`, and neither has a CI job: the Android one could run beside
+`:conformance-oauth`, the iOS one cannot (no Docker on GitHub's macOS runners), so the pull request
+names which tier ran.
+
 ## Fault injection
 
 The capabilities `spec/conformance/README.md` lists, and where each lives:

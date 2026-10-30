@@ -12,14 +12,24 @@ on:
     branches: [main]
   push:
     branches: [main]
+  schedule:
+    # Recheck existing code against newly published findings every Monday.
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: security-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # Verified credentials committed anywhere in the history this PR/push adds. Gates. Full
   # history (fetch-depth 0) so the scanner can diff the range the event carries.
   secrets:
+    # The action uses event commit ranges; full-tree scans below also run on schedules.
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -50,6 +60,7 @@ jobs:
   codeql:
     if: ${{ !github.event.repository.private }}
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     permissions:
       actions: read
       contents: read
@@ -64,6 +75,11 @@ jobs:
             runner: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Match ios.yml: resolve the package before CodeQL instruments xcodebuild.
+      # Resolving the graph inside the traced build can stall before compilation starts.
+      - name: Resolve Swift packages before tracing
+        if: ${{ matrix.language == 'swift' }}
+        run: swift package resolve
       - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           languages: ${{ matrix.language }}
@@ -83,3 +99,46 @@ jobs:
       - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           category: /language:${{ matrix.language }}
+
+  # Same source scanners as the server. These also run on schedules so new findings in
+  # unchanged code are visible. Trivy covers supported manifests; it does not resolve the
+  # Android Gradle graph. Dependabot and dependency review complement this scan.
+  trivy-repo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Vulnerabilities and secrets (gating)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: fs
+          scanners: vuln,secret
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          skip-dirs: .git,.claude
+
+  # Gates on ERROR findings, matching the server. Registry metrics are disabled.
+  # CodeQL remains the deeper Kotlin/Swift analysis; Semgrep complements it.
+  semgrep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Semgrep
+        run: python3 -m pip install --user semgrep==1.179.0
+      - name: Scan (gating)
+        run: ~/.local/bin/semgrep scan --config p/default --metrics=off --severity ERROR --error --sarif --output semgrep.sarif --exclude .claude
+      - name: Upload findings
+        if: always() && hashFiles('semgrep.sarif') != '' && !github.event.repository.private
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: semgrep.sarif
+          category: semgrep

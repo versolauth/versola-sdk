@@ -84,7 +84,8 @@ a single example test cannot catch that.
 - Transcripts compare with the reference client's, ignoring `jti`, `iat` and nonce values.
 - A generic-facade scenario (`facade: [oauth]`) runs in `android/conformance-oauth` against the
   provider container, through `ProviderProxy`; it is skipped, never failed, when no provider is
-  configured, and the PR says which provider it ran against.
+  configured, and the PR says which provider it ran against. The Flutter plugin runs the same
+  scenarios again through its bridge, in the example app's test targets (`flutter.md`).
 
 ## Keeping tests honest
 

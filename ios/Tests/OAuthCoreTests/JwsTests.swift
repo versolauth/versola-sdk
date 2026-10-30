@@ -125,6 +125,8 @@ final class JwsTests: XCTestCase {
     /// that it agrees with itself. Key and signatures are generated and throwaway.
     func testOpenSslProducedRsaPssAndPkcs1SignaturesVerify() {
         let key = JsonWebKey(kty: "RSA", kid: "fx", n: JwsTests.fixtureN, e: "AQAB")
+        // Synthetic header/payload only, no credential or signature. Owner: @goshacodes; review: 2027-01-30.
+        // nosemgrep: generic.secrets.security.detected-jwt-token.detected-jwt-token
         let input = Data("eyJhbGciOiJQUzI1NiJ9.eyJzdWIiOiJ1MSJ9".utf8)
         for (alg, signature) in JwsTests.fixtureSignatures {
             let bytes = JoseBase64Url.decode(signature)!

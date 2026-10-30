@@ -7,15 +7,32 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		0E9D15EADD932F05CE37C861 /* FakeMessenger.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19B508BE5EBE0A7B1AFB4254 /* FakeMessenger.swift */; };
+		0FBB1F2F9F39DC8ACDFC51FB /* Provider.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7433BED56CD359631522AC39 /* Provider.swift */; };
 		1498D2341E8E89220040F4C2 /* GeneratedPluginRegistrant.m in Sources */ = {isa = PBXBuildFile; fileRef = 1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */; };
-		331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 331C807B294A618700263BE5 /* RunnerTests.swift */; };
+		151F0B92A385AB73F9F60B7B /* VirtualNetwork.swift in Sources */ = {isa = PBXBuildFile; fileRef = A630D3187AE8ABB5B93363AE /* VirtualNetwork.swift */; };
+		2CCA194D4635FB63A1740BCA /* Scenario24GenericHappyPathBridgeTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = DD8C42AC9C53D017F6051A8F /* Scenario24GenericHappyPathBridgeTest.swift */; };
+		2E10A5FD372B573B79A49CCE /* Scenario29PushedAuthorizationBridgeTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE23D7255FC32DB60DA3D190 /* Scenario29PushedAuthorizationBridgeTest.swift */; };
+		2E324B5AA753678C8F789C62 /* BridgeConformance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 838E47283AA057E7A0D22A3A /* BridgeConformance.swift */; };
 		3B3967161E833CAA004F5970 /* AppFrameworkInfo.plist in Resources */ = {isa = PBXBuildFile; fileRef = 3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */; };
+		6DE38435FF23C76F3108D159 /* CryptoHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2C32058AE45105FC49FDB382 /* CryptoHelpers.swift */; };
 		74858FAF1ED2DC5600515810 /* AppDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 74858FAE1ED2DC5600515810 /* AppDelegate.swift */; };
 		7884E8682EC3CC0700C636F2 /* SceneDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */; };
 		78A318202AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage in Frameworks */ = {isa = PBXBuildFile; productRef = 78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */; };
+		81DA3DEA64ED2B49E6F57D0D /* HarnessSigner.swift in Sources */ = {isa = PBXBuildFile; fileRef = BE2B809A7B98F5BF1F43C658 /* HarnessSigner.swift */; };
+		84F4B45D646B74555F4D0F53 /* ResourceServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF00191784B388FF1B765027 /* ResourceServer.swift */; };
+		92836694A506E1B196B95E7E /* ProviderConformance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 12F1DC8659AD6F2710AE7438 /* ProviderConformance.swift */; };
 		97C146FC1CF9000F007C117D /* Main.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FA1CF9000F007C117D /* Main.storyboard */; };
 		97C146FE1CF9000F007C117D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FD1CF9000F007C117D /* Assets.xcassets */; };
 		97C147011CF9000F007C117D /* LaunchScreen.storyboard in Resources */ = {isa = PBXBuildFile; fileRef = 97C146FF1CF9000F007C117D /* LaunchScreen.storyboard */; };
+		B8CBD674B2F5FFDE06937245 /* Scenario28ExplicitEndpointsBridgeTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8AB16DA4EDBC0983F2487C3A /* Scenario28ExplicitEndpointsBridgeTest.swift */; };
+		D5258433EE4B3B9AFE3F68B4 /* Scenario30LogoutBridgeTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6EA446F67A8305CB4B88150A /* Scenario30LogoutBridgeTest.swift */; };
+		D61AF574AAC2411084506C7F /* HttpLoginBrowser.swift in Sources */ = {isa = PBXBuildFile; fileRef = 706C56C76CB1223D5C5AD1C2 /* HttpLoginBrowser.swift */; };
+		DEFE7660D05B4304D257BEB3 /* DartSide.swift in Sources */ = {isa = PBXBuildFile; fileRef = 48A81FF259F892167D1E257B /* DartSide.swift */; };
+		F12174F74A3BEFF851CC767A /* WireMappingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 754C936DE782684D453635C0 /* WireMappingTests.swift */; };
+		F68FF0A427D405E364FA3067 /* Scenario25To27IdTokenValidationBridgeTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 05F320241791F58BE225AFDF /* Scenario25To27IdTokenValidationBridgeTest.swift */; };
+		FAB39D0B915799A950375003 /* Scenario31SessionWithoutRefreshTokenBridgeTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = 275BA734B9CCDA166354D5E1 /* Scenario31SessionWithoutRefreshTokenBridgeTest.swift */; };
+		FB7081247B93450CC09231F5 /* Scenario32ProtectedOriginsBridgeTest.swift in Sources */ = {isa = PBXBuildFile; fileRef = E37E358528E3D67559A851EE /* Scenario32ProtectedOriginsBridgeTest.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -42,18 +59,29 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		05F320241791F58BE225AFDF /* Scenario25To27IdTokenValidationBridgeTest.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Scenario25To27IdTokenValidationBridgeTest.swift; sourceTree = "<group>"; };
+		12F1DC8659AD6F2710AE7438 /* ProviderConformance.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ProviderConformance.swift; sourceTree = "<group>"; };
 		1498D2321E8E86230040F4C2 /* GeneratedPluginRegistrant.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = GeneratedPluginRegistrant.h; sourceTree = "<group>"; };
 		1498D2331E8E89220040F4C2 /* GeneratedPluginRegistrant.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = GeneratedPluginRegistrant.m; sourceTree = "<group>"; };
-		331C807B294A618700263BE5 /* RunnerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RunnerTests.swift; sourceTree = "<group>"; };
+		19B508BE5EBE0A7B1AFB4254 /* FakeMessenger.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FakeMessenger.swift; sourceTree = "<group>"; };
+		275BA734B9CCDA166354D5E1 /* Scenario31SessionWithoutRefreshTokenBridgeTest.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Scenario31SessionWithoutRefreshTokenBridgeTest.swift; sourceTree = "<group>"; };
+		2C32058AE45105FC49FDB382 /* CryptoHelpers.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CryptoHelpers.swift; sourceTree = "<group>"; };
 		331C8081294A63A400263BE5 /* RunnerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = RunnerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		3B3967151E833CAA004F5970 /* AppFrameworkInfo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; name = AppFrameworkInfo.plist; path = Flutter/AppFrameworkInfo.plist; sourceTree = "<group>"; };
+		48A81FF259F892167D1E257B /* DartSide.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = DartSide.swift; sourceTree = "<group>"; };
+		6EA446F67A8305CB4B88150A /* Scenario30LogoutBridgeTest.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Scenario30LogoutBridgeTest.swift; sourceTree = "<group>"; };
+		706C56C76CB1223D5C5AD1C2 /* HttpLoginBrowser.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HttpLoginBrowser.swift; sourceTree = "<group>"; };
+		7433BED56CD359631522AC39 /* Provider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Provider.swift; sourceTree = "<group>"; };
 		74858FAD1ED2DC5600515810 /* Runner-Bridging-Header.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = "Runner-Bridging-Header.h"; sourceTree = "<group>"; };
 		74858FAE1ED2DC5600515810 /* AppDelegate.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; path = AppDelegate.swift; sourceTree = "<group>"; };
-		7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
-		78E0A7A72DC9AD7400C4905E /* FlutterGeneratedPluginSwiftPackage */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = FlutterGeneratedPluginSwiftPackage; path = Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage; sourceTree = "<group>"; };
+		754C936DE782684D453635C0 /* WireMappingTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WireMappingTests.swift; sourceTree = "<group>"; };
 		784666492D4C4C64000A1A5F /* FlutterFramework */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = FlutterFramework; path = Flutter/ephemeral/Packages/.packages/FlutterFramework; sourceTree = "<group>"; };
+		7884E8672EC3CC0400C636F2 /* SceneDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SceneDelegate.swift; sourceTree = "<group>"; };
 		78DABEA22ED26510000E7860 /* versola_oauth */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = versola_oauth; path = ../../ios/versola_oauth; sourceTree = "<group>"; };
+		78E0A7A72DC9AD7400C4905E /* FlutterGeneratedPluginSwiftPackage */ = {isa = PBXFileReference; lastKnownFileType = wrapper; name = FlutterGeneratedPluginSwiftPackage; path = Flutter/ephemeral/Packages/FlutterGeneratedPluginSwiftPackage; sourceTree = "<group>"; };
 		7AFA3C8E1D35360C0083082E /* Release.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; name = Release.xcconfig; path = Flutter/Release.xcconfig; sourceTree = "<group>"; };
+		838E47283AA057E7A0D22A3A /* BridgeConformance.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = BridgeConformance.swift; sourceTree = "<group>"; };
+		8AB16DA4EDBC0983F2487C3A /* Scenario28ExplicitEndpointsBridgeTest.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Scenario28ExplicitEndpointsBridgeTest.swift; sourceTree = "<group>"; };
 		9740EEB21CF90195004384FC /* Debug.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; name = Debug.xcconfig; path = Flutter/Debug.xcconfig; sourceTree = "<group>"; };
 		9740EEB31CF90195004384FC /* Generated.xcconfig */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.xcconfig; name = Generated.xcconfig; path = Flutter/Generated.xcconfig; sourceTree = "<group>"; };
 		97C146EE1CF9000F007C117D /* Runner.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Runner.app; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -61,6 +89,12 @@
 		97C146FD1CF9000F007C117D /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		97C147001CF9000F007C117D /* Base */ = {isa = PBXFileReference; lastKnownFileType = file.storyboard; name = Base; path = Base.lproj/LaunchScreen.storyboard; sourceTree = "<group>"; };
 		97C147021CF9000F007C117D /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A630D3187AE8ABB5B93363AE /* VirtualNetwork.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = VirtualNetwork.swift; sourceTree = "<group>"; };
+		BE2B809A7B98F5BF1F43C658 /* HarnessSigner.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = HarnessSigner.swift; sourceTree = "<group>"; };
+		DD8C42AC9C53D017F6051A8F /* Scenario24GenericHappyPathBridgeTest.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Scenario24GenericHappyPathBridgeTest.swift; sourceTree = "<group>"; };
+		E37E358528E3D67559A851EE /* Scenario32ProtectedOriginsBridgeTest.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Scenario32ProtectedOriginsBridgeTest.swift; sourceTree = "<group>"; };
+		EF00191784B388FF1B765027 /* ResourceServer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = ResourceServer.swift; sourceTree = "<group>"; };
+		FE23D7255FC32DB60DA3D190 /* Scenario29PushedAuthorizationBridgeTest.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Scenario29PushedAuthorizationBridgeTest.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -78,10 +112,35 @@
 		331C8082294A63A400263BE5 /* RunnerTests */ = {
 			isa = PBXGroup;
 			children = (
-				331C807B294A618700263BE5 /* RunnerTests.swift */,
+				838E47283AA057E7A0D22A3A /* BridgeConformance.swift */,
+				48A81FF259F892167D1E257B /* DartSide.swift */,
+				19B508BE5EBE0A7B1AFB4254 /* FakeMessenger.swift */,
+				DD8C42AC9C53D017F6051A8F /* Scenario24GenericHappyPathBridgeTest.swift */,
+				05F320241791F58BE225AFDF /* Scenario25To27IdTokenValidationBridgeTest.swift */,
+				8AB16DA4EDBC0983F2487C3A /* Scenario28ExplicitEndpointsBridgeTest.swift */,
+				FE23D7255FC32DB60DA3D190 /* Scenario29PushedAuthorizationBridgeTest.swift */,
+				6EA446F67A8305CB4B88150A /* Scenario30LogoutBridgeTest.swift */,
+				275BA734B9CCDA166354D5E1 /* Scenario31SessionWithoutRefreshTokenBridgeTest.swift */,
+				E37E358528E3D67559A851EE /* Scenario32ProtectedOriginsBridgeTest.swift */,
+				754C936DE782684D453635C0 /* WireMappingTests.swift */,
 			);
 			path = RunnerTests;
 			sourceTree = "<group>";
+		};
+		884440036F4B8BEAE7FCF791 /* OAuthConformanceDriver */ = {
+			isa = PBXGroup;
+			children = (
+				2C32058AE45105FC49FDB382 /* CryptoHelpers.swift */,
+				BE2B809A7B98F5BF1F43C658 /* HarnessSigner.swift */,
+				706C56C76CB1223D5C5AD1C2 /* HttpLoginBrowser.swift */,
+				7433BED56CD359631522AC39 /* Provider.swift */,
+				12F1DC8659AD6F2710AE7438 /* ProviderConformance.swift */,
+				EF00191784B388FF1B765027 /* ResourceServer.swift */,
+				A630D3187AE8ABB5B93363AE /* VirtualNetwork.swift */,
+			);
+			name = OAuthConformanceDriver;
+			path = ../../../../ios/Tests/OAuthConformanceTests;
+			sourceTree = SOURCE_ROOT;
 		};
 		9740EEB11CF90186004384FC /* Flutter */ = {
 			isa = PBXGroup;
@@ -104,6 +163,7 @@
 				97C146F01CF9000F007C117D /* Runner */,
 				97C146EF1CF9000F007C117D /* Products */,
 				331C8082294A63A400263BE5 /* RunnerTests */,
+				884440036F4B8BEAE7FCF791 /* OAuthConformanceDriver */,
 			);
 			sourceTree = "<group>";
 		};
@@ -277,7 +337,24 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				331C808B294A63AB00263BE5 /* RunnerTests.swift in Sources */,
+				2E324B5AA753678C8F789C62 /* BridgeConformance.swift in Sources */,
+				DEFE7660D05B4304D257BEB3 /* DartSide.swift in Sources */,
+				0E9D15EADD932F05CE37C861 /* FakeMessenger.swift in Sources */,
+				2CCA194D4635FB63A1740BCA /* Scenario24GenericHappyPathBridgeTest.swift in Sources */,
+				6DE38435FF23C76F3108D159 /* CryptoHelpers.swift in Sources */,
+				81DA3DEA64ED2B49E6F57D0D /* HarnessSigner.swift in Sources */,
+				D61AF574AAC2411084506C7F /* HttpLoginBrowser.swift in Sources */,
+				0FBB1F2F9F39DC8ACDFC51FB /* Provider.swift in Sources */,
+				92836694A506E1B196B95E7E /* ProviderConformance.swift in Sources */,
+				84F4B45D646B74555F4D0F53 /* ResourceServer.swift in Sources */,
+				151F0B92A385AB73F9F60B7B /* VirtualNetwork.swift in Sources */,
+				F68FF0A427D405E364FA3067 /* Scenario25To27IdTokenValidationBridgeTest.swift in Sources */,
+				B8CBD674B2F5FFDE06937245 /* Scenario28ExplicitEndpointsBridgeTest.swift in Sources */,
+				2E10A5FD372B573B79A49CCE /* Scenario29PushedAuthorizationBridgeTest.swift in Sources */,
+				D5258433EE4B3B9AFE3F68B4 /* Scenario30LogoutBridgeTest.swift in Sources */,
+				FAB39D0B915799A950375003 /* Scenario31SessionWithoutRefreshTokenBridgeTest.swift in Sources */,
+				FB7081247B93450CC09231F5 /* Scenario32ProtectedOriginsBridgeTest.swift in Sources */,
+				F12174F74A3BEFF851CC767A /* WireMappingTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -403,12 +480,15 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
+				OTHER_SWIFT_FLAGS = "$(inherited) -package-name $(VERSOLA_SWIFT_PACKAGE_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = kz.versola.versolaOauthExample.RunnerTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 				SWIFT_VERSION = 5.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Runner.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Runner";
+				VERSOLA_SDK_ROOT = "$(SRCROOT)/../../../..";
+				VERSOLA_SWIFT_PACKAGE_NAME = "$(VERSOLA_SDK_ROOT:standardizepath:file:lower:c99extidentifier)";
 			};
 			name = Debug;
 		};
@@ -420,10 +500,13 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
+				OTHER_SWIFT_FLAGS = "$(inherited) -package-name $(VERSOLA_SWIFT_PACKAGE_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = kz.versola.versolaOauthExample.RunnerTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Runner.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Runner";
+				VERSOLA_SDK_ROOT = "$(SRCROOT)/../../../..";
+				VERSOLA_SWIFT_PACKAGE_NAME = "$(VERSOLA_SDK_ROOT:standardizepath:file:lower:c99extidentifier)";
 			};
 			name = Release;
 		};
@@ -435,10 +518,13 @@
 				CURRENT_PROJECT_VERSION = 1;
 				GENERATE_INFOPLIST_FILE = YES;
 				MARKETING_VERSION = 1.0;
+				OTHER_SWIFT_FLAGS = "$(inherited) -package-name $(VERSOLA_SWIFT_PACKAGE_NAME)";
 				PRODUCT_BUNDLE_IDENTIFIER = kz.versola.versolaOauthExample.RunnerTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_VERSION = 5.0;
 				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Runner.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/Runner";
+				VERSOLA_SDK_ROOT = "$(SRCROOT)/../../../..";
+				VERSOLA_SWIFT_PACKAGE_NAME = "$(VERSOLA_SDK_ROOT:standardizepath:file:lower:c99extidentifier)";
 			};
 			name = Profile;
 		};
