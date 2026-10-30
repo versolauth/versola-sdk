@@ -71,6 +71,20 @@ publish nothing.
   Central job runs in the GitHub environment `maven-central`. `publish-pubdev.yml` is the dormant
   pub.dev counterpart.
 
+- Provenance and the dependency graph. After the upload `release.yml` attests the build provenance
+  of every AAR and JAR in the bundle (`actions/attest-build-provenance`, signed through GitHub's
+  Sigstore, no secret involved): they are the files Central serves, so
+  `gh attestation verify oauth-android-X.Y.Z.aar --repo versolauth/versola-sdk` ties a downloaded
+  artefact to the workflow run, tag and commit that built it (the first release that carries this is
+  the one after 0.1.0). `security.yml` submits the Gradle dependency graph on `main`, weekly and on
+  demand, which feeds Dependabot alerts and dependency review. An SBOM attached to the release is
+  deferred: the dependency graph above can be exported as SPDX
+  (`gh api repos/versolauth/versola-sdk/dependency-graph/sbom`), but a CycloneDX file per release
+  needs a Gradle plugin, which is a new dependency to approve (`AGENTS.md`, "Ask Before"), and
+  scanning the checkout with a generic tool misses the Gradle graph for the same reason Trivy does.
+  `android/gradle/verification-metadata.xml` checks every artefact the build resolves against a
+  recorded checksum (`develop.md`).
+
 What was verified locally, before 0.1.0 was tagged, on `-PreleaseVersion=0.1.0`: all six modules publish; every POM names
 only coordinates that are in the bundle; each artefact has sources, javadoc, POM and Gradle module
 metadata with MD5 and SHA-1 checksums; a bundle signed with a throwaway key has a signature for every

@@ -62,6 +62,11 @@ jobs:
     # GitHub creates the environment on first use; adding required reviewers to it (Settings,
     # Environments) puts a human between a pushed tag and the upload.
     environment: maven-central
+    # `id-token` and `attestations` only for the provenance step below; everything else read-only.
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     defaults:
       run:
         working-directory: android
@@ -149,6 +154,19 @@ jobs:
           # A Central Portal user token (central.sonatype.com/account), not a login.
           SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
           SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
+
+      # Build provenance (SLSA, signed through GitHub's Sigstore): the AARs and JARs that went into
+      # the bundle are tied to this workflow run, this tag and this commit. They are the same bytes
+      # Central serves, so a consumer verifies a downloaded artefact with
+      # `gh attestation verify oauth-android-X.Y.Z.aar --repo versolauth/versola-sdk`. After the
+      # upload, so only what was sent is attested; no secret is involved, the OIDC token is the
+      # job's own. An SBOM is not produced: docs/releasing.md says why.
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            android/build/central-bundle/repo/**/*.aar
+            android/build/central-bundle/repo/**/*.jar
 
   # SwiftPM consumers resolve the release tag itself: there is nothing to publish. What this job
   # proves is that the tagged tree resolves and builds from a clean checkout, which is what a

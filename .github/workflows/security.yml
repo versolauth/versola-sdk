@@ -106,6 +106,39 @@ jobs:
         with:
           category: /language:${{ matrix.language }}
 
+  # The Gradle dependency graph for GitHub's dependency graph, Dependabot alerts and dependency
+  # review: Trivy (below) cannot see the Android build's graph and dependency review only knows
+  # what has been submitted. Submits on main, weekly and on demand, never on a pull request: the
+  # Dependency Submission API needs `contents: write`, which a pull request from a fork does not
+  # get and a pull request run should not hold. Reports (nothing gates on it). The graph is
+  # resolved, not built, so the platform install below is only what AGP wants at configuration.
+  # Caching is off: this job holds a write token and has no use for a warm Gradle home.
+  gradle-dependency-graph:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+      - name: Install Android SDK platform
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
+            "platforms;android-37.0" "build-tools;36.0.0" > /dev/null
+      - name: Submit the dependency graph
+        uses: gradle/actions/dependency-submission@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          build-root-directory: android
+          dependency-graph: generate-and-submit
+          cache-disabled: true
+          validate-wrappers: true
+
   # Same source scanners as the server. These also run on schedules so new findings in
   # unchanged code are visible. Trivy covers supported manifests; it does not resolve the
   # Android Gradle graph. Dependabot and dependency review complement this scan.
