@@ -48,9 +48,10 @@ public sealed class VersolaError(
              *
              * [attempts] and [elapsedMillis] are how an integrator tells a ceiling that was
              * reached from a single request that failed: the same message carries both
-             * otherwise. They describe the operation rather than this request — the default
-             * of one attempt is the failure of a call made outside any [RetryBudget], which
-             * is the only attempt there was.
+             * otherwise. [attempts] is the failed requests of the call that surfaced this error
+             * (not of the whole operation: a `login()` whose discovery failed twice and whose push
+             * then fails three times reports 3), and the default of one is the failure of a call
+             * made outside any [RetryBudget], which is the only attempt there was.
              */
             public data class Network(
                 public val detail: String,
@@ -70,8 +71,8 @@ public sealed class VersolaError(
              * category: both are `Recoverable`. [retryAfterMillis] is the `Retry-After` of a 429
              * or 503, parsed and saturated at one day, and null when there was none or it was
              * unreadable; an app that gets one does not repeat before it. [attempts] and
-             * [elapsedMillis] are those of the operation, as in [Network]; [attempts] is 0 when
-             * nothing was sent because a cooldown was running.
+             * [elapsedMillis] are those of the call that surfaced the error, as in [Network];
+             * [attempts] is 0 when nothing was sent because a cooldown was running.
              */
             public data class Server(
                 public val status: Int,
