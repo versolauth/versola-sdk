@@ -99,13 +99,52 @@ final class WebAuthenticationBrowserTests: XCTestCase {
         XCTAssertEqual(received, redirect)
     }
 
-    func testBufferIsOneSlotAndTheNewestWins() async throws {
+    func testBufferKeepsRedirectsInArrivalOrderSoALaterForeignOneCannotReplaceTheGenuine() async throws {
+        // A cold-started process is handed the genuine redirect and may be handed others (a stale
+        // link, another app) after it; the flow reads them against its request, so none is dropped
+        // for being newer.
         let redirects = PendingRedirects()
-        let older = URL(string: "https://app.example.com/callback?state=old")!
-        await redirects.deliver(older)
-        await redirects.deliver(redirect)
-        let received = try await redirects.next()
-        XCTAssertEqual(received, redirect)
+        let genuine = URL(string: "https://app.example.com/callback?code=abc&state=s")!
+        let foreign = URL(string: "https://app.example.com/callback?state=old")!
+        await redirects.deliver(genuine)
+        await redirects.deliver(foreign)
+        let first = try await redirects.next()
+        let second = try await redirects.next()
+        XCTAssertEqual(first, genuine)
+        XCTAssertEqual(second, foreign)
+    }
+
+    func testBufferIsBoundedAndDropsTheOldest() async throws {
+        let redirects = PendingRedirects()
+        let urls = (0..<(PendingRedirects.capacity + 3)).map { URL(string: "https://app.example.com/callback?state=\($0)")! }
+        for url in urls { await redirects.deliver(url) }
+        let first = try await redirects.next()
+        XCTAssertEqual(first, urls[3], "the three oldest were dropped")
+    }
+
+    // MARK: a session that ends with a redirect that is not the response (scenario 15)
+
+    func testASessionThatEndsWithTheAwaitedStateKeepsItsRedirect() {
+        let url = URL(string: "https://app.example.com/callback?code=abc&state=awaited")!
+        XCTAssertEqual(WebAuthenticationBrowser.ended(.redirect(url), expectedState: "awaited", logger: nil), .redirect(url))
+    }
+
+    func testASessionThatEndsWithAnotherStateOrNoneEndsTheLoginAsTheUserClosingTheSheetWouldAndLogsNoValue() {
+        let logger = RecordingLogger()
+        for query in ["code=SECRETCODE&state=other", "code=SECRETCODE", "code=SECRETCODE&state=awaited-and-more", "code=SECRETCODE&state="] {
+            let url = URL(string: "https://app.example.com/callback?\(query)")!
+            XCTAssertEqual(WebAuthenticationBrowser.ended(.redirect(url), expectedState: "awaited", logger: logger), .userCancelled, query)
+        }
+        XCTAssertEqual(logger.warnings.count, 4)
+        XCTAssertTrue(logger.warnings.allSatisfy { !$0.contains("SECRETCODE") && !$0.contains("awaited") && !$0.contains("example.com") })
+    }
+
+    func testASessionWithNoAwaitedStateAndEveryOtherOutcomePassThrough() {
+        // An end-session leg names no state; a cancel is not a redirect.
+        let url = URL(string: "https://app.example.com/callback?state=anything")!
+        XCTAssertEqual(WebAuthenticationBrowser.ended(.redirect(url), expectedState: nil, logger: nil), .redirect(url))
+        XCTAssertEqual(WebAuthenticationBrowser.ended(.systemCancelled, expectedState: "awaited", logger: nil), .systemCancelled)
+        XCTAssertEqual(WebAuthenticationBrowser.ended(.userCancelled, expectedState: "awaited", logger: nil), .userCancelled)
     }
 
     func testAwaitThenDeliverCompletesTheWaiter() async throws {

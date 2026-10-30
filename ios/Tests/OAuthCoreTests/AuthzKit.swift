@@ -204,6 +204,14 @@ actor GatedBrowser: BrowserAuthorizationSession {
 }
 
 /// Records one value from inside a closure that cannot capture a mutable local.
+/// An `OAuthLogger` that keeps what it was told, for asserting on what the SDK says and what it leaves out.
+final class LoggedLines: OAuthLogger, Sendable {
+    private let lines = OSAllocatedUnfairLock(initialState: [String]())
+    var all: [String] { lines.withLock { $0 } }
+    func info(_ message: String) { lines.withLock { $0.append(message) } }
+    func warn(_ message: String) { lines.withLock { $0.append(message) } }
+}
+
 actor Box<Value: Sendable> {
     private(set) var value: Value
     init(_ initial: Value) { value = initial }
