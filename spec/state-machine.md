@@ -295,7 +295,7 @@ Gating is a **time-bound** authorization of the key, not an auth-per-use binding
 | Platform | Mechanism |
 |---|---|
 | Android | `setUserAuthenticationParameters(300, AUTH_BIOMETRIC_STRONG or AUTH_DEVICE_CREDENTIAL)`, or `setUserAuthenticationValidityDurationSeconds(300)` below API 30 |
-| iOS | `LAContext.touchIDAuthenticationAllowableReuseDuration = 300` |
+| iOS | the device unlock itself: the items are `WhenUnlockedThisDeviceOnly` (see the iOS deviation below) |
 
 300 seconds is iOS's own ceiling for that window. Android permits a longer one; matching the
 stricter platform keeps this one machine rather than two. Any matching OS authentication inside
@@ -311,6 +311,24 @@ Because nothing is cached, this can occur mid-session rather than once per launc
 by refresh cadence — at most one prompt per access-token lifetime, never one per API call — and
 that bound is what is paid for never holding the credential in memory. Neither platform offers
 both at once.
+
+**iOS deviation.** The iOS SDK does not gate the storage on `LAContext` user presence with a
+300-second reuse window. `UnlockPolicy.OnAppUnlock` puts the credential items in the
+`kSecAttrAccessibleWhenUnlockedThisDeviceOnly` class instead (the default, `None`, is
+`AfterFirstUnlockThisDeviceOnly`): they are readable while the device is unlocked and refused
+with `errSecInteractionNotAllowed` while it is locked, which is `Locked` and
+`Recoverable(UnlockRequired)` here, with the grant intact. The device unlock is the
+authentication, so a session raises no prompt of the SDK's own, and a refresh from a background
+task on a locked device waits for the next unlock.
+
+The window design is not implemented because it needs what this specification does not define
+and a test tier the repository does not have. The SDK cannot present the prompt, so the app would
+have to hand it the `LAContext` that satisfied the item's access control, which is a new public
+parameter of `UnlockPolicy`; and its behaviour depends on biometric enrolment, which only a
+physical phone can exercise. Two rows of this specification therefore do not apply on iOS: the
+300-second window, and `Locked → Unauthenticated` on a biometric enrolment change (a
+`WhenUnlocked` item survives it). A deployment that needs a stronger gate than the device lock
+needs a new `UnlockPolicy` case with its own definition, not a reading of this one.
 
 The prompt must be bound to the crypto operation (`BiometricPrompt.CryptoObject`, `LAContext`
 reuse) rather than gating on a boolean returned by a biometric API. A boolean gates nothing: a

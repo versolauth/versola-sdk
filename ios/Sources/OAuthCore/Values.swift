@@ -40,7 +40,11 @@ public enum RefreshTokenPolicy: Sendable, Equatable {
 /// `spec/state-machine.md`'s `locked` state is reachable only under `onAppUnlock`.
 public enum UnlockPolicy: Sendable, Equatable {
     case none
-    /// The credentials unlock with the device (`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`).
+    /// The credentials are readable only while the device is unlocked
+    /// (`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`), where `none` keeps them readable from the
+    /// first unlock after boot (`AfterFirstUnlockThisDeviceOnly`). A locked device is `locked` and
+    /// `unlockRequired`; there is no biometric prompt or reuse window (`spec/state-machine.md`,
+    /// "iOS deviation"). A refresh from a background task on a locked device waits for the unlock.
     case onAppUnlock
 }
 
