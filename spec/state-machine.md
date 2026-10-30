@@ -112,16 +112,59 @@ cancel should be retried silently, a user cancel must not be.
 
 The pending request is wiped on user cancel and **kept** on system cancel, so the flow can be
 resumed. Kept for a resume, not reserved: nothing awaits it, so a new `login()` is not made to
-wait out its ten minutes. It supersedes the leftover, and the old request's `state` is remembered
-so a redirect its tab still delivers is stepped over rather than failing the new login. The same
-holds for a cold-start resume that only waits for its redirect: `login()` and `stepUp()` end that
-wait first (as `logout()` does) and supersede the request.
+wait out its ten minutes. It supersedes the leftover; a redirect its tab still delivers carries a
+`state` that is not the new request's and is ignored like any other (below). The same holds for a
+cold-start resume that only waits for its redirect: `login()` and `stepUp()` end that wait first
+(as `logout()` does) and supersede the request.
 
-A redirect that reaches a live request with a `state` that is not its own stays
-`Configuration(StateMismatch)` and discards the request (scenario 15), wherever it came from: the
-spec does not distinguish a redirect delivered by the browser session from one handed over by the
-app (`handleRedirect`). A URL that is not the configured redirect URI at all is not a response
-and is ignored by the facade before it reaches the flow.
+#### A redirect that is not the awaited response (scenario 15)
+
+While a request is pending and something awaits its redirect (a `login()` with the browser up, or
+a resume after a cold start), only a redirect whose `state` equals the request's is the response.
+The redirect URI is public (the app's manifest or associated domains name it), so any other app, an
+old link or a stale tab can deliver a URL for it; such a redirect must not be able to end the login
+it is not an answer to. A redirect for the configured redirect URI whose `state` is not the
+pending request's, or that carries none while the request has one, is therefore **ignored**: no
+token request, no error, the pending request and the `Authorizing` state kept, the wait continuing
+until the genuine redirect, the user dismissing the browser, or the request's expiry (a resume is
+bounded by what is left of the ten minutes; a login whose browser is up is bounded, as before, by
+the browser and its caller). The SDK logs
+that it ignored one, without the URL or any value of it. A URL that is not the configured redirect
+URI at all is not a response either and is ignored by the facade before it reaches the flow.
+
+Where this is decided, so that the same answer holds whichever way the redirect arrives:
+
+- **At the platform's delivery point, when a login is waiting and its `state` is known.** Android:
+  the exported redirect activity drops a non-matching intent before it is delivered, so it does not
+  bring the app forward over the open tab, does not silence the foreground-return cancel detection
+  and is not buffered. iOS: `handleRedirect(_:)` hands every URL for the redirect URI to the flow;
+  there is no earlier point.
+- **Where the pending request is read, which is the authority.** The flow compares each redirect's
+  `state` with the request's, in constant time, before anything else. This is what covers a
+  cold-started process, whose redirect arrives before anything expects it (Android: the redirect
+  activity has no expectation yet; iOS: `handleRedirect` before the resume): the resume that reads
+  the stored request skips every buffered redirect that does not match and validates the first that
+  does, while it keeps waiting. The buffer is bounded (Android: the dispatcher's channel; iOS: eight
+  URLs, the oldest dropped).
+- **A matching `state` completes or fails the login**, in the order of `Authorizing →
+  Authenticated` above: a wrong or missing `iss` is `Configuration(IssuerMismatch)`, an `error`
+  parameter is the provider's answer (`Reauthenticate` or `Configuration(AuthorizationRejected)`),
+  and neither `code` nor `error` is `Configuration(MalformedAuthorizationResponse)`.
+
+The one place a non-matching redirect still ends something is the browser surface itself ending
+with it: iOS's `ASWebAuthenticationSession` completes the moment its page navigates to the callback
+URL, and an Android Auth Tab returns the redirect as its result and closes. Such a redirect was
+produced by a page inside that surface (a URL another app opens reaches the SDK through the
+redirect activity or `handleRedirect(_:)`, not through the surface), and the surface that carried
+it is gone: no dismissal can be
+observed any more and the genuine response cannot come from it. Waiting on would leave a login
+nobody can see or cancel. The login ends as `Recoverable(UserCancelled)` and the pending request is
+wiped, the same outcome as the user closing that surface; it is not a system cancel, which an app
+retries silently and which would loop on a provider that keeps answering for another request.
+
+`Configuration(StateMismatch)` is therefore never reported for a waiting login. It remains the
+error `AuthorizationResponseValidator.validate` reports for a redirect handed to it directly,
+because the check stays there as defence in depth, and it stays a case of the public error type.
 
 iOS, a caller cancelled mid-browser (a SwiftUI `.task` torn down by navigation): the SDK's
 cancellation handler dismisses the `ASWebAuthenticationSession`, so nothing can redirect

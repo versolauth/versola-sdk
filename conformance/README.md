@@ -339,11 +339,16 @@ What each test asserts, and runs:
   cold-starts the app, which observes `Authorizing` and never `Unauthenticated`, and the sign-in
   completes on its own (`provider keycloak`, Custom Tabs leg). On iOS the app is terminated with
   the sheet open and a redirect is opened against it by the system.
-- **A redirect that is not the request's** (scenario 15): a redirect with a made-up `state` is
-  refused as `Configuration(StateMismatch)` before any token request, on a live login (Android,
-  fired at the exported redirect activity, and a genuine sign-in afterwards still works) and
-  against a cold-started app (iOS). On Android an intent for a URI that is not the redirect at all
-  is ignored, and the login it was fired at still completes (Custom Tabs leg).
+- **A redirect that is not the request's** (scenario 15): a redirect for the configured redirect
+  URI with a made-up `state`, or none, is ignored: no token request, no failure, and the login
+  waits on. On Android it is fired at the exported redirect activity of a live login (both
+  browser legs): the tab stays in front, the genuine sign-in in it still completes, and the user
+  closing the tab afterwards is still a cancel. On iOS it is opened by the system against a
+  terminated app that the redirect cold-starts: the restored request survives, in this process and
+  the next. On Android an intent for a URI that is not the redirect at all is ignored the same
+  way (Custom Tabs leg). A redirect that ends the browser surface itself (an Auth Tab result, an
+  `ASWebAuthenticationSession` completion) cannot be produced by a third party and is proven one
+  tier down only (`ended(_:expectedState:logger:)` on iOS, the trampoline's result on Android).
 
 What it does not prove, and why (each is also a row in the PR's "Gaps left"):
 
