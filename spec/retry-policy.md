@@ -32,14 +32,15 @@ attempts is triggered by a call with three attempts and the pair emits nine requ
 |---|---|---|---|
 | `maxAttemptsPerOrigin` | 3 | 5 | Requests to one origin per operation, original included, that failed. |
 | `maxTotalAttempts` | 4 | 8 | Failed requests across all origins per operation. A call that fails and the refresh it triggers share it. |
-| `initialBackoff` | 500 ms | — | Delay before the second attempt. |
+| `initialBackoff` | 500 ms | 30 s | Delay before the second attempt. |
 | `backoffMultiplier` | 2.0 | 4.0 | Applied per attempt. |
 | `maxBackoff` | 8 s | 30 s | Ceiling on any single delay. |
 | `jitter` | full | — | Not configurable. Synchronised retries across a user base are a thundering herd. |
 | `totalBudget` | 20 s | 60 s | Wall-clock ceiling for one operation including delays. |
 
 A value above the hard maximum is a `Configuration` error at `configure()` time, not a silent
-clamp. Silently accepting a rejected value teaches an integrator that the knob works.
+clamp, and so are a `maxBackoff` below `initialBackoff` and a `maxAttemptsPerOrigin` above
+`maxTotalAttempts`. Silently accepting a rejected value teaches an integrator that the knob works.
 
 ## Retries that are fixed, not configurable
 
@@ -81,7 +82,7 @@ failure is repeated only when both say yes, and always inside the operation's bu
 | Any other 5xx (501, 505, ...) | `permanent server fault` | Not implemented, or an HTTP version the server refuses: a repeat cannot help. Surfaced at once as `Recoverable(Server)` with no retry. |
 | A status the operation has no use for and no more precise error for (a 404 on the key set, a 1xx) | `unexpected` | `Recoverable(Server(status))`, never repeated. It was a `Network` before, which the budget would have repeated as a transport failure. |
 | 3xx from discovery, the key set, the token endpoint, UserInfo or the push | `Configuration` | A redirect is not followed and is a deployment fault no retry fixes (`errors.md`), the same at every endpoint. |
-| 4xx other than 408 and 429 | the OAuth error, or `Configuration` | `errors.md`. A 4xx is never repeated. |
+| 4xx other than 408 and 429 | the OAuth error, or `Configuration` | `errors.md`. A 4xx is never repeated. UserInfo's own mapping: any answer that is not 2xx, 401, 408, 429 or 5xx (a 403, a 404, a redirect, a 1xx) is `Configuration(UserInfoRejected)` on every platform. |
 | 401 and 400 DPoP challenges | handled internally | The fixed retries above. |
 
 A `transport` or `transient` failure on an operation that tolerates a repeat consumes the

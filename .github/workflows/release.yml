@@ -70,7 +70,7 @@ jobs:
       - name: Install Android SDK platform
         run: |
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            "platforms;android-36" "build-tools;36.0.0" > /dev/null
+            "platforms;android-37.0" "build-tools;36.0.0" > /dev/null
       - uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5.0.2
 
       # The gate before anything is signed: what the release would ship has to pass what every
@@ -86,6 +86,23 @@ jobs:
           # key file is written to the runner.
           ORG_GRADLE_PROJECT_signingKey: ${{ secrets.MAVEN_SIGNING_KEY }}
           ORG_GRADLE_PROJECT_signingPassword: ${{ secrets.MAVEN_SIGNING_PASSWORD }}
+
+      # The exact zip that is about to be uploaded, checked before it is: all six modules are in it at
+      # the tag, every module the POMs name is in it, every artefact file has its checksums and its
+      # signature (presence only; the private key stays in the step above). A failure stops the job
+      # before anything reaches Central; this is what makes the later Publish click a click on a
+      # checked artefact. The script lives at the repository root, hence the working-directory
+      # override.
+      - name: Check the bundle before it is uploaded
+        working-directory: .
+        run: |
+          bundle="$RUNNER_TEMP/bundle"
+          rm -rf "$bundle"
+          mkdir "$bundle"
+          unzip -q "android/build/central-bundle/versola-${RELEASE_TAG}.zip" -d "$bundle"
+          tools/verify-consumer/check-bundle.sh "$bundle" "$RELEASE_TAG"
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
 
       # Central Portal Publisher API (https://central.sonatype.com/api/v1/publisher/upload):
       # `Authorization: Bearer base64(user:password)` with a Portal user token, a multipart part
@@ -149,9 +166,24 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      # Only to dispatch verify-release below.
+      actions: write
     steps:
       - name: Create the release
         run: gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$RELEASE_TAG" --generate-notes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+
+      # The consumer check (verify-release.yml): apps that install the release from Maven Central,
+      # SwiftPM and a Flutter git dependency. Dispatched here because a release created with the
+      # workflow's own token does not fire that workflow's `release: published` trigger (GitHub
+      # does not start workflow runs from events the GITHUB_TOKEN causes; `workflow_dispatch` is
+      # the documented exception). It waits for the maintainer's click in the Central Portal, up
+      # to three hours; a run that timed out is started again from the Actions tab. It runs on the
+      # default branch, which is where its scripts are.
+      - name: Start the consumer check
+        run: gh workflow run verify-release.yml --repo "$GITHUB_REPOSITORY" -f version="$RELEASE_TAG"
         env:
           RELEASE_TAG: ${{ github.ref_name }}
           GH_TOKEN: ${{ github.token }}
