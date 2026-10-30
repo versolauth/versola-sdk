@@ -31,6 +31,8 @@ assertions:
   - After a cold start the SDK sends one request (the cooldown is not persisted), and the session is Authenticated throughout.
   - Exhausting the budget on 503 without Retry-After starts no cooldown, and the immediate second call makes a new set of attempts.
   - Requests through the authenticated client to protected origins are never blocked by the cooldown.
+  - login() during a cooldown is refused before the browser opens and sends nothing, with attempts 0. A code exchange is never refused by a cooldown, and a Retry-After on it starts one.
+  - A Retry-After that fits the budget and is followed by a success starts no cooldown.
 notes: >
   The cooldown protects a server that asked for quiet from an app that retries in a loop. It is
   memory-only and starts only from what the server said; the SDK does not invent a provider's

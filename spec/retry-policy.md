@@ -79,8 +79,8 @@ failure is repeated only when both say yes, and always inside the operation's bu
 | No response: connect failure, DNS, TLS, reset, timeout | `transport` | A timeout after the request left the device may have been processed, so it is repeated only for an operation that tolerates a repeat (table below). |
 | 408, 429, 500, 502, 503, 504 | `transient` | The provider is busy or briefly broken. 429 and 503 may carry `Retry-After` (below). |
 | Any other 5xx (501, 505, ...) | `permanent server fault` | Not implemented, or an HTTP version the server refuses: a repeat cannot help. Surfaced at once as `Recoverable(Server)` with no retry. |
-| A status the operation has no use for and no more precise error for (a 404 on the key set, a 1xx, a 3xx on discovery) | `unexpected` | `Recoverable(Server(status))`, never repeated. It was a `Network` before, which the budget would have repeated as a transport failure. |
-| 3xx | `Configuration` | Not followed (`errors.md`). |
+| A status the operation has no use for and no more precise error for (a 404 on the key set, a 1xx) | `unexpected` | `Recoverable(Server(status))`, never repeated. It was a `Network` before, which the budget would have repeated as a transport failure. |
+| 3xx from discovery, the key set, the token endpoint, UserInfo or the push | `Configuration` | A redirect is not followed and is a deployment fault no retry fixes (`errors.md`), the same at every endpoint. |
 | 4xx other than 408 and 429 | the OAuth error, or `Configuration` | `errors.md`. A 4xx is never repeated. |
 | 401 and 400 DPoP challenges | handled internally | The fixed retries above. |
 
@@ -118,7 +118,8 @@ under the budget like any other (three attempts and the backoff), which is what 
 in which a login the provider already completed would otherwise be lost. Fetching the key set before
 the browser opens was considered and refused: it changes when the key set is requested (scenarios 24
 and 26 assert that validation, and a rejection before it, decide that), for a window the budget
-already covers. The time the user spends in the browser is not counted against `totalBudget`.
+already covers. The time the user spends in the browser is not counted against `totalBudget`, and the allowances
+are shared across it: a `login()` is one budget, paused while the browser is up.
 
 ### `Retry-After`
 
@@ -130,11 +131,12 @@ Read on **429 and 503 only**; on any other status the header is ignored.
   else (negative, fractional, empty, repeated, unparseable, a date in the past) is treated as
   absent and the policy's own backoff applies. A malformed header never fails the request.
 - **In preference to the backoff.** With a value `R` the delay before the next attempt is `R` plus
-  jitter of up to `min(R / 10, 1 s)`, not the computed backoff: the server has said when it will
+  jitter of up to `min(R / 10, 1 s, what is left of the budget after R)`, never negative, not the
+  computed backoff. The jitter never turns a `Retry-After` that fits into one that does not: the server has said when it will
   accept the request, and an earlier one is a request it said it would refuse. `maxBackoff` does
   not cap it.
 - **Never retried early to fit the budget.** If `R` plus the time already spent exceeds
-  `totalBudget`, the SDK does not sleep and does not shorten the wait. It stops at once and
+  `totalBudget` (the jitter is not part of this test), the SDK does not sleep and does not shorten the wait. It stops at once and
   surfaces `Recoverable(Server)` carrying `retryAfter`, so a `Retry-After: 86400` costs no
   waiting and no request, and the app decides what to do with the day. This replaces the earlier
   draft ("clamped to `totalBudget`"), which would have retried earlier than the server allowed.
@@ -144,26 +146,42 @@ Read on **429 and 503 only**; on any other status the header is ignored.
 
 ### Cooldown
 
-When an operation ends because of a `Retry-After`, the SDK remembers, per origin and in memory,
-the moment the server said it would accept requests again. Until then every SDK-originated
+When an operation **ends** because of a `Retry-After` (the wait does not fit the budget, or the
+attempts ran out while the server kept asking), the SDK remembers, per origin and in memory, the
+moment the server said it would accept requests again. A `Retry-After` that fits, is waited out
+and is followed by a success starts nothing, so a concurrent call is not refused on its account.
+The origin is the one the request goes to: a revocation endpoint on another host than the token
+endpoint has its own allowance and its own cooldown. Until the time passes every SDK-originated
 request to that origin (a refresh triggered by a call, a revocation, a UserInfo) fails
 immediately with the same `Recoverable(Server)`, `retryAfter` set to what is left and `attempts` 0,
 **without sending anything**. Without this, an app that calls `accessToken()` in a loop, or fifty screens
 that each retry, would send a new request per call to a server that asked for quiet.
 
+- The code exchange is the exception on both sides. It is **not refused** by a cooldown: the code
+  was just obtained after the user's time in the browser, and refusing it would waste that step for
+  a request the provider was going to answer anyway. It is made once, and if it ends with a
+  `Retry-After` of 429 or 503 that starts a cooldown like any other ending. `login()` therefore
+  checks the cooldown of the token origin at its **start**, before the browser opens, where a
+  refusal costs the user nothing; `resumePendingLogin()` does not check.
 - Memory only. A cold start forgets it; the server still enforces its limit, and one request
   after a restart is the cost of not persisting a deadline.
 - Only what the server said. Exhausting the budget on 5xx with no `Retry-After` starts no cooldown:
   the SDK does not invent a provider's policy, and the app owns the retry loop above it.
 - The application's requests through the authenticated client are never blocked by it.
+- Both the cooldown and the budget are measured on a clock that keeps running while the device
+  sleeps (Android `SystemClock.elapsedRealtime`, iOS a continuous clock), because `Retry-After` is
+  wall time: a monotonic clock that stops in deep sleep would hold an origin for the time the
+  phone slept on top of what the server asked.
 
 ### What the app sees
 
 `Recoverable` carries one of two network causes. `Network` is a transport failure (nothing
 answered). `Server(status, retryAfter, attempts, elapsed)` is an HTTP answer that kept the
-operation from finishing: `status` is the last status seen (408, 429 or 5xx), `retryAfter` is the
-parsed header (absent when there was none), and the attempt count and elapsed time say whether the
-ceiling was reached. Both leave the session where it was (`Authenticated` after a failed refresh;
+operation from finishing: `status` is the last status seen (408, 429, 5xx or an unusable one),
+`retryAfter` is the parsed header (absent when there was none), `attempts` is the number of failed
+requests **of the call that surfaced the error** (not of the whole operation, so a `login()` whose
+discovery failed twice and whose push then fails three times reports 3 on the push), and the
+attempt count and elapsed time say whether the ceiling was reached. Both leave the session where it was (`Authenticated` after a failed refresh;
 the pre-`login()` state after a failed login). What the app does:
 
 - `retryAfter` present: do not repeat before it; schedule the retry instead of looping.

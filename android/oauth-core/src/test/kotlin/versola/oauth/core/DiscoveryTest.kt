@@ -289,7 +289,20 @@ class DiscoveryTest {
     fun `a 404 is still a configuration fault and is not repeated`() = runTest {
         server.enqueue(MockResponse.Builder().code(404).build())
 
-        val error = failure { RetryScope(RetryPolicy(), { testScheduler.currentTime }, Random(1)).operation { client.fetch(issuer) } }
+        val noRedirects = HttpDiscoveryClient(OkHttpClient.Builder().followRedirects(false).build())
+
+        val error = failure { RetryScope(RetryPolicy(), { testScheduler.currentTime }, Random(1)).operation { noRedirects.fetch(issuer) } }
+
+        assertTrue(error is VersolaError.Configuration)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun `a redirect from the discovery endpoint is a configuration fault and is not repeated`() = runTest {
+        server.enqueue(MockResponse.Builder().code(302).addHeader("Location", "https://elsewhere.example.com/").build())
+        val noRedirects = HttpDiscoveryClient(OkHttpClient.Builder().followRedirects(false).build())
+
+        val error = failure { RetryScope(RetryPolicy(), { testScheduler.currentTime }, Random(1)).operation { noRedirects.fetch(issuer) } }
 
         assertTrue(error is VersolaError.Configuration)
         assertEquals(1, server.requestCount)
