@@ -112,8 +112,8 @@ public data class ProviderMetadata(
             )
         }
         // Every URL the SDK will send a code, a refresh token, a proof or the user to. Held to the
-        // issuer's own rule (https, or cleartext on loopback for a staged stack) but not to the
-        // issuer's origin: Cognito's OAuth endpoints live on the user-pool domain and Entra's
+        // issuer's own rule (https, or cleartext on a loopback host for a staged stack; not the
+        // emulator's `10.0.2.2` alias, which the issuer alone may use) but not to the issuer's origin: Cognito's OAuth endpoints live on the user-pool domain and Entra's
         // UserInfo on Microsoft Graph, so a cross-origin endpoint is legitimate (`providers.md`).
         // Without this a document announcing `http://…/token` has refresh tokens POSTed to it in
         // the clear.
@@ -138,7 +138,7 @@ public data class ProviderMetadata(
         }
         val scheme = parsed?.scheme?.lowercase()
         val acceptable = !parsed?.host.isNullOrEmpty() &&
-            (scheme == "https" || (scheme == "http" && isLoopbackHost(parsed?.host)))
+            (scheme == "https" || (scheme == "http" && parsed?.host in LOOPBACK_ENDPOINT_HOSTS))
         if (!acceptable) {
             // The member's name and nothing of its value: the document is the provider's, but the
             // value could carry a credential in its query, and the name is what a developer needs.
@@ -148,3 +148,6 @@ public data class ProviderMetadata(
         }
     }
 }
+
+/** The hosts a discovered endpoint may use over cleartext HTTP: the developer's own machine, reached through `adb reverse`. */
+private val LOOPBACK_ENDPOINT_HOSTS = setOf("localhost", "127.0.0.1", "[::1]")

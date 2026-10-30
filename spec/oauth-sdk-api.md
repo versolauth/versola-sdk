@@ -88,7 +88,7 @@ val oauth = OAuthClient.create(context, configuration)
   `Authorizing`; otherwise `Unauthenticated`. Discovery runs lazily on the first operation that
   needs it and is cached on disk; the cache is refetched when it is older than 24 hours or when a
   request fails in a way a changed endpoint could explain. Every endpoint the document announces
-  must be `https` (cleartext only on the loopback hosts the issuer may use) and may sit on another
+  must be `https` (cleartext only on `localhost`, `127.0.0.1` or `[::1]`) and may sit on another
   origin than the issuer; otherwise `Configuration(DiscoveryMalformed)`, and a cached copy that
   fails the same check is discarded.
 - `sessionState` is the source of truth. Every operation below publishes through it, including an

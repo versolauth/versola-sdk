@@ -292,13 +292,15 @@ class DiscoveryTest {
     }
 
     @Test
-    fun `cleartext is accepted only on the loopback hosts the issuer may use`() = runTest {
-        for (host in listOf("localhost", "127.0.0.1", "[::1]", "10.0.2.2")) {
+    fun `cleartext is accepted only on the three loopback hosts, not the emulator alias or a LAN address`() = runTest {
+        for (host in listOf("localhost", "127.0.0.1", "[::1]")) {
             server.enqueue(MockResponse.Builder().code(200).body(documentWith("token_endpoint" to "http://$host:9003/token")).build())
             assertEquals("http://$host:9003/token", client.fetch(issuer).tokenEndpoint)
         }
-        server.enqueue(MockResponse.Builder().code(200).body(documentWith("token_endpoint" to "http://192.168.0.2:9003/token")).build())
-        assertTrue(failure { client.fetch(issuer) } is VersolaError.Configuration)
+        for (host in listOf("10.0.2.2", "192.168.0.2")) {
+            server.enqueue(MockResponse.Builder().code(200).body(documentWith("token_endpoint" to "http://$host:9003/token")).build())
+            assertTrue(host, failure { client.fetch(issuer) } is VersolaError.Configuration)
+        }
     }
 
     @Test
