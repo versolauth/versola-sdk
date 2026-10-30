@@ -1,3 +1,4 @@
+import CryptoKit
 import Security
 import XCTest
 @testable import OAuthClient
@@ -87,11 +88,23 @@ final class KeychainTests: XCTestCase {
         XCTAssertNil(PendingRequestCoding.decode(Data("{}".utf8)))
     }
 
-    func testLockedDeviceMapsToUnlockRequiredAndOtherStatusesToConfigurationWithoutData() {
+    func testStoresThatAreOutOfReachForNowAreUnlockRequiredAndOtherStatusesAreConfigurationWithoutData() {
         XCTAssertEqual(KeychainItem.error(for: errSecInteractionNotAllowed), .recoverable(.unlockRequired))
         XCTAssertEqual(KeychainItem.error(for: -25308), .recoverable(.unlockRequired))
-        XCTAssertEqual(KeychainItem.error(for: errSecAuthFailed), .configuration(.invalidConfiguration(detail: "keychain error \(errSecAuthFailed)")))
-        XCTAssertEqual(KeychainItem.error(for: errSecDecode), .configuration(.invalidConfiguration(detail: "keychain error \(errSecDecode)")))
+        // Transient: the store is not available yet (early boot) or authentication to it is withheld.
+        XCTAssertEqual(KeychainItem.error(for: errSecNotAvailable), .recoverable(.unlockRequired))
+        XCTAssertEqual(KeychainItem.error(for: errSecAuthFailed), .recoverable(.unlockRequired))
+        // Permanent: nothing a retry changes, and nothing that signs the user out.
+        for status in [errSecDecode, errSecParam, errSecMissingEntitlement, errSecDuplicateItem, errSecNoSuchAttr] {
+            XCTAssertEqual(KeychainItem.error(for: status), .configuration(.invalidConfiguration(detail: "keychain error \(status)")))
+        }
+    }
+
+    func testAStatusIsReadOffCryptoKitAndSecurityErrors() {
+        XCTAssertEqual(KeychainFailure.status(of: CryptoKitError.underlyingCoreCryptoError(error: -25308)), -25308)
+        XCTAssertEqual(KeychainFailure.status(of: NSError(domain: NSOSStatusErrorDomain, code: -25293)), -25293)
+        XCTAssertNil(KeychainFailure.status(of: CryptoKitError.incorrectKeySize))
+        XCTAssertNil(KeychainFailure.status(of: URLError(.timedOut)))
     }
 
     func testUnlockPolicyChoosesTheAccessibilityClass() {

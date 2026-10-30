@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import Security
 
 
 /// Where a DPoP key's tier came from, read back from the key that was loaded, never assumed
@@ -91,6 +92,7 @@ package actor SecureEnclaveDpopKey: DpopSigningKey {
     private let requireHardware: Bool
     private let logger: (any OAuthLogger)?
     private let enclaveAvailable: Bool
+    private let makeEnclaveKey: @Sendable () throws -> SecureEnclave.P256.Signing.PrivateKey
     private var loaded: Loaded?
 
     /// - Parameters:
@@ -105,15 +107,38 @@ package actor SecureEnclaveDpopKey: DpopSigningKey {
     }
 
     /// For a store of the caller's own, and for tests, which also decide whether the enclave
-    /// counts as present (a Mac host may report one it cannot use unsigned).
+    /// counts as present (a Mac host may report one it cannot use unsigned) and what making a key
+    /// does (`makeEnclaveKey`, which a test makes fail the way a locked device does).
     package init(
         store: any DpopKeyStore, requireHardware: Bool = false, logger: (any OAuthLogger)? = nil,
-        secureEnclaveAvailable: Bool = SecureEnclave.isAvailable
+        secureEnclaveAvailable: Bool = SecureEnclave.isAvailable,
+        makeEnclaveKey: @escaping @Sendable () throws -> SecureEnclave.P256.Signing.PrivateKey = SecureEnclaveDpopKey.newEnclaveKey
     ) {
         self.store = store
         self.requireHardware = requireHardware
         self.logger = logger
         self.enclaveAvailable = secureEnclaveAvailable
+        self.makeEnclaveKey = makeEnclaveKey
+    }
+
+    /// The access control the enclave key is created with, spelled out rather than left to
+    /// CryptoKit's default: `AfterFirstUnlockThisDeviceOnly`, no flags (so no user presence, and
+    /// no biometry binding that an enrolment change would invalidate). Signing then works while
+    /// the device is locked, which a push-triggered or `BGAppRefreshTask` refresh needs, and the
+    /// key never leaves the device. This is what Apple documents as the initializer's default, and
+    /// the shipped CryptoKit interface of the SDK this was built against declares the same, so
+    /// keys made before this was explicit have the same access control and need no migration.
+    static func enclaveAccessControl() throws -> SecAccessControl {
+        var failure: Unmanaged<CFError>?
+        guard let access = SecAccessControlCreateWithFlags(nil, kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly, [], &failure) else {
+            failure?.release()
+            throw OAuthError.configuration(.hardwareBindingUnavailable(detail: "the Secure Enclave access control could not be created"))
+        }
+        return access
+    }
+
+    @Sendable static func newEnclaveKey() throws -> SecureEnclave.P256.Signing.PrivateKey {
+        try SecureEnclave.P256.Signing.PrivateKey(accessControl: enclaveAccessControl())
     }
 
     /// The tier of the key in use, generating the key first if there is none.
@@ -133,7 +158,33 @@ package actor SecureEnclaveDpopKey: DpopSigningKey {
     /// `R || S`, 64 bytes: what JWS ES256 wants, and what CryptoKit's `rawRepresentation`
     /// already is, so Android's DER conversion has no counterpart here.
     package func sign(_ data: Data) async throws -> Data {
-        try key().signature(for: data).rawRepresentation
+        let key = try key()
+        do {
+            return try key.signature(for: data).rawRepresentation
+        } catch {
+            // A raw CryptoKit error would reach the app as an untyped failure it cannot act on
+            // (`spec/errors.md`): a locked device is `unlockRequired`, the key intact.
+            if case .enclave = key { throw Self.typed(signingError: error, store: store) }
+            throw error
+        }
+    }
+
+    /// What a failed enclave signature means to the app. The enclave key is usable once the
+    /// device has been unlocked since boot (`AfterFirstUnlock`), so the failure that matters is a
+    /// refusal before that or while the store is out of reach: `unlockRequired`, never a reason to
+    /// destroy the key under a live grant. CryptoKit's error shape for that refusal is not
+    /// documented, so when the status cannot be read off it the Keychain is asked directly: the
+    /// key's own store item has the same class, and says plainly whether it is reachable.
+    /// Anything else is reported as the hardware being unable to sign, which names no key material.
+    static func typed(signingError error: Error, store: any DpopKeyStore) -> OAuthError {
+        if let status = KeychainFailure.status(of: error), KeychainFailure.isUnavailableForNow(status) {
+            return .recoverable(.unlockRequired)
+        }
+        if case .recoverable(.unlockRequired)? = (error as? OAuthError) { return .recoverable(.unlockRequired) }
+        do { _ = try store.load() } catch let probed as OAuthError {
+            if case .recoverable(.unlockRequired) = probed { return probed }
+        } catch {}
+        return .configuration(.hardwareBindingUnavailable(detail: "the Secure Enclave could not sign the proof"))
     }
 
     /// Deletes the persisted key and forgets it: the next proof is signed by a freshly
@@ -182,6 +233,11 @@ package actor SecureEnclaveDpopKey: DpopSigningKey {
         } catch let error as OAuthError {
             throw error
         } catch {
+            // A key the enclave cannot open because the device is locked is not a key that is
+            // unreadable: reporting it as such would send the app to destroy it.
+            if let status = KeychainFailure.status(of: error), KeychainFailure.isUnavailableForNow(status) {
+                throw OAuthError.recoverable(.unlockRequired)
+            }
             throw OAuthError.configuration(.hardwareBindingUnavailable(detail: "the stored DPoP key is not readable"))
         }
     }
@@ -191,9 +247,18 @@ package actor SecureEnclaveDpopKey: DpopSigningKey {
             // Runtime fall-through, as Android's StrongBox to TEE: a device that reports an
             // enclave can still refuse a key (an unsigned test host), and what happens then is
             // the app's `requireHardware`, not a crash.
-            if let enclave = try? SecureEnclave.P256.Signing.PrivateKey() {
+            do {
+                let enclave = try makeEnclaveKey()
                 try store.save(Data([Tag.secureEnclave.rawValue]) + enclave.dataRepresentation)
                 return .enclave(enclave)
+            } catch {
+                // A device that is merely locked is not one that refuses keys: falling through
+                // here would persist a software key for good because of a passing condition.
+                if let status = KeychainFailure.status(of: error), KeychainFailure.isUnavailableForNow(status) {
+                    throw OAuthError.recoverable(.unlockRequired)
+                }
+                // A failure to persist the new key is the store's, not the enclave's.
+                if error is OAuthError { throw error }
             }
             logger?.warn("the Secure Enclave refused to generate a key")
         }

@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Security
 
@@ -28,6 +29,35 @@ enum KeychainAccessibility: Sendable, Equatable {
     }
 }
 
+/// Which Keychain and Secure Enclave failures are the store being out of reach, not broken.
+enum KeychainFailure {
+    /// The statuses of a store that cannot be used right now and will be later, none of which
+    /// says anything about the item:
+    /// - `errSecInteractionNotAllowed` (-25308): the device is locked, or has not been unlocked
+    ///   since boot (an `AfterFirstUnlock` item before that first unlock, a `WhenUnlocked` one
+    ///   while locked).
+    /// - `errSecNotAvailable` (-25291): the Keychain is not available yet, which is early boot and
+    ///   the same wait.
+    /// - `errSecAuthFailed` (-25293): authentication to the store failed or was withheld, which on a
+    ///   locked device is the lock again; the app unlocks and retries.
+    /// Everything else (a missing entitlement, a malformed query, a corrupt item) is permanent and
+    /// stays `invalidConfiguration`: signing the user out for the first and calling the second
+    /// "retry later" would each be the wrong answer.
+    static func isUnavailableForNow(_ status: OSStatus) -> Bool {
+        status == errSecInteractionNotAllowed || status == errSecNotAvailable || status == errSecAuthFailed
+    }
+
+    /// The `OSStatus` inside an error that crossed CryptoKit or Security, when it carries one.
+    /// CryptoKit reports the Secure Enclave's refusals as `underlyingCoreCryptoError`; Security
+    /// bridged errors are an `NSError` in the OSStatus domain.
+    static func status(of error: Error) -> OSStatus? {
+        if let crypto = error as? CryptoKitError, case .underlyingCoreCryptoError(let status) = crypto { return status }
+        let bridged = error as NSError
+        if bridged.domain == NSOSStatusErrorDomain { return OSStatus(truncatingIfNeeded: bridged.code) }
+        return nil
+    }
+}
+
 /// One generic-password item, and the only code that talks to `SecItem*`. Value type with no
 /// state: the stores serialise their own calls as actors.
 struct KeychainItem: Sendable {
@@ -46,9 +76,11 @@ struct KeychainItem: Sendable {
     static func service(forStorageKey storageKey: String) -> String { "versola.oauth.\(storageKey)" }
 
     /// The statuses that mean something to the SDK; the code never reaches for the data of a
-    /// failure, and the detail is the number only.
+    /// failure, and the detail is the number only. A status that says the store is out of reach
+    /// for now (`KeychainFailure.isUnavailableForNow`) is `unlockRequired`, the grant intact; any
+    /// other is a fault no retry changes.
     static func error(for status: OSStatus) -> OAuthError {
-        if status == errSecInteractionNotAllowed { return .recoverable(.unlockRequired) }
+        if KeychainFailure.isUnavailableForNow(status) { return .recoverable(.unlockRequired) }
         return .configuration(.invalidConfiguration(detail: "keychain error \(status)"))
     }
 
