@@ -102,7 +102,7 @@ reporting the change as finished.
   verification, DPoP proof checks, Keychain / Keystore protection) for any reason, including to
   make a test or a provider work.
 - Changing a normative rule in `spec/` that a merged implementation already follows.
-- Tagging, publishing, or flipping a job in `release.yml` from `if: false`.
+- Tagging (a pushed `X.Y.Z` tag releases), publishing, or flipping a job in `publish-pubdev.yml` or the dormant jobs of `release.yml` from `if: false`.
 
 ## Test Coverage Rules
 

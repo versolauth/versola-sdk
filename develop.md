@@ -112,7 +112,7 @@ cd example/android && ./gradlew :versola_oauth:testDebugUnitTest                
 ```
 
 The example's Android build includes `android/` as a composite build and substitutes the
-`kz.versola:oauth-android` artefact, which is not published yet, with the `:oauth` project; it
+`io.versola:oauth-android` artefact, which is not published yet, with the `:oauth` project; it
 needs the same `JAVA_HOME` (21) and `ANDROID_HOME` as the Android build. The iOS half depends on
 the repository package by path (Swift Package Manager only; the SDK is not on CocoaPods).
 
@@ -128,7 +128,7 @@ publishes nowhere: it writes the Maven bundle that would be uploaded to a local 
 
 ```bash
 ./gradlew centralBundle -PreleaseVersion=0.1.0 -PallowUnsignedBundle   # android/build/central-bundle/versola-0.1.0.zip
-tools/check-release-version.sh v0.1.0                                    # from the repository root; reads files only
+tools/check-release-version.sh 0.1.0                                     # from the repository root; reads files only
 ```
 
 ### Spec and Markdown

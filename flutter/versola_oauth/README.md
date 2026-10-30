@@ -1,7 +1,7 @@
 # versola_oauth
 
 The Versola generic OAuth 2.0 / OpenID Connect SDK for Flutter: a binding over the native
-Android (`kz.versola:oauth-android`) and iOS (`VersolaOAuth`) SDKs of this repository. The API is
+Android (`io.versola:oauth-android`) and iOS (`VersolaOAuth`) SDKs of this repository. The API is
 `spec/oauth-sdk-api.md` section 13 in Dart; the behaviour is the native SDKs', proven by the same
 conformance scenarios. No protocol logic runs in Dart (`.claude/rules/flutter.md`).
 
@@ -43,7 +43,7 @@ payload is the native case.
 
 - **Android**: declare the redirect URI on `versola.sdk.browser.VersolaRedirectActivity` in the
   app manifest (`example/android/app/src/main/AndroidManifest.xml` shows the verified App Link
-  snippet). `minSdk` 26. Until `kz.versola:oauth-android` is published, the app's
+  snippet). `minSdk` 26. Until `io.versola:oauth-android` is published, the app's
   `settings.gradle.kts` includes this repository's `android/` build with a dependency
   substitution, as the example does.
 - **iOS**: Swift Package Manager only (the SDK is not on CocoaPods). iOS 17.4 or newer. The

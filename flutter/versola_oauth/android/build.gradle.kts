@@ -1,4 +1,4 @@
-// The Android half of the versola_oauth plugin: glue over kz.versola:oauth-android, the
+// The Android half of the versola_oauth plugin: glue over io.versola:oauth-android, the
 // generic facade of this repository (android/oauth). The artefact is not published yet, so an
 // app resolves it from the repository itself with a composite build (example/android/settings.gradle.kts).
 group = "versola.oauth.flutter"
@@ -39,7 +39,7 @@ dependencies {
     // The generic facade; its state, errors and claims are what the bridge converts. The
     // version is nominal until the artefact is published: the composite build substitutes the
     // repository's :oauth project for these coordinates.
-    implementation("kz.versola:oauth-android:0.1.0")
+    implementation("io.versola:oauth-android:0.1.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 
     testImplementation("junit:junit:4.13.2")

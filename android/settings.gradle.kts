@@ -31,10 +31,10 @@ include(":browser")
 include(":okhttp")
 // The facade module. Added in #5 rather than #4 because the entry point in #1 §1 has to see
 // the browser and the store at once, and neither may depend on the other. It is also the
-// module the single published artifact (kz.versola:versola-android) maps to.
+// module the single published artifact (io.versola:versola-android) maps to.
 include(":sdk")
 // The generic facade (issue #46, spec/oauth-sdk-api.md): OAuthClient over the same protocol
-// core, for any conforming provider. Published as kz.versola:oauth-android.
+// core, for any conforming provider. Published as io.versola:oauth-android.
 include(":oauth")
 // The conformance driver (#15): instrumented tests only, driving the SDK against a staged
 // auth + central + edge from an emulator. Nothing is published from it.

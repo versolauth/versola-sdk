@@ -2,7 +2,7 @@
 // protocol core as the Versola facade (ADR 0001). It knows no Versola endpoint: configuration
 // is an issuer (or explicit endpoints) and a client id, defaults are the standards' (Bearer,
 // PAR when advertised), and provider differences are capabilities read from discovery
-// (spec/providers.md). This is the module kz.versola:oauth-android maps to.
+// (spec/providers.md). This is the module io.versola:oauth-android maps to.
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
@@ -75,7 +75,7 @@ apiValidation {
     nonPublicMarkers.add("versola.oauth.core.VersolaInternalApi")
 }
 
-// Published (gradle/publishing.gradle.kts): the coordinates are kz.versola:oauth-android.
+// Published (gradle/publishing.gradle.kts): the coordinates are io.versola:oauth-android.
 extra["publishing.artifactId"] = "oauth-android"
 extra["publishing.name"] = "Versola OAuth for Android"
 extra["publishing.description"] = "OAuth 2.0 / OpenID Connect client for Android that works with any conforming provider: authorization code with PKCE, ID-token validation, single-flight refresh, secure storage."

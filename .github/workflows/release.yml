@@ -1,18 +1,22 @@
 name: release
 
-# Wired but dormant (#4, B7 of #46): every job below is gated off with `if: false`. Releasing is the
-# maintainer's act, end to end: the credentials, the tag, the GitHub release that triggers this file
-# and flipping a job's condition on are all theirs (docs/releasing.md has the runbook and what has
-# to exist first). Nothing in this file has run on GitHub: the maintainer's first release is its
-# first run, which is why the Central upload is USER_MANAGED (a deployment that waits in the Portal
-# and can be dropped) and why docs/releasing.md has the maintainer look at a local bundle first.
+# A release is a tag. Pushing a tag `X.Y.Z` (0.1.0, no `v`: the tag is the version) runs this file:
+# the three platforms are checked against the tag, the Android artefacts are signed and uploaded to
+# the Maven Central Portal, the Swift package is proven to resolve and build at the tag, and a
+# GitHub release is created with generated notes. docs/releasing.md has the runbook and what has
+# to exist first (the Central namespace, the signing key and the four secrets).
 #
-# The pub.dev job lives in publish-pubdev.yml: pub.dev authenticates a workflow by the tag push
-# that triggered it, and this file is triggered by a published release.
+# Nothing in this file has run on GitHub yet: the first tag is its first run, which is why the
+# Central upload is USER_MANAGED (a deployment that waits in the Portal for a click and can be
+# dropped there) and why docs/releasing.md has the maintainer look at a local bundle first.
+#
+# The pub.dev job lives in publish-pubdev.yml (it is dormant: the first publish is by hand).
+# CocoaPods and npm below are dormant too: there is no podspec and no React Native package.
 
 on:
-  release:
-    types: [published]
+  push:
+    tags:
+      - "[0-9]+.[0-9]+.[0-9]+"
 
 permissions:
   contents: read
@@ -22,25 +26,35 @@ jobs:
   # the Android artefacts take it from the tag, SwiftPM resolves the tag, pub.dev publishes the
   # pubspec's. tools/check-release-version.sh reads files only.
   verify-version:
-    if: false
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The whole history, so the next step can ask whether the tagged commit is on main.
+          fetch-depth: 0
+      # Anyone who can push a tag would otherwise be able to publish any branch. A release is cut
+      # from main; a tag on a commit that main does not contain is refused before anything is built.
+      - name: The tagged commit is on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
       - name: Tag, pubspec, plugin pin and changelog agree
         run: tools/check-release-version.sh "$RELEASE_TAG"
         env:
           # Through env, never interpolated into the script: a tag name is attacker-shaped input
-          # to anything that runs it as shell (ci-release.md). The script matches vX.Y.Z only.
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          # to anything that runs it as shell (ci-release.md). The script matches X.Y.Z only.
+          RELEASE_TAG: ${{ github.ref_name }}
 
-  # Six artefacts under kz.versola (docs/releasing.md has the list and why each exists):
-  # `oauth-android` and the five modules its POM names. The Central Portal takes one signed zip in Maven layout; this job builds it
-  # and uploads it as USER_MANAGED, so the deployment waits in the Portal for the maintainer's
-  # click and can be dropped there. Switching to AUTOMATIC is a later decision, not this file's.
+  # Six artefacts under io.versola (docs/releasing.md has the list and why each exists):
+  # `oauth-android` and the five modules its POM names. The Central Portal takes one signed zip in
+  # Maven layout; this job builds it and uploads it as USER_MANAGED, so the deployment waits in the
+  # Portal for the maintainer's click and can be dropped there. Central releases are immutable, and
+  # this upload has never run, so the first release is not AUTOMATIC; switching is a later decision.
   maven-central:
-    if: false
     needs: verify-version
     runs-on: ubuntu-latest
+    # The signing key and the Portal token are secrets of this environment (or of the repository).
+    # GitHub creates the environment on first use; adding required reviewers to it (Settings,
+    # Environments) puts a human between a pushed tag and the upload.
+    environment: maven-central
     defaults:
       run:
         working-directory: android
@@ -62,9 +76,9 @@ jobs:
         run: ./gradlew test lint apiCheck
 
       - name: Build the signed bundle
-        run: ./gradlew centralBundle -PreleaseVersion="${RELEASE_TAG#v}"
+        run: ./gradlew centralBundle -PreleaseVersion="$RELEASE_TAG"
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
           # The armoured private key and its passphrase, read in memory by the signing plugin; no
           # key file is written to the runner.
           ORG_GRADLE_PROJECT_signingKey: ${{ secrets.MAVEN_SIGNING_KEY }}
@@ -78,7 +92,7 @@ jobs:
         run: |
           token="$(printf '%s:%s' "$SONATYPE_USERNAME" "$SONATYPE_PASSWORD" | base64 | tr -d '\n')"
           echo "::add-mask::$token"
-          version="${RELEASE_TAG#v}"
+          version="$RELEASE_TAG"
           id="$(printf 'header = "Authorization: Bearer %s"\n' "$token" | curl --fail --silent --show-error \
             --config - -X POST \
             -F "bundle=@build/central-bundle/versola-${version}.zip" \
@@ -100,7 +114,7 @@ jobs:
           echo "::error::the deployment did not validate within ten minutes"
           exit 1
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_TAG: ${{ github.ref_name }}
           # A Central Portal user token (central.sonatype.com/account), not a login.
           SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
           SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
@@ -110,13 +124,29 @@ jobs:
   # consumer's `.package(url:, from:)` will do. The simulator name drifts with the runner's Xcode
   # (ios.yml says so).
   swiftpm:
-    if: false
     needs: verify-version
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: swift package resolve
       - run: xcodebuild build -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 17"
+
+  # The GitHub release for the tag, with notes generated from the merged pull requests. Created
+  # only after the Android bundle validated and the Swift package built at the tag, so a failed
+  # run leaves a tag and no release. `gh` ships on the runner; no third-party action receives the
+  # write token. The Central deployment is USER_MANAGED, so the artefacts reach Central when the
+  # maintainer publishes the validated deployment in the Portal, not when this job ends.
+  github-release:
+    needs: [maven-central, swiftpm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create the release
+        run: gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --verify-tag --title "$RELEASE_TAG" --generate-notes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
 
   # CocoaPods is dormant (ios-swift.md): there is no podspec, and the plugin's iOS half is SwiftPM
   # only. Kept so the pipeline shape exists if the maintainer ever wants it.

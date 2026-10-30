@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Refuses a release tag that disagrees with what the three platforms would publish.
 #
-#   tools/check-release-version.sh v0.1.0
+#   tools/check-release-version.sh 0.1.0
 #
 # One version for every platform while the project is 0.x (docs/releasing.md): the Android
 # artefacts take it from the tag (-PreleaseVersion), SwiftPM resolves the tag itself, and pub.dev
@@ -10,9 +10,9 @@
 # changelog and fails on any disagreement. Run from the repository root; reads files only.
 set -euo pipefail
 
-tag="${1:?usage: check-release-version.sh vX.Y.Z}"
-if [[ ! "$tag" =~ ^v([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
-  echo "not a release tag: '$tag' (expected vX.Y.Z)" >&2
+tag="${1:?usage: check-release-version.sh X.Y.Z}"
+if [[ ! "$tag" =~ ^([0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+  echo "not a release tag: '$tag' (expected X.Y.Z, no leading v)" >&2
   exit 1
 fi
 version="${BASH_REMATCH[1]}"
@@ -28,7 +28,7 @@ check() { # description, actual
 pubspec="$(sed -n 's/^version: *//p' flutter/versola_oauth/pubspec.yaml | head -1 | tr -d '\r')"
 check "flutter/versola_oauth/pubspec.yaml version" "$pubspec"
 
-pinned="$(sed -n 's/.*"kz\.versola:oauth-android:\([^"]*\)".*/\1/p' flutter/versola_oauth/android/build.gradle.kts | head -1)"
+pinned="$(sed -n 's/.*"io\.versola:oauth-android:\([^"]*\)".*/\1/p' flutter/versola_oauth/android/build.gradle.kts | head -1)"
 check "the oauth-android version the Flutter plugin depends on" "$pinned"
 
 if ! grep -qE "^## ${version//./\\.}( |$)" flutter/versola_oauth/CHANGELOG.md; then

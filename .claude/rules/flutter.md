@@ -20,7 +20,7 @@ in `security.md`; what the platform SDKs do is in `android-kotlin.md` and `ios-s
   SDK's public API (not its `@VersolaInternalApi` wiring) and converts types. It contains no
   protocol logic either, and it adds no second copy of the Android or iOS rules.
 - The native SDKs are consumed as this repository's own builds: the Android half depends on
-  `kz.versola:oauth-android`, which the example app's `settings.gradle.kts` substitutes with the
+  `io.versola:oauth-android`, which the example app's `settings.gradle.kts` substitutes with the
   `:oauth` project through a composite build until the artefact is published; the iOS half depends
   on the root `Package.swift` by path (SwiftPM only, no podspec: CocoaPods is dormant). Both pins
   (AGP and Kotlin in the example, the iOS floor in the plugin's `Package.swift`) follow the

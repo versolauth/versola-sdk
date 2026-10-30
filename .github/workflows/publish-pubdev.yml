@@ -1,11 +1,11 @@
 name: publish-pubdev
 
-# versola_oauth on pub.dev. Dormant like release.yml (`if: false`): publishing is the maintainer's
-# act, and docs/releasing.md says what has to exist first.
+# versola_oauth on pub.dev. Dormant (`if: false`): the first publish is by hand and flipping this on
+# is the maintainer's pull request; docs/releasing.md says what has to exist first.
 #
 # A separate file because pub.dev authenticates a workflow by the tag push that triggered it
-# ("automated publishing" on the package's admin page, tag pattern `v{{version}}`), and rejects a
-# run that was not triggered by a tag. release.yml is triggered by a published release instead.
+# ("automated publishing" on the package's admin page, tag pattern `{{version}}`), and rejects a
+# run that was not triggered by a tag. release.yml runs on the same tag; the two are independent.
 #
 # Two things this file cannot settle from here, both for the maintainer's first run:
 #  - The automated-publishing switch exists only after a package has been published once, so the
@@ -18,7 +18,7 @@ name: publish-pubdev
 on:
   push:
     tags:
-      - "v[0-9]+.[0-9]+.[0-9]+"
+      - "[0-9]+.[0-9]+.[0-9]+"
 
 permissions:
   contents: read
@@ -59,7 +59,7 @@ jobs:
       # published plugin has to name the tag (tools/flutter-prepare-publish.sh). The change is
       # this job's working copy only, never committed.
       - name: Point the iOS half at the release tag
-        run: tools/flutter-prepare-publish.sh "${RELEASE_TAG#v}"
+        run: tools/flutter-prepare-publish.sh "$RELEASE_TAG"
         env:
           RELEASE_TAG: ${{ github.ref_name }}
 

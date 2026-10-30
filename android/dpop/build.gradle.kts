@@ -69,7 +69,7 @@ apiValidation {
     nonPublicMarkers.add("versola.oauth.core.VersolaInternalApi")
 }
 
-// Published (gradle/publishing.gradle.kts): the coordinates are kz.versola:dpop-android.
+// Published (gradle/publishing.gradle.kts): the coordinates are io.versola:dpop-android.
 extra["publishing.artifactId"] = "dpop-android"
 extra["publishing.name"] = "Versola DPoP (Android)"
 extra["publishing.description"] = "Hardware-backed DPoP key and proof generation (RFC 9449) for the Versola OAuth SDKs on Android."

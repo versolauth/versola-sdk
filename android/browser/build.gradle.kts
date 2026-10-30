@@ -67,7 +67,7 @@ apiValidation {
     nonPublicMarkers.add("versola.oauth.core.VersolaInternalApi")
 }
 
-// Published (gradle/publishing.gradle.kts): the coordinates are kz.versola:browser-android.
+// Published (gradle/publishing.gradle.kts): the coordinates are io.versola:browser-android.
 extra["publishing.artifactId"] = "browser-android"
 extra["publishing.name"] = "Versola browser leg (Android)"
 extra["publishing.description"] = "Auth Tab and Custom Tabs authorization sessions and the redirect activity for the Versola OAuth SDKs on Android."

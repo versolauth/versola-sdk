@@ -76,7 +76,7 @@ afterEvaluate {
                     developer {
                         id.set("versolauth")
                         name.set("Versola")
-                        url.set("https://versola.kz")
+                        url.set("https://versola.io")
                     }
                 }
                 scm {

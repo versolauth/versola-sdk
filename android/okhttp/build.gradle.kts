@@ -48,7 +48,7 @@ apiValidation {
     nonPublicMarkers.add("versola.oauth.core.VersolaInternalApi")
 }
 
-// Published (gradle/publishing.gradle.kts): the coordinates are kz.versola:okhttp-android.
+// Published (gradle/publishing.gradle.kts): the coordinates are io.versola:okhttp-android.
 extra["publishing.artifactId"] = "okhttp-android"
 extra["publishing.name"] = "Versola OkHttp integration (Android)"
 extra["publishing.description"] = "OkHttp interceptor that attaches the access token, with DPoP proofs, to requests for configured origins."
