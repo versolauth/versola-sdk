@@ -25,24 +25,45 @@ import android.os.Bundle
  * </activity>
  * ```
  *
- * It holds no state of its own. Everything needed to finish the flow was persisted before the
- * browser opened, so a redirect arriving at a cold-started process completes exactly as one
- * arriving at a live process does.
+ * It holds no state of its own beyond the redirect the login in progress expects. Everything
+ * needed to finish the flow was persisted before the browser opened, so a redirect arriving at
+ * a cold-started process completes exactly as one arriving at a live process does.
+ *
+ * Any app can start this activity with an explicit intent, which skips the intent filter above:
+ * an intent for a URI other than the redirect the login in progress waits for is ignored
+ * (scheme, host, port and path are compared, not the query).
  */
 public class VersolaRedirectActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        intent?.data?.let { RedirectDispatcher.deliver(it.toString()) }
+        handle(intent)
+    }
 
-        // The Custom Tab is still on top of its own task. Bringing the app's task forward
-        // with CLEAR_TOP dismisses it and lands the user back where they started — and on a
-        // cold start, starts the app, which is what makes the killed-mid-browser case
-        // (scenario 12) look ordinary to the user.
-        packageManager.getLaunchIntentForPackage(packageName)?.let { launch ->
-            launch.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-            startActivity(launch)
+    // singleTask: a redirect arriving while this instance exists comes here, not to onCreate.
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handle(intent)
+    }
+
+    private fun handle(intent: Intent?) {
+        val uri = intent?.data?.toString()
+        if (uri == null || !RedirectDispatcher.accepts(uri)) {
+            // Not a response: see [RedirectDispatcher.accepts]. Nothing is delivered and the app
+            // is not brought forward on its account; the login it did not answer carries on.
+            RedirectDispatcher.noteIgnoredIntent()
+            finish()
+            return
         }
+        RedirectDispatcher.deliver(uri)
+
+        // The Custom Tab is still on top of its own task, so the app's task is brought forward
+        // to land the user back where they started — and on a cold start that starts the app,
+        // which is what makes the killed-mid-browser case (scenario 12) look ordinary to the
+        // user. No CLEAR_TOP: it would also finish every screen above the launcher, including
+        // the one `login()` was called from, and with it the scope the caller was waiting in.
+        packageManager.getLaunchIntentForPackage(packageName)?.let { startActivity(it) }
         finish()
     }
 }

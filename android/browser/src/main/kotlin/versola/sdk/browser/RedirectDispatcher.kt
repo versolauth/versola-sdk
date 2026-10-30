@@ -1,5 +1,6 @@
 package versola.sdk.browser
 
+import android.net.Uri
 import kotlinx.coroutines.channels.Channel
 import versola.oauth.core.BrowserOutcome
 import versola.oauth.core.VersolaError
@@ -28,6 +29,59 @@ internal object RedirectDispatcher {
     var redirectDelivered: Boolean = false
         private set
 
+    /**
+     * The redirect the browser leg in progress waits for, set by the session before it opens
+     * the browser and read by [accepts]. Null when no leg has said what to expect: a process
+     * the redirect itself started, or a leg with no redirect URI. Process-wide like the
+     * channel, and forgotten with it by [drain].
+     */
+    @Volatile
+    private var expected: String? = null
+
+    /** The redirect the browser leg about to open will deliver; see [accepts]. */
+    fun expect(redirectUri: String?) {
+        expected = redirectUri
+    }
+
+    /**
+     * Whether an intent that reached the exported [VersolaRedirectActivity] is the redirect
+     * the login waits for. Any app can start that activity with an explicit intent, which
+     * skips the intent filter the OS applies to a browser's, so without this a URI like
+     * `anything://x?state=junk` would be taken for the response: it fails the login as a
+     * state mismatch, wipes the pending request, and (through [redirectDelivered]) silences
+     * the cancel detector.
+     *
+     * Scheme, host, port and path must be the configured redirect's; the query is the
+     * response itself and is not compared. A response that matches and carries the wrong
+     * `state` is still delivered: that is the state mismatch the spec requires to fail.
+     * With nothing expected the intent is accepted, as before, and the persisted request
+     * does the validating.
+     */
+    fun accepts(uri: String): Boolean {
+        val redirect = expected ?: return true
+        return sameRedirect(redirect, uri)
+    }
+
+    /**
+     * Set when [VersolaRedirectActivity] dropped an intent that was not the awaited redirect.
+     * Starting that activity raises the app's task over the open tab, so the host resumes
+     * without the user having closed anything: [ForegroundReturnDetector] must not read that
+     * resume as a dismissal, or the foreign intent ends the login after all.
+     */
+    @Volatile
+    private var ignoredIntentPending = false
+
+    fun noteIgnoredIntent() {
+        ignoredIntentPending = true
+    }
+
+    /** Whether a resume is the aftermath of an ignored intent; true at most once per intent. */
+    fun consumeIgnoredIntent(): Boolean {
+        val pending = ignoredIntentPending
+        ignoredIntentPending = false
+        return pending
+    }
+
     fun deliver(uri: String) {
         redirectDelivered = true
         outcomes.trySend(Result.success(BrowserOutcome.Redirect(uri)))
@@ -55,8 +109,32 @@ internal object RedirectDispatcher {
      */
     fun drain() {
         redirectDelivered = false
+        ignoredIntentPending = false
+        expected = null
         while (outcomes.tryReceive().isSuccess) {
             // discard
         }
     }
+}
+
+/**
+ * Whether [actual] is [expected] as a redirect: scheme and host without case, the port with a
+ * scheme's default folded away, the path exactly. A private-use scheme with no host compares
+ * on scheme and path alone. A URI that dresses another host up with userinfo
+ * (`https://app.example.com@evil.example.org/`) is compared on the host the OS would route to.
+ */
+internal fun sameRedirect(expected: String, actual: String): Boolean {
+    val a = Uri.parse(expected)
+    val b = Uri.parse(actual)
+    return a.scheme.equals(b.scheme, ignoreCase = true) &&
+        a.host.equals(b.host, ignoreCase = true) &&
+        effectivePort(a) == effectivePort(b) &&
+        a.path.orEmpty() == b.path.orEmpty()
+}
+
+private fun effectivePort(uri: Uri): Int = when {
+    uri.port != -1 -> uri.port
+    uri.scheme.equals("https", ignoreCase = true) -> 443
+    uri.scheme.equals("http", ignoreCase = true) -> 80
+    else -> -1
 }

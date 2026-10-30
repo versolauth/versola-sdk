@@ -171,6 +171,28 @@ class BrowserLegTest(private val leg: String) {
         harness.awaitLog("login: ok")
     }
 
+    @Test
+    fun aRedirectToAnotherUriIsIgnoredAndTheLoginStillCompletes() {
+        startLogin()
+        harness.awaitLoginForm()
+
+        // Another app firing the exported redirect activity with a URI that is not the
+        // redirect the login waits for: it must neither fail the login nor end it.
+        harness.shell(
+            "am start -W -a android.intent.action.VIEW -n ${Harness.HOST}/versola.sdk.browser.VersolaRedirectActivity " +
+                "-d anything://x?code=forged&state=forged",
+        )
+        Thread.sleep(SETTLE_MILLIS)
+
+        val log = harness.log()
+        assertFalse("a foreign redirect is not a response\n$log", "login: failed" in log)
+        assertFalse("no sign-in happened\n$log", "state: Authenticated" in log)
+        if ("CustomTabActivity" !in harness.topActivity()) harness.returnToBrowser()
+        harness.signInAtProvider()
+        harness.awaitLog("login: ok")
+        assertTrue("signed in after the foreign intent", "state: Authenticated" in harness.log())
+    }
+
     private fun startLogin() {
         harness.tap("login")
         harness.awaitLog("state: Authorizing")

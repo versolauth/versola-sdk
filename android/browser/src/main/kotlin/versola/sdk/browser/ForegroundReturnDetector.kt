@@ -52,6 +52,13 @@ internal class ForegroundReturnDetector(
         // redirect has been delivered every subsequent resume belongs to it.
         if (!armed || !leftForeground) return
         if (activity is VersolaRedirectActivity || RedirectDispatcher.redirectDelivered) return
+        // The app was raised by an intent that was not the redirect (another app firing the
+        // exported activity), not by the user closing the tab. The app is in front now, so the
+        // next return is only a return after the next time it leaves.
+        if (RedirectDispatcher.consumeIgnoredIntent()) {
+            leftForeground = false
+            return
+        }
         armed = false
         onReturnedWithoutRedirect()
     }
