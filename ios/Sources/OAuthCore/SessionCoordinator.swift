@@ -268,6 +268,14 @@ package actor SessionCoordinator: AccessTokenSource {
             // step-up from `stepUpRequired`; a flight's own state is never somewhere to return to.
             let current = await flow.states.current
             let priorState: SessionState = current == .refreshing ? .authenticated : current
+            // Nothing to spend is not a refresh that failed: no `refreshing` is published, and
+            // nothing is torn down (see `settleWithoutGrant`). Asked without the storage key.
+            do {
+                guard try await credentialStore.hasGrant() else { throw await settleWithoutGrant(from: priorState) }
+            } catch let error as OAuthError {
+                if case .recoverable(.unlockRequired) = error { await flow.setState(.locked) }
+                throw error
+            }
             await flow.setState(.refreshing)
             return try await performRefresh(startedIn: startedIn, priorState: priorState)
         }
@@ -288,7 +296,7 @@ package actor SessionCoordinator: AccessTokenSource {
             if let pending = try await credentialStore.pendingRotation() {
                 idempotencyKey = pending
             } else {
-                guard let token = try await credentialStore.refreshToken() else { throw Self.noGrantStored() }
+                guard let token = try await credentialStore.refreshToken() else { throw NoGrantStored() }
                 idempotencyKey = Self.idempotencyKey(for: token)
                 try await credentialStore.savePendingRotation(idempotencyKey)
             }
@@ -310,7 +318,7 @@ package actor SessionCoordinator: AccessTokenSource {
             let issued = try await budget.execute(origin: origin, mayRepeat: mayRepeat) {
                 connection.reset()
                 // A fresh read per attempt: the token is read for the duration of one request.
-                guard let token = try await store.refreshToken() else { throw Self.noGrantStored() }
+                guard let token = try await store.refreshToken() else { throw NoGrantStored() }
                 return try await ConnectionFlag.$current.withValue(connection) {
                     try await tokenClient.refresh(refreshToken: token, idempotencyKey: idempotencyKey)
                 }
@@ -357,6 +365,9 @@ package actor SessionCoordinator: AccessTokenSource {
             return issued
         } catch is WipedMeanwhile {
             throw OAuthError.reauthenticate(.grantRejected)
+        } catch is NoGrantStored {
+            // The grant left the store between the check and the read: the same case.
+            throw await settleWithoutGrant(from: priorState)
         } catch let error as OAuthError {
             switch error {
             case .recoverable(let cause):
@@ -383,7 +394,27 @@ package actor SessionCoordinator: AccessTokenSource {
         if epoch == startedIn { await flow.setState(state) }
     }
 
-    private static func noGrantStored() -> OAuthError { .reauthenticate(.grantRejected) }
+    private struct NoGrantStored: Error {}
+
+    /// A refresh asked for while no grant is stored: before `resumePendingAuthorization()` has
+    /// finished a sign-in, after the item was removed from under the app, on a session that never
+    /// had one. The provider has said nothing, so this is not `invalid_grant` and is not the
+    /// teardown it earns (`wipe()`): that clears the pending authorization of a sign-in in
+    /// progress and destroys the DPoP key its `dpop_jkt` committed to, so the code exchange that
+    /// follows would sign with a key that matches nothing. The caller is told the grant is not
+    /// there; the state follows the facts (`unauthenticated` for a session that believed it had
+    /// one) except where a sign-in is in progress or none was ever begun, which stay as they are.
+    private func settleWithoutGrant(from prior: SessionState) async -> OAuthError {
+        switch prior {
+        case .authorizing, .unauthenticated:
+            break
+        default:
+            cachedAccessToken = nil
+            claims = nil
+            await flow.setState(.unauthenticated)
+        }
+        return .reauthenticate(.grantRejected)
+    }
 
     // MARK: - Logout
 

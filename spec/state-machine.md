@@ -242,6 +242,16 @@ Only on `invalid_grant`. Network failures, `use_dpop_nonce`, 429 and 5xx leave t
 Everything credential-shaped is wiped: refresh token, pending slot, nonce caches. The DPoP key
 follows the logout rule (below).
 
+A refresh asked for while **no grant is stored** is not this transition. The provider said
+nothing, so there is no `invalid_grant`: the call fails with `Reauthenticate(GrantRejected)`, no
+token request is made, `Refreshing` is never entered, and **nothing is wiped**. That teardown
+would clear the pending authorization of a sign-in in progress (an app that asks for a token
+before it has let the cold-start resume finish) and destroy the DPoP key that sign-in's
+`dpop_jkt` committed to, so the code exchange that followed would sign with a key matching
+nothing. The state stays `Authorizing` or `Unauthenticated` where it was; a session that believed
+it held a grant (the item was removed from under the app) settles `Unauthenticated`, its
+in-memory access token and claims dropped, the key and the pending request untouched.
+
 ### `Authenticated → Authenticated` — `invalid_dpop_proof`, then `Authenticated → Unauthenticated`
 
 A 401 with `invalid_dpop_proof` (token endpoint, UserInfo or edge — see

@@ -133,7 +133,7 @@ final class SessionCoordinatorTests: XCTestCase {
         TokenResponse(accessToken: "at-\(refresh ?? "none")-\(UUID().uuidString.prefix(4))", tokenType: "Bearer", expiresIn: expiresIn, refreshToken: refresh, idToken: idToken(subject: subject), scope: "openid")
     }
 
-    private func fixture(answers: [Result<TokenResponse, OAuthError>], policy: RefreshTokenPolicy = .optional, store: MemoryCredentials = MemoryCredentials(), retry: RetryPolicy? = nil, pending: PendingAuthorizationRequest? = nil, browser: ScriptedBrowser = ScriptedBrowser.answering(), clock injectedClock: TickingClock? = nil, validatorOverride: IdTokenValidator? = nil, repeatsAmbiguousRefresh: Bool = true, discoveryClient: DiscoveryClient? = nil) throws -> Fixture {
+    private func fixture(answers: [Result<TokenResponse, OAuthError>], policy: RefreshTokenPolicy = .optional, store: MemoryCredentials = MemoryCredentials(), retry: RetryPolicy? = nil, pending: PendingAuthorizationRequest? = nil, browser: ScriptedBrowser = ScriptedBrowser.answering(), clock injectedClock: TickingClock? = nil, validatorOverride: IdTokenValidator? = nil, repeatsAmbiguousRefresh: Bool = true, discoveryClient: DiscoveryClient? = nil, onCredentialsWiped: @escaping @Sendable () async throws -> Void = {}) throws -> Fixture {
         let clock = injectedClock ?? TickingClock(Date(timeIntervalSince1970: 1_700_000_000))
         let configuration = CoreConfiguration(issuer: Self.issuer, clientId: "mobile", redirectUri: URL(string: Self.redirect)!, postLogoutRedirectUri: URL(string: "https://app.example.com/signed-out"))
         let discovery = DiscoveryService(issuer: Self.issuer, client: discoveryClient ?? StaticDiscoveryClient(metadata: AuthzKit.metadata()), cache: MemoryMetadataCache())
@@ -149,7 +149,7 @@ final class SessionCoordinatorTests: XCTestCase {
         let coordinator = SessionCoordinator(
             flow: flow, tokenClient: tokens, credentialStore: store,
             retryPolicy: try retry ?? RetryPolicy(maxAttemptsPerOrigin: 2, maxTotalAttempts: 2, initialBackoff: 0, backoffMultiplier: 1, maxBackoff: 0, totalBudget: 10),
-            clock: Clock(now: { clock.peek() }, uptime: { clock.peekUptime() }), logger: logger, refreshTokens: policy, idTokenValidator: validatorOverride ?? validator,
+            clock: Clock(now: { clock.peek() }, uptime: { clock.peekUptime() }), onCredentialsWiped: onCredentialsWiped, logger: logger, refreshTokens: policy, idTokenValidator: validatorOverride ?? validator,
             repeatsAmbiguousRefresh: repeatsAmbiguousRefresh
         )
         return Fixture(coordinator: coordinator, flow: flow, store: store, tokens: tokens, validator: validator, logger: logger, clock: clock, pendingStore: pendingStore)
@@ -515,6 +515,72 @@ final class SessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(state, .locked)
         let stored = await f.store.refresh
         XCTAssertEqual(stored, "rt-1")
+    }
+
+    // MARK: - Refresh with no grant
+
+    private func pendingRequest() -> PendingAuthorizationRequest {
+        PendingAuthorizationRequest(state: "state-1", nonce: "nonce-1", codeVerifier: "verifier-1", scopes: ["openid"], redirectUri: Self.redirect, createdAt: Date(), issRequired: false)
+    }
+
+    /// Bootstrap code that asks for a token before `resumePendingAuthorization()` has run must
+    /// not lose the sign-in the user is in the middle of.
+    func testAnAccessTokenAskedForWithNoGrantLeavesAPendingAuthorizationAndTheKeyAlone() async throws {
+        let wipes = Box(0)
+        let f = try fixture(answers: [], pending: pendingRequest(), onCredentialsWiped: { await wipes.set(wipes.value + 1) })
+        try await f.flow.ensureRestored()
+        let restored = await f.flow.states.current
+        XCTAssertEqual(restored, .authorizing)
+
+        do {
+            _ = try await f.coordinator.accessToken()
+            XCTFail("no error")
+        } catch let error as OAuthError {
+            XCTAssertEqual(error, .reauthenticate(.grantRejected))
+        }
+
+        let pending = await f.pendingStore.stored
+        XCTAssertEqual(pending?.state, "state-1", "the pending request is the sign-in in progress")
+        let wiped = await wipes.value
+        XCTAssertEqual(wiped, 0, "the DPoP key the pending request committed to is not destroyed")
+        let state = await f.flow.states.current
+        XCTAssertEqual(state, .authorizing, "the state is the one the pending request restored")
+        let calls = await f.tokens.calls
+        XCTAssertTrue(calls.isEmpty, "no token request without a token to spend")
+    }
+
+    func testAGrantThatVanishedFromTheStoreEndsTheSessionWithoutTearingDownTheKeyOrThePendingRequest() async throws {
+        let wipes = Box(0)
+        let f = try fixture(answers: [.success(response(refresh: "rt-1", expiresIn: 60))], onCredentialsWiped: { await wipes.set(wipes.value + 1) })
+        try await f.coordinator.login(scopes: ["openid"])
+        try await f.store.clear()
+        f.clock.advance(61)
+
+        do {
+            _ = try await f.coordinator.accessToken()
+            XCTFail("no error")
+        } catch let error as OAuthError {
+            XCTAssertEqual(error, .reauthenticate(.grantRejected))
+        }
+
+        let state = await f.flow.states.current
+        XCTAssertEqual(state, .unauthenticated, "nothing is held any more, and the state says so")
+        let wiped = await wipes.value
+        XCTAssertEqual(wiped, 0)
+        let claims = await f.coordinator.claims
+        XCTAssertNil(claims)
+    }
+
+    func testARejectedGrantStillWipesTheKeyAsLogoutDoes() async throws {
+        let wipes = Box(0)
+        let f = try fixture(answers: [.success(response(refresh: "rt-1", expiresIn: 60)), .failure(.reauthenticate(.grantRejected))], onCredentialsWiped: { await wipes.set(wipes.value + 1) })
+        try await f.coordinator.login(scopes: ["openid"])
+        f.clock.advance(61)
+
+        _ = try? await f.coordinator.accessToken()
+
+        let wiped = await wipes.value
+        XCTAssertEqual(wiped, 1, "invalid_grant is the provider saying the grant is gone: a different case from never having one")
     }
 
     // MARK: - Refresh: the ID token is judged after the rotation is kept
