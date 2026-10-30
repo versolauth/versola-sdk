@@ -7,8 +7,9 @@ name: release
 # to exist first (the Central namespace, the signing key and the four secrets).
 #
 # Nothing in this file has run on GitHub yet: the first tag is its first run, which is why the
-# Central upload is USER_MANAGED (a deployment that waits in the Portal for a click and can be
-# dropped there) and why docs/releasing.md has the maintainer look at a local bundle first.
+# Central upload is USER_MANAGED by default (a deployment that waits in the Portal for a click and
+# can be dropped there; the repository variable MAVEN_CENTRAL_PUBLISHING_TYPE=AUTOMATIC publishes
+# on validation instead) and why docs/releasing.md has the maintainer look at a local bundle first.
 #
 # The pub.dev job lives in publish-pubdev.yml (it is dormant: the first publish is by hand).
 # CocoaPods and npm below are dormant too: there is no podspec and no React Native package.
@@ -45,9 +46,11 @@ jobs:
 
   # Six artefacts under io.versola (docs/releasing.md has the list and why each exists):
   # `oauth-android` and the five modules its POM names. The Central Portal takes one signed zip in
-  # Maven layout; this job builds it and uploads it as USER_MANAGED, so the deployment waits in the
-  # Portal for the maintainer's click and can be dropped there. Central releases are immutable, and
-  # this upload has never run, so the first release is not AUTOMATIC; switching is a later decision.
+  # Maven layout; this job builds it and uploads it as USER_MANAGED unless the repository variable
+  # MAVEN_CENTRAL_PUBLISHING_TYPE says AUTOMATIC (Settings, Secrets and variables, Variables). A
+  # USER_MANAGED deployment waits in the Portal for the maintainer's click and can be dropped there;
+  # an AUTOMATIC one is published as soon as Central validates it, and Central releases are
+  # immutable. Switch only once a USER_MANAGED release has gone through.
   maven-central:
     needs: verify-version
     runs-on: ubuntu-latest
@@ -86,17 +89,21 @@ jobs:
 
       # Central Portal Publisher API (https://central.sonatype.com/api/v1/publisher/upload):
       # `Authorization: Bearer base64(user:password)` with a Portal user token, a multipart part
-      # named `bundle`, `publishingType=USER_MANAGED`. The token goes to curl on stdin as a
+      # named `bundle`, `publishingType` USER_MANAGED or AUTOMATIC. The token goes to curl on stdin as a
       # config file, so it never appears in a process list or in the log, and is masked anyway.
-      - name: Upload the bundle (USER_MANAGED)
+      - name: Upload the bundle
         run: |
           token="$(printf '%s:%s' "$SONATYPE_USERNAME" "$SONATYPE_PASSWORD" | base64 | tr -d '\n')"
           echo "::add-mask::$token"
           version="$RELEASE_TAG"
+          case "$PUBLISHING_TYPE" in
+            USER_MANAGED|AUTOMATIC) ;;
+            *) echo "::error::MAVEN_CENTRAL_PUBLISHING_TYPE must be USER_MANAGED or AUTOMATIC"; exit 1 ;;
+          esac
           id="$(printf 'header = "Authorization: Bearer %s"\n' "$token" | curl --fail --silent --show-error \
             --config - -X POST \
             -F "bundle=@build/central-bundle/versola-${version}.zip" \
-            "https://central.sonatype.com/api/v1/publisher/upload?name=versola-${version}&publishingType=USER_MANAGED")"
+            "https://central.sonatype.com/api/v1/publisher/upload?name=versola-${version}&publishingType=${PUBLISHING_TYPE}")"
           echo "deployment id: $id"
           # Validation takes a minute or two; wait for it so a rejected bundle fails this job
           # instead of sitting unnoticed in the Portal.
@@ -115,6 +122,7 @@ jobs:
           exit 1
         env:
           RELEASE_TAG: ${{ github.ref_name }}
+          PUBLISHING_TYPE: ${{ vars.MAVEN_CENTRAL_PUBLISHING_TYPE || 'USER_MANAGED' }}
           # A Central Portal user token (central.sonatype.com/account), not a login.
           SONATYPE_USERNAME: ${{ secrets.SONATYPE_USERNAME }}
           SONATYPE_PASSWORD: ${{ secrets.SONATYPE_PASSWORD }}
@@ -134,8 +142,8 @@ jobs:
   # The GitHub release for the tag, with notes generated from the merged pull requests. Created
   # only after the Android bundle validated and the Swift package built at the tag, so a failed
   # run leaves a tag and no release. `gh` ships on the runner; no third-party action receives the
-  # write token. The Central deployment is USER_MANAGED, so the artefacts reach Central when the
-  # maintainer publishes the validated deployment in the Portal, not when this job ends.
+  # write token. A USER_MANAGED Central deployment reaches Central when the maintainer publishes it
+  # in the Portal, not when this job ends.
   github-release:
     needs: [maven-central, swiftpm]
     runs-on: ubuntu-latest

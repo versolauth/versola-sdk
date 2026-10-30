@@ -101,8 +101,12 @@ deployment can be dropped, rather than on Central.
 1. **Main is green** for `android.yml`, `ios.yml`, `flutter.yml`, `spec.yml` and `security.yml`, and the
    conformance runs named in `conformance/README.md` have been run for the release candidate (the iOS
    and bridge drivers are local only).
-2. **Set the version** in one pull request: `flutter/versola_oauth/pubspec.yaml`, the
-   `io.versola:oauth-android:X.Y.Z` pin in `flutter/versola_oauth/android/build.gradle.kts`, a
+2. **Set the version.** Run the `prepare-release` workflow from the Actions tab (branch `main`, input
+   `X.Y.Z`), or `tools/prepare-release.sh X.Y.Z` locally. It edits the files below, runs the check and
+   pushes `release/X.Y.Z` with a pull request (or a link to open one, when the repository does not let
+   Actions create pull requests). Edit the changelog entry, which starts as the list of commit subjects
+   since the last tag, and merge. By hand, it is one pull request: `flutter/versola_oauth/pubspec.yaml`, the
+   `version` and the `io.versola:oauth-android:X.Y.Z` pin in `flutter/versola_oauth/android/build.gradle.kts`, a
    `## X.Y.Z` entry in `flutter/versola_oauth/CHANGELOG.md`, and `VERSION_NAME` in
    `android/gradle.properties` (still `-SNAPSHOT`, at or above the release). Run
    `tools/check-release-version.sh X.Y.Z`.
@@ -124,9 +128,13 @@ deployment can be dropped, rather than on Central.
    again. For the first release, consider requiring reviewers on the `maven-central` environment
    (Settings, Environments) so that the upload waits for a click.
 5. **Central.** `maven-central` runs the tests, builds the signed bundle, uploads it as
-   `USER_MANAGED` and waits for validation. A rejected bundle fails the job. A validated one waits in
+   `USER_MANAGED` (or `AUTOMATIC`, below) and waits for validation. A rejected bundle fails the job. A validated one waits in
    the Portal: look at it, then publish it there (or drop it). Central releases are immutable: a
-   published version is never replaced, only superseded.
+   published version is never replaced, only superseded. Once a `USER_MANAGED` release has gone
+   through, set the repository variable `MAVEN_CENTRAL_PUBLISHING_TYPE` to `AUTOMATIC` (Settings,
+   Secrets and variables, Actions, Variables) and later tags are published on validation, with no
+   click; removing the variable returns to `USER_MANAGED`. Keep reviewers on the `maven-central`
+   environment if a human should still stand between the tag and Central.
 6. **Check what a consumer sees**, from a project outside this repository, once Central has it:
    `implementation("io.versola:oauth-android:X.Y.Z")` with `mavenCentral()` and `google()` resolves, and
    a Swift package depending on `.package(url: "https://github.com/versolauth/versola-sdk", from: "X.Y.Z")`

@@ -1,0 +1,60 @@
+name: prepare-release
+
+# Step one of a release: set the version everywhere and put it on a branch. Run it from the
+# Actions tab ("Run workflow", branch main) with the version, review the pull request, merge it,
+# then push the tag X.Y.Z, which starts release.yml (docs/releasing.md). The tag stays a human act:
+# it is what publishes.
+#
+# What it edits is tools/prepare-release.sh's business; the same script runs locally. The branch is
+# pushed with the workflow's token, and GitHub does not start workflows for events that token
+# causes, so the pull request's checks run when a person opens it (the link is in the job summary)
+# or pushes to the branch. Opening the pull request here needs Settings, Actions, General, "Allow
+# GitHub Actions to create and approve pull requests"; without it the step prints the link instead.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version, X.Y.Z (the tag is the same, without a v)"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The history and the tags: the changelog entry lists what changed since the last tag.
+          fetch-depth: 0
+
+      - name: Set the version
+        run: tools/prepare-release.sh "$VERSION"
+        env:
+          # Through env, never interpolated into the script; the script accepts X.Y.Z only.
+          VERSION: ${{ inputs.version }}
+
+      - name: Push the branch and open the pull request
+        run: |
+          branch="release/$VERSION"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add flutter/versola_oauth/pubspec.yaml flutter/versola_oauth/android/build.gradle.kts \
+            flutter/versola_oauth/CHANGELOG.md android/gradle.properties
+          git commit -m "Release $VERSION"
+          git push origin "$branch"
+          body="Sets the version to $VERSION (pubspec, the plugin's Android pin, the changelog, the development version). Edit the changelog entry into prose, merge, then push the tag \`$VERSION\` from main: that starts release.yml (docs/releasing.md)."
+          if ! gh pr create --base main --head "$branch" --title "Release $VERSION" --body "$body"; then
+            echo "Open the pull request: https://github.com/$GITHUB_REPOSITORY/compare/main...$branch?expand=1" >> "$GITHUB_STEP_SUMMARY"
+          fi
+        env:
+          VERSION: ${{ inputs.version }}
+          GH_TOKEN: ${{ github.token }}
