@@ -750,6 +750,46 @@ class AuthorizationFlowTest {
     }
 
     @Test
+    fun `an authorization is in flight while the browser is up and not once its caller has gone`() = runTest {
+        val store = RecordingStore()
+        val browser = StuckBrowser()
+        val flow = flow(store, browser)
+        assertFalse(flow.authorizationInFlight)
+
+        val caller = launch { flow.authorize(setOf("openid")) }
+        browser.entered.await()
+        assertTrue(flow.authorizationInFlight)
+
+        caller.cancelAndJoin()
+
+        // The slot and `Authorizing` stay for a resume, but nothing awaits them: a leftover.
+        assertSame(SessionState.Authorizing, flow.sessionState.first())
+        assertFalse(flow.authorizationInFlight)
+    }
+
+    @Test
+    fun `a leftover pending request nobody awaits is superseded by a new authorization and its tab stepped over`() = runTest {
+        // A cold start restored it and nothing started a resume.
+        val leftover = pendingRequest()
+        val store = RecordingStore(leftover)
+        val browser = object : BrowserAuthorizationSession {
+            override suspend fun authorize(uri: String): BrowserOutcome = BrowserOutcome.Redirect(
+                "https://app.example.com/oauth?code=stale&state=${leftover.state}&iss=$ISSUER",
+            )
+            override suspend fun awaitPendingRedirect(): BrowserOutcome = BrowserOutcome.Redirect(
+                "https://app.example.com/oauth?code=mine&state=${store.stored!!.state}&iss=$ISSUER",
+            )
+        }
+        val flow = flow(store, browser)
+        assertSame(SessionState.Authorizing, flow.sessionState.first())
+        assertFalse(flow.authorizationInFlight)
+
+        val grant = flow.authorize(setOf("openid"))
+
+        assertEquals("mine", grant.code)
+    }
+
+    @Test
     fun `the tab a cancelled caller abandoned cannot fail the authorization that replaced it`() = runTest {
         // Releasing the lock on cancellation lets a new authorize() start while the old tab is
         // still open, and that tab can redirect after the new call has drained whatever was

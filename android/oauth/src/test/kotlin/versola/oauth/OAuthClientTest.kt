@@ -229,6 +229,22 @@ class OAuthClientTest {
     }
 
     @Test
+    fun `a login whose caller was cancelled does not block the next one, though the state still reads Authorizing`() = runTest {
+        browser.hold = kotlinx.coroutines.CompletableDeferred()
+        val client = client()
+        val first = async(start = CoroutineStart.UNDISPATCHED) { runCatching { client.login() } }
+        browser.opened.await()
+        first.cancelAndJoin()
+        assertEquals("the slot is kept for a resume", SessionState.Authorizing, client.sessionState.first())
+
+        // Nothing awaits that slot, so it is a leftover and the new login supersedes it at once.
+        browser.hold = null
+        client.login()
+
+        assertEquals(SessionState.Authenticated, client.sessionState.first())
+    }
+
+    @Test
     fun `ephemeralBrowser reaches the browser session and is off by default`() = runTest {
         val client = client()
 

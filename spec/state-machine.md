@@ -114,16 +114,20 @@ The pending request is wiped on user cancel and **kept** on system cancel, so th
 resumed.
 
 **App cancel.** A pending request whose browser is gone — the app was killed while it was open and
-the user came back to the app itself, not through the redirect — would hold `Authorizing`, and
-`login()` refused (generic facade) or queued (core), for the rest of its ten minutes: nothing
-observes the browser from a process that was not running when it opened. The app says so with
-`cancelPendingAuthorization()`: a `login()` or resume that is waiting for the browser ends with
-`Recoverable(UserCancelled)`, the pending request is wiped and the state settles as for a user
-cancel (`Authenticated` over a stored grant, otherwise `Unauthenticated`); a tab that is still open
-may yet redirect, and that redirect is discarded rather than failing the next login as a state
+the user came back to the app itself, not through the redirect — is awaited by the cold-start resume
+and so is *in flight* (`oauth-sdk-api.md` section 5): `login()` is refused, and nothing observes the
+browser from a process that was not running when it opened, for the rest of its ten minutes. The app
+says so with `cancelPendingAuthorization()`: a `login()` or resume that is waiting for the browser
+ends with `Recoverable(UserCancelled)`, the pending request is wiped and the state settles as for a
+user cancel (`Authenticated` over a stored grant, otherwise `Unauthenticated`); a tab that is still
+open may yet redirect, and that redirect is discarded rather than failing the next login as a state
 mismatch. With nothing pending it does nothing. Android has it first (`OAuthClient`); iOS and
-Flutter add the same call with the same semantics, until then their `login()` is the one blocked
-by a gone browser (`oauth-sdk-api.md` section 5).
+Flutter add the same call with the same semantics.
+
+A pending request that nobody awaits (a cancelled caller kept it for a resume the app never asked
+for, a system cancel did, or a restore found it and nothing started) is not in flight: it is kept
+for a resume, not reserved, and a new `login()` supersedes it, remembering its `state` so a
+redirect its tab still delivers is stepped over.
 
 iOS, a caller cancelled mid-browser (a SwiftUI `.task` torn down by navigation): the SDK's
 cancellation handler dismisses the `ASWebAuthenticationSession`, so nothing can redirect

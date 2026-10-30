@@ -127,10 +127,17 @@ val oauth = OAuthClient.create(context, configuration)
 
 `login()` while `Authenticated` starts a new authorization and, on success, replaces the stored
 grant; on cancel or failure the existing session stays (`state-machine.md`, settle on
-`Authenticated`). `login()` while `Authorizing` is refused with
+`Authenticated`). `login()` while an authorization is **in flight** is refused with
 `Configuration(InvalidConfiguration("an authorization is already in progress"))`; the app observes
-the state before asking, and gives up one whose browser is gone with `cancelPendingAuthorization()`
-rather than waiting out its ten minutes.
+the state before asking. In flight means this process is carrying one out: the browser is up, a
+resume is awaiting its redirect, or a validated redirect's code exchange has not finished. A
+pending request that nobody awaits is not in flight even though the state reads `Authorizing`
+(a cancelled caller kept it for a resume the app has not asked for, a system cancel did, or a cold
+start restored it and nothing was started): `login()` **supersedes** it, and remembers its `state`
+so that a redirect the old tab still delivers is stepped over instead of failing the new login as
+a mismatch. An authorization that *is* in flight but whose redirect is not coming (the app was
+killed while the browser was open and the user returned to the app itself, so the cold-start resume
+awaits it) is given up with `cancelPendingAuthorization()` rather than waited out for ten minutes.
 
 ## 6. `login()` options
 
@@ -340,10 +347,10 @@ refresh token issued, `offline_access` advertised but not configured, a response
 
 1. `IdTokenRejected` as `Configuration` (section 11) versus a fifth category; the spec's
    four-category rule argues for `Configuration`.
-2. `login()` while `Authorizing` refused (section 5) versus cancelling the outstanding request.
-   Refusal stays, with an explicit `cancelPendingAuthorization()` as the way out: superseding on
-   its own would discard a request whose redirect may still be coming, and a gone browser cannot
-   be told from a slow one.
+2. `login()` while an authorization is in flight refused (section 5) versus cancelling the
+   outstanding request. Refusal stays, with `cancelPendingAuthorization()` as the explicit way
+   out: superseding a request that is awaited would discard a redirect that may still be coming,
+   and a gone browser cannot be told from a slow one. A request nobody awaits is superseded.
 3. `stepUp()` takes the configured scopes by default (section 5); the Versola facade requires
    them as a parameter. The two differ in signature, not in what is sent.
 4. The 24-hour discovery cache age (and the key set's bounds of 5 minutes to 24 hours) and the 30-second refresh skew: all fixed, not configurable.

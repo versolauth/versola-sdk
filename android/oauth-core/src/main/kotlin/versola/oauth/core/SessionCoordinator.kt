@@ -292,7 +292,16 @@ public class SessionCoordinator(
      * [resumePendingLogin] so that a sign-in finished in a cold-started process passes through
      * exactly the checks and the persistence order of one finished in the process that began it.
      */
-    private suspend fun finishLogin(grant: AuthorizationGrant, maxAge: Long?): TokenResponse {
+    private suspend fun finishLogin(grant: AuthorizationGrant, maxAge: Long?): TokenResponse =
+        // However it ends — a grant stored, a refusal, a cancelled caller, a store that would not
+        // write — the exchange is over, and `login()` is no longer refused on its account.
+        try {
+            exchange(grant, maxAge)
+        } finally {
+            flow.exchangeFinished()
+        }
+
+    private suspend fun exchange(grant: AuthorizationGrant, maxAge: Long?): TokenResponse {
         // One attempt, with no retry budget around it. An authorization code is single-use
         // and the token endpoint offers no idempotency for `authorization_code` —
         // `Idempotency-Key` is honoured for the refresh family alone (`OAuthTokenService`) —

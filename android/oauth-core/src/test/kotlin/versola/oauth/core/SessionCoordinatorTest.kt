@@ -866,6 +866,37 @@ class SessionCoordinatorTest {
     }
 
     @Test
+    fun `a login is in flight until its code exchange has ended, however it ends`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val credentialStore = FakeCredentialStore()
+        val flow = authFlow(pendingStore, credentialStore)
+        val tokenClient = FakeTokenClient()
+        val coordinator = SessionCoordinator(flow, tokenClient, credentialStore, RetryPolicy.Conservative, elapsedMillis = { elapsed })
+        val exchanging = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        tokenClient.exchangeResult = { exchanging.complete(Unit); release.await(); issued() }
+
+        val login = async(start = CoroutineStart.UNDISPATCHED) { coordinator.login(setOf("openid")) }
+        exchanging.await()
+        assertTrue("the browser is done, the code is being redeemed", flow.authorizationInFlight)
+        release.complete(Unit)
+        login.await()
+        assertFalse(flow.authorizationInFlight)
+
+        // A store that will not write ends the exchange too; it must not leave login() refused for good.
+        credentialStore.saveFailure = { VersolaError.Recoverable(VersolaError.Recoverable.Cause.UnlockRequired) }
+        tokenClient.exchangeResult = { issued() }
+        failure { coordinator.login(setOf("openid")) }
+        assertFalse(flow.authorizationInFlight)
+
+        // And so does a refusal of the exchange.
+        credentialStore.saveFailure = null
+        tokenClient.exchangeResult = { throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.GrantRejected) }
+        failure { coordinator.login(setOf("openid")) }
+        assertFalse(flow.authorizationInFlight)
+    }
+
+    @Test
     fun `a failed exchange abandons the login rather than leaving a slot nothing can resume`() = runTest {
         val pendingStore = RecordingPendingStore()
         val (coordinator, tokenClient, _) = coordinator(pendingStore)

@@ -212,13 +212,16 @@ public class OAuthClient private constructor(
     }
 
     /**
-     * `spec/oauth-sdk-api.md` section 5: a `login()` while one is outstanding, in this process
-     * or a previous one, is refused rather than queued behind the open browser or allowed to
-     * supersede a request the redirect may still complete. The restored state is read first,
-     * so a cold start mid-browser counts.
+     * `spec/oauth-sdk-api.md` section 5: a `login()` while this process is carrying an authorization
+     * out — the browser is up or opening, a resume is awaiting its redirect, or a code exchange has
+     * not finished — is refused rather than queued behind it or allowed to supersede a request the
+     * redirect may still complete. A pending request nobody awaits (a cancelled caller left it, or
+     * nothing started a resume) is a leftover, and the new login supersedes it; the state alone,
+     * `Authorizing` for the leftover's ten minutes, cannot tell the two apart. A resume that is
+     * awaiting a redirect which is not coming is ended with [cancelPendingAuthorization].
      */
-    private suspend fun refuseWhileAuthorizing() {
-        if (flow.sessionState.first() == SessionState.Authorizing) {
+    private fun refuseWhileAuthorizing() {
+        if (flow.authorizationInFlight) {
             throw OAuthConfiguration.invalid("an authorization is already in progress; observe sessionState before asking again")
         }
     }

@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import java.net.URLEncoder
 import java.security.SecureRandom
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
@@ -135,6 +136,41 @@ public class AuthorizationFlow(
     internal suspend fun abandonLogin() {
         pendingStore.clear()
         state.value = settledState()
+    }
+
+    /** [authorize] and [resumePendingAuthorization] bodies running, whether or not they have reached the browser yet. */
+    private val browserLegs = AtomicInteger()
+
+    /** Validated redirects whose code exchange the coordinator has not finished; see [exchangeFinished]. */
+    private val exchanges = AtomicInteger()
+
+    /**
+     * Whether this process is carrying an authorization out: a browser leg running (the browser is
+     * up, or being opened, or a resume is awaiting its redirect) or a code exchange not yet finished.
+     * This, not the `Authorizing` state, is what makes a second `login()` wrong: a pending request
+     * that nobody awaits — a cancelled caller left it for a resume the app never asked for, or a cold
+     * start restored it and nothing started — is only a leftover, and [authorize] supersedes it. The
+     * state alone cannot tell the two apart and refusing on it blocked `login()` for the leftover's
+     * ten minutes (`spec/oauth-sdk-api.md` section 5).
+     */
+    public val authorizationInFlight: Boolean get() = browserLegs.get() > 0 || exchanges.get() > 0
+
+    /**
+     * The coordinator's `finishLogin` has ended, however it ended: the exchange is no longer in flight.
+     * A counter rather than a flag so two flows over one store cannot clear each other's; clamped so
+     * a caller that used [authorize] without a coordinator (a test) cannot drive it negative.
+     */
+    internal fun exchangeFinished() {
+        exchanges.updateAndGet { maxOf(0, it - 1) }
+    }
+
+    private inline fun <T> leg(block: () -> T): T {
+        browserLegs.incrementAndGet()
+        try {
+            return block()
+        } finally {
+            browserLegs.decrementAndGet()
+        }
     }
 
     /**
@@ -326,6 +362,16 @@ public class AuthorizationFlow(
         /** `spec/oauth-sdk-api.md` section 6: a browser without the user's shared state. */
         ephemeralBrowser: Boolean = false,
     ): AuthorizationGrant = AUTHORIZE_LOCK.withLock {
+        leg { authorizeUnderLock(scopes, acrValues, maxAge, parameters, ephemeralBrowser) }
+    }
+
+    private suspend fun authorizeUnderLock(
+        scopes: Set<String>,
+        acrValues: List<String>,
+        maxAge: Long?,
+        parameters: AuthorizationParameters,
+        ephemeralBrowser: Boolean,
+    ): AuthorizationGrant {
         ensureRestored()
         val metadata = discovery.metadata()
         // `code_challenge_methods_supported` present without S256 is a provider this SDK cannot
@@ -348,6 +394,10 @@ public class AuthorizationFlow(
         } else {
             starter.start(request, metadata, clock()).let { it.pending to it.browserUri }
         }
+        // A request still in the slot is a leftover nobody awaits (else this call would not be here,
+        // the lock being held for as long as one is awaited): superseded, and its `state` remembered
+        // so that a redirect its tab still delivers is stepped over rather than failing this login.
+        pendingStore.load()?.let { rememberAbandoned(it.state) }
         pendingStore.save(pending)
         state.value = SessionState.Authorizing
 
@@ -355,7 +405,7 @@ public class AuthorizationFlow(
         val outcome = try {
             awaitUnlessCancelled {
                 belongingTo(pending, outsideRetryBudget { browser.authorize(uri, browserOptions) })
-            } ?: return@withLock abandonedByApp(pending)
+            } ?: abandonedByApp(pending)
         } catch (e: CancellationException) {
             // The *caller* was cancelled, not the authorization. The browser may already be
             // in the foreground and its redirect may still arrive, so the slot and the
@@ -378,7 +428,7 @@ public class AuthorizationFlow(
             state.value = settledState()
             throw e
         }
-        complete(outcome, pending, metadata)
+        return complete(outcome, pending, metadata)
     }
 
     /**
@@ -393,6 +443,10 @@ public class AuthorizationFlow(
      * cancel wipes the request, so there is nothing here to resume.
      */
     public suspend fun resumePendingAuthorization(): AuthorizationGrant? = AUTHORIZE_LOCK.withLock {
+        leg { resumeUnderLock() }
+    }
+
+    private suspend fun resumeUnderLock(): AuthorizationGrant? {
         ensureRestored()
         val pending = pendingStore.load()
             // Restoring already discarded it, and "expired" is not "nothing was pending":
@@ -401,7 +455,7 @@ public class AuthorizationFlow(
                 expiredOnRestore = false
                 throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.PendingRequestExpired)
             } else {
-                return@withLock null
+                return null
             }
         if (pending.isExpired(clock())) {
             pendingStore.clear()
@@ -426,7 +480,7 @@ public class AuthorizationFlow(
                 state.value = settledState()
                 throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.PendingRequestExpired)
             }
-        complete(answered, pending, discovery.metadata())
+        return complete(answered, pending, discovery.metadata())
     }
 
     /**
@@ -487,7 +541,10 @@ public class AuthorizationFlow(
                     // 2.4 compares the strings as they are).
                     issuer = metadata.issuer,
                     issParameterSupported = metadata.authorizationResponseIssParameterSupported,
-                )
+                ).also {
+                    // From here to the coordinator's `finishLogin` ending, the code is being redeemed.
+                    exchanges.incrementAndGet()
+                }
                 // Deliberately still Authorizing, and the pending request deliberately still
                 // stored: the machine reaches Authenticated only once a refresh token is
                 // durably held, and the slot is wiped only after that (#8).
