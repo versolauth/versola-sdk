@@ -626,7 +626,7 @@ class AuthorizationFlowTest {
         assertEquals("resumed", flow.resumePendingAuthorization()!!.code)
     }
 
-    // ---- cancelPendingAuthorization(): the app's way out of a browser that is gone ------------
+    // ---- a resume that only waits for a redirect gives way to login(), logout() and the wipe -------
 
     private class StuckBrowser : BrowserAuthorizationSession {
         val entered = CompletableDeferred<Unit>()
@@ -652,101 +652,72 @@ class AuthorizationFlowTest {
     )
 
     @Test
-    fun `cancelling a pending authorization ends the login that waits for the browser as a user cancel`() = runTest {
-        val store = RecordingStore()
-        val browser = StuckBrowser()
-        val flow = flow(store, browser)
+    fun `a login pre-empts a resume that waits for a redirect no one will send, and steps over its tab`() = runTest {
+        val leftover = pendingRequest()
+        val store = RecordingStore(leftover)
+        val waiting = StuckBrowser()
+        val resumeFlow = flow(store, waiting)
+        val resumed = async { resumeFlow.resumePendingAuthorization() }
+        waiting.entered.await()
+        assertFalse("a resume that only waits is not an authorization carried out", resumeFlow.authorizationInFlight)
 
-        val login = async { runCatching { flow.authorize(setOf("openid")) } }
-        browser.entered.await()
-        assertSame(SessionState.Authorizing, flow.sessionState.first())
-
-        flow.cancelPendingAuthorization()
-
-        val error = login.await().exceptionOrNull() as VersolaError.Recoverable
-        assertSame(VersolaError.Recoverable.Cause.UserCancelled, error.reason)
-        assertNull("the pending request is gone", store.stored)
-        assertSame(SessionState.Unauthenticated, flow.sessionState.first())
-    }
-
-    @Test
-    fun `after a cancel a new login starts at once instead of waiting out the old browser`() = runTest {
-        val store = RecordingStore()
-        val stuck = StuckBrowser()
-        val first = flow(store, stuck)
-        val login = async { runCatching { first.authorize(setOf("openid")) } }
-        stuck.entered.await()
-        val abandonedState = store.stored!!.state
-        first.cancelPendingAuthorization()
-        login.await()
-
-        // The abandoned tab redirects into the replacement first; it is stepped over, not a mismatch.
+        // The abandoned tab redirects into the new login first; it is stepped over, not a mismatch.
         val replacement = object : BrowserAuthorizationSession {
             override suspend fun authorize(uri: String): BrowserOutcome = BrowserOutcome.Redirect(
-                "https://app.example.com/oauth?code=stale&state=$abandonedState&iss=$ISSUER",
+                "https://app.example.com/oauth?code=stale&state=${leftover.state}&iss=$ISSUER",
             )
             override suspend fun awaitPendingRedirect(): BrowserOutcome = BrowserOutcome.Redirect(
                 "https://app.example.com/oauth?code=mine&state=${store.stored!!.state}&iss=$ISSUER",
             )
         }
+        val grant = flow(store, replacement).authorize(setOf("openid"))
 
-        assertEquals("mine", flow(store, replacement).authorize(setOf("openid")).code)
+        assertNull("the pre-empted resume gives up quietly", resumed.await())
+        assertEquals("mine", grant.code)
     }
 
     @Test
-    fun `cancelling wakes a resumed pending authorization that waits for a redirect no one will send`() = runTest {
+    fun `a sign-out's browser pre-empts a resume that holds the lock`() = runTest {
         val store = RecordingStore(pendingRequest())
-        val browser = StuckBrowser()
+        val waiting = StuckBrowser()
+        val flow = flow(store, waiting)
+        val resumed = async { flow.resumePendingAuthorization() }
+        waiting.entered.await()
+        val signedOut = FakeBrowser({ uri -> BrowserOutcome.Redirect("https://app.example.com/signed-out?state=${stateOf(uri)}") }, store)
+
+        val acknowledged = flow(store, signedOut).endSession("hint")
+
+        assertTrue(acknowledged)
+        assertNull(resumed.await())
+    }
+
+    @Test
+    fun `the local wipe of a sign-out pre-empts a resume so that it cannot redeem a redirect into the next session`() = runTest {
+        val store = RecordingStore(pendingRequest())
+        val waiting = StuckBrowser()
+        val flow = flow(store, waiting)
+        val resumed = async { flow.resumePendingAuthorization() }
+        waiting.entered.await()
+
+        flow.completeLogout()
+
+        assertNull(resumed.await())
+        assertNull(store.stored)
+        assertSame(SessionState.Unauthenticated, flow.sessionState.first())
+    }
+
+    @Test
+    fun `a resume whose redirect has arrived is carrying an exchange out and is not pre-empted`() = runTest {
+        val store = RecordingStore(pendingRequest())
+        val browser = FakeBrowser({ BrowserOutcome.Redirect("https://app.example.com/oauth?code=c&state=restored-state&iss=$ISSUER") }, store)
         val flow = flow(store, browser)
 
-        val resumed = async { runCatching { flow.resumePendingAuthorization() } }
-        browser.entered.await()
-        flow.cancelPendingAuthorization()
+        val grant = flow.resumePendingAuthorization()
 
-        val error = resumed.await().exceptionOrNull() as VersolaError.Recoverable
-        assertSame(VersolaError.Recoverable.Cause.UserCancelled, error.reason)
-        assertNull(store.stored)
-        assertSame(SessionState.Unauthenticated, flow.sessionState.first())
-    }
-
-    @Test
-    fun `cancelling a restored authorization nobody is waiting for discards it`() = runTest {
-        // A cold start restores `Authorizing`; with nothing awaiting a redirect, this is the only way out.
-        val store = RecordingStore(pendingRequest())
-        val flow = flow(store, StuckBrowser())
-        assertSame(SessionState.Authorizing, flow.sessionState.first())
-
-        flow.cancelPendingAuthorization()
-
-        assertNull(store.stored)
-        assertSame(SessionState.Unauthenticated, flow.sessionState.first())
-    }
-
-    @Test
-    fun `cancelling over a stored grant settles on Authenticated, as a cancelled step-up does`() = runTest {
-        val store = RecordingStore()
-        val browser = StuckBrowser()
-        val flow = flow(store, browser, hasStoredGrant = { true })
-        val stepUp = async { runCatching { flow.authorize(setOf("openid")) } }
-        browser.entered.await()
-
-        flow.cancelPendingAuthorization()
-
-        assertTrue(stepUp.await().exceptionOrNull() is VersolaError.Recoverable)
-        assertSame(SessionState.Authenticated, flow.sessionState.first())
-    }
-
-    @Test
-    fun `cancelling with nothing pending changes nothing`() = runTest {
-        val store = RecordingStore()
-        val flow = flow(store, StuckBrowser(), hasStoredGrant = { true })
-        flow.sessionState.first() // restores, so the state set next is not overwritten by it
-        flow.setState(SessionState.Locked)
-
-        flow.cancelPendingAuthorization()
-
-        assertSame("a live session is not rewritten", SessionState.Locked, flow.sessionState.first())
-        assertEquals(0, store.clears)
+        assertEquals("c", grant!!.code)
+        assertTrue("the code is being redeemed until the coordinator says otherwise", flow.authorizationInFlight)
+        flow.exchangeFinished()
+        assertFalse(flow.authorizationInFlight)
     }
 
     @Test

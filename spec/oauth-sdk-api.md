@@ -140,7 +140,6 @@ val oauth = OAuthClient.create(context, configuration)
 | `logout(options)` | the local wipe is done; server-side steps are best effort | `LogoutOutcome(sessionEnded: Boolean, tokenRevoked: Boolean)`; `Unauthenticated` published unconditionally | never throws for a server-side failure; `Configuration` only for a misuse |
 | `accessToken()` | a token not within its refresh skew is available, refreshing once if needed (single-flight) | `AccessToken(value, type: Bearer or DPoP, expiresAt, scopes)` | `Reauthenticate(GrantRejected, SessionExpired)`, `Recoverable(Network, UnlockRequired)` |
 | `refresh()` | the refresh completed | nothing | as `accessToken()` |
-| `cancelPendingAuthorization()` | the pending authorization is discarded | nothing | never throws; does nothing when none is pending. A waiting `login()` or `stepUp()` ends with `Recoverable(UserCancelled)`. **Android only for now**; iOS and Flutter follow with the same semantics (`state-machine.md`, app cancel) |
 | `claims` | — (property, memory) | `IdTokenClaims?` of the last validated ID token; null when unauthenticated. After a cold start the stored ID token is read back by the first operation (`accessToken()`, `userInfo()`, a refresh), without re-verifying it: it was validated before it was stored | — |
 | `userInfo()` | the UserInfo response is validated | `UserInfo` (the standard claims typed, the rest as a read-only map); `sub` must equal the ID token's `sub` (OIDC Core 5.3.2) | `Configuration(ProviderUnsupported)` when no endpoint, `Recoverable`, `Reauthenticate` |
 | `stepUp(challenge, options)` | as `login()` | re-authorizes with the challenge's `acr_values` and `max_age` and the configured scopes (or the options'); the app re-issues the refused call | as `login()` |
@@ -152,15 +151,16 @@ val oauth = OAuthClient.create(context, configuration)
 grant; on cancel or failure the existing session stays (`state-machine.md`, settle on
 `Authenticated`). `login()` while an authorization is **in flight** is refused with
 `Configuration(InvalidConfiguration("an authorization is already in progress"))`; the app observes
-the state before asking. In flight means this process is carrying one out: the browser is up, a
-resume is awaiting its redirect, or a validated redirect's code exchange has not finished. A
-pending request that nobody awaits is not in flight even though the state reads `Authorizing`
-(a cancelled caller kept it for a resume the app has not asked for, a system cancel did, or a cold
-start restored it and nothing was started): `login()` **supersedes** it, and remembers its `state`
-so that a redirect the old tab still delivers is stepped over instead of failing the new login as
-a mismatch. An authorization that *is* in flight but whose redirect is not coming (the app was
-killed while the browser was open and the user returned to the app itself, so the cold-start resume
-awaits it) is given up with `cancelPendingAuthorization()` rather than waited out for ten minutes.
+the state before asking. In flight means this process is carrying one out: another `login()` or
+`stepUp()` has its browser up with a live awaiter, or a validated redirect's code exchange has not
+finished. Two things the `Authorizing` state can read are **not** in flight, and `login()` goes
+ahead over them: a pending request that nobody awaits (a cancelled caller kept it for a resume the
+app has not asked for, a system cancel did, or a cold start restored it and nothing was started),
+which it **supersedes**; and a resume that is only *waiting* for its redirect (the cold-start
+resume of a login whose browser is gone), which it **pre-empts**, as `logout()` does
+(`state-machine.md`, "A resume that only waits gives way"). In both it remembers the old request's
+`state` so that a redirect the old tab still delivers is stepped over instead of failing the new
+login as a mismatch. There is no cancel call: the operations that need the gate take it.
 
 ## 6. `login()` options
 
@@ -406,9 +406,8 @@ refresh token issued, `offline_access` advertised but not configured, a response
 1. `IdTokenRejected` as `Configuration` (section 11) versus a fifth category; the spec's
    four-category rule argues for `Configuration`.
 2. `login()` while an authorization is in flight refused (section 5) versus cancelling the
-   outstanding request. Refusal stays, with `cancelPendingAuthorization()` as the explicit way
-   out: superseding a request that is awaited would discard a redirect that may still be coming,
-   and a gone browser cannot be told from a slow one. A request nobody awaits is superseded.
+   outstanding request. Refusal stays only for an authorization truly carried out; a request nobody
+   awaits is superseded and a resume that only waits is pre-empted, so no cancel call is needed.
 3. `stepUp()` takes the configured scopes by default (section 5); the Versola facade requires
    them as a parameter. The two differ in signature, not in what is sent.
 4. The discovery and key-set cache lifetime bounds (5 minutes to 24 hours, 24 hours without `Cache-Control`) and the 30-second refresh skew: fixed, not configurable.

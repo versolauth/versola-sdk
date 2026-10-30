@@ -210,25 +210,6 @@ class OAuthClientTest {
     }
 
     @Test
-    fun `cancelPendingAuthorization ends a login whose browser is gone and lets the next one start`() = runTest {
-        browser.hold = kotlinx.coroutines.CompletableDeferred()
-        val client = client()
-        val first = async(start = CoroutineStart.UNDISPATCHED) { runCatching { client.login() } }
-        browser.opened.await()
-        assertEquals(SessionState.Authorizing, client.sessionState.first())
-
-        client.cancelPendingAuthorization()
-
-        val error = first.await().exceptionOrNull() as VersolaError.Recoverable
-        assertEquals(VersolaError.Recoverable.Cause.UserCancelled, error.reason)
-        assertEquals(SessionState.Unauthenticated, client.sessionState.first())
-        // The abandoned tab is still "open"; the next login must not wait for it.
-        browser.hold = null
-        client.login()
-        assertEquals(SessionState.Authenticated, client.sessionState.first())
-    }
-
-    @Test
     fun `a login whose caller was cancelled does not block the next one, though the state still reads Authorizing`() = runTest {
         browser.hold = kotlinx.coroutines.CompletableDeferred()
         val client = client()
@@ -429,6 +410,26 @@ class OAuthClientTest {
     private fun kotlinx.coroutines.test.TestScope.restartWith(killed: KilledLogin, cold: ColdStartBrowser): OAuthClient {
         OAuthClient.resumeScope = backgroundScope
         return OAuthClient.create(application, killed.configuration, browser = cold, keyProvider = ReversingKeyProvider)
+    }
+
+    @Test
+    fun `a login pre-empts the cold-start resume that waits for a redirect which is not coming`() = runTest {
+        val killed = killedMidBrowser()
+        // The process restarts into Authorizing and its resume waits; the user comes back to the app
+        // itself, not through the redirect, and signs in again.
+        val live = FakeBrowser(provider.issuer)
+        browser = live
+        val resuming = object : BrowserAuthorizationSession by live {
+            override suspend fun awaitPendingRedirect(): BrowserOutcome = kotlinx.coroutines.awaitCancellation()
+        }
+        OAuthClient.resumeScope = backgroundScope
+        val client = OAuthClient.create(application, killed.configuration, browser = resuming, keyProvider = ReversingKeyProvider)
+        assertEquals(SessionState.Authorizing, client.sessionState.first())
+        kotlinx.coroutines.yield()
+
+        client.login()
+
+        assertEquals(SessionState.Authenticated, client.sessionState.first())
     }
 
     @Test

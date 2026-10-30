@@ -138,20 +138,21 @@ public class AuthorizationFlow(
         state.value = settledState()
     }
 
-    /** [authorize] and [resumePendingAuthorization] bodies running, whether or not they have reached the browser yet. */
+    /** [authorize] bodies running, whether or not they have reached the browser yet. */
     private val browserLegs = AtomicInteger()
 
     /** Validated redirects whose code exchange the coordinator has not finished; see [exchangeFinished]. */
     private val exchanges = AtomicInteger()
 
     /**
-     * Whether this process is carrying an authorization out: a browser leg running (the browser is
-     * up, or being opened, or a resume is awaiting its redirect) or a code exchange not yet finished.
-     * This, not the `Authorizing` state, is what makes a second `login()` wrong: a pending request
-     * that nobody awaits — a cancelled caller left it for a resume the app never asked for, or a cold
-     * start restored it and nothing started — is only a leftover, and [authorize] supersedes it. The
-     * state alone cannot tell the two apart and refusing on it blocked `login()` for the leftover's
-     * ten minutes (`spec/oauth-sdk-api.md` section 5).
+     * Whether this process is carrying an authorization out: a `login()` or `stepUp()` has its
+     * browser up (or being opened) with a live awaiter, or a validated redirect's code exchange has
+     * not finished. This, not the `Authorizing` state, is what makes a second `login()` wrong. A
+     * pending request that nobody awaits (a cancelled caller left it for a resume the app never asked
+     * for, or a cold start restored it) is only a leftover, and a resume that merely waits for its
+     * redirect is pre-empted: [authorize] supersedes both. The state alone cannot tell these apart,
+     * and refusing on it blocked `login()` for the leftover's ten minutes
+     * (`spec/oauth-sdk-api.md` section 5).
      */
     public val authorizationInFlight: Boolean get() = browserLegs.get() > 0 || exchanges.get() > 0
 
@@ -174,66 +175,40 @@ public class AuthorizationFlow(
     }
 
     /**
-     * Completed by [cancelPendingAuthorization] to wake the call that is waiting for the browser
-     * (a [authorize] or a [resumePendingAuthorization]); null when none is. Written under
-     * [AUTHORIZE_LOCK] by the waiter, read without it by the canceller, which is the point: the
-     * canceller must be able to reach a waiter that is holding the lock.
-     */
-    @Volatile
-    private var cancelSignal: CompletableDeferred<Unit>? = null
-
-    /**
-     * `Authorizing → Unauthenticated` on the app's say-so, for the case nothing else ends: a
-     * browser that is gone — the app was killed while it was open and the user returned to the app
-     * rather than through the redirect, or closed the tab in a way that reported nothing — leaves a
-     * pending request that would otherwise hold the session in `Authorizing`, and `login()` refused
-     * or queued behind it, for the rest of its ten minutes.
+     * Completed to end a [resumePendingAuthorization] that is only *waiting* for a redirect, so that
+     * whatever needs the authorize lock next does not wait out the request's ten minutes behind it:
+     * [authorize] (a `login()` or `stepUp()`), [endSession] and the local wipe of a sign-out all do
+     * this first. Null when no resume is running. Process-wide, like [AUTHORIZE_LOCK] it belongs to.
+     * Written under [AUTHORIZE_LOCK] by the resume, read
+     * without it by the pre-empting caller, which is the point: it must reach a resume that holds the
+     * lock.
      *
-     * Wakes a [authorize] or [resumePendingAuthorization] that is waiting (it ends with
-     * `Recoverable(UserCancelled)`), discards the pending request and settles the state the way a
-     * user cancel does: `Authenticated` over a stored grant, otherwise `Unauthenticated`. A tab
-     * that is still open may yet redirect; that redirect is discarded rather than allowed to fail
-     * the next login as a mismatch. Does nothing when no authorization is pending, so an app may
-     * call it without looking first. Waits for the authorize lock when it is held by something that
-     * is not waiting for a browser (a sign-out's own browser leg).
+     * A resume is not "an authorization carried out": nothing is open in this process that a new
+     * `login()` could disturb, only a request that may or may not still be answered. A browser that is
+     * up for a live `login()` is, and so is a code exchange; neither is pre-empted (see
+     * [authorizationInFlight]). If the resume's redirect has already arrived it is past the wait and
+     * its exchange is counted, so the signal finds nobody to wake.
      */
-    public suspend fun cancelPendingAuthorization() {
-        cancelSignal?.complete(Unit)
-        AUTHORIZE_LOCK.withLock {
-            ensureRestored()
-            val pending = pendingStore.load()
-            if (pending != null) rememberAbandoned(pending.state)
-            // Nothing pending and not `Authorizing`: nothing to cancel. A live session in
-            // `Refreshing`, `Locked` or `StepUpRequired` must not be rewritten to `Authenticated`.
-            if (pending == null && state.value != SessionState.Authorizing) return@withLock
-            pendingStore.clear()
-            state.value = settledState()
-        }
+    private fun preemptResume() {
+        resumeSignal?.complete(Unit)
     }
 
     /**
-     * Waits for [block], the browser leg, until [cancelPendingAuthorization] says otherwise: then
-     * [block] is cancelled and the answer is null. The caller's own cancellation is not this: it
-     * propagates, and leaves the slot as a process death would (see [authorize]).
+     * Waits for [block], the resume's wait for a redirect, until [signal] says a newer operation
+     * wants the lock: then [block] is cancelled and the answer is null. The caller's own
+     * cancellation is not this: it propagates.
      */
-    private suspend fun awaitUnlessCancelled(block: suspend () -> BrowserOutcome): BrowserOutcome? {
-        val signal = CompletableDeferred<Unit>()
-        cancelSignal = signal
-        return try {
-            coroutineScope {
-                val work = async { block() }
-                select {
-                    work.onAwait { it }
-                    signal.onAwait {
-                        work.cancel()
-                        null
-                    }
+    private suspend fun awaitUnlessPreempted(signal: CompletableDeferred<Unit>, block: suspend () -> BrowserOutcome): BrowserOutcome? =
+        coroutineScope {
+            val work = async { block() }
+            select {
+                work.onAwait { it }
+                signal.onAwait {
+                    work.cancel()
+                    null
                 }
             }
-        } finally {
-            cancelSignal = null
         }
-    }
 
     /** `Authenticated → StepUpRequired`; nothing else moves, the grant is intact. */
     internal fun enterStepUpRequired() {
@@ -256,6 +231,9 @@ public class AuthorizationFlow(
      * `Unauthenticated` whatever the server leg did.
      */
     internal suspend fun completeLogout() {
+        // A resume still waiting for a redirect would otherwise redeem it into the session this
+        // sign-out just ended: it is told to stand down before its request is wiped.
+        preemptResume()
         pendingStore.clear()
         state.value = SessionState.Unauthenticated
     }
@@ -276,7 +254,13 @@ public class AuthorizationFlow(
      * channel are one per process, and a `login()` racing a `logout()` for them is the bug,
      * not a case to support.
      */
-    public suspend fun endSession(idTokenHint: String?): Boolean = AUTHORIZE_LOCK.withLock {
+    public suspend fun endSession(idTokenHint: String?): Boolean {
+        // The sign-out's browser needs the lock a waiting resume holds for up to ten minutes.
+        preemptResume()
+        return endSessionUnderLock(idTokenHint)
+    }
+
+    private suspend fun endSessionUnderLock(idTokenHint: String?): Boolean = AUTHORIZE_LOCK.withLock {
         ensureRestored()
         val endpoint = discovery.metadata().endSessionEndpoint
         if (endpoint.isNullOrBlank()) return@withLock false
@@ -361,8 +345,13 @@ public class AuthorizationFlow(
         parameters: AuthorizationParameters = AuthorizationParameters(),
         /** `spec/oauth-sdk-api.md` section 6: a browser without the user's shared state. */
         ephemeralBrowser: Boolean = false,
-    ): AuthorizationGrant = AUTHORIZE_LOCK.withLock {
-        leg { authorizeUnderLock(scopes, acrValues, maxAge, parameters, ephemeralBrowser) }
+    ): AuthorizationGrant {
+        // A resume that is only waiting for a redirect gives way: its request is the leftover this
+        // call supersedes below. Before the lock, because the resume is holding it.
+        preemptResume()
+        return AUTHORIZE_LOCK.withLock {
+            leg { authorizeUnderLock(scopes, acrValues, maxAge, parameters, ephemeralBrowser) }
+        }
     }
 
     private suspend fun authorizeUnderLock(
@@ -403,9 +392,7 @@ public class AuthorizationFlow(
 
         val browserOptions = BrowserSessionOptions(ephemeral = ephemeralBrowser, redirectUri = configuration.redirectUri.value)
         val outcome = try {
-            awaitUnlessCancelled {
-                belongingTo(pending, outsideRetryBudget { browser.authorize(uri, browserOptions) })
-            } ?: abandonedByApp(pending)
+            belongingTo(pending, outsideRetryBudget { browser.authorize(uri, browserOptions) })
         } catch (e: CancellationException) {
             // The *caller* was cancelled, not the authorization. The browser may already be
             // in the foreground and its redirect may still arrive, so the slot and the
@@ -443,10 +430,16 @@ public class AuthorizationFlow(
      * cancel wipes the request, so there is nothing here to resume.
      */
     public suspend fun resumePendingAuthorization(): AuthorizationGrant? = AUTHORIZE_LOCK.withLock {
-        leg { resumeUnderLock() }
+        val signal = CompletableDeferred<Unit>()
+        resumeSignal = signal
+        try {
+            resumeUnderLock(signal)
+        } finally {
+            resumeSignal = null
+        }
     }
 
-    private suspend fun resumeUnderLock(): AuthorizationGrant? {
+    private suspend fun resumeUnderLock(signal: CompletableDeferred<Unit>): AuthorizationGrant? {
         ensureRestored()
         val pending = pendingStore.load()
             // Restoring already discarded it, and "expired" is not "nothing was pending":
@@ -468,12 +461,18 @@ public class AuthorizationFlow(
         // before the process died — and an unbounded wait here holds the authorize lock, and
         // with it every later `login()`, for as long as the app lives.
         val remaining = PendingAuthorizationRequest.MAX_AGE_MILLIS - (clock() - pending.createdAtEpochMillis)
-        var cancelled = false
-        val outcome = withTimeoutOrNull(remaining) {
-            awaitUnlessCancelled { belongingTo(pending, outsideRetryBudget { browser.awaitPendingRedirect() }) }
-                .also { if (it == null) cancelled = true }
+        var preempted = signal.isCompleted
+        val outcome = if (preempted) null else withTimeoutOrNull(remaining) {
+            awaitUnlessPreempted(signal) { belongingTo(pending, outsideRetryBudget { browser.awaitPendingRedirect() }) }
+                .also { if (it == null) preempted = true }
         }
-        if (cancelled) abandonedByApp(pending)
+        if (preempted) {
+            // A newer operation (a login, a sign-out) wants the lock. This request is its leftover:
+            // its tab may yet redirect, so its `state` is remembered, and the slot is left to whoever
+            // took over (a login's `save` replaces it, a sign-out's wipe clears it).
+            rememberAbandoned(pending.state)
+            return null
+        }
         val answered = outcome
             ?: run {
                 pendingStore.clear()
@@ -507,14 +506,6 @@ public class AuthorizationFlow(
         val redirect = outcome as? BrowserOutcome.Redirect ?: return false
         val state = AuthorizationResponseValidator.stateOf(redirect.uri) ?: return false
         return state != pending.state && forgetAbandoned(state)
-    }
-
-    /** The end of an authorization that [cancelPendingAuthorization] cut short: a user cancel, with the tab possibly still open. */
-    private suspend fun abandonedByApp(pending: PendingAuthorizationRequest): Nothing {
-        rememberAbandoned(pending.state)
-        pendingStore.clear()
-        state.value = settledState()
-        throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.UserCancelled)
     }
 
     private suspend fun complete(
@@ -637,6 +628,9 @@ public class AuthorizationFlow(
          * flight at once is not a case worth supporting — it is the bug.
          */
         private val AUTHORIZE_LOCK = Mutex()
+
+        @Volatile
+        private var resumeSignal: CompletableDeferred<Unit>? = null
 
         /**
          * `state` values of authorizations whose caller was cancelled while their tab was

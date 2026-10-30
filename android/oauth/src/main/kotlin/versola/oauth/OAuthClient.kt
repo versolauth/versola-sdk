@@ -115,23 +115,6 @@ public class OAuthClient private constructor(
     }
 
     /**
-     * Gives up an authorization whose browser is gone, so that [login] can be called again now
-     * instead of being refused while [sessionState] stays `Authorizing` for the rest of the pending
-     * request's ten minutes. The case is the app killed while the browser was open and the user
-     * coming back to the app itself, not through the redirect: nothing else tells the SDK the
-     * redirect is not coming.
-     *
-     * A [login] or [stepUp] that is still waiting on the browser ends with
-     * `Recoverable(UserCancelled)`; the pending request is discarded and the state settles as for a
-     * user cancel (`Authenticated` over a stored grant, otherwise `Unauthenticated`). A tab that is
-     * still open may yet redirect, and that redirect is ignored. Does nothing when no authorization
-     * is pending, so it is safe to call without checking [sessionState] first.
-     */
-    public suspend fun cancelPendingAuthorization() {
-        flow.cancelPendingAuthorization()
-    }
-
-    /**
      * Answers a [VersolaError.StepUp] by re-authorizing at the authentication context the
      * resource server asked for, then leaves the app to re-issue the refused call. The scopes
      * are the configured ones unless [options] says otherwise.
@@ -215,12 +198,11 @@ public class OAuthClient private constructor(
 
     /**
      * `spec/oauth-sdk-api.md` section 5: a `login()` while this process is carrying an authorization
-     * out — the browser is up or opening, a resume is awaiting its redirect, or a code exchange has
-     * not finished — is refused rather than queued behind it or allowed to supersede a request the
-     * redirect may still complete. A pending request nobody awaits (a cancelled caller left it, or
-     * nothing started a resume) is a leftover, and the new login supersedes it; the state alone,
-     * `Authorizing` for the leftover's ten minutes, cannot tell the two apart. A resume that is
-     * awaiting a redirect which is not coming is ended with [cancelPendingAuthorization].
+     * out — another `login()` has its browser up, or a code exchange has not finished — is refused
+     * rather than queued behind it or allowed to disturb it. A pending request that nobody awaits (a
+     * cancelled caller left it, or a restore found it) is a leftover, and a resume that is only
+     * waiting for its redirect is pre-empted: the new login supersedes both, so the state alone,
+     * `Authorizing` for the leftover's ten minutes, does not refuse it.
      */
     private fun refuseWhileAuthorizing() {
         if (flow.authorizationInFlight) {
