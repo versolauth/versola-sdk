@@ -75,7 +75,9 @@ the device in this mode, and the browser opens on discovery's `authorization_end
 On redirect, in this order, all before any network call:
 
 1. `state` matches the persisted value, compared in constant time
-2. `iss` matches the configured issuer (RFC 9207) if present; if absent, this is only a failure
+2. `iss` equals the issuer the provider's metadata announces (RFC 9207), by simple string
+   comparison with no normalisation (section 2.4: a trailing slash or a case difference is a
+   different issuer), if present; if absent, this is only a failure
    when discovery advertises `authorization_response_iss_parameter_supported` — a deployment
    that does not advertise it may legitimately omit `iss`
 3. the response carries `code`
@@ -154,8 +156,6 @@ what a returning user sees. When a later read finds the request, the cold-start 
 then, not only at creation (Android). A collector of the state is not handed the error. With a
 grant the restore also **clears the pending slot on every cold start**, unread (it is residue,
 above); a slot that cannot be cleared yet fails the restore the same way and is retried.
-(Android deviation: it reads the slot and clears it when there is one, and an unreadable slot,
-being residue, is left in place and does not fail the restore.)
 
 The cost is a re-authorization started over a live session — a step-up, an account switch — and
 then killed mid-browser: it resolves in favour of the session that already exists rather than
@@ -281,7 +281,8 @@ before it has let the cold-start resume finish) and destroy the DPoP key that si
 `dpop_jkt` committed to, so the code exchange that followed would sign with a key matching
 nothing. The state stays `Authorizing` or `Unauthenticated` where it was; a session that believed
 it held a grant (the item was removed from under the app) settles `Unauthenticated`, its
-in-memory access token and claims dropped, the key and the pending request untouched.
+in-memory access token and claims dropped, the key and the pending request untouched. A real
+`invalid_grant` still wipes.
 
 ### `Authenticated → Authenticated` — `invalid_dpop_proof`, then `Authenticated → Unauthenticated`
 
@@ -294,23 +295,21 @@ same access token: the usual cause is clock skew the SDK can now correct from th
 The offset is learned from the `Date` header of **every** response from a server the proofs are
 for, a success as much as a refusal, so the retry's `iat` is already corrected when it is minted
 and a device with a wrong clock usually pays no refusal at all after its first request.
+One offset per client, shared by every origin, **the last response wins** (a server whose own clock
+is wrong moves it until the next one that is right); in memory only (see the persistence summary);
+an absent or unparseable `Date` leaves what was learned in place. Two things are not learned from: a `Date` more
+than 30 days from the device clock (a device that far off could not complete a TLS handshake against
+most certificates, so the value is a stale cache or a broken intermediary), and a response with an
+`Age` header other than `0` (it was generated earlier and handed back by a cache or proxy, so its
+`Date` is when the origin made it, RFC 9111 section 5.1, not now; on iOS also one the URL cache
+produced). UserInfo follows the same rule
+as the token endpoint and the authenticated client: `invalid_dpop_proof` is retried **once**, in
+place, with the same access token and a fresh proof, spending no renewal and so rotating no
+refresh token, and a second one is `Reauthenticate(CredentialsInvalidated)`.
 
-Common to both SDKs: one offset per client, shared by every origin, **the last response wins**
-(a server whose own clock is wrong moves it until the next one that is right); in memory only
-(see the persistence summary); an absent or unparseable `Date` leaves what was learned in place.
-
-iOS only until Android follows (tracked as a follow-up to the Android batch; nothing below is
-claimed for Android yet):
-
-- A `Date` more than 30 days from the device clock is ignored: a device that far off could not
-  complete a TLS handshake against most certificates, so the value is a stale cache or a broken
-  intermediary.
-- A response with an `Age` header other than `0`, or one the URL cache rather than the network
-  produced, teaches nothing: its `Date` is when the origin generated it (RFC 9111 section 5.1),
-  not now, and would shift the offset by the age of the response. This matters most for the app's
-  `AuthenticatedSession` traffic, which goes through the app's own `URLSession` and its cache.
-- UserInfo retries `invalid_dpop_proof` once in place, as the token endpoint and the
-  authenticated session do (see `errors.md`). Android's UserInfo client does not yet.
+A second failure means the key no longer matches the grant, not a timing problem. Nothing
+retries it again: the SDK wipes credential state exactly as `Refreshing → Unauthenticated` does
+and surfaces `Reauthenticate`.
 
 ### `Authenticated → StepUpRequired → Authorizing`
 
@@ -418,7 +417,7 @@ undecryptable. This is indistinguishable from tampering and is treated as sign-o
 
 `logout()` revokes the refresh token at `/revoke` (through `/native/revoke` under
 `BackChannel.Edge`, with a proof signed for the remembered `revocation_endpoint`), opens auth's
-`/logout` with `id_token_hint`, `post_logout_redirect_uri` and a `state`, then wipes local
+`/logout` with `id_token_hint`, `client_id`, `post_logout_redirect_uri` and a `state`, then wipes local
 state. Revocation comes first: a user who dismisses the signed-out page has still had the grant
 killed at the server. The `id_token_hint` is the last ID token held, which every refresh
 renews; auth silently ignores an expired hint and then has no session to end, so a session
@@ -450,6 +449,7 @@ one grant to one device-installation; reusing it across users on a shared device
 | DPoP nonce, per origin | Memory | no | no |
 | Clock skew offset | Memory | no | no |
 | Discovery metadata, with the lifetime it was fetched with | Disk, unencrypted | yes, until the lifetime ends | yes |
+| JWK Set (generic facade), with the lifetime it was fetched with | Disk, unencrypted | yes, until the lifetime ends (a week more for a refresh's ID token only) | yes |
 
 **Uninstall.** Android's credentials are files in the app's own data and go with the app. The
 iOS Keychain outlives it: a reinstall on the same device would otherwise open signed in as the
@@ -475,7 +475,13 @@ learned from a throwaway item, never to the other groups the process is entitled
 cannot be learned nothing is deleted.
 
 Discovery metadata is not credential material and is cached across logout deliberately: a
-re-login should not need a round trip to `/.well-known/openid-configuration`. The two native
+re-login should not need a round trip to `/.well-known/openid-configuration`. It is fetched again
+when its lifetime has ended (the provider's `Cache-Control: max-age` or `Expires`, held between 5
+minutes and 24 hours, 24 hours when it says nothing), in memory and on disk; if the provider cannot
+be reached then, the old document is served once more and the next try waits a minute (it is not
+what anything is verified against, and a `logout()` offline must still finish). The JWK Set is cached the same way but fails closed: an expired set that cannot be
+refetched is not served, because a withdrawn signing key is what it would still vouch for (the one
+exception is a refresh's ID token, up to a week past expiry: `retry-policy.md`, "A stale key set for a refresh"). The two native
 endpoints are kept for the same reason: a refresh in a later process signs for them and has no
 `/native/start` of its own to learn them from. Without the file the SDK falls back to
 discovery's `mtls_endpoint_aliases`, then to the plain endpoints — inferences, where the file

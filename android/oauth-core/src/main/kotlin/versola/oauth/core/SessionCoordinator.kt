@@ -5,7 +5,14 @@ import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
@@ -91,6 +98,13 @@ public class SessionCoordinator(
      * ([ServerFault.wasNotProcessed]) and every other failure is surfaced after one request.
      */
     private val repeatsRefreshAfterAmbiguousFailure: Boolean = true,
+    /**
+     * Where the best-effort revocation of a refused login's refresh token runs: detached from the
+     * login, so the app gets the error that ended it at once and not after a revocation that may
+     * take a timeout. A scope of the coordinator's own, never the caller's, which may be about to
+     * be cancelled with the screen the error is shown on.
+     */
+    private val background: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default),
 ) : AccessTokenSource {
 
     /**
@@ -290,7 +304,16 @@ public class SessionCoordinator(
      * [resumePendingLogin] so that a sign-in finished in a cold-started process passes through
      * exactly the checks and the persistence order of one finished in the process that began it.
      */
-    private suspend fun finishLogin(grant: AuthorizationGrant, maxAge: Long?): TokenResponse {
+    private suspend fun finishLogin(grant: AuthorizationGrant, maxAge: Long?): TokenResponse =
+        // However it ends — a grant stored, a refusal, a cancelled caller, a store that would not
+        // write — the exchange is over, and `login()` is no longer refused on its account.
+        try {
+            exchange(grant, maxAge)
+        } finally {
+            flow.exchangeFinished()
+        }
+
+    private suspend fun exchange(grant: AuthorizationGrant, maxAge: Long?): TokenResponse {
         // One attempt, with no retry budget around it. An authorization code is single-use
         // and the token endpoint offers no idempotency for `authorization_code` —
         // `Idempotency-Key` is honoured for the refresh family alone (`OAuthTokenService`) —
@@ -301,6 +324,9 @@ public class SessionCoordinator(
         // recognise as a repeat. The nonce and clock-skew retries inside [TokenClient] still
         // apply — those answer a challenge raised before the code was redeemed.
         var validated: IdTokenClaims? = null
+        // What the provider issued, once it has: a login that fails after this point discards it
+        // unused, and the refresh token is then a live credential nobody holds (below).
+        var exchanged: TokenResponse? = null
         val response = try {
             val issued = try {
                 tokenClient.exchange(grant)
@@ -309,6 +335,7 @@ public class SessionCoordinator(
                 retryScope.endedBy(tokenOrigin(), e)
                 throw e
             }
+            exchanged = issued
             // Validated before anything is persisted (`spec/oauth-sdk-api.md` section 11): a
             // rejected ID token leaves the store exactly as it was.
             validated = idTokenValidator?.let { validator ->
@@ -343,6 +370,11 @@ public class SessionCoordinator(
             throw e
         } catch (e: Throwable) {
             flow.abandonLogin()
+            // The provider already issued these and the SDK is throwing them away: an ID token that
+            // failed validation, or could not be checked, leaves a refresh token that is valid at the
+            // server for as long as it lives and that no device holds. Best effort, after the state
+            // has settled and detached: the caller gets the error that ended the login now.
+            exchanged?.let { revokeDiscarded(it) }
             throw e
         }
         val refreshToken = response.refreshToken
@@ -501,10 +533,9 @@ public class SessionCoordinator(
             }
 
             val startedIn = epoch.get()
-            flow.setState(SessionState.Refreshing)
 
             val result = try {
-                Result.success(performRefresh(startedIn))
+                Result.success(performRefresh(startedIn, priorState))
             } catch (e: CancellationException) {
                 withContext(NonCancellable) {
                     // `Refreshing` was pushed by this flight and nothing resolved it, so it
@@ -553,8 +584,14 @@ public class SessionCoordinator(
         flight.complete(outcome)
     }
 
-    private suspend fun performRefresh(startedIn: Long): TokenResponse {
+    private suspend fun performRefresh(startedIn: Long, priorState: SessionState): TokenResponse {
         val response = try {
+            // Asked before `Refreshing` is published, and without the storage key: a refresh with
+            // no grant stored makes no token request and is not a transition at all (see the
+            // `NoGrantStored` catch). The answer is re-checked below, where the token is unwrapped,
+            // because the store can change between the two.
+            if (!credentialStore.hasGrant()) throw NoGrantStored()
+            flow.setState(SessionState.Refreshing)
             // Step 1. Recorded once, from one unwrap that spends nothing — hashing does not
             // take ownership of what it reads, so this unwrap is independent of the one(s)
             // below and leaves the stored token exactly as it was.
@@ -564,7 +601,7 @@ public class SessionCoordinator(
             // from it (step 2 never ran), so replaying with it is correct rather than merely
             // convenient.
             val idempotencyKey = credentialStore.pendingRotation() ?: run {
-                val key = credentialStore.useRefreshToken { idempotencyKeyFor(it) } ?: noGrantStored()
+                val key = credentialStore.useRefreshToken { idempotencyKeyFor(it) } ?: throw NoGrantStored()
                 credentialStore.savePendingRotation(key)
                 key
             }
@@ -579,54 +616,109 @@ public class SessionCoordinator(
                 // re-unwraps the still-untouched ciphertext each time, which is also exactly
                 // the "unwrapped for the duration of one token request and no longer" rule
                 // `spec/state-machine.md`'s `Locked` section states for every other caller.
-                credentialStore.useRefreshToken { tokenClient.refresh(it, idempotencyKey) } ?: noGrantStored()
+                credentialStore.useRefreshToken { tokenClient.refresh(it, idempotencyKey) } ?: throw NoGrantStored()
             }
-            // An ID token on a refresh response is validated with the login rules minus the
-            // nonce, and against the claims it replaces (OpenID Connect Core 12.2), before the
-            // response is persisted. A refusal is a `Configuration` fault handled below: the
-            // grant stays, nothing from this response is kept.
-            val refreshedClaims = idTokenValidator?.let { validator ->
-                issued.idToken?.let {
-                    validator.validate(
-                        it,
-                        expectedNonce = null,
-                        accessToken = issued.accessToken,
-                        maxAge = null,
-                        previous = restoreClaims(),
-                        serverTime = issued.serverDate,
-                    )
+            // Step 2 comes before the ID token is judged, and for a reason the validator cannot
+            // give: by now the provider has rotated, so the response's refresh token is the only
+            // live one and the stored one is spent. Validating first would let a key set that
+            // cannot be fetched, an unknown `kid` or a changed `sub` — or a caller cancelled
+            // during that fetch — drop the new token on the floor, and the next refresh would
+            // present the spent one: `invalid_grant`, a wipe, and on a provider that treats
+            // reuse as theft a revoked family. A bad ID token costs the ID token, never the grant.
+            val validator = idTokenValidator
+            val rawIdToken = issued.idToken
+            val validating = validator != null && rawIdToken != null
+            // The raw ID token is stored only once it has been validated (what is on disk is read
+            // back as claims without being re-verified, and replayed as `id_token_hint`), so this
+            // write carries none; the one that does comes after, whether or not the token rotated.
+            val rotated = issued.refreshToken
+            run {
+                withContext(NonCancellable) {
+                    refreshFlight.mutex.withLock {
+                        // The grant was wiped while this request was out — a `logout()`, or another
+                        // caller's `invalid_grant`. The server's answer is for a session that has
+                        // ended, and persisting it would resurrect the session; the wipe's state stands.
+                        if (epoch.get() != startedIn) throw WipedMeanwhile()
+                        // `BoundRenewal` echoes the same `refresh_token`, which is stored again as
+                        // it was; a response omitting it leaves the stored value alone rather than
+                        // overwriting it with an absence. Step 3 rides on the same write — see
+                        // [CredentialStore.replaceRefreshToken] — and under DPoP clears a slot
+                        // whose value never moved: inert, per the class doc, not skipped.
+                        //
+                        // Both inside this same try: a key that locks or is invalidated between the
+                        // server answering and the write landing is exactly what the catches below
+                        // already map to `Locked` or `Unauthenticated`, and leaving it outside would
+                        // let that failure escape with `Refreshing` never resolved — the one state
+                        // this class must never leave stuck. And under the flight mutex, so a wipe
+                        // cannot slip between the check and the write.
+                        if (rotated != null) {
+                            credentialStore.replaceRefreshToken(rotated, rawIdToken.takeUnless { validator != null })
+                        } else {
+                            credentialStore.savePendingRotation(null)
+                        }
+                        if (!validating) {
+                            cachedAccessToken = Cached(issued, elapsedMillis())
+                            flow.setState(SessionState.Authenticated)
+                        }
+                    }
+                }
+                if (validating) {
+                    // An ID token on a refresh response is validated with the login rules minus
+                    // the nonce, and against the claims it replaces (OpenID Connect Core 12.2). A
+                    // refusal is a `Configuration` fault handled below, a key set that cannot be
+                    // fetched a `Recoverable` one; either way the grant — the rotated token just
+                    // stored — stays, and nothing else from this response is kept: not the access
+                    // token, which the same ID token vouches for, nor the ID token, nor its claims.
+                    // A key set that cannot be fetched may be judged against the one held past its
+                    // lifetime, for this check alone (`spec/retry-policy.md`, "A stale key set for a
+                    // refresh"): without that every `accessToken()` of a key-set outage spends a
+                    // rotation, receives an access token and throws it away.
+                    val refreshedClaims = withContext(StaleKeysAllowed()) {
+                        checkNotNull(validator).validate(
+                            checkNotNull(rawIdToken),
+                            expectedNonce = null,
+                            accessToken = issued.accessToken,
+                            maxAge = null,
+                            previous = restoreClaims(),
+                            serverTime = issued.serverDate,
+                        )
+                    }
+                    withContext(NonCancellable) {
+                        refreshFlight.mutex.withLock {
+                            if (epoch.get() != startedIn) throw WipedMeanwhile()
+                            credentialStore.saveIdToken(rawIdToken)
+                            claims = refreshedClaims
+                            cachedAccessToken = Cached(issued, elapsedMillis())
+                            flow.setState(SessionState.Authenticated)
+                        }
+                    }
                 }
             }
             warnIfNoExpiry(issued)
-            refreshFlight.mutex.withLock {
-                // The grant was wiped while this request was out — a `logout()`, or another
-                // caller's `invalid_grant`. The server's answer is for a session that has
-                // ended, and persisting it would resurrect the session; the wipe's state stands.
-                if (epoch.get() != startedIn) throw WipedMeanwhile()
-                refreshedClaims?.let { claims = it }
-                // Step 2. Persisted before returning to any caller — including the one whose
-                // call triggered this refresh. `BoundRenewal` echoes the same `refresh_token`,
-                // which is stored again as it was; a response omitting it leaves the stored
-                // value alone rather than overwriting it with an absence.
-                issued.refreshToken?.let { credentialStore.save(it, issued.idToken) }
-                // Step 3. Cleared only now. Under DPoP this clears a slot whose value never
-                // moved — inert, per the class doc, not skipped.
-                //
-                // Both writes run inside this same try: a key that locks or is invalidated
-                // between the server answering and either one landing is exactly what the
-                // catches below already map to `Locked` or `Unauthenticated`, and leaving
-                // them outside would let that failure escape as an uncaught exception with
-                // `Refreshing` never resolved — the one state this class must never leave
-                // stuck. And under the flight mutex, with the state published in the same
-                // breath, so a wipe cannot slip between the save and the `Authenticated`.
-                credentialStore.savePendingRotation(null)
-                cachedAccessToken = Cached(issued, elapsedMillis())
-                flow.setState(SessionState.Authenticated)
-            }
             issued
         } catch (e: WipedMeanwhile) {
             // Not a failure of the refresh and nothing to wipe: the caller that asked is told
             // the grant is gone, which is what it will find.
+            throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.GrantRejected)
+        } catch (e: NoGrantStored) {
+            // No refresh token was there to spend, so there is nothing to wipe either, and wiping
+            // anyway destroys what is *not* the grant's: the pending authorization of a login in
+            // flight (an app that asks for a token before it has looked at `sessionState`) and the
+            // DPoP key its `dpop_jkt` already committed that authorization to, after which the
+            // code exchange signs with a key the code is not bound to. The state is where it was
+            // (`Authorizing` stays, so does `Unauthenticated`); a session that believed it held a
+            // grant — the item was removed from under the app — settles `Unauthenticated` with its
+            // in-memory token and claims dropped. The caller is told the session is not there.
+            refreshFlight.mutex.withLock {
+                if (epoch.get() == startedIn) {
+                    if (priorState != SessionState.Authorizing) {
+                        cachedAccessToken = null
+                        claims = null
+                        claimsRestored = false
+                    }
+                    flow.setState(if (priorState == SessionState.Authorizing) SessionState.Authorizing else SessionState.Unauthenticated)
+                }
+            }
             throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.GrantRejected)
         } catch (e: CancellationException) {
             // Not an outcome of the refresh, and not this function's to settle: [refresh]
@@ -676,14 +768,12 @@ public class SessionCoordinator(
     private class WipedMeanwhile : RuntimeException()
 
     /**
-     * There was no refresh token to spend — `credentialStore.useRefreshToken` answered null,
-     * which happens only when the session was already signed out in substance, whatever state
-     * the caller last observed. Modelled as the same `Reauthenticate(GrantRejected)` the token
-     * endpoint's own `invalid_grant` produces, so the one `catch` above wipes and settles
-     * `Unauthenticated` for this case exactly as it does for that one.
+     * There was no refresh token to spend — `credentialStore.useRefreshToken` answered null, which
+     * happens only when the session was already signed out in substance, whatever state the
+     * caller last observed. Distinct from the token endpoint's own `invalid_grant`: that one ends a
+     * grant that existed and wipes it, this one has nothing to wipe (see [performRefresh]).
      */
-    private fun noGrantStored(): Nothing =
-        throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.GrantRejected)
+    private class NoGrantStored : RuntimeException()
 
     /**
      * `Authenticated → LoggingOut → Unauthenticated` (#10, scenario 18), in the order
@@ -705,7 +795,18 @@ public class SessionCoordinator(
         var serverSessionEnded = false
         var revoked = false
         try {
-            refreshFlight.mutex.withLock { refreshFlight.pending }?.let { flight -> runCatching { flight.await() } }
+            refreshFlight.mutex.withLock { refreshFlight.pending }?.let { flight ->
+                // The flight's outcome is a `Result` and is not this caller's to report (the wipe
+                // below ends the grant whatever it was), but this caller's cancellation is:
+                // `runCatching` swallowed it, and a cancelled `logout()` went on to revoke and
+                // open the end-session browser. A flight abandoned by its own winner completes with
+                // null, which is no reason to stop.
+                try {
+                    flight.await()
+                } catch (e: CancellationException) {
+                    currentCoroutineContext().ensureActive()
+                }
+            }
             if (revoke) revoked = revokeQuietly()
             if (endSession) {
                 val hint = try {
@@ -714,12 +815,51 @@ public class SessionCoordinator(
                     logger?.warn("logout: id_token_hint unavailable (${e.message}); ending the session without it")
                     null
                 }
-                serverSessionEnded = flow.endSession(hint)
+                // Best effort like the revocation above: an end-session endpoint the document gave that
+                // is not `https`, or a discovery that cannot be reached, is `sessionEnded = false` and a
+                // log line, not a `logout()` that throws after the wipe (`spec/oauth-sdk-api.md` section 5).
+                serverSessionEnded = try {
+                    flow.endSession(hint)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: VersolaError) {
+                    logger?.warn("logout: the provider's session could not be ended (${e.message}); it ends at its own expiry instead")
+                    false
+                }
             }
         } finally {
             withContext(NonCancellable) { wipe() }
         }
         LogoutOutcome(sessionEnded = serverSessionEnded, tokenRevoked = revoked)
+    }
+
+    /**
+     * RFC 7009 revocation of the refresh token of a response this session is not going to keep, so
+     * that a login refused after the exchange does not leave a live grant at the provider. Revoking
+     * the refresh token also ends the access tokens issued from the same grant (RFC 7009 section
+     * 2.1: the server "SHOULD" invalidate them), which is why only the refresh token is sent; a
+     * response with none has nothing the SDK can revoke and its access token dies at expiry.
+     *
+     * Never throws a [VersolaError] or anything else but the caller's cancellation: the login's
+     * own failure is what the app must see. Detached and bounded: one attempt, five seconds, outside
+     * the login's budget, so the error is delivered at once.
+     */
+    private fun revokeDiscarded(response: TokenResponse) {
+        val token = response.refreshToken?.copyOf() ?: return
+        background.launch {
+            try {
+                // Its own bound and one attempt: the login's budget is over (the error is being
+                // delivered) and a revocation is not worth more than a few seconds of a radio.
+                withTimeoutOrNull(REVOCATION_TIMEOUT_MILLIS) { tokenClient.revoke(token.copyOf()) }
+                    ?: logger?.warn("login: revoking the refresh token of the rejected response timed out; it dies at expiry instead")
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logger?.warn("login: revoking the refresh token of the rejected response failed (${if (e is VersolaError) e.message else e.javaClass.simpleName}); it dies at expiry instead")
+            } finally {
+                token.fill(0)
+            }
+        }
     }
 
     /** True when the provider took the revocation (RFC 7009: taken, not necessarily live). */
@@ -815,6 +955,9 @@ public class SessionCoordinator(
 }
 
 private const val NANOS_PER_MILLI = 1_000_000L
+
+/** How long the detached revocation of a refused login's refresh token may take. */
+private const val REVOCATION_TIMEOUT_MILLIS = 5_000L
 
 /** OpenID Connect Core §11. */
 private const val OFFLINE_ACCESS = "offline_access"

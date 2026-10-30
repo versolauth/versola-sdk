@@ -1,12 +1,17 @@
 package versola.oauth.core
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.flow
 import java.net.URLEncoder
 import java.security.SecureRandom
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withTimeoutOrNull
@@ -147,6 +152,78 @@ public class AuthorizationFlow(
         state.value = settledState()
     }
 
+    /** [authorize] bodies running, whether or not they have reached the browser yet. */
+    private val browserLegs = AtomicInteger()
+
+    /** Validated redirects whose code exchange the coordinator has not finished; see [exchangeFinished]. */
+    private val exchanges = AtomicInteger()
+
+    /**
+     * Whether this process is carrying an authorization out: a `login()` or `stepUp()` has its
+     * browser up (or being opened) with a live awaiter, or a validated redirect's code exchange has
+     * not finished. This, not the `Authorizing` state, is what makes a second `login()` wrong. A
+     * pending request that nobody awaits (a cancelled caller left it for a resume the app never asked
+     * for, or a cold start restored it) is only a leftover, and a resume that merely waits for its
+     * redirect is pre-empted: [authorize] supersedes both. The state alone cannot tell these apart,
+     * and refusing on it blocked `login()` for the leftover's ten minutes
+     * (`spec/oauth-sdk-api.md` section 5).
+     */
+    public val authorizationInFlight: Boolean get() = browserLegs.get() > 0 || exchanges.get() > 0
+
+    /**
+     * The coordinator's `finishLogin` has ended, however it ended: the exchange is no longer in flight.
+     * A counter rather than a flag so two flows over one store cannot clear each other's; clamped so
+     * a caller that used [authorize] without a coordinator (a test) cannot drive it negative.
+     */
+    internal fun exchangeFinished() {
+        exchanges.updateAndGet { maxOf(0, it - 1) }
+    }
+
+    private inline fun <T> leg(block: () -> T): T {
+        browserLegs.incrementAndGet()
+        try {
+            return block()
+        } finally {
+            browserLegs.decrementAndGet()
+        }
+    }
+
+    /**
+     * Completed to end a [resumePendingAuthorization] that is only *waiting* for a redirect, so that
+     * whatever needs the authorize lock next does not wait out the request's ten minutes behind it:
+     * [authorize] (a `login()` or `stepUp()`), [endSession] and the local wipe of a sign-out all do
+     * this first. Null when no resume is running. Process-wide, like [AUTHORIZE_LOCK] it belongs to.
+     * Written under [AUTHORIZE_LOCK] by the resume, read
+     * without it by the pre-empting caller, which is the point: it must reach a resume that holds the
+     * lock.
+     *
+     * A resume is not "an authorization carried out": nothing is open in this process that a new
+     * `login()` could disturb, only a request that may or may not still be answered. A browser that is
+     * up for a live `login()` is, and so is a code exchange; neither is pre-empted (see
+     * [authorizationInFlight]). If the resume's redirect has already arrived it is past the wait and
+     * its exchange is counted, so the signal finds nobody to wake.
+     */
+    private fun preemptResume() {
+        resumeSignal?.complete(Unit)
+    }
+
+    /**
+     * Waits for [block], the resume's wait for a redirect, until [signal] says a newer operation
+     * wants the lock: then [block] is cancelled and the answer is null. The caller's own
+     * cancellation is not this: it propagates.
+     */
+    private suspend fun awaitUnlessPreempted(signal: CompletableDeferred<Unit>, block: suspend () -> BrowserOutcome): BrowserOutcome? =
+        coroutineScope {
+            val work = async { block() }
+            select {
+                work.onAwait { it }
+                signal.onAwait {
+                    work.cancel()
+                    null
+                }
+            }
+        }
+
     /** `Authenticated → StepUpRequired`; nothing else moves, the grant is intact. */
     internal fun enterStepUpRequired() {
         if (state.value == SessionState.Authenticated) state.value = SessionState.StepUpRequired
@@ -168,6 +245,9 @@ public class AuthorizationFlow(
      * `Unauthenticated` whatever the server leg did.
      */
     internal suspend fun completeLogout() {
+        // A resume still waiting for a redirect would otherwise redeem it into the session this
+        // sign-out just ended: it is told to stand down before its request is wiped.
+        preemptResume()
         pendingStore.clear()
         state.value = SessionState.Unauthenticated
     }
@@ -188,13 +268,21 @@ public class AuthorizationFlow(
      * channel are one per process, and a `login()` racing a `logout()` for them is the bug,
      * not a case to support.
      */
-    public suspend fun endSession(idTokenHint: String?): Boolean = AUTHORIZE_LOCK.withLock {
+    public suspend fun endSession(idTokenHint: String?): Boolean {
+        // The sign-out's browser needs the lock a waiting resume holds for up to ten minutes.
+        preemptResume()
+        return endSessionUnderLock(idTokenHint)
+    }
+
+    private suspend fun endSessionUnderLock(idTokenHint: String?): Boolean = AUTHORIZE_LOCK.withLock {
         ensureRestored()
         val endpoint = discovery.metadata().endSessionEndpoint
         if (endpoint.isNullOrBlank()) return@withLock false
+        // The user is about to be sent to it, with the ID token as `id_token_hint`.
+        requireSecureEndpoint("end_session_endpoint", endpoint)
         val postLogoutRedirectUri = configuration.postLogoutRedirectUri?.value
         val expectedState = SecureTokens.generate(SecureRandom())
-        val uri = endSessionUri(endpoint, idTokenHint, postLogoutRedirectUri, expectedState)
+        val uri = endSessionUri(endpoint, idTokenHint, configuration.clientId, postLogoutRedirectUri, expectedState)
 
         val outcome = try {
             // Never ephemeral: the point is to end the session the shared browser holds.
@@ -217,17 +305,23 @@ public class AuthorizationFlow(
     }
 
     /**
-     * OpenID Connect RP-Initiated Logout §2. `state` goes whether or not a redirect URI does:
+     * OpenID Connect RP-Initiated Logout §2: `id_token_hint`, `client_id`, `post_logout_redirect_uri`
+     * when configured, and `state`. `state` goes whether or not a redirect URI does:
      * it costs nothing and is what lets the redirect be told apart from a stale one.
      */
     private fun endSessionUri(
         endpoint: String,
         idTokenHint: String?,
+        clientId: String,
         postLogoutRedirectUri: String?,
         state: String,
     ): String {
         val parameters = buildList {
             idTokenHint?.let { add("id_token_hint" to it) }
+            // RP-Initiated Logout §2: with no usable `id_token_hint` (an expired one is ignored, a
+            // session with none has none) it is what tells the provider which client is asking, and
+            // some validate `post_logout_redirect_uri` against it.
+            add("client_id" to clientId)
             postLogoutRedirectUri?.let { add("post_logout_redirect_uri" to it) }
             add("state" to state)
         }
@@ -267,7 +361,22 @@ public class AuthorizationFlow(
         parameters: AuthorizationParameters = AuthorizationParameters(),
         /** `spec/oauth-sdk-api.md` section 6: a browser without the user's shared state. */
         ephemeralBrowser: Boolean = false,
-    ): AuthorizationGrant = AUTHORIZE_LOCK.withLock {
+    ): AuthorizationGrant {
+        // A resume that is only waiting for a redirect gives way: its request is the leftover this
+        // call supersedes below. Before the lock, because the resume is holding it.
+        preemptResume()
+        return AUTHORIZE_LOCK.withLock {
+            leg { authorizeUnderLock(scopes, acrValues, maxAge, parameters, ephemeralBrowser) }
+        }
+    }
+
+    private suspend fun authorizeUnderLock(
+        scopes: Set<String>,
+        acrValues: List<String>,
+        maxAge: Long?,
+        parameters: AuthorizationParameters,
+        ephemeralBrowser: Boolean,
+    ): AuthorizationGrant {
         ensureRestored()
         val metadata = discovery.metadata()
         // `code_challenge_methods_supported` present without S256 is a provider this SDK cannot
@@ -290,6 +399,10 @@ public class AuthorizationFlow(
         } else {
             starter.start(request, metadata, clock()).let { it.pending to it.browserUri }
         }
+        // A request still in the slot is a leftover nobody awaits (else this call would not be here,
+        // the lock being held for as long as one is awaited): superseded, and its `state` remembered
+        // so that a redirect its tab still delivers is stepped over rather than failing this login.
+        pendingStore.load()?.let { rememberAbandoned(it.state) }
         pendingStore.save(pending)
         state.value = SessionState.Authorizing
 
@@ -318,7 +431,7 @@ public class AuthorizationFlow(
             state.value = settledState()
             throw e
         }
-        complete(outcome, pending, metadata)
+        return complete(outcome, pending, metadata)
     }
 
     /**
@@ -333,6 +446,16 @@ public class AuthorizationFlow(
      * cancel wipes the request, so there is nothing here to resume.
      */
     public suspend fun resumePendingAuthorization(): AuthorizationGrant? = AUTHORIZE_LOCK.withLock {
+        val signal = CompletableDeferred<Unit>()
+        resumeSignal = signal
+        try {
+            resumeUnderLock(signal)
+        } finally {
+            resumeSignal = null
+        }
+    }
+
+    private suspend fun resumeUnderLock(signal: CompletableDeferred<Unit>): AuthorizationGrant? {
         ensureRestored()
         val pending = pendingStore.load()
             // Restoring already discarded it, and "expired" is not "nothing was pending":
@@ -341,7 +464,7 @@ public class AuthorizationFlow(
                 expiredOnRestore = false
                 throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.PendingRequestExpired)
             } else {
-                return@withLock null
+                return null
             }
         if (pending.isExpired(clock())) {
             pendingStore.clear()
@@ -354,13 +477,25 @@ public class AuthorizationFlow(
         // before the process died — and an unbounded wait here holds the authorize lock, and
         // with it every later `login()`, for as long as the app lives.
         val remaining = PendingAuthorizationRequest.MAX_AGE_MILLIS - (clock() - pending.createdAtEpochMillis)
-        val outcome = withTimeoutOrNull(remaining) { belongingTo(pending, outsideRetryBudget { browser.awaitPendingRedirect() }) }
+        var preempted = signal.isCompleted
+        val outcome = if (preempted) null else withTimeoutOrNull(remaining) {
+            awaitUnlessPreempted(signal) { belongingTo(pending, outsideRetryBudget { browser.awaitPendingRedirect() }) }
+                .also { if (it == null) preempted = true }
+        }
+        if (preempted) {
+            // A newer operation (a login, a sign-out) wants the lock. This request is its leftover:
+            // its tab may yet redirect, so its `state` is remembered, and the slot is left to whoever
+            // took over (a login's `save` replaces it, a sign-out's wipe clears it).
+            rememberAbandoned(pending.state)
+            return null
+        }
+        val answered = outcome
             ?: run {
                 pendingStore.clear()
                 state.value = settledState()
                 throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.PendingRequestExpired)
             }
-        complete(outcome, pending, discovery.metadata())
+        return complete(answered, pending, discovery.metadata())
     }
 
     /**
@@ -408,9 +543,15 @@ public class AuthorizationFlow(
                 AuthorizationResponseValidator.validate(
                     redirect = outcome.uri,
                     pending = pending,
-                    issuer = configuration.issuer,
+                    // The issuer the provider announces, not the configured one: the configured
+                    // value has lost a trailing slash the provider's `iss` keeps (RFC 9207 section
+                    // 2.4 compares the strings as they are).
+                    issuer = metadata.issuer,
                     issParameterSupported = metadata.authorizationResponseIssParameterSupported,
-                )
+                ).also {
+                    // From here to the coordinator's `finishLogin` ending, the code is being redeemed.
+                    exchanges.incrementAndGet()
+                }
                 // Deliberately still Authorizing, and the pending request deliberately still
                 // stored: the machine reaches Authenticated only once a refresh token is
                 // durably held, and the slot is wiped only after that (#8).
@@ -466,34 +607,36 @@ public class AuthorizationFlow(
             // only residue and the state does not depend on it. Cancellation is not a
             // `Recoverable` and passes through.
             val granted = hasStoredGrant()
-            val pending = try {
-                pendingStore.load()
-            } catch (e: VersolaError.Recoverable) {
-                if (!granted) {
+            if (granted) {
+                // With a grant the slot is only residue — a login killed between persisting the
+                // token and clearing it, its code already redeemed — and the state does not depend
+                // on it, so it is cleared on every cold start **unread** (`spec/state-machine.md`,
+                // the same rule as iOS): nothing is decrypted that nothing needs, and an unreadable
+                // slot cannot hide behind not being read. A slot that cannot be cleared yet fails
+                // the restore the way an unreadable one does without a grant: `Locked`, the storage
+                // error to the operation that asked, nothing remembered, so the next call retries.
+                //
+                // The cost is a re-authorization started *over* a live session (a step-up, an
+                // account switch) and then killed mid-browser: it is resolved in favour of the
+                // session that already exists rather than resumed, since what is on disk cannot
+                // tell it from a login whose code was already redeemed.
+                try {
+                    pendingStore.clear()
+                } catch (e: VersolaError.Recoverable) {
                     state.value = SessionState.Locked
                     throw e
                 }
-                null
+                state.value = SessionState.Authenticated
+                restored = true
+                return
+            }
+            val pending = try {
+                pendingStore.load()
+            } catch (e: VersolaError.Recoverable) {
+                state.value = SessionState.Locked
+                throw e
             }
             state.value = when {
-                // A stored grant outranks whatever the browser leg left behind, and it is
-                // read first for both directions of that: without it a returning session
-                // reports `Unauthenticated` on every cold start until something happens to
-                // call refresh, and with a pending request beside it the request is the
-                // residue of a login killed between persisting the token and clearing the
-                // slot — a code already redeemed, so the redirect it still waits for can no
-                // longer be spent and resuming it would only fail as `invalid_grant`.
-                //
-                // The cost is a re-authorization started *over* a live session (a step-up,
-                // an account switch) and then killed mid-browser: it is resolved in favour
-                // of the session that already exists rather than resumed. Nothing is lost
-                // that the next 401 does not ask for again, and the alternative — believing
-                // a pending request that may or may not have been redeemed — has no way to
-                // tell the two apart.
-                granted -> {
-                    if (pending != null) pendingStore.clear()
-                    SessionState.Authenticated
-                }
                 pending == null -> SessionState.Unauthenticated
                 pending.isExpired(clock()) -> {
                     pendingStore.clear()
@@ -521,6 +664,9 @@ public class AuthorizationFlow(
          * flight at once is not a case worth supporting — it is the bug.
          */
         private val AUTHORIZE_LOCK = Mutex()
+
+        @Volatile
+        private var resumeSignal: CompletableDeferred<Unit>? = null
 
         /**
          * `state` values of authorizations whose caller was cancelled while their tab was

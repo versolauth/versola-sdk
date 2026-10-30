@@ -1,5 +1,7 @@
 package versola.oauth.core
 
+import kotlinx.coroutines.currentCoroutineContext
+
 import java.security.InvalidKeyException
 import java.security.PublicKey
 import java.security.Signature
@@ -267,13 +269,19 @@ public class JwsVerifier(
             VersolaError.Configuration.Detail.ProviderUnsupported("jwks_uri"),
         )
 
-        var loaded = jwks.keys(uri, forceRefresh = false)
+        val allowStale = currentCoroutineContext()[StaleKeysAllowed] != null
+        var loaded = jwks.keys(uri, forceRefresh = false, allowStale = allowStale)
         var candidates = select(loaded.keys, token, algorithm)
-        if (candidates.isEmpty() && !loaded.fetched) {
+        if (candidates.isEmpty() && !loaded.fetched && !loaded.stale) {
             // One refetch, and only when the set in hand was not itself just fetched: a cold
             // start that found no such key has already asked the provider.
-            loaded = jwks.keys(uri, forceRefresh = true)
+            loaded = jwks.keys(uri, forceRefresh = true, allowStale = allowStale)
             candidates = select(loaded.keys, token, algorithm)
+        }
+        // A stale set that lacks the token's `kid` proves an outage and nothing else: the key may be
+        // exactly the one the provider has published since. Recoverable, never a rejection.
+        if (candidates.isEmpty() && loaded.stale) {
+            throw loaded.cause ?: VersolaError.Recoverable(VersolaError.Recoverable.Cause.Network("the key set is unreachable"))
         }
         if (candidates.none { Jws.verify(token, it.publicKey, algorithm) }) {
             throw JwsRejection(IdTokenRejection.Signature, "no key at jwks_uri verifies the signature")
@@ -315,4 +323,14 @@ public object JwsSignatures {
         val empty = kotlinx.serialization.json.JsonObject(emptyMap())
         return Jws.verify(ParsedJws(empty, empty, signingInput, signature), key, parsed)
     }
+}
+
+/**
+ * Marks the coroutines that may be given a key set past its lifetime when the fetch fails as a
+ * `Recoverable`, up to a week past expiry (`spec/retry-policy.md`, "A stale key set for a refresh"):
+ * the check of a refresh's ID token and nothing else. A context element rather than a parameter
+ * because [IdTokenValidator] is public API and the rule is the coordinator's.
+ */
+internal class StaleKeysAllowed : kotlin.coroutines.AbstractCoroutineContextElement(Key) {
+    companion object Key : kotlin.coroutines.CoroutineContext.Key<StaleKeysAllowed>
 }

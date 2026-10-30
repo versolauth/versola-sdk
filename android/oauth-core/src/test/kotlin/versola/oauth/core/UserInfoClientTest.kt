@@ -124,6 +124,14 @@ class UserInfoClientTest {
     }
 
     @Test
+    fun `a userinfo endpoint that is not https is refused at the place of use, sending nothing`() = runTest {
+        val error = failure { client(endpoint = "http://idp.example.com/userinfo").fetch(tokens(bearer), "user-1") }
+
+        assertTrue((error as VersolaError.Configuration).detail is VersolaError.Configuration.Detail.DiscoveryMalformed)
+        assertEquals(0, server.requestCount)
+    }
+
+    @Test
     fun `a bearer token is not given a proof even when a proof source is wired`() = runTest {
         val dpop = RecordingDpop()
         serveJson()
@@ -280,6 +288,83 @@ class UserInfoClientTest {
         assertEquals(2, server.requestCount)
         assertEquals(listOf("proof-1", "proof-2"), listOf(server.takeRequest().headers["DPoP"], server.takeRequest().headers["DPoP"]))
         assertEquals("n-1", dpop.observed.first().third)
+    }
+
+    // --- invalid_dpop_proof: one retry in place, no renewal --------------------------------------
+
+    private fun serveInvalidProof(date: String? = null) {
+        server.enqueue(
+            MockResponse.Builder().code(401)
+                .addHeader("WWW-Authenticate", "DPoP error=\"invalid_dpop_proof\"")
+                .apply { date?.let { addHeader("Date", it) } }
+                .build(),
+        )
+    }
+
+    @Test
+    fun `invalid_dpop_proof is retried once in place with a fresh proof, spending no renewal`() = runTest {
+        val dpop = RecordingDpop()
+        serveInvalidProof()
+        serveJson()
+        val tokens = tokens(bound)
+
+        val info = client(dpop = dpop).fetch(tokens, "user-1")
+
+        assertEquals("user-1", info.subject)
+        assertEquals(0, tokens.renewals)
+        assertEquals(listOf("proof-1", "proof-2"), listOf(server.takeRequest().headers["DPoP"], server.takeRequest().headers["DPoP"]))
+    }
+
+    @Test
+    fun `a second invalid_dpop_proof is Reauthenticate(CredentialsInvalidated) after exactly two requests and no renewal`() = runTest {
+        serveInvalidProof()
+        serveInvalidProof()
+        serveInvalidProof()
+        val tokens = tokens(bound)
+
+        val error = failure { client(dpop = RecordingDpop()).fetch(tokens, "user-1") }
+
+        assertEquals(VersolaError.Reauthenticate.Reason.CredentialsInvalidated, (error as VersolaError.Reauthenticate).reason)
+        assertEquals(2, server.requestCount)
+        assertEquals(0, tokens.renewals)
+    }
+
+    /** Stamps proofs from a device clock and learns its offset from the `Date` of every response, as `ClockSkew` does. */
+    private class SkewLearningDpop(private val deviceMillis: Long) : DpopProofSource {
+        var offset = 0L
+        override suspend fun proof(method: String, url: String, accessToken: String?): String = "iat=${deviceMillis + offset}"
+        override fun observe(url: String, dateHeader: String?, nonceHeader: String?) {
+            val server = dateHeader?.let { java.time.ZonedDateTime.parse(it, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant().toEpochMilli() } ?: return
+            offset = server - deviceMillis
+        }
+    }
+
+    @Test
+    fun `a device ten minutes fast is refused once, learns the offset from that refusal and succeeds on the retry`() = runTest {
+        val serverMillis = 1_700_000_000_000L
+        val dpop = SkewLearningDpop(deviceMillis = serverMillis + 600_000)
+        serveInvalidProof(date = "Tue, 14 Nov 2023 22:13:20 GMT")
+        serveJson()
+        val tokens = tokens(bound)
+
+        client(dpop = dpop).fetch(tokens, "user-1")
+
+        assertEquals("iat=${serverMillis + 600_000}", server.takeRequest().headers["DPoP"])
+        assertEquals("the retry's iat is already corrected", "iat=$serverMillis", server.takeRequest().headers["DPoP"])
+        assertEquals("no refresh-token rotation for a clock problem", 0, tokens.renewals)
+    }
+
+    @Test
+    fun `a response that carries an Age teaches the clock nothing`() = runTest {
+        val dpop = RecordingDpop()
+        server.enqueue(
+            MockResponse.Builder().code(200).addHeader("Content-Type", "application/json")
+                .addHeader("Date", "Tue, 14 Nov 2023 22:13:20 GMT").addHeader("Age", "3600").body(json).build(),
+        )
+
+        client(dpop = dpop).fetch(tokens(bound), "user-1")
+
+        assertNull(dpop.observed.single().second)
     }
 
     @Test

@@ -151,8 +151,14 @@ public class VersolaConfiguration internal constructor(
             cause,
         )
 
-        /** The loopback names RFC 8252 §7.3 allows for a redirect, plus the emulator's alias for its host. */
-        private fun isLoopback(host: String?): Boolean =
-            host == "localhost" || host == "127.0.0.1" || host == "[::1]" || host == "10.0.2.2"
+        private fun isLoopback(host: String?): Boolean = isLoopbackHost(host)
     }
 }
+
+/**
+ * The loopback names RFC 8252 §7.3 allows for a redirect, plus the emulator's alias for its host:
+ * the one place cleartext HTTP is let through, for the issuer and for every endpoint its metadata
+ * announces, because traffic to them never leaves the machine.
+ */
+internal fun isLoopbackHost(host: String?): Boolean =
+    host == "localhost" || host == "127.0.0.1" || host == "[::1]" || host == "10.0.2.2"

@@ -50,6 +50,11 @@ public class AuthorizationGrant @VersolaInternalApi public constructor(
  */
 public object AuthorizationResponseValidator {
 
+    /**
+     * @param issuer the `issuer` of the provider's metadata, as announced: the redirect's `iss` must
+     *   equal it byte for byte (RFC 9207 section 2.4), which is not the configured issuer when the
+     *   provider announces a trailing slash.
+     */
     public fun validate(
         redirect: String,
         pending: PendingAuthorizationRequest,
@@ -65,14 +70,17 @@ public object AuthorizationResponseValidator {
             throw VersolaError.Configuration(VersolaError.Configuration.Detail.StateMismatch)
         }
 
-        // 2. iss (RFC 9207). Present ⇒ must match. Absent ⇒ only a failure when the provider
+        // 2. iss (RFC 9207). Present ⇒ must match, by simple string comparison (section 2.4): no
+        //    trailing-slash or case folding, because two issuers that differ only that way are two
+        //    issuers, and a tolerance here is room for the mix-up attack this parameter exists to
+        //    close. The comparand is the issuer the provider's own metadata announces. Absent ⇒ only a failure when the provider
         //    advertises authorization_response_iss_parameter_supported; a deployment that
         //    does not advertise it may legitimately omit iss.
         //    A starter whose exchange requires `iss` (the edge back channel: a required field
         //    of `/native/complete`) says so on the pending request, whatever discovery says.
         val iss = parameters["iss"]
         if (iss != null) {
-            if (iss.trimEnd('/') != issuer.trimEnd('/')) {
+            if (iss != issuer) {
                 throw VersolaError.Configuration(
                     VersolaError.Configuration.Detail.IssuerMismatch(issuer, iss),
                 )
@@ -156,11 +164,14 @@ public object AuthorizationResponseValidator {
     } catch (e: URISyntaxException) {
         // The redirect activity hands over whatever URI string the OS delivered; a
         // malformed one is untrusted external input, not a place to let a raw exception
-        // escape past the `VersolaError` contract `complete()` cleans up after.
-        throw VersolaError.Configuration(VersolaError.Configuration.Detail.MalformedAuthorizationResponse, e)
+        // escape past the `VersolaError` contract `complete()` cleans up after. No cause is
+        // attached: `URISyntaxException.message` is the whole redirect, `code` and `state`
+        // included, and a cause travels with the error into crash reports and logs.
+        throw VersolaError.Configuration(VersolaError.Configuration.Detail.MalformedAuthorizationResponse)
     } catch (e: IllegalArgumentException) {
-        // Thrown by `URLDecoder.decode` on an invalid percent-escape (e.g. a bare "%").
-        throw VersolaError.Configuration(VersolaError.Configuration.Detail.MalformedAuthorizationResponse, e)
+        // Thrown by `URLDecoder.decode` on an invalid percent-escape (e.g. a bare "%"); its
+        // message quotes the offending part of the query, so it is dropped for the same reason.
+        throw VersolaError.Configuration(VersolaError.Configuration.Detail.MalformedAuthorizationResponse)
     }
 
     private fun parseQueryOrThrowRaw(redirect: String): Map<String, String> {

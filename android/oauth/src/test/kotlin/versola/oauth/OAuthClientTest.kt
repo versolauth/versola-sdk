@@ -185,14 +185,43 @@ class OAuthClientTest {
     @Test
     fun `the ID token's iss is held to the issuer discovery announces, trailing slash included`() = runTest {
         // Auth0 announces `https://tenant/` and signs tokens with that `iss`; the configured
-        // issuer has no slash. Discovery tolerates the one slash; the ID token must match
-        // what discovery said, not what was configured.
+        // issuer has no slash. Discovery tolerates the one slash; the ID token, and the redirect's
+        // RFC 9207 `iss`, must match what discovery said, not what was configured.
         provider.announcedIssuer = provider.issuer + "/"
+        browser = FakeBrowser(provider.issuer + "/")
         val client = client()
 
         client.login()
 
         assertEquals(provider.issuer + "/", client.claims?.issuer)
+        assertEquals(SessionState.Authenticated, client.sessionState.first())
+    }
+
+    @Test
+    fun `a redirect iss that differs from the announced issuer by the trailing slash is refused`() = runTest {
+        provider.announcedIssuer = provider.issuer + "/"
+        browser = FakeBrowser(provider.issuer)
+        val client = client()
+
+        val error = runCatching { client.login() }.exceptionOrNull() as VersolaError.Configuration
+
+        assertEquals(VersolaError.Configuration.Detail.IssuerMismatch(provider.issuer + "/", provider.issuer), error.detail)
+        assertEquals(SessionState.Unauthenticated, client.sessionState.first())
+    }
+
+    @Test
+    fun `a login whose caller was cancelled does not block the next one, though the state still reads Authorizing`() = runTest {
+        browser.hold = kotlinx.coroutines.CompletableDeferred()
+        val client = client()
+        val first = async(start = CoroutineStart.UNDISPATCHED) { runCatching { client.login() } }
+        browser.opened.await()
+        first.cancelAndJoin()
+        assertEquals("the slot is kept for a resume", SessionState.Authorizing, client.sessionState.first())
+
+        // Nothing awaits that slot, so it is a leftover and the new login supersedes it at once.
+        browser.hold = null
+        client.login()
+
         assertEquals(SessionState.Authenticated, client.sessionState.first())
     }
 
@@ -381,6 +410,26 @@ class OAuthClientTest {
     private fun kotlinx.coroutines.test.TestScope.restartWith(killed: KilledLogin, cold: ColdStartBrowser): OAuthClient {
         OAuthClient.resumeScope = backgroundScope
         return OAuthClient.create(application, killed.configuration, browser = cold, keyProvider = ReversingKeyProvider)
+    }
+
+    @Test
+    fun `a login pre-empts the cold-start resume that waits for a redirect which is not coming`() = runTest {
+        val killed = killedMidBrowser()
+        // The process restarts into Authorizing and its resume waits; the user comes back to the app
+        // itself, not through the redirect, and signs in again.
+        val live = FakeBrowser(provider.issuer)
+        browser = live
+        val resuming = object : BrowserAuthorizationSession by live {
+            override suspend fun awaitPendingRedirect(): BrowserOutcome = kotlinx.coroutines.awaitCancellation()
+        }
+        OAuthClient.resumeScope = backgroundScope
+        val client = OAuthClient.create(application, killed.configuration, browser = resuming, keyProvider = ReversingKeyProvider)
+        assertEquals(SessionState.Authorizing, client.sessionState.first())
+        kotlinx.coroutines.yield()
+
+        client.login()
+
+        assertEquals(SessionState.Authenticated, client.sessionState.first())
     }
 
     @Test

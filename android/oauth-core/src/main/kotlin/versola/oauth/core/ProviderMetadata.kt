@@ -111,5 +111,46 @@ public data class ProviderMetadata(
                 VersolaError.Configuration.Detail.DiscoveryFieldMissing("token_endpoint"),
             )
         }
+        // The three the SDK cannot start without: where the user is sent, where the code is redeemed
+        // and where the ID token's keys come from. The others are checked where they are used
+        // ([requireSecureEndpoint]): one `http://` in an end-session, revocation, PAR, UserInfo or
+        // mTLS-alias URL the app never calls must not make the whole document unusable and break
+        // login. Held to the issuer's own rule (https, or cleartext on a loopback host for a staged
+        // stack; not the emulator's `10.0.2.2` alias, which the issuer alone may use) but not to the
+        // issuer's origin: Cognito's OAuth endpoints live on the user-pool domain and Entra's
+        // UserInfo on Microsoft Graph, so a cross-origin endpoint is legitimate (`providers.md`).
+        // Without this a document announcing `http://…/token` has refresh tokens POSTed to it in
+        // the clear.
+        requireSecureEndpoint("authorization_endpoint", authorizationEndpoint)
+        requireSecureEndpoint("token_endpoint", tokenEndpoint)
+        requireSecureEndpoint("jwks_uri", jwksUri)
     }
 }
+
+/**
+ * Refuses [url], the value of discovery member [member], unless it is an absolute `https` URL with a
+ * host, or `http` on `localhost`, `127.0.0.1` or `[::1]`: `Configuration(DiscoveryMalformed)`. Absent
+ * or blank is "not advertised", which callers already read as such. Checked where an endpoint is
+ * about to be used, for the optional ones; the member's name goes into the error and nothing of its
+ * value, which could carry a credential in its query.
+ */
+@VersolaInternalApi
+public fun requireSecureEndpoint(member: String, url: String?) {
+    if (url.isNullOrBlank()) return
+    val parsed = try {
+        java.net.URI(url)
+    } catch (e: java.net.URISyntaxException) {
+        null
+    }
+    val scheme = parsed?.scheme?.lowercase()
+    val acceptable = !parsed?.host.isNullOrEmpty() &&
+        (scheme == "https" || (scheme == "http" && parsed?.host in LOOPBACK_ENDPOINT_HOSTS))
+    if (!acceptable) {
+        throw VersolaError.Configuration(
+            VersolaError.Configuration.Detail.DiscoveryMalformed("$member must be an https URL (http only on loopback)"),
+        )
+    }
+}
+
+/** The hosts a discovered endpoint may use over cleartext HTTP: the developer's own machine, reached through `adb reverse`. */
+private val LOOPBACK_ENDPOINT_HOSTS = setOf("localhost", "127.0.0.1", "[::1]")

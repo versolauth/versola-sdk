@@ -111,15 +111,47 @@ class AuthorizationResponseValidatorTest {
     }
 
     @Test
-    fun `a trailing slash on iss is not a mismatch`() {
-        val grant = AuthorizationResponseValidator.validate(
-            redirect = "https://app.example.com/oauth?code=c&state=the-state&iss=$ISSUER/",
-            pending = pending(),
-            issuer = ISSUER,
-            issParameterSupported = true,
-        )
+    fun `iss is compared as a string, so a trailing slash or another case is a mismatch`() {
+        // RFC 9207 section 2.4: simple string comparison, no normalisation. A tolerance here is
+        // the mix-up attack's room: `https://id.example.com/` and `https://id.example.com` are
+        // two issuers.
+        for (iss in listOf("$ISSUER/", ISSUER.uppercase(), "$ISSUER ", "${ISSUER}%2F")) {
+            val error = assertThrows(VersolaError.Configuration::class.java) {
+                AuthorizationResponseValidator.validate(
+                    redirect = "https://app.example.com/oauth?code=c&state=the-state&iss=" + java.net.URLEncoder.encode(iss, "UTF-8"),
+                    pending = pending(),
+                    issuer = ISSUER,
+                    issParameterSupported = true,
+                )
+            }
+            assertTrue(iss, error.detail is VersolaError.Configuration.Detail.IssuerMismatch)
+        }
+    }
 
-        assertEquals("c", grant.code)
+    @Test
+    fun `a malformed redirect carries no cause and nothing of it in the error text`() {
+        // `URISyntaxException.message` is the whole URI and `URLDecoder`'s quotes part of the
+        // query: either, attached as a cause, would put a code or a state into a crash report.
+        for (redirect in listOf(
+            "https://app.example.com/oauth?code=SECRETCODE&state=SECRETSTATE a",
+            "https://app.example.com/oauth?code=SECRETCODE&state=SECRETSTATE%zz",
+        )) {
+            val error = assertThrows(VersolaError.Configuration::class.java) {
+                AuthorizationResponseValidator.validate(redirect, pending(), ISSUER, issParameterSupported = true)
+            }
+
+            assertEquals(VersolaError.Configuration.Detail.MalformedAuthorizationResponse, error.detail)
+            assertEquals(null, error.cause)
+            val text = error.toString() + error.message + error.detail
+            assertTrue(text, "SECRET" !in text)
+        }
+    }
+
+    @Test
+    fun `a pending request prints none of the values a redirect is matched against`() {
+        val text = pending(state = "SECRETSTATE").toString()
+
+        assertTrue(text, "SECRETSTATE" !in text && "the-nonce" !in text && "dBjftJeZ4CVP" !in text)
     }
 
     @Test

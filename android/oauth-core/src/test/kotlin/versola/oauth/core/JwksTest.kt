@@ -166,12 +166,12 @@ class JwksTest {
 
         assertTrue(loaded.fetched)
         assertEquals(1, server.requestCount)
-        assertEquals(document, file.readText())
+        assertEquals("replaced with the fetched document", document, FileJwksCache(file).load())
     }
 
     @Test
     fun `a malformed answer is DiscoveryMalformed and does not replace the cache`() = runTest {
-        val cache = MemoryJwksCache().also { it.save(document) }
+        val cache = MemoryJwksCache().also { it.save(document, 3_600_000) }
         serve("<html>not keys</html>")
 
         val error = failure { JwksClient(OkHttpClient(), cache).keys(uri, forceRefresh = true) }
@@ -219,7 +219,7 @@ class JwksTest {
         val cache = MemoryJwksCache()
         assertNull(cache.load())
 
-        cache.save("x")
+        cache.save("x", 3_600_000)
         assertEquals("x", cache.load())
 
         cache.clear()
@@ -231,11 +231,261 @@ class JwksTest {
         val cache = FileJwksCache(File(folder.newFolder(), "nested/jwks.json"))
         assertNull(cache.load())
 
-        cache.save("""{"keys":[]}""")
+        cache.save("""{"keys":[]}""", 3_600_000)
         assertEquals("""{"keys":[]}""", cache.load())
 
         cache.clear()
         assertNull(cache.load())
+    }
+
+    // ---- the key set expires: a withdrawn key must not stay trusted -----------------------------
+
+    private val minute = 60_000L
+    private val hour = 60 * minute
+
+    private fun serveWith(body: String, vararg headers: Pair<String, String>) {
+        server.enqueue(
+            MockResponse.Builder().code(200).body(body).apply { headers.forEach { (name, value) -> setHeader(name, value) } }.build(),
+        )
+    }
+
+    /** Fetches once, then asks again after each of [afterMillis] and reports how many requests the asks cost. */
+    private suspend fun requestsAfter(vararg headers: Pair<String, String>, afterMillis: Long): Int {
+        serveWith(document, *headers)
+        serveWith(document, *headers)
+        var now = 1_000_000_000_000L
+        val client = JwksClient(OkHttpClient(), MemoryJwksCache { now }) { now }
+        client.keys(uri, forceRefresh = false)
+        now += afterMillis
+        client.keys(uri, forceRefresh = false)
+        return server.requestCount
+    }
+
+    @Test
+    fun `with no Cache-Control the key set lives 24 hours and is then fetched again`() = runTest {
+        assertEquals(1, requestsAfter(afterMillis = 24 * hour - 1))
+        server.close(); start()
+        assertEquals(2, requestsAfter(afterMillis = 24 * hour))
+    }
+
+    @Test
+    fun `a Cache-Control max-age shorter than a day is honoured`() = runTest {
+        assertEquals(1, requestsAfter("Cache-Control" to "public, max-age=3600", afterMillis = hour - 1))
+        server.close(); start()
+        assertEquals(2, requestsAfter("Cache-Control" to "public, max-age=3600", afterMillis = hour))
+    }
+
+    @Test
+    fun `a max-age below five minutes or no-store is raised to five minutes, and one past a day lowered to a day`() = runTest {
+        assertEquals(1, requestsAfter("Cache-Control" to "max-age=1", afterMillis = 5 * minute - 1))
+        server.close(); start()
+        assertEquals(2, requestsAfter("Cache-Control" to "no-store", afterMillis = 5 * minute))
+        server.close(); start()
+        assertEquals(2, requestsAfter("Cache-Control" to "max-age=31536000", afterMillis = 24 * hour))
+    }
+
+    @Test
+    fun `Expires is honoured against the response's own Date when there is no max-age`() = runTest {
+        // Wall clock here is a year-2001 instant; the provider's Date and Expires are what count.
+        val date = "Sun, 06 Nov 1994 08:49:37 GMT"
+        val expires = "Sun, 06 Nov 1994 09:49:37 GMT"
+        assertEquals(1, requestsAfter("Date" to date, "Expires" to expires, afterMillis = hour - 1))
+        server.close(); start()
+        assertEquals(2, requestsAfter("Date" to date, "Expires" to expires, afterMillis = hour))
+    }
+
+    @Test
+    fun `a response that carries an Age has that much less of its lifetime`() = runTest {
+        // max-age of an hour, already ten minutes old when it arrived: fifty minutes left.
+        assertEquals(1, requestsAfter("Cache-Control" to "max-age=3600", "Age" to "600", afterMillis = 50 * minute - 1))
+        server.close(); start()
+        assertEquals(2, requestsAfter("Cache-Control" to "max-age=3600", "Age" to "600", afterMillis = 50 * minute))
+        server.close(); start()
+        // Older than its whole lifetime: the five-minute floor, not a negative one.
+        assertEquals(2, requestsAfter("Cache-Control" to "max-age=60", "Age" to "3000", afterMillis = 5 * minute))
+    }
+
+    @Test
+    fun `an Expires that does not parse is already past and gets the shortest lifetime`() = runTest {
+        assertEquals(2, requestsAfter("Expires" to "0", afterMillis = 5 * minute))
+    }
+
+    @Test
+    fun `an expired file copy is not read by a new process, and the lifetime survives the restart`() = runTest {
+        var now = 1_000_000_000_000L
+        val file = File(folder.newFolder(), "jwks.json")
+        serveWith(document, "Cache-Control" to "max-age=3600")
+        serveWith(document, "Cache-Control" to "max-age=3600")
+        JwksClient(OkHttpClient(), FileJwksCache(file) { now }) { now }.keys(uri, forceRefresh = false)
+
+        now += hour - 1
+        JwksClient(OkHttpClient(), FileJwksCache(file) { now }) { now }.keys(uri, forceRefresh = false)
+        assertEquals("a restart inside the lifetime asks nothing", 1, server.requestCount)
+
+        now += 1
+        JwksClient(OkHttpClient(), FileJwksCache(file) { now }) { now }.keys(uri, forceRefresh = false)
+        assertEquals("a restart after it fetches", 2, server.requestCount)
+    }
+
+    @Test
+    fun `a bare copy written before keys expired reads as a miss once, and is replaced`() = runTest {
+        val file = File(folder.newFolder(), "jwks.json")
+        file.writeText(document) // as an older SDK left it
+        serve(document)
+
+        val loaded = JwksClient(OkHttpClient(), FileJwksCache(file)).keys(uri, forceRefresh = false)
+
+        assertTrue(loaded.fetched)
+        assertEquals(document, FileJwksCache(file).load())
+    }
+
+    @Test
+    fun `touching the file does not move its expiry`() = runTest {
+        var now = 1_000_000_000_000L
+        val file = File(folder.newFolder(), "jwks.json")
+        val cache = FileJwksCache(file) { now }
+        cache.save(document, hour)
+
+        file.setLastModified(now + 365 * 24 * hour) // a backup tool, a restore, a touch
+        now += hour
+
+        assertNull(cache.load())
+    }
+
+    @Test
+    fun `a clock moved back past the fetch makes the copy expired rather than good for years`() = runTest {
+        var now = 1_000_000_000_000L
+        serve(document)
+        serve(document)
+        val client = JwksClient(OkHttpClient(), MemoryJwksCache { now }) { now }
+        client.keys(uri, forceRefresh = false)
+
+        now -= 2 * 24 * hour
+        client.keys(uri, forceRefresh = false)
+
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun `an expired key set is not served when the refetch fails`() = runTest {
+        var now = 1_000_000_000_000L
+        serve(document)
+        val client = JwksClient(OkHttpClient(), MemoryJwksCache { now }) { now }
+        client.keys(uri, forceRefresh = false)
+
+        now += 24 * hour
+        server.enqueue(MockResponse.Builder().code(503).build())
+
+        // A key the provider withdrew is what a stale copy would go on vouching for.
+        val error = failure { client.keys(uri, forceRefresh = false) }
+        assertTrue(error is VersolaError.Recoverable)
+    }
+
+    // ---- a stale key set, for the ID token of a refresh only ----------------------------------------
+
+    private val week = 7 * 24 * hour
+
+    /** A client that fetched [document] at a clock the test then moves; the next fetch answers 503. */
+    private suspend fun heldThenOutage(clock: (Long) -> Unit, cache: JwksCache = MemoryJwksCache { now }): JwksClient {
+        serve(document)
+        val client = JwksClient(OkHttpClient(), cache) { now }
+        client.keys(uri, forceRefresh = false)
+        clock(24 * hour) // its lifetime is over
+        server.enqueue(MockResponse.Builder().code(503).build())
+        return client
+    }
+
+    private var now = 1_000_000_000_000L
+
+    @Test
+    fun `a reader that may use a stale set is served the one held past its lifetime when the fetch fails`() = runTest {
+        val client = heldThenOutage({ now += it })
+
+        val loaded = client.keys(uri, forceRefresh = false, allowStale = true)
+
+        assertTrue(loaded.stale)
+        assertEquals(4, loaded.keys.keys.size)
+        assertTrue(loaded.cause is VersolaError.Recoverable)
+    }
+
+    @Test
+    fun `any other reader gets the failure, not a stale set`() = runTest {
+        val client = heldThenOutage({ now += it })
+
+        assertTrue(failure { client.keys(uri, forceRefresh = false) } is VersolaError.Recoverable)
+    }
+
+    @Test
+    fun `a set that expired more than a week ago is not used even by that reader`() = runTest {
+        val client = heldThenOutage({ now += it + week })
+
+        assertTrue(failure { client.keys(uri, forceRefresh = false, allowStale = true) } is VersolaError.Recoverable)
+    }
+
+    @Test
+    fun `an answer that is not a key set is never masked by the stale copy`() = runTest {
+        serve(document)
+        val client = JwksClient(OkHttpClient(), MemoryJwksCache { now }) { now }
+        client.keys(uri, forceRefresh = false)
+        now += 24 * hour
+        serve("<html>not keys</html>")
+
+        val error = failure { client.keys(uri, forceRefresh = false, allowStale = true) }
+
+        assertTrue(error is VersolaError.Configuration)
+    }
+
+    @Test
+    fun `after a failed fetch the stale reader is not sent to the provider again for a minute`() = runTest {
+        val client = heldThenOutage({ now += it })
+        client.keys(uri, forceRefresh = false, allowStale = true)
+        val requests = server.requestCount
+
+        now += minute - 1
+        assertTrue(client.keys(uri, forceRefresh = false, allowStale = true).stale)
+        assertEquals("no request within the minute", requests, server.requestCount)
+
+        now += 1
+        server.enqueue(MockResponse.Builder().code(503).build())
+        assertTrue(client.keys(uri, forceRefresh = false, allowStale = true).stale)
+        assertEquals("one more after it", requests + 1, server.requestCount)
+    }
+
+    @Test
+    fun `the disk copy is the stale set of a new process`() = runTest {
+        val file = File(folder.newFolder(), "jwks.json")
+        serve(document)
+        JwksClient(OkHttpClient(), FileJwksCache(file) { now }) { now }.keys(uri, forceRefresh = false)
+        now += 24 * hour
+        server.enqueue(MockResponse.Builder().code(503).build())
+
+        val loaded = JwksClient(OkHttpClient(), FileJwksCache(file) { now }) { now }.keys(uri, forceRefresh = false, allowStale = true)
+
+        assertTrue(loaded.stale)
+    }
+
+    private fun token(kid: String) = Jose.jws("RS256", Jose.rsa.private, """{"sub":"s"}""", kid = kid)
+
+    @Test
+    fun `an ID token whose kid the stale set lacks is Recoverable, not a signature rejection`() = runTest {
+        val client = heldThenOutage({ now += it })
+        val verifier = JwsVerifier({ uri }, { emptyList() }, client)
+
+        val error = failure { kotlinx.coroutines.withContext(StaleKeysAllowed()) { verifier.verify(token("rotated-in-since")) } }
+
+        assertTrue(error.toString(), error is VersolaError.Recoverable)
+    }
+
+    @Test
+    fun `an ID token the stale set verifies is accepted under the refresh rule and Recoverable without it`() = runTest {
+        val client = heldThenOutage({ now += it })
+        val verifier = JwsVerifier({ uri }, { emptyList() }, client)
+
+        kotlinx.coroutines.withContext(StaleKeysAllowed()) { verifier.verify(token("rsa")) }
+
+        server.enqueue(MockResponse.Builder().code(503).build())
+        now += 2 * minute
+        assertTrue(failure { verifier.verify(token("rsa")) } is VersolaError.Recoverable)
     }
 
     // ---- scenario 34, unit tier: the key set is repeated under the operation's budget -------

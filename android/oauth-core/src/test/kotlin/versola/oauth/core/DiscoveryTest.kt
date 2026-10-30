@@ -238,6 +238,237 @@ class DiscoveryTest {
         assertEquals(2, server.requestCount)
     }
 
+    // ---- endpoints are https (or cleartext on the developer's own machine), wherever they are hosted ----
+
+    /** The test document with [overrides] replacing or adding members; a value of null removes one. */
+    private fun documentWith(vararg overrides: Pair<String, String?>): String {
+        val members = linkedMapOf(
+            "issuer" to issuer,
+            "authorization_endpoint" to "$issuer/authorize",
+            "token_endpoint" to "$issuer/token",
+        )
+        overrides.forEach { (name, value) -> if (value == null) members.remove(name) else members[name] = value }
+        return members.entries.joinToString(",", "{", "}") { (name, value) -> "\"$name\":\"$value\"" }
+    }
+
+    @Test
+    fun `the three endpoints the SDK cannot start without must be https, naming the member`() = runTest {
+        for (field in listOf("authorization_endpoint", "token_endpoint", "jwks_uri")) {
+            for (bad in listOf("http://idp.example.com/x", "ftp://idp.example.com/x", "/relative", "javascript:alert(1)", "https:///nohost")) {
+                server.enqueue(MockResponse.Builder().code(200).body(documentWith(field to bad)).build())
+
+                val error = failure { client.fetch(issuer) } as VersolaError.Configuration
+
+                val detail = error.detail as VersolaError.Configuration.Detail.DiscoveryMalformed
+                assertTrue("$field=$bad: ${detail.detail}", field in detail.detail)
+            }
+        }
+    }
+
+    @Test
+    fun `an insecure optional endpoint does not make the document unusable, it is refused where it would be used`() = runTest {
+        // One http:// in an end-session, revocation, PAR, UserInfo or mTLS-alias URL the app never
+        // calls must not break login.
+        val body = documentWith(
+            "userinfo_endpoint" to "http://idp.example.com/userinfo",
+            "revocation_endpoint" to "http://idp.example.com/revoke",
+            "end_session_endpoint" to "http://idp.example.com/logout",
+            "pushed_authorization_request_endpoint" to "http://idp.example.com/par",
+        ).dropLast(1) + ""","mtls_endpoint_aliases":{"token_endpoint":"http://idp.example.com/token"}}"""
+        server.enqueue(MockResponse.Builder().code(200).body(body).build())
+
+        val metadata = client.fetch(issuer)
+
+        assertEquals("http://idp.example.com/revoke", metadata.revocationEndpoint)
+        assertTrue(failure { requireSecureEndpoint("revocation_endpoint", metadata.revocationEndpoint) } is VersolaError.Configuration)
+    }
+
+    @Test
+    fun `https endpoints on another origin than the issuer are legitimate and accepted`() = runTest {
+        server.enqueue(
+            MockResponse.Builder().code(200).body(
+                documentWith("token_endpoint" to "https://login.other.example/token", "jwks_uri" to "https://keys.other.example/jwks"),
+            ).build(),
+        )
+
+        val metadata = client.fetch(issuer)
+
+        assertEquals("https://login.other.example/token", metadata.tokenEndpoint)
+    }
+
+    @Test
+    fun `cleartext is accepted only on the three loopback hosts, not the emulator alias or a LAN address`() = runTest {
+        for (host in listOf("localhost", "127.0.0.1", "[::1]")) {
+            server.enqueue(MockResponse.Builder().code(200).body(documentWith("token_endpoint" to "http://$host:9003/token")).build())
+            assertEquals("http://$host:9003/token", client.fetch(issuer).tokenEndpoint)
+        }
+        for (host in listOf("10.0.2.2", "192.168.0.2")) {
+            server.enqueue(MockResponse.Builder().code(200).body(documentWith("token_endpoint" to "http://$host:9003/token")).build())
+            assertTrue(host, failure { client.fetch(issuer) } is VersolaError.Configuration)
+        }
+    }
+
+    @Test
+    fun `a cached document whose endpoint is no longer acceptable is a miss and is fetched again`() = runTest {
+        val cache = cache()
+        cache.save(discoveryJson.decodeFromString(ProviderMetadata.serializer(), documentWith("token_endpoint" to "http://idp.example.com/token")))
+        server.enqueue(MockResponse.Builder().code(200).body(document(issuer)).build())
+
+        val metadata = DiscoveryService(issuer, client, cache).metadata()
+
+        assertEquals("$issuer/token", metadata.tokenEndpoint)
+        assertEquals(1, server.requestCount)
+    }
+
+    // ---- the cache expires: Cache-Control within 5 minutes and 24 hours, 24 hours without one -----
+
+    private val minute = 60_000L
+    private val hour = 60 * minute
+    private val day = 24 * hour
+
+    private fun serve(vararg headers: Pair<String, String>) {
+        server.enqueue(
+            MockResponse.Builder().code(200).body(document(issuer)).apply { headers.forEach { (n, v) -> setHeader(n, v) } }.build(),
+        )
+    }
+
+    /** Fetches once, asks again [afterMillis] later, and reports the requests that cost. */
+    private suspend fun requestsAfter(vararg headers: Pair<String, String>, afterMillis: Long): Int {
+        serve(*headers)
+        serve(*headers)
+        var now = 1_000_000_000_000L
+        val service = DiscoveryService(issuer, client, cache()) { now }
+        service.metadata()
+        now += afterMillis
+        service.metadata()
+        return server.requestCount
+    }
+
+    @Test
+    fun `with no Cache-Control a document lives 24 hours and is then fetched again`() = runTest {
+        assertEquals(1, requestsAfter(afterMillis = day - 1))
+        server.close(); start()
+        assertEquals(2, requestsAfter(afterMillis = day))
+    }
+
+    @Test
+    fun `a Cache-Control max-age is honoured, raised to five minutes at the bottom and lowered to a day at the top`() = runTest {
+        assertEquals(1, requestsAfter("Cache-Control" to "max-age=3600", afterMillis = hour - 1))
+        server.close(); start()
+        assertEquals(2, requestsAfter("Cache-Control" to "max-age=3600", afterMillis = hour))
+        server.close(); start()
+        assertEquals(1, requestsAfter("Cache-Control" to "max-age=1", afterMillis = 5 * minute - 1))
+        server.close(); start()
+        assertEquals(2, requestsAfter("Cache-Control" to "no-store", afterMillis = 5 * minute))
+        server.close(); start()
+        assertEquals(2, requestsAfter("Cache-Control" to "max-age=31536000", afterMillis = day))
+    }
+
+    @Test
+    fun `the lifetime survives a restart through the disk copy, and a copy older than that is not read`() = runTest {
+        var now = 1_000_000_000_000L
+        val file = File(folder.newFolder(), "provider-metadata.json")
+        serve("Cache-Control" to "max-age=3600")
+        serve("Cache-Control" to "max-age=3600")
+        DiscoveryService(issuer, client, FileProviderMetadataCache(file) { now }) { now }.metadata()
+
+        now += hour - 1
+        DiscoveryService(issuer, client, FileProviderMetadataCache(file) { now }) { now }.metadata()
+        assertEquals("a restart inside the lifetime asks nothing", 1, server.requestCount)
+
+        now += 1
+        DiscoveryService(issuer, client, FileProviderMetadataCache(file) { now }) { now }.metadata()
+        assertEquals("a restart after it fetches", 2, server.requestCount)
+    }
+
+    @Test
+    fun `a bare copy written before documents expired is fetched again once, and replaced`() = runTest {
+        val file = File(folder.newFolder(), "provider-metadata.json")
+        file.writeText(document(issuer)) // as an older SDK left it
+        serve()
+
+        DiscoveryService(issuer, client, FileProviderMetadataCache(file)).metadata()
+
+        assertEquals(1, server.requestCount)
+        assertTrue("replaced with an expiry in the future", FileProviderMetadataCache(file).expiresAtEpochMillis()!! > System.currentTimeMillis())
+    }
+
+    @Test
+    fun `a bare copy is still the fallback when the provider cannot be reached`() = runTest {
+        val file = File(folder.newFolder(), "provider-metadata.json")
+        file.writeText(document(issuer))
+        server.enqueue(MockResponse.Builder().code(503).build())
+
+        val metadata = DiscoveryService(issuer, client, FileProviderMetadataCache(file)).metadata()
+
+        assertEquals("$issuer/token", metadata.tokenEndpoint)
+    }
+
+    @Test
+    fun `touching the file does not move its expiry`() = runTest {
+        var now = 1_000_000_000_000L
+        val file = File(folder.newFolder(), "provider-metadata.json")
+        val cache = FileProviderMetadataCache(file) { now }
+        cache.save(discoveryJson.decodeFromString(ProviderMetadata.serializer(), document(issuer)), hour)
+
+        file.setLastModified(now + 365 * day)
+        now += hour
+
+        assertEquals(1_000_000_000_000L + hour, cache.expiresAtEpochMillis())
+        serve()
+        DiscoveryService(issuer, client, cache) { now }.metadata()
+        assertEquals("expired despite the touch", 1, server.requestCount)
+    }
+
+    @Test
+    fun `a clock moved back past the fetch is an expired document, not one good for years`() = runTest {
+        serve()
+        serve()
+        var now = 1_000_000_000_000L
+        val service = DiscoveryService(issuer, client, cache()) { now }
+
+        service.metadata()
+        now -= 2 * day
+        service.metadata()
+
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun `an expired document is served once more when the provider cannot be reached, and asked again after a minute`() = runTest {
+        serve()
+        var now = 1_000_000_000_000L
+        val service = DiscoveryService(issuer, client, cache()) { now }
+        val first = service.metadata()
+
+        now += day
+        server.enqueue(MockResponse.Builder().code(503).build())
+        assertEquals(first, service.metadata())
+        assertEquals(2, server.requestCount)
+
+        // Within the minute nothing is asked; after it, the provider is asked again.
+        now += minute - 1
+        assertEquals(first, service.metadata())
+        assertEquals(2, server.requestCount)
+        now += 1
+        serve()
+        service.metadata()
+        assertEquals(3, server.requestCount)
+    }
+
+    @Test
+    fun `an expired document is not served when the refetch is answered with something wrong`() = runTest {
+        serve()
+        var now = 1_000_000_000_000L
+        val service = DiscoveryService(issuer, client, cache()) { now }
+        service.metadata()
+
+        now += day
+        server.enqueue(MockResponse.Builder().code(200).body(documentWith("token_endpoint" to "http://idp.example.com/token")).build())
+
+        assertTrue(failure { service.metadata() } is VersolaError.Configuration)
+    }
+
     // ---- scenario 34, unit tier: discovery is repeated under the operation's budget ----------
 
     @Test

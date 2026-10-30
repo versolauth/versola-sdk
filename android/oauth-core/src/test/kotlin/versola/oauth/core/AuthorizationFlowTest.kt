@@ -25,17 +25,23 @@ private class RecordingStore(var stored: PendingAuthorizationRequest? = null) : 
     /** Thrown by [load] while set: what a store does when the slot is out of reach, not gone. */
     var loadFailure: VersolaError? = null
 
+    /** Thrown by [clear] while set: a slot that cannot be cleared yet. */
+    var clearFailure: VersolaError? = null
+    var loads = 0
+
     override suspend fun save(request: PendingAuthorizationRequest) {
         saves++
         stored = request
     }
 
     override suspend fun load(): PendingAuthorizationRequest? {
+        loads++
         loadFailure?.let { throw it }
         return stored
     }
 
     override suspend fun clear() {
+        clearFailure?.let { throw it }
         clears++
         stored = null
     }
@@ -280,6 +286,26 @@ class AuthorizationFlowTest {
     }
 
     @Test
+    fun `iss is held to the issuer discovery announces, trailing slash included`() = runTest {
+        // The configured issuer is stored without its slash, but the provider signs the
+        // redirect with the value its metadata carries (Auth0 announces one): byte for byte.
+        val announced = metadata.copy(issuer = "$ISSUER/")
+
+        val matching = RecordingStore()
+        val grant = flow(matching, FakeBrowser(redirectFor(matching, extra = "&iss=$ISSUER/"), matching), metadata = announced)
+            .authorize(setOf("openid"))
+        assertEquals("$ISSUER/", grant.iss)
+
+        val unslashed = RecordingStore()
+        val error = failure {
+            flow(unslashed, FakeBrowser(redirectFor(unslashed, extra = "&iss=$ISSUER"), unslashed), metadata = announced)
+                .authorize(setOf("openid"))
+        } as VersolaError.Configuration
+        assertEquals(VersolaError.Configuration.Detail.IssuerMismatch("$ISSUER/", ISSUER), error.detail)
+        assertNull(unslashed.stored)
+    }
+
+    @Test
     fun `a cold start with a pending request observes Authorizing, never Unauthenticated`() = runTest {
         // Scenario 12: the app was killed while the browser was foreground. The first value
         // the app sees must already be Authorizing.
@@ -343,13 +369,40 @@ class AuthorizationFlowTest {
     }
 
     @Test
-    fun `a stored grant decides the state even when the pending slot cannot be read`() = runTest {
+    fun `with a stored grant the restore clears the pending slot unread, whether or not it could be read`() = runTest {
+        // The slot is residue (a login killed after its token was stored): cleared on every cold
+        // start without being decrypted, the same rule as iOS (`spec/state-machine.md`).
         val store = RecordingStore(restoredRequest())
         store.loadFailure = VersolaError.Recoverable(VersolaError.Recoverable.Cause.UnlockRequired)
+        var resumeCues = 0
         val flow = flow(store, FakeBrowser({ BrowserOutcome.UserCancelled }, store), now = 1_000, hasStoredGrant = { true })
+        flow.onRestoredAuthorizing = { resumeCues++ }
 
         assertSame(SessionState.Authenticated, flow.sessionState.first())
-        assertEquals("the unreadable slot is residue and is left", 0, store.clears)
+
+        assertEquals("never read", 0, store.loads)
+        assertEquals(1, store.clears)
+        assertNull(store.stored)
+        assertEquals(0, resumeCues)
+    }
+
+    @Test
+    fun `with a stored grant a slot that cannot be cleared yet fails the restore and is retried on the next read`() = runTest {
+        val store = RecordingStore(restoredRequest())
+        store.clearFailure = VersolaError.Recoverable(VersolaError.Recoverable.Cause.UnlockRequired)
+        val flow = flow(store, FakeBrowser({ BrowserOutcome.UserCancelled }, store), now = 1_000, hasStoredGrant = { true })
+
+        // A collector of the state is not handed the error; an operation is.
+        assertSame(SessionState.Locked, flow.sessionState.first())
+        val refused = failure { flow.authorize(setOf("openid")) } as VersolaError.Recoverable
+        assertSame(VersolaError.Recoverable.Cause.UnlockRequired, refused.reason)
+        assertEquals(0, store.saves)
+        assertEquals("nothing was remembered", 0, store.clears)
+
+        store.clearFailure = null
+        assertSame(SessionState.Authenticated, flow.sessionState.first())
+        assertEquals(1, store.clears)
+        assertNull(store.stored)
     }
 
     @Test
@@ -685,6 +738,140 @@ class AuthorizationFlowTest {
         assertEquals("resumed", flow.resumePendingAuthorization()!!.code)
     }
 
+    // ---- a resume that only waits for a redirect gives way to login(), logout() and the wipe -------
+
+    private class StuckBrowser : BrowserAuthorizationSession {
+        val entered = CompletableDeferred<Unit>()
+        override suspend fun authorize(uri: String): BrowserOutcome {
+            entered.complete(Unit)
+            awaitCancellation()
+        }
+        override suspend fun awaitPendingRedirect(): BrowserOutcome {
+            entered.complete(Unit)
+            awaitCancellation()
+        }
+    }
+
+    private fun pendingRequest(createdAt: Long = 0) = PendingAuthorizationRequest(
+        state = "restored-state",
+        nonce = "restored-nonce",
+        codeVerifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk",
+        scopes = listOf("openid"),
+        redirectUri = "https://app.example.com/oauth",
+        acrValues = emptyList(),
+        maxAge = null,
+        createdAtEpochMillis = createdAt,
+    )
+
+    @Test
+    fun `a login pre-empts a resume that waits for a redirect no one will send, and steps over its tab`() = runTest {
+        val leftover = pendingRequest()
+        val store = RecordingStore(leftover)
+        val waiting = StuckBrowser()
+        val resumeFlow = flow(store, waiting)
+        val resumed = async { resumeFlow.resumePendingAuthorization() }
+        waiting.entered.await()
+        assertFalse("a resume that only waits is not an authorization carried out", resumeFlow.authorizationInFlight)
+
+        // The abandoned tab redirects into the new login first; it is stepped over, not a mismatch.
+        val replacement = object : BrowserAuthorizationSession {
+            override suspend fun authorize(uri: String): BrowserOutcome = BrowserOutcome.Redirect(
+                "https://app.example.com/oauth?code=stale&state=${leftover.state}&iss=$ISSUER",
+            )
+            override suspend fun awaitPendingRedirect(): BrowserOutcome = BrowserOutcome.Redirect(
+                "https://app.example.com/oauth?code=mine&state=${store.stored!!.state}&iss=$ISSUER",
+            )
+        }
+        val grant = flow(store, replacement).authorize(setOf("openid"))
+
+        assertNull("the pre-empted resume gives up quietly", resumed.await())
+        assertEquals("mine", grant.code)
+    }
+
+    @Test
+    fun `a sign-out's browser pre-empts a resume that holds the lock`() = runTest {
+        val store = RecordingStore(pendingRequest())
+        val waiting = StuckBrowser()
+        val flow = flow(store, waiting)
+        val resumed = async { flow.resumePendingAuthorization() }
+        waiting.entered.await()
+        val signedOut = FakeBrowser({ uri -> BrowserOutcome.Redirect("https://app.example.com/signed-out?state=${stateOf(uri)}") }, store)
+
+        val acknowledged = flow(store, signedOut).endSession("hint")
+
+        assertTrue(acknowledged)
+        assertNull(resumed.await())
+    }
+
+    @Test
+    fun `the local wipe of a sign-out pre-empts a resume so that it cannot redeem a redirect into the next session`() = runTest {
+        val store = RecordingStore(pendingRequest())
+        val waiting = StuckBrowser()
+        val flow = flow(store, waiting)
+        val resumed = async { flow.resumePendingAuthorization() }
+        waiting.entered.await()
+
+        flow.completeLogout()
+
+        assertNull(resumed.await())
+        assertNull(store.stored)
+        assertSame(SessionState.Unauthenticated, flow.sessionState.first())
+    }
+
+    @Test
+    fun `a resume whose redirect has arrived is carrying an exchange out and is not pre-empted`() = runTest {
+        val store = RecordingStore(pendingRequest())
+        val browser = FakeBrowser({ BrowserOutcome.Redirect("https://app.example.com/oauth?code=c&state=restored-state&iss=$ISSUER") }, store)
+        val flow = flow(store, browser)
+
+        val grant = flow.resumePendingAuthorization()
+
+        assertEquals("c", grant!!.code)
+        assertTrue("the code is being redeemed until the coordinator says otherwise", flow.authorizationInFlight)
+        flow.exchangeFinished()
+        assertFalse(flow.authorizationInFlight)
+    }
+
+    @Test
+    fun `an authorization is in flight while the browser is up and not once its caller has gone`() = runTest {
+        val store = RecordingStore()
+        val browser = StuckBrowser()
+        val flow = flow(store, browser)
+        assertFalse(flow.authorizationInFlight)
+
+        val caller = launch { flow.authorize(setOf("openid")) }
+        browser.entered.await()
+        assertTrue(flow.authorizationInFlight)
+
+        caller.cancelAndJoin()
+
+        // The slot and `Authorizing` stay for a resume, but nothing awaits them: a leftover.
+        assertSame(SessionState.Authorizing, flow.sessionState.first())
+        assertFalse(flow.authorizationInFlight)
+    }
+
+    @Test
+    fun `a leftover pending request nobody awaits is superseded by a new authorization and its tab stepped over`() = runTest {
+        // A cold start restored it and nothing started a resume.
+        val leftover = pendingRequest()
+        val store = RecordingStore(leftover)
+        val browser = object : BrowserAuthorizationSession {
+            override suspend fun authorize(uri: String): BrowserOutcome = BrowserOutcome.Redirect(
+                "https://app.example.com/oauth?code=stale&state=${leftover.state}&iss=$ISSUER",
+            )
+            override suspend fun awaitPendingRedirect(): BrowserOutcome = BrowserOutcome.Redirect(
+                "https://app.example.com/oauth?code=mine&state=${store.stored!!.state}&iss=$ISSUER",
+            )
+        }
+        val flow = flow(store, browser)
+        assertSame(SessionState.Authorizing, flow.sessionState.first())
+        assertFalse(flow.authorizationInFlight)
+
+        val grant = flow.authorize(setOf("openid"))
+
+        assertEquals("mine", grant.code)
+    }
+
     @Test
     fun `the tab a cancelled caller abandoned cannot fail the authorization that replaced it`() = runTest {
         // Releasing the lock on cancellation lets a new authorize() start while the old tab is
@@ -757,8 +944,23 @@ class AuthorizationFlowTest {
         val uri = browser.launchedUri!!
         assertTrue(uri.startsWith("$ISSUER/logout?"))
         assertTrue(uri.contains("id_token_hint=the.id.token"))
+        // Right after the hint, and always: the provider learns which client asks even when the
+        // hint is expired or absent.
+        assertTrue(uri.contains("id_token_hint=the.id.token&client_id=mobile-app&"))
         assertTrue(uri.contains("post_logout_redirect_uri=https%3A%2F%2Fapp.example.com%2Fsigned-out"))
         assertTrue(stateOf(uri).length >= 22)
+    }
+
+    @Test
+    fun `an end_session_endpoint that is not https is refused at the place of use, opening nothing`() = runTest {
+        val store = RecordingStore()
+        val browser = FakeBrowser({ BrowserOutcome.Redirect("https://x?state=s") }, store)
+        val insecure = metadata.copy(endSessionEndpoint = "http://idp.example.com/logout")
+
+        val error = failure { flow(store, browser, metadata = insecure).endSession("hint") } as VersolaError.Configuration
+
+        assertTrue(error.detail is VersolaError.Configuration.Detail.DiscoveryMalformed)
+        assertNull(browser.launchedUri)
     }
 
     @Test
@@ -778,6 +980,7 @@ class AuthorizationFlowTest {
         val uri = browser.launchedUri!!
         assertFalse(uri.contains("id_token_hint"))
         assertFalse(uri.contains("post_logout_redirect_uri"))
+        assertTrue("client_id still goes, without a hint", uri.contains("?client_id=mobile-app&"))
         assertTrue(uri.contains("state="))
     }
 

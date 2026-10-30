@@ -4,6 +4,7 @@ import android.content.Context
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -28,6 +29,8 @@ import versola.oauth.core.HttpDiscoveryClient
 import versola.oauth.core.HttpTokenClient
 import versola.oauth.core.HttpUserInfoClient
 import versola.oauth.core.IdTokenClaims
+import versola.oauth.core.LifetimeAwareDiscoveryClient
+import versola.oauth.core.fetchWithLifetime
 import versola.oauth.core.JwksClient
 import versola.oauth.core.JwksIdTokenValidator
 import versola.oauth.core.JwsVerifier
@@ -212,13 +215,15 @@ public class OAuthClient private constructor(
     }
 
     /**
-     * `spec/oauth-sdk-api.md` section 5: a `login()` while one is outstanding, in this process
-     * or a previous one, is refused rather than queued behind the open browser or allowed to
-     * supersede a request the redirect may still complete. The restored state is read first,
-     * so a cold start mid-browser counts.
+     * `spec/oauth-sdk-api.md` section 5: a `login()` while this process is carrying an authorization
+     * out — another `login()` has its browser up, or a code exchange has not finished — is refused
+     * rather than queued behind it or allowed to disturb it. A pending request that nobody awaits (a
+     * cancelled caller left it, or a restore found it) is a leftover, and a resume that is only
+     * waiting for its redirect is pre-empted: the new login supersedes both, so the state alone,
+     * `Authorizing` for the leftover's ten minutes, does not refuse it.
      */
-    private suspend fun refuseWhileAuthorizing() {
-        if (flow.sessionState.first() == SessionState.Authorizing) {
+    private fun refuseWhileAuthorizing() {
+        if (flow.authorizationInFlight) {
             throw OAuthConfiguration.invalid("an authorization is already in progress; observe sessionState before asking again")
         }
     }
@@ -237,6 +242,10 @@ public class OAuthClient private constructor(
      * other origin passes through untouched, so installing it on a client shared with the rest
      * of the app is safe. Errors arrive as [VersolaHttpException], because an interceptor may
      * raise nothing else without crashing an enqueued call; [call] unwraps them.
+     *
+     * It blocks the calling thread while it waits for the token, a refresh included. Use `enqueue`
+     * or [call]; do not `execute()` many calls at once on `Dispatchers.IO`, whose threads the
+     * refresh itself needs, or they can hold all of them and hang the process.
      */
     public fun interceptor(origins: Set<String> = configuration.protectedOrigins): Interceptor =
         VersolaInterceptor(coordinator, scopeOf(origins), proofs)
@@ -252,9 +261,17 @@ public class OAuthClient private constructor(
             .addInterceptor(interceptor(origins))
             .build()
 
-    /** One authenticated call through [authenticatedClient], with the error taxonomy raised as itself. */
+    /**
+     * One authenticated call through [authenticatedClient], with the error taxonomy raised as itself.
+     *
+     * The call blocks a thread for its whole duration (OkHttp's `execute()`, and inside it the
+     * interceptor waits for the access token), and that thread is not one of `Dispatchers.IO`'s
+     * default view: the refresh such a call waits for dispatches its token request and its storage
+     * reads there, and 64 calls parked on `Dispatchers.IO` itself would hold every thread of it and
+     * starve the refresh they wait for, hanging the process. See [BLOCKING_CALLS].
+     */
     public suspend fun call(request: Request, origins: Set<String> = configuration.protectedOrigins): Response =
-        withContext(Dispatchers.IO) {
+        withContext(BLOCKING_CALLS) {
             try {
                 authenticatedClient(origins).newCall(request).execute()
             } catch (e: VersolaHttpException) {
@@ -275,6 +292,14 @@ public class OAuthClient private constructor(
 
     public companion object {
         private val clients = ConcurrentHashMap<String, OAuthClient>()
+
+        /**
+         * Where [call] blocks. A view of `Dispatchers.IO` with a quota of its own, which `limitedParallelism`
+         * makes independent of the 64 threads the default view is capped at: the calls parked here, 64 of
+         * them at most, leave that view free for the refresh they are waiting on. Beyond 64 they queue,
+         * and queue behind nothing that needs them.
+         */
+        private val BLOCKING_CALLS: CoroutineDispatcher = Dispatchers.IO.limitedParallelism(64)
 
         /**
          * Where a cold-started process finishes the sign-in its redirect answers. The process,
@@ -478,10 +503,14 @@ private class StaticDiscoveryClient(private val metadata: ProviderMetadata) : Di
 private class EndSessionOverride(
     private val delegate: DiscoveryClient,
     private val endSessionEndpoint: String?,
-) : DiscoveryClient {
-    override suspend fun fetch(issuer: String): ProviderMetadata {
-        val metadata = delegate.fetch(issuer)
-        return endSessionEndpoint?.let { metadata.copy(endSessionEndpoint = it) } ?: metadata
+) : LifetimeAwareDiscoveryClient {
+    override suspend fun fetch(issuer: String): ProviderMetadata = fetchWithLifetime(issuer).first
+
+    // The delegate's lifetime travels through: the override changes a value, not how long the
+    // document it came in may be kept.
+    override suspend fun fetchWithLifetime(issuer: String): Pair<ProviderMetadata, Long> {
+        val (metadata, lifetime) = delegate.fetchWithLifetime(issuer)
+        return (endSessionEndpoint?.let { metadata.copy(endSessionEndpoint = it) } ?: metadata) to lifetime
     }
 }
 

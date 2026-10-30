@@ -16,6 +16,23 @@ public interface DiscoveryClient {
 }
 
 /**
+ * A [DiscoveryClient] that also says how long the answer it fetched may be trusted
+ * ([CacheLifetime]: the provider's `Cache-Control` or `Expires`, bounded). The wiring seam of
+ * [DiscoveryService]; a client that is not one is cached for the longest lifetime there is.
+ */
+@VersolaInternalApi
+public interface LifetimeAwareDiscoveryClient : DiscoveryClient {
+    /** The document and its lifetime in milliseconds. */
+    public suspend fun fetchWithLifetime(issuer: String): Pair<ProviderMetadata, Long>
+}
+
+/** [LifetimeAwareDiscoveryClient.fetchWithLifetime] where the client is one, the longest lifetime otherwise. */
+@VersolaInternalApi
+public suspend fun DiscoveryClient.fetchWithLifetime(issuer: String): Pair<ProviderMetadata, Long> =
+    (this as? LifetimeAwareDiscoveryClient)?.fetchWithLifetime(issuer)
+        ?: (fetch(issuer) to CacheLifetime.MAX_MILLIS)
+
+/**
  * Where a fetched document is kept between runs. Unencrypted and kept across logout, both
  * deliberately: metadata is not credential material, and a re-login should not need a round
  * trip to `/.well-known/openid-configuration` (`spec/state-machine.md`, persistence summary).
@@ -24,6 +41,22 @@ public interface ProviderMetadataCache {
     public suspend fun load(): ProviderMetadata?
     public suspend fun save(metadata: ProviderMetadata)
     public suspend fun clear()
+
+    /**
+     * [save], remembering that the document is good for [lifetimeMillis] and no longer
+     * ([expiresAtEpochMillis]). The default forgets it, for a cache that cannot keep one.
+     */
+    public suspend fun save(metadata: ProviderMetadata, lifetimeMillis: Long) {
+        save(metadata)
+    }
+
+    /**
+     * When the document [load] returns stops being good, in epoch milliseconds, or null when the
+     * cache does not know (a document saved without a lifetime, or by a cache that keeps none).
+     * [DiscoveryService] then reads it as good for the longest lifetime from now, so such a cache
+     * is bounded by that many hours from each load rather than never.
+     */
+    public suspend fun expiresAtEpochMillis(): Long? = null
 }
 
 @VersolaInternalApi
@@ -41,17 +74,19 @@ internal fun wellKnownUrl(issuer: String): String =
 
 public class HttpDiscoveryClient(
     private val httpClient: OkHttpClient,
-) : DiscoveryClient {
+) : LifetimeAwareDiscoveryClient {
 
-    override suspend fun fetch(issuer: String): ProviderMetadata {
+    override suspend fun fetch(issuer: String): ProviderMetadata = fetchWithLifetime(issuer).first
+
+    override suspend fun fetchWithLifetime(issuer: String): Pair<ProviderMetadata, Long> {
         val url = wellKnownUrl(issuer)
-        val body = retrying(originOf(url)) { withContext(Dispatchers.IO) {
+        val fetched = retrying(originOf(url)) { withContext(Dispatchers.IO) {
             val request = Request.Builder().url(url).header("Accept", "application/json").build()
             try {
                 httpClient.newCall(request).execute().use { response ->
                     val payload = response.body.string()
                     when {
-                        response.isSuccessful -> payload
+                        response.isSuccessful -> payload to CacheLifetime.of(response.headers, System.currentTimeMillis())
                         // 408, 429 and 5xx are the provider having a bad moment: transport-shaped,
                         // repeated under the operation's budget (`spec/retry-policy.md`).
                         ServerFault.isServerFault(response.code) -> throw ServerFault.failure(response.code, response.headers)
@@ -82,6 +117,7 @@ public class HttpDiscoveryClient(
             }
         } }
 
+        val (body, lifetime) = fetched
         val metadata = try {
             discoveryJson.decodeFromString(ProviderMetadata.serializer(), body)
         } catch (e: Exception) {
@@ -91,19 +127,50 @@ public class HttpDiscoveryClient(
             )
         }
         metadata.validate(issuer)
-        return metadata
+        return metadata to lifetime
     }
 }
 
-/** A plain JSON file. Not encrypted, by the same reasoning as [ProviderMetadataCache]. */
+/** What [FileProviderMetadataCache] writes: the document and the instant it stops being good, in one file. */
+@kotlinx.serialization.Serializable
+internal class ExpiringMetadata(val expiresAt: Long, val metadata: ProviderMetadata)
+
+/**
+ * A plain JSON file. Not encrypted, by the same reasoning as [ProviderMetadataCache].
+ *
+ * The expiry travels inside the file, beside the document ([ExpiringMetadata]), so one atomic write
+ * sets both and nothing that merely touches the file can move it. A file written before expiry
+ * existed holds the bare document: it still loads, with an expiry of zero, so it is used as the
+ * fallback if the provider is unreachable and is otherwise fetched again, once.
+ */
 public class FileProviderMetadataCache(
     private val file: File,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) : ProviderMetadataCache {
 
-    override suspend fun load(): ProviderMetadata? = withContext(Dispatchers.IO) {
-        if (!file.exists()) return@withContext null
+    private fun read(): ExpiringMetadata? {
+        if (!file.exists()) return null
+        val text = file.readText()
+        return try {
+            discoveryJson.decodeFromString(ExpiringMetadata.serializer(), text)
+        } catch (e: Exception) {
+            // The envelope failed: a bare document from before expiry existed, or damage; the
+            // second parse tells them apart.
+            ExpiringMetadata(0, discoveryJson.decodeFromString(ProviderMetadata.serializer(), text))
+        }
+    }
+
+    override suspend fun expiresAtEpochMillis(): Long? = withContext(Dispatchers.IO) {
         try {
-            discoveryJson.decodeFromString(ProviderMetadata.serializer(), file.readText())
+            read()?.expiresAt
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    override suspend fun load(): ProviderMetadata? = withContext(Dispatchers.IO) {
+        try {
+            read()?.metadata
         } catch (e: Exception) {
             // A cache that cannot be read is a cache miss, never a failure: the document is
             // one round trip away and the alternative is bricking login on a corrupt file.
@@ -113,10 +180,16 @@ public class FileProviderMetadataCache(
     }
 
     override suspend fun save(metadata: ProviderMetadata) {
+        save(metadata, CacheLifetime.MAX_MILLIS)
+    }
+
+    override suspend fun save(metadata: ProviderMetadata, lifetimeMillis: Long) {
         withContext(Dispatchers.IO) {
             file.parentFile?.mkdirs()
             val temporary = File(file.parentFile, file.name + ".tmp")
-            temporary.writeText(discoveryJson.encodeToString(ProviderMetadata.serializer(), metadata))
+            temporary.writeText(
+                discoveryJson.encodeToString(ExpiringMetadata.serializer(), ExpiringMetadata(clock() + lifetimeMillis, metadata)),
+            )
             if (!temporary.renameTo(file)) temporary.delete()
         }
     }
@@ -127,35 +200,85 @@ public class FileProviderMetadataCache(
 }
 
 /**
- * Discovery with its cache in front. One fetch per process at most, unless the caller forces
- * a refresh.
+ * Discovery with its cache in front. One fetch per process at most, unless the caller forces a
+ * refresh or what is held has outlived its lifetime ([CacheLifetime]: the provider's
+ * `Cache-Control` or `Expires`, held between five minutes and 24 hours, 24 hours when it says
+ * nothing; `spec/oauth-sdk-api.md` section 4): a provider that moved its token endpoint, or
+ * withdrew a field, is picked up within a day without the integrator shipping anything, and
+ * neither memory nor the disk copy outlives that.
+ *
+ * Past its lifetime the document is fetched again; if that fetch cannot reach the provider the old
+ * document is served once more, and the next attempt waits a minute, rather than the failure.
+ * Unlike the key set (see [JwksClient]), this document is not what anything is verified against:
+ * every endpoint in it is held to the same checks again, and what it can do a stale copy of itself
+ * has already been trusted to do. Refusing instead would make a phone that was offline for a day
+ * unable even to finish a `logout()`, whose browser leg needs the document. Only an outage is
+ * forgiven: a document that is served but wrong is still a `Configuration` failure.
  */
-public class DiscoveryService(
+public class DiscoveryService internal constructor(
     private val issuer: String,
     private val client: DiscoveryClient,
     private val cache: ProviderMetadataCache,
+    private val clock: () -> Long,
 ) {
+    public constructor(
+        issuer: String,
+        client: DiscoveryClient,
+        cache: ProviderMetadataCache,
+    ) : this(issuer, client, cache, System::currentTimeMillis)
+
     private val mutex = Mutex()
     private var inMemory: ProviderMetadata? = null
+    private var inMemoryExpiresAt = 0L
 
     public suspend fun metadata(forceRefresh: Boolean = false): ProviderMetadata = mutex.withLock {
+        // What was held but has aged out: the fallback if the provider cannot be asked.
+        var stale: ProviderMetadata? = null
         if (!forceRefresh) {
-            inMemory?.let { return@withLock it }
+            inMemory?.let {
+                if (CacheLifetime.isFresh(inMemoryExpiresAt, clock())) return@withLock it
+                stale = it
+            }
             cache.load()?.let { cached ->
                 // A cached document from a different issuer belongs to a previous
-                // configuration of this app; treat it as absent rather than trusting it.
-                // Trailing-slash-insensitive, matching `ProviderMetadata.validate` — otherwise
-                // metadata saved as "<issuer>/" would pass validation on first fetch but never
-                // be recognised as a cache hit again, silently defeating the disk cache.
-                if (cached.issuer.trimEnd('/') == issuer.trimEnd('/')) {
-                    inMemory = cached
-                    return@withLock cached
+                // configuration of this app, and one that no longer passes the checks a fetched
+                // one must (an endpoint that is not https) was written by an earlier SDK or by
+                // something else: either is treated as absent rather than trusted. The same
+                // `validate` as on fetch, so the issuer comparison stays trailing-slash-
+                // insensitive — otherwise metadata saved as "<issuer>/" would pass validation on
+                // first fetch but never be recognised as a cache hit again, silently defeating
+                // the disk cache.
+                val usable = try {
+                    cached.validate(issuer)
+                    true
+                } catch (e: VersolaError.Configuration) {
+                    false
+                }
+                if (usable) {
+                    val expiresAt = cache.expiresAtEpochMillis() ?: (clock() + CacheLifetime.MAX_MILLIS)
+                    if (CacheLifetime.isFresh(expiresAt, clock())) {
+                        inMemory = cached
+                        inMemoryExpiresAt = expiresAt
+                        return@withLock cached
+                    }
+                    stale = stale ?: cached
                 }
             }
         }
-        val fetched = client.fetch(issuer)
-        cache.save(fetched)
+        val (fetched, lifetime) = try {
+            client.fetchWithLifetime(issuer)
+        } catch (e: VersolaError.Recoverable) {
+            val fallback = stale ?: throw e
+            inMemory = fallback
+            inMemoryExpiresAt = clock() + RETRY_AFTER_OUTAGE_MILLIS
+            return@withLock fallback
+        }
+        cache.save(fetched, lifetime)
         inMemory = fetched
+        inMemoryExpiresAt = clock() + lifetime
         fetched
     }
 }
+
+/** How long a document served stale because the provider was unreachable is trusted before the next try. */
+private const val RETRY_AFTER_OUTAGE_MILLIS = 60_000L

@@ -15,6 +15,7 @@ import versola.oauth.core.VersolaError
 import versola.oauth.core.acceptIssued
 import versola.oauth.core.discoveryJson
 import versola.oauth.core.originOf
+import versola.oauth.core.requireSecureEndpoint
 import versola.oauth.core.wwwAuthenticateError
 import okhttp3.OkHttpClient
 
@@ -154,6 +155,9 @@ public class EdgeNativeTokenClient(
         endpoints.load()?.let { return it }
         val metadata = discovery.metadata()
         val aliases = metadata.mtlsEndpointAliases
+        // Proofs and refresh tokens are about to be sent to whichever of these is chosen.
+        requireSecureEndpoint("mtls_endpoint_aliases.token_endpoint", aliases?.tokenEndpoint)
+        requireSecureEndpoint("mtls_endpoint_aliases.revocation_endpoint", aliases?.revocationEndpoint)
         return NativeEndpoints(
             tokenEndpoint = aliases?.tokenEndpoint ?: metadata.tokenEndpoint,
             revocationEndpoint = aliases?.revocationEndpoint ?: metadata.revocationEndpoint

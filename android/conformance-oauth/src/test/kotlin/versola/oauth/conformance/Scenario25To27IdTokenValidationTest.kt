@@ -61,11 +61,20 @@ class Scenario25To27IdTokenValidationTest : ProviderConformance() {
     private suspend fun assertNothingPersisted(client: OAuthClient, metadata: ProviderMetadata, since: Int = 0) {
         assertEquals(SessionState.Unauthenticated, client.state())
         assertNull(client.claims)
-        // No userinfo, no protected origin, no revocation after the rejection.
+        // No userinfo and no protected origin after the rejection.
         val after = transcript.entries.drop(since)
         assertTrue(after.none { it.method == "GET" && it.url.startsWith(metadata.userinfoEndpoint!!) })
         assertTrue(after.none { it.url.startsWith(resource.origin) })
-        metadata.revocationEndpoint?.let { endpoint -> assertTrue(after.none { it.method == "POST" && it.url.startsWith(endpoint) }) }
+        // The refresh token the provider issued for the refused ID token is a live credential no
+        // device holds, so it is revoked once, best effort and detached from the login (`spec/oauth-sdk-api.md` section 11).
+        metadata.revocationEndpoint?.let { endpoint ->
+            // Detached from the login (the error is delivered first), so awaited here, bounded.
+            val deadline = System.currentTimeMillis() + 5_000
+            while (transcript.entries.drop(since).none { it.method == "POST" && it.url.startsWith(endpoint) } && System.currentTimeMillis() < deadline) {
+                Thread.sleep(25)
+            }
+            assertEquals(1, transcript.entries.drop(since).count { it.method == "POST" && it.url.startsWith(endpoint) })
+        }
         // The store is as it was before login(): nothing to refresh with.
         failsWith<VersolaError.Reauthenticate> { runBlocking { client.accessToken() } }
     }

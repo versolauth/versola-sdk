@@ -50,6 +50,31 @@ public class DataStoreCredentialStore(
     )
 
     override suspend fun save(refreshToken: ByteArray, rawIdToken: String?) {
+        write(refreshToken, rawIdToken, clearPendingRotation = false)
+    }
+
+    /**
+     * The new token and the cleared rotation slot land in one `updateData`, so a process killed
+     * between them cannot find the new token beside the previous generation's key.
+     */
+    override suspend fun replaceRefreshToken(refreshToken: ByteArray, rawIdToken: String?) {
+        write(refreshToken, rawIdToken, clearPendingRotation = true)
+    }
+
+    override suspend fun saveIdToken(rawIdToken: String) {
+        val wrapped = keyProvider.wrap(rawIdToken.toByteArray(Charsets.UTF_8))
+        dataStore.updateData { current ->
+            // No grant held: nothing for an ID token to travel with, and writing one alone would
+            // leave a hint for a session that is not there.
+            if (current.refreshToken == null) current else CredentialBlob(
+                refreshToken = current.refreshToken,
+                rawIdToken = wrapped,
+                pendingRotation = current.pendingRotation,
+            )
+        }
+    }
+
+    private suspend fun write(refreshToken: ByteArray, rawIdToken: String?, clearPendingRotation: Boolean) {
         // `keyProvider.wrap` can throw — a locked key above all — and `save`'s contract is
         // that it takes ownership of `refreshToken` regardless of outcome. Zeroing has to run
         // whether or not the wrap succeeded, or a failed save leaves the caller's buffer
@@ -65,7 +90,7 @@ public class DataStoreCredentialStore(
             CredentialBlob(
                 refreshToken = wrappedToken,
                 rawIdToken = wrappedIdToken ?: current.rawIdToken,
-                pendingRotation = current.pendingRotation,
+                pendingRotation = if (clearPendingRotation) null else current.pendingRotation,
             )
         }
     }

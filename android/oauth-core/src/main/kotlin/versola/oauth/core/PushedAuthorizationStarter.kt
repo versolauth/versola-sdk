@@ -59,6 +59,8 @@ public class PushedAuthorizationStarter(
             PushedAuthorization.Required -> advertised ?: throw unsupported()
             PushedAuthorization.WhenAdvertised -> advertised
         }
+        // The request, `dpop_jkt` and the PKCE challenge are about to be POSTed to it.
+        requireSecureEndpoint("pushed_authorization_request_endpoint", endpoint)
         // Honoured whatever the option says: a plain request the provider will refuse is worse
         // than naming the capability that is missing. This also catches a provider that
         // requires PAR yet advertises nowhere to push to.

@@ -129,14 +129,20 @@ public abstract interface class versola/oauth/core/CredentialStore {
 	public abstract fun hasGrant (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun pendingRotation (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun rawIdToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun replaceRefreshToken ([BLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun replaceRefreshToken$default (Lversola/oauth/core/CredentialStore;[BLjava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public abstract fun save ([BLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun save$default (Lversola/oauth/core/CredentialStore;[BLjava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public fun saveIdToken (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun savePendingRotation (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun useRefreshToken (Lkotlin/jvm/functions/Function2;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class versola/oauth/core/CredentialStore$DefaultImpls {
+	public static fun replaceRefreshToken (Lversola/oauth/core/CredentialStore;[BLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static synthetic fun replaceRefreshToken$default (Lversola/oauth/core/CredentialStore;[BLjava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
 	public static synthetic fun save$default (Lversola/oauth/core/CredentialStore;[BLjava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public static fun saveIdToken (Lversola/oauth/core/CredentialStore;Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public abstract interface class versola/oauth/core/DiscoveryClient {
@@ -164,15 +170,19 @@ public final class versola/oauth/core/DpopProofSource$DefaultImpls {
 }
 
 public final class versola/oauth/core/FileProviderMetadataCache : versola/oauth/core/ProviderMetadataCache {
-	public fun <init> (Ljava/io/File;)V
+	public fun <init> (Ljava/io/File;Lkotlin/jvm/functions/Function0;)V
+	public synthetic fun <init> (Ljava/io/File;Lkotlin/jvm/functions/Function0;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun expiresAtEpochMillis (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun load (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun save (Lversola/oauth/core/ProviderMetadata;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun save (Lversola/oauth/core/ProviderMetadata;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
-public final class versola/oauth/core/HttpDiscoveryClient : versola/oauth/core/DiscoveryClient {
+public final class versola/oauth/core/HttpDiscoveryClient : versola/oauth/core/LifetimeAwareDiscoveryClient {
 	public fun <init> (Lokhttp3/OkHttpClient;)V
 	public fun fetch (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun fetchWithLifetime (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class versola/oauth/core/HttpTokenClient : versola/oauth/core/TokenClient {
@@ -375,8 +385,15 @@ public final class versola/oauth/core/ProviderMetadata$Companion {
 
 public abstract interface class versola/oauth/core/ProviderMetadataCache {
 	public abstract fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun expiresAtEpochMillis (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun load (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public fun save (Lversola/oauth/core/ProviderMetadata;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun save (Lversola/oauth/core/ProviderMetadata;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+}
+
+public final class versola/oauth/core/ProviderMetadataCache$DefaultImpls {
+	public static fun expiresAtEpochMillis (Lversola/oauth/core/ProviderMetadataCache;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public static fun save (Lversola/oauth/core/ProviderMetadataCache;Lversola/oauth/core/ProviderMetadata;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class versola/oauth/core/PushedAuthorization : java/lang/Enum {

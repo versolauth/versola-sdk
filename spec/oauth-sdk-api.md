@@ -163,8 +163,6 @@ pending request that nobody awaits is not in flight either, even though the stat
 did, or a cold start restored it and nothing was started): `login()` **supersedes** it, and
 remembers its `state` so that a redirect the old tab still delivers is stepped over instead of
 failing the new login as a mismatch.
-Platform note: Android refuses while its cold-start resume waits and offers
-`cancelPendingAuthorization()` instead; the two are meant to converge on this rule.
 
 ## 6. `login()` options
 
@@ -329,8 +327,11 @@ Mandatory on every platform, before the token response is persisted (OIDC Core 3
 
 A failure is `Configuration(IdTokenRejected(reason))`, where `reason` is a closed enum
 (`Signature`, `Algorithm`, `Issuer`, `Audience`, `Expired`, `IssuedAt`, `Nonce`, `AuthTime`,
-`Malformed`, `AccessTokenHash`): nothing is persisted, the pending request is discarded, the state
-settles on what it was before `login()`. The category is `Configuration` because every cause is
+`Malformed`, `AccessTokenHash`): at login nothing is persisted, the pending request is discarded,
+the state settles on what it was before `login()`, and the refresh token the provider issued is revoked best effort (RFC 7009; detached from the login so the error is delivered at once, one attempt bounded at five seconds; it is a live credential no device holds; the access tokens of the same grant die with it, and a response with no refresh token leaves nothing to revoke); on a refresh the grant stays on the
+rotated token, nothing else from the response is kept, and the state stays `Authenticated`.
+A key set that cannot be fetched is not a rejection: it is `Recoverable` (`Network` or `Server`),
+raised before any claim is read, with the same consequences. The category is `Configuration` because every cause is
 either a deployment mistake (issuer, algorithm, audience, clock) or an attack, and neither is fixed
 by the user trying again; see `errors.md`'s rule that a category is the app's action.
 
@@ -419,6 +420,6 @@ refresh token issued, `offline_access` advertised but not configured, a response
 2. `login()` while an authorization is in flight refused (section 5) versus cancelling the outstanding request. A request nobody awaits, or a resume that only waits for its redirect, is superseded.
 3. `stepUp()` takes the configured scopes by default (section 5); the Versola facade requires
    them as a parameter. The two differ in signature, not in what is sent.
-4. The 24-hour discovery cache age and the 30-second refresh skew: both fixed, not configurable.
+4. The discovery and key-set cache lifetime bounds (5 minutes to 24 hours, 24 hours without `Cache-Control`) and the 30-second refresh skew: fixed, not configurable.
 5. Whether `authenticatedSession` on iOS should be a `URLSession` subclass or a wrapper; a wrapper
    keeps the surface small.
