@@ -9,7 +9,7 @@ right and this file is stale.
 | Tool | Version | Used for |
 |---|---|---|
 | JDK | 17 | Gradle, the Android modules (`sourceCompatibility` is 17) |
-| Android SDK | platform 36, build-tools 36.0.0 | `compileSdk` 36 in every module; `minSdk` is 26 |
+| Android SDK | platform 37.0, build-tools 36.0.0 | `compileSdk` 37 in every module; `minSdk` is 26 |
 | Android Gradle Plugin | 9.5.0 | pinned in `android/build.gradle.kts` |
 | Kotlin | 2.4.21 | pinned in `android/build.gradle.kts`; `explicitApi()` is on |
 | Gradle | 9.7.1 | through the wrapper, never a system Gradle |
@@ -30,10 +30,11 @@ export ANDROID_HOME=~/Library/Android/sdk
 export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$PATH"
 ```
 
-Install the Android platform once, the way CI does:
+Install the Android platforms once. `compileSdk` is 37, so `android-37.0` is the one the build needs;
+CI installs `android-36` and lets AGP download the rest:
 
 ```bash
-yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-36" "build-tools;36.0.0"
+yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "platforms;android-37.0" "platforms;android-36" "build-tools;36.0.0"
 ```
 
 ## Layout

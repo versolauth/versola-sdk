@@ -8,7 +8,7 @@ for iOS, with a Flutter (Dart) binding, and works with any standards-conforming 
 as Keycloak or Ory Hydra. If you use AppAuth today, it is an alternative that also does token
 refresh coordination, secure storage and ID-token signature validation for you.
 
-Documentation: <https://docs.versola.io> (the SDK section is being added to this site).
+Documentation: <https://docs.versola.io>.
 
 ## Quick facts
 
@@ -50,11 +50,27 @@ token.
 
 ### Install
 
-- **Android:** `implementation("io.versola:oauth-android:0.1.0")` from `mavenCentral()` (and
+The current version is on the [Releases](https://github.com/versolauth/versola-sdk/releases) page;
+write it where `<version>` stands.
+
+- **Android:** `implementation("io.versola:oauth-android:<version>")` from `mavenCentral()` (and
   `google()`).
-- **iOS:** Swift Package Manager, `.package(url: "https://github.com/versolauth/versola-sdk", from: "0.1.0")`,
+- **iOS:** Swift Package Manager, `.package(url: "https://github.com/versolauth/versola-sdk", from: "<version>")`,
   product `VersolaOAuth`.
-- **Flutter:** `flutter pub add versola_oauth`, with Swift Package Manager integration enabled for iOS.
+- **Flutter:** a git dependency in `pubspec.yaml` (below), with Swift Package Manager integration
+  enabled for iOS.
+
+```yaml
+dependencies:
+  versola_oauth:
+    git:
+      url: https://github.com/versolauth/versola-sdk.git
+      path: flutter/versola_oauth
+      ref: <version>
+```
+
+A Flutter app needs `compileSdk` 37 and `minSdk` 26 in `android/app/build.gradle.kts` and an iOS
+deployment target of 17.4; a lower value fails the build with a message that names the minimum.
 
 ### Android (Kotlin)
 
@@ -243,14 +259,21 @@ even though the major version is still 0. We won't change an interface unless a 
 required. When one is, the pull request that makes it says so and carries the regenerated API
 dump, and the minor version goes up; compatible additions and fixes raise only the patch version.
 
+### How do I add it to my project?
+
+On Android, add `io.versola:oauth-android` from Maven Central. On iOS, add the Swift package
+`https://github.com/versolauth/versola-sdk` and use the `VersolaOAuth` product. On Flutter, add
+`versola_oauth` as a git dependency from the same repository. The [Install](#install) section has
+the coordinates.
+
 ### What licence is it under?
 
 Apache-2.0. See [LICENSE](LICENSE).
 
 ## Documentation
 
-- The SDK documentation will be hosted at <https://docs.versola.io>: platform guides, provider
-  guides (Keycloak, Ory Hydra) and the AppAuth migration guide.
+- The SDK documentation at <https://docs.versola.io>: platform guides, provider guides (Keycloak,
+  Ory Hydra) and the AppAuth migration guide.
 - [`spec/`](spec/): the specification the three implementations follow
   ([API](spec/oauth-sdk-api.md), [state machine](spec/state-machine.md),
   [errors](spec/errors.md), [retry policy](spec/retry-policy.md),

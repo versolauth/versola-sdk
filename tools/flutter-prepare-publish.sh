@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Makes the Flutter plugin consumable from pub.dev: its iOS half depends on this repository's
-# Swift package by path (../../../..), which exists only inside a checkout. In a published package
-# it has to be the release tag.
+# Swift package by path (the repository root, found from the manifest's own location), which
+# exists only inside a checkout or a clone of the whole repository. In a published package it has
+# to be the release tag.
 #
 #   tools/flutter-prepare-publish.sh 0.1.0
 #
@@ -25,11 +26,20 @@ version = sys.argv[1]
 path = "flutter/versola_oauth/ios/versola_oauth/Package.swift"
 text = open(path).read()
 
-local = '.package(name: "Versola", path: "../../../..")'
+local = '.package(name: "Versola", path: repositoryRoot)'
 remote = f'.package(url: "https://github.com/versolauth/versola-sdk", exact: "{version}")'
 if local not in text:
     sys.exit(f"{path}: the path dependency on the repository package is not where this script expects it")
 text = text.replace(local, remote)
+
+# The computation of repositoryRoot is meaningless once the dependency is a URL (and would point
+# at nothing in a published package): drop the delimited block and the import only it needs.
+text, blocks = re.subn(r"// repository-root:begin\n.*?// repository-root:end\n\n?", "", text, flags=re.S)
+if blocks != 1:
+    sys.exit(f"{path}: the repository-root block is not delimited as this script expects it")
+text = text.replace("import Foundation\n", "", 1)
+if "repositoryRoot" in text:
+    sys.exit(f"{path}: repositoryRoot is still referenced after the rewrite")
 
 # A package named by URL has the identity of the last path component of the URL.
 product = '.product(name: "VersolaOAuth", package: "Versola")'

@@ -22,7 +22,13 @@ in `security.md`; what the platform SDKs do is in `android-kotlin.md` and `ios-s
 - The native SDKs are consumed as this repository's own builds: the Android half depends on
   `io.versola:oauth-android`, which the example app's `settings.gradle.kts` substitutes with the
   `:oauth` project through a composite build until the artefact is published; the iOS half depends
-  on the root `Package.swift` by path (SwiftPM only, no podspec: CocoaPods is dormant). Both pins
+  on the root `Package.swift` by path (SwiftPM only, no podspec: CocoaPods is dormant). Flutter
+  builds the plugin through a symlink into the app, so the plugin's `Package.swift` finds the
+  repository root from its own symlink-resolved `#filePath`, never from a relative `path:` (which
+  SwiftPM resolves against the symlink and which pointed into the app). That is what makes a git
+  or path dependency on the plugin build; the example app, being inside the checkout, would not
+  show a regression, so after touching that manifest build a throwaway app with both kinds of
+  dependency. Both pins
   (AGP and Kotlin in the example, the iOS floor in the plugin's `Package.swift`) follow the
   native builds and change with them.
 
@@ -110,6 +116,6 @@ cd example && flutter build ios --no-codesign   # and on iOS
 - Publishing to pub.dev is dormant: `publish-pubdev.yml` is `if: false` and the first release is a
   manual `flutter pub publish` by the maintainer (`docs/releasing.md`). Do not run `flutter pub
   publish`, with or without `--dry-run`, do not remove the dormancy, and do not add a `publish_to`
-  that would enable it by accident. The published plugin cannot use the path dependency its iOS
-  `Package.swift` has inside a checkout: `tools/flutter-prepare-publish.sh` rewrites it to the release
-  tag in the publishing job's working copy, and the rewrite is never committed.
+  that would enable it by accident. The published plugin has no repository root to find, which the path dependency its iOS
+  `Package.swift` has inside a checkout needs: `tools/flutter-prepare-publish.sh` rewrites it to the release
+  tag by URL, and drops the root computation, in the publishing job's working copy, and the rewrite is never committed.
