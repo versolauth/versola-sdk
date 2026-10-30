@@ -40,7 +40,7 @@ public class VersolaRedirectActivity : Activity() {
         handle(intent)
     }
 
-    // singleTask: a redirect arriving while this instance exists comes here, not to onCreate.
+    // singleInstance: a redirect arriving while this instance exists comes here, not to onCreate.
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
