@@ -33,9 +33,8 @@ jobs:
           # to anything that runs it as shell (ci-release.md). The script matches vX.Y.Z only.
           RELEASE_TAG: ${{ github.event.release.tag_name }}
 
-  # Eight artefacts under kz.versola (android/gradle/publishing.gradle.kts has the list and why
-  # each exists): the two facades, `oauth-core` and the building blocks, because a facade's POM
-  # names the others. The Central Portal takes one signed zip in Maven layout; this job builds it
+  # Six artefacts under kz.versola (docs/releasing.md has the list and why each exists):
+  # `oauth-android` and the five modules its POM names. The Central Portal takes one signed zip in Maven layout; this job builds it
   # and uploads it as USER_MANAGED, so the deployment waits in the Portal for the maintainer's
   # click and can be dropped there. Switching to AUTOMATIC is a later decision, not this file's.
   maven-central:

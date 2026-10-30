@@ -17,21 +17,19 @@ One version for every platform while the project is 0.x, written `X.Y.Z`, tagged
 
 | Platform | Published as | How | Workflow |
 |---|---|---|---|
-| Android | `kz.versola:oauth-android` (the generic facade), `kz.versola:versola-android` (the Versola facade), and the six modules they depend on (below) | Maven Central, through the Central Portal | `release.yml` `maven-central` |
+| Android | `kz.versola:oauth-android` and the five modules it depends on (below) | Maven Central, through the Central Portal | `release.yml` `maven-central` |
 | iOS | the repository itself: product `VersolaOAuth` (and the `Versola*` placeholders) | Swift Package Manager resolves the tag; nothing is uploaded | `release.yml` `swiftpm` verifies the tag builds |
 | Flutter | `versola_oauth` on pub.dev | `flutter pub publish`, by hand for 0.1.0 and by workflow after | `publish-pubdev.yml` |
 
-The Android facades are not single artefacts: a Gradle project dependency becomes a Maven dependency
-in the published POM, so every module a facade needs is published too, under the same group and
+The Android SDK is not a single artefact: a Gradle project dependency becomes a Maven dependency
+in the published POM, so every module `OAuthClient` needs is published too, under the same group and
 version. The coordinates are chosen in each module's `build.gradle.kts` and are the contract once
 released.
 
 | Module | Coordinates | Kind |
 |---|---|---|
-| `:oauth` | `kz.versola:oauth-android` | AAR, the generic facade |
-| `:sdk` | `kz.versola:versola-android` | AAR, the Versola facade |
+| `:oauth` | `kz.versola:oauth-android` | AAR, `OAuthClient` |
 | `:oauth-core` | `kz.versola:oauth-core` | JAR, plain JVM protocol engine |
-| `:core` | `kz.versola:versola-core-android` | AAR, the edge back channel |
 | `:dpop` | `kz.versola:dpop-android` | AAR |
 | `:storage` | `kz.versola:storage-android` | AAR |
 | `:browser` | `kz.versola:browser-android` | AAR |
@@ -58,7 +56,7 @@ publish nothing.
 - `release.yml` and `publish-pubdev.yml`: the above, in order, with the upload to the Central Portal.
   Every job is `if: false`.
 
-What was verified locally, on `-PreleaseVersion=0.1.0`: all eight modules publish; every POM names
+What was verified locally, on `-PreleaseVersion=0.1.0`: all six modules publish; every POM names
 only coordinates that are in the bundle; each artefact has sources, javadoc, POM and Gradle module
 metadata with MD5 and SHA-1 checksums; a bundle signed with a throwaway key has a signature for every
 file (40 of them) and one of them verifies with the matching public key. What was not verified:
