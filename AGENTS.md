@@ -15,9 +15,9 @@ other issue assumes; read it before non-trivial work, then `README.md`, `spec/st
 
 This is an SDK that customers compile into shipped apps. A public type, parameter, default or
 error case is a promise an app compiles against; `apiCheck` (Android), the Swift ABI and the Dart
-API hold us to it. Nothing is published yet, so before the first release the surface may still
-change, but every change to a public symbol is stated in the PR together with the regenerated
-`android/*/api/*.api` dump. After the first release the versioning policy in
+API hold us to it. The API is production ready and the major version is still 0: interfaces
+change only when a change is required, and every change to a public symbol is stated in the PR
+together with the regenerated `android/*/api/*.api` dump. The versioning policy in
 `.claude/rules/ci-release.md` applies. A secret (refresh token, key material) that leaks is a
 vulnerability in every app that embeds the SDK, not a bug.
 
