@@ -100,7 +100,7 @@ jobs:
         run: ./gradlew assemble
       - name: Build Swift targets
         if: ${{ matrix.language == 'swift' }}
-        run: xcodebuild build -scheme VersolaOAuth -sdk iphonesimulator -destination "generic/platform=iOS Simulator" ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO
+        run: xcodebuild build -scheme Versola -sdk iphonesimulator -destination "generic/platform=iOS Simulator" ARCHS=arm64 ONLY_ACTIVE_ARCH=NO CODE_SIGNING_ALLOWED=NO
       - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
           category: /language:${{ matrix.language }}

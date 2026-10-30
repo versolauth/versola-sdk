@@ -203,7 +203,7 @@ jobs:
         with:
           persist-credentials: false
       - run: swift package resolve
-      - run: xcodebuild build -scheme VersolaOAuth -destination "generic/platform=iOS Simulator"
+      - run: xcodebuild build -scheme Versola -destination "generic/platform=iOS Simulator"
 
   # The GitHub release for the tag, with notes generated from the merged pull requests. Created
   # only after the Android bundle validated and the Swift package built at the tag, so a failed

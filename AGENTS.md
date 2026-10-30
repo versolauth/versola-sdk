@@ -29,7 +29,7 @@ cd android && ./gradlew :oauth-core:test                 # one module (:core and
 cd android && ./gradlew apiDump                        # after a public API change; commit the .api files
 cd android && ./gradlew :storage:connectedDebugAndroidTest   # device tier; needs a booted emulator
 swift package resolve                                  # iOS: from the repo root (Package.swift lives here)
-xcodebuild test -scheme VersolaOAuth -destination "platform=iOS Simulator,name=iPhone 16"   # pick a name from: xcrun simctl list devices available
+xcodebuild test -scheme Versola -destination "platform=iOS Simulator,name=iPhone 16"   # pick a name from: xcrun simctl list devices available
 python3 tools/validate-scenarios.py                   # spec: scenarios against spec/conformance/schema.json (pip install -r tools/requirements.txt once)
 npx markdownlint-cli2 "**/*.md"                        # spec.yml's markdown job
 ```

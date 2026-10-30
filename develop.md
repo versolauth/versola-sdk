@@ -125,8 +125,8 @@ Run from the repository root. These are the `ios.yml` steps.
 
 ```bash
 swift package resolve
-xcodebuild build -scheme VersolaOAuth -destination "platform=iOS Simulator,name=iPhone 17"
-xcodebuild test  -scheme VersolaOAuth -destination "platform=iOS Simulator,name=iPhone 17"
+xcodebuild build -scheme Versola -destination "platform=iOS Simulator,name=iPhone 17"
+xcodebuild test  -scheme Versola -destination "platform=iOS Simulator,name=iPhone 17"
 ```
 
 `swift build` and `swift test` on the Mac host work too (the manifest lists macOS 14.4, so the
@@ -387,7 +387,7 @@ answer it. Without `ISSUER` in the runner's environment every test is skipped.
 Both host apps double as small example apps over the generic facade: launch one with the issuer
 (`adb shell am start -n versola.conformance.browser.app/.HostActivity --es issuer ...`, or the
 `ISSUER` environment variable on iOS) and use the buttons by hand. `ios/BrowserLegHost` is not part
-of `Package.swift`, and `xcodebuild -scheme VersolaOAuth` does not see it.
+of `Package.swift`, and `xcodebuild -scheme Versola` does not see it.
 
 ## Agent setup
 
@@ -401,7 +401,7 @@ written so they keep holding after the planned `versola.*` package move (#46).
 
 1. `cd android && ./gradlew test apiCheck` is green. Run `lint` too if you touched resources or
    the manifest.
-2. `xcodebuild test -scheme VersolaOAuth -destination "platform=iOS Simulator,name=iPhone 17"`
+2. `xcodebuild test -scheme Versola -destination "platform=iOS Simulator,name=iPhone 17"`
    is green if anything under `ios/` or `Package.swift` changed.
 3. `python3 tools/validate-scenarios.py` passes if anything under `spec/` changed, and
    `npx markdownlint-cli2 "**/*.md"` is clean if any Markdown did.

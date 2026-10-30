@@ -136,7 +136,7 @@ variables to the test process):
 OAUTH_CONFORMANCE_ISSUER=http://localhost:8080/realms/conformance OAUTH_CONFORMANCE_PROVIDER=keycloak \
   swift test --filter OAuthConformanceTests
 TEST_RUNNER_OAUTH_CONFORMANCE_ISSUER=http://localhost:4444 TEST_RUNNER_OAUTH_CONFORMANCE_PROVIDER=hydra \
-  xcodebuild test -scheme VersolaOAuth -destination "platform=iOS Simulator,name=iPhone 17" \
+  xcodebuild test -scheme Versola -destination "platform=iOS Simulator,name=iPhone 17" \
   -only-testing:OAuthConformanceTests
 ```
 

@@ -104,8 +104,8 @@ transcripts, not against each other's code. Security rules are in `security.md`.
 swift package resolve                  # SPM resolution from a clean checkout
 swift build
 swift test                             # macOS host; what runs without a simulator
-xcodebuild build -scheme VersolaOAuth -destination "platform=iOS Simulator,name=iPhone 17"
-xcodebuild test  -scheme VersolaOAuth -destination "platform=iOS Simulator,name=iPhone 17"
+xcodebuild build -scheme Versola -destination "platform=iOS Simulator,name=iPhone 17"
+xcodebuild test  -scheme Versola -destination "platform=iOS Simulator,name=iPhone 17"
 ```
 
 - `.github/workflows/ios.yml` runs exactly the `resolve`, `xcodebuild build` and `xcodebuild test`
