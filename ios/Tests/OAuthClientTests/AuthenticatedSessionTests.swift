@@ -35,6 +35,7 @@ private actor FakeDpop: DpopProofSource {
 
     private(set) var proofs: [Proof] = []
     private(set) var observed: [(nonce: String, origin: String)] = []
+    private(set) var observedDates: [String?] = []
     private var nonces: [String: String] = [:]
 
     func thumbprint() async throws -> String { "jkt" }
@@ -48,6 +49,8 @@ private actor FakeDpop: DpopProofSource {
         observed.append((nonce, origin))
         nonces[origin] = nonce
     }
+
+    func observe(serverDate: String?) async { observedDates.append(serverDate) }
 
     func nonce(for origin: String) async -> String? { nonces[origin] }
     func clearNonces() async { nonces = [:] }
@@ -358,6 +361,43 @@ final class AuthenticatedSessionTests: XCTestCase {
             XCTAssertEqual(error as? OAuthError, .recoverable(.nonceLoop(origin: "https://api.example.com")))
         }
         XCTAssertEqual(StubURLProtocol.requests.count, 1)
+    }
+
+    func testInvalidDpopProofFromASkewedDeviceClockIsRetriedOnceWithTheServersTimeAndSucceeds() async throws {
+        let serverTime = Date(timeIntervalSince1970: 1_700_000_000)
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
+        let dateHeader = formatter.string(from: serverTime)
+        StubURLProtocol.install { request in
+            let iat = request.value(forHTTPHeaderField: "DPoP").flatMap { Self.iat(of: $0) }
+            if let iat, abs(iat - Int(serverTime.timeIntervalSince1970)) <= 60 {
+                return .response(status: 200, headers: ["Date": dateHeader], body: Data("ok".utf8))
+            }
+            return .response(status: 401, headers: ["Date": dateHeader, "WWW-Authenticate": "DPoP error=\"invalid_dpop_proof\""])
+        }
+        let tokens = FakeTokens(current: dpopToken)
+        let factory = DpopProofFactory(key: SoftwareDpopKey(), clock: Clock(now: { serverTime.addingTimeInterval(-900) }))
+
+        let (data, response) = try await session(tokens: tokens, dpop: factory).data(for: URLRequest(url: api))
+
+        XCTAssertEqual(response.statusCode, 200)
+        XCTAssertEqual(String(decoding: data, as: UTF8.self), "ok")
+        let requests = StubURLProtocol.requests
+        XCTAssertEqual(requests.count, 2, "one refusal, one corrected retry")
+        XCTAssertEqual(requests.compactMap { $0.value(forHTTPHeaderField: "DPoP").flatMap { Self.iat(of: $0) } }, [1_699_999_100, 1_700_000_000])
+        let renewals = await tokens.renewCount
+        XCTAssertEqual(renewals, 0)
+    }
+
+    private static func iat(of proof: String) -> Int? {
+        guard let payload = proof.split(separator: ".").dropFirst().first,
+              let data = Data(base64Encoded: String(payload).replacingOccurrences(of: "-", with: "+").replacingOccurrences(of: "_", with: "/")
+                  + String(repeating: "=", count: (4 - payload.count % 4) % 4)),
+              let claims = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+        else { return nil }
+        return claims["iat"] as? Int
     }
 
     func testInvalidDpopProofIsRetriedOnceThenCredentialsInvalidated() async throws {

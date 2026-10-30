@@ -213,6 +213,8 @@ package struct HTTPTokenClient: TokenClient {
         } catch {
             throw OAuthError.recoverable(.network(detail: "token request failed", attempts: 1, elapsedMillis: 0))
         }
+        // Before the answer is read, so an `invalid_dpop_proof` retry mints from the server's clock.
+        if let dpop { await dpop.observe(serverDate: response.header("Date")) }
         // Under the origin the proof was for: that server issued the nonce and will check it.
         if let nonce = response.header("DPoP-Nonce"), !nonce.isEmpty, let dpop {
             await dpop.observe(nonce: nonce, origin: DpopOrigin.of(proofFor ?? url))

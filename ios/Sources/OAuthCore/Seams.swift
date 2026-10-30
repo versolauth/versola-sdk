@@ -132,6 +132,10 @@ package protocol DpopProofSource: Sendable {
     func proof(method: String, url: URL, nonce: String?, accessToken: String?) async throws -> String
     /// A nonce the origin demanded (`use_dpop_nonce`), remembered per origin.
     func observe(nonce: String, origin: String) async
+    /// The `Date` header of any response from a server the proofs are for, successful or not:
+    /// the server's clock, from which the next proof's `iat` is corrected. Called before a
+    /// retry is minted, so the single `invalid_dpop_proof` retry carries the corrected time.
+    func observe(serverDate: String?) async
     func nonce(for origin: String) async -> String?
     func clearNonces() async
 }

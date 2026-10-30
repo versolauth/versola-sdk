@@ -232,6 +232,13 @@ same access token: the usual cause is clock skew the SDK can now correct from th
 `Date` header. This is handled internally and never surfaced to the app, the same treatment as
 `use_dpop_nonce`.
 
+The offset is learned from the `Date` header of **every** response from a server the proofs are
+for, a success as much as a refusal, so the retry's `iat` is already corrected when it is minted
+and a device with a wrong clock usually pays no refusal at all after its first request. A `Date`
+that is absent, unreadable or more than 30 days from the device clock is ignored (a cached
+response or a broken intermediary says nothing true about the clock), leaving whatever was
+learned before. The offset is one per client, in memory only (see the persistence summary).
+
 A second failure means the key no longer matches the grant, not a timing problem. Nothing
 retries it again: the SDK wipes credential state exactly as `Refreshing → Unauthenticated` does
 and surfaces `Reauthenticate`.

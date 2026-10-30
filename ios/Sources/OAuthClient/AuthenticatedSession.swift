@@ -69,6 +69,7 @@ public final class AuthenticatedSession: Sendable {
 
         while true {
             let (data, response) = try await send(try await sign(request, url: url, token: token, origin: origin))
+            if let dpop { await dpop.observe(serverDate: response.value(forHTTPHeaderField: "Date")) }
             if let dpop, let nonce = response.value(forHTTPHeaderField: "DPoP-Nonce"), !nonce.isEmpty {
                 await dpop.observe(nonce: nonce, origin: origin)
             }
@@ -91,7 +92,8 @@ public final class AuthenticatedSession: Sendable {
                 nonceRetried = true
 
             case "invalid_dpop_proof":
-                // The one recoverable cause is clock skew, learned off this response. A second
+                // The one recoverable cause is clock skew, learned off this response's `Date`
+                // (above), so the retry's proof is minted from the server's clock. A second
                 // refusal means the key does not match the grant, and a refresh reuses the
                 // same key, so no refresh repairs it.
                 if proofRetried { throw OAuthError.reauthenticate(.credentialsInvalidated) }
