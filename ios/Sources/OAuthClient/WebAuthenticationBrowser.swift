@@ -1,11 +1,16 @@
 import AuthenticationServices
 import Foundation
 
-/// A redirect handed over by the app for an authorization this process did not start, with
-/// room for one that arrives before anyone is waiting. One waiter, one buffered URL: a second
-/// delivery replaces the first, because only the newest redirect can match the newest request.
+/// A redirect handed over by the app for an authorization this process did not start, with room
+/// for those that arrive before anyone is waiting: a cold-started process is handed the redirect
+/// before the resume has read the request it answers, and may be handed others (a stale link,
+/// another app) before or after it. They are kept in arrival order, up to `capacity`, the oldest
+/// dropped first, and the flow reads them against the request: the one that carries its `state`
+/// answers it and the others are stepped over. One waiter.
 actor PendingRedirects {
-    private var buffered: URL?
+    static let capacity = 8
+
+    private var buffered: [URL] = []
     private var waiter: (id: Int, continuation: CheckedContinuation<URL, any Error>)?
     private var nextId = 0
 
@@ -14,21 +19,19 @@ actor PendingRedirects {
             self.waiter = nil
             waiter.continuation.resume(returning: url)
         } else {
-            buffered = url
+            buffered.append(url)
+            if buffered.count > Self.capacity { buffered.removeFirst() }
         }
     }
 
-    /// A new authorization is starting: a redirect buffered for an older one is stale and
+    /// A new authorization is starting: redirects buffered for an older one are stale and
     /// must not be mistaken for this one's.
     func drain() {
-        buffered = nil
+        buffered.removeAll()
     }
 
     func next() async throws -> URL {
-        if let url = buffered {
-            buffered = nil
-            return url
-        }
+        if !buffered.isEmpty { return buffered.removeFirst() }
         try Task.checkCancellation()
         nextId += 1
         let id = nextId
@@ -106,7 +109,8 @@ package final class WebAuthenticationBrowser: BrowserAuthorizationSession, Senda
         }
         // A caller that was cancelled gets a cancellation, not an outcome it no longer wants.
         try Task.checkCancellation()
-        return try Self.outcome(for: result.0, foreground: result.1, logger: logger).get()
+        let outcome = try Self.outcome(for: result.0, foreground: result.1, logger: logger).get()
+        return Self.ended(outcome, expectedState: options.expectedState, logger: logger)
     }
 
     /// The redirect of an authorization this process did not start: whatever the app handed to
@@ -149,6 +153,21 @@ package final class WebAuthenticationBrowser: BrowserAuthorizationSession, Senda
         default:
             return .customScheme(scheme)
         }
+    }
+
+    /// What the session's own completion means when it carries a redirect that is not the response
+    /// to the login in progress (scenario 15). `ASWebAuthenticationSession` completes the moment its
+    /// page navigates to the callback URL, so the sheet is gone with that redirect: nothing can
+    /// follow from it, no dismissal can be observed any more, and the genuine response cannot come
+    /// from it. Waiting on would leave a login that nobody can see or cancel, so it ends as the
+    /// user closing the sheet would end it (`userCancelled`, the request wiped) and not as a system
+    /// cancel, which an app retries silently. A URL another app opens reaches the SDK through
+    /// `handleRedirect`, not through the sheet, and the flow ignores it there.
+    static func ended(_ outcome: BrowserOutcome, expectedState: String?, logger: (any OAuthLogger)?) -> BrowserOutcome {
+        guard case .redirect(let url) = outcome, let expectedState,
+              !AuthorizationResponseValidator.carries(url, state: expectedState) else { return outcome }
+        logger?.warn("the browser session ended with a redirect that is not the response to the login in progress; the login is over")
+        return .userCancelled
     }
 
     /// `canceledLogin` is one code for two causes; `foreground` (read at the moment it arrived)

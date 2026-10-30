@@ -18,7 +18,8 @@ final class AuthorizationFlowTests: XCTestCase {
         dpopKey: DpopProofSource? = nil,
         starter: AuthorizationStarter? = nil,
         now: Date = AuthzKit.now,
-        configuration: CoreConfiguration = AuthzKit.configuration
+        configuration: CoreConfiguration = AuthzKit.configuration,
+        logger: (any OAuthLogger)? = nil
     ) -> Fixture {
         let hub = SessionStateHub()
         let discovery = DiscoveryService(
@@ -26,7 +27,7 @@ final class AuthorizationFlowTests: XCTestCase {
         let flow = AuthorizationFlow(
             configuration: configuration, discovery: discovery, pendingStore: store, browser: browser,
             states: hub, tokenBinding: tokenBinding, dpopKey: dpopKey, clock: Clock(now: { now }),
-            hasStoredGrant: grantProbe ?? { hasStoredGrant }, starter: starter
+            hasStoredGrant: grantProbe ?? { hasStoredGrant }, starter: starter, logger: logger
         )
         return Fixture(flow: flow, store: store, hub: hub)
     }
@@ -85,7 +86,13 @@ final class AuthorizationFlowTests: XCTestCase {
         let uri = await browser.opened[0]
         XCTAssertTrue(uri.absoluteString.hasPrefix("https://id.example.com/authorize?response_type=code"))
         let options = await browser.options[0]
-        XCTAssertEqual(options, BrowserSessionOptions(ephemeral: true, redirectURI: URL(string: AuthzKit.redirect)))
+        let stored = await f.store.stored
+        XCTAssertEqual(
+            options,
+            BrowserSessionOptions(ephemeral: true, redirectURI: URL(string: AuthzKit.redirect), expectedState: stored?.state),
+            "the browser is told the state of the request it waits for the response to"
+        )
+        XCTAssertNotNil(stored)
     }
 
     func testAStarterBuildsTheRequestAndItsPendingRecordIsWhatIsSaved() async throws {
@@ -157,14 +164,88 @@ final class AuthorizationFlowTests: XCTestCase {
 
     // MARK: Redirect validation
 
-    func testARedirectFailingValidationClearsThePendingRequestAndRethrows() async {
-        let browser = ScriptedBrowser { uri, _ in .redirect(AuthzKit.redirect(answering: uri, state: "forged")) }
+    func testARedirectWhoseStateIsNotThePendingRequestsIsIgnoredAndTheGenuineOneCompletesTheLogin() async throws {
+        // Scenario 15. The redirect URI is public, so a URL for it with a state this request never
+        // sent is not its response: ignored, not a failure, and what comes after still answers.
+        let logger = LoggedLines()
+        let calls = Box(0)
+        let browser = ScriptedBrowser(
+            onAuthorize: { uri, _ in .redirect(AuthzKit.redirect(answering: uri, state: "forged")) },
+            onAwait: { opened in
+                let n = await calls.value + 1
+                await calls.set(n)
+                // The second is a redirect with no state at all; the third is the genuine one.
+                if n == 1 { return .redirect(URL(string: AuthzKit.redirect + "?code=forged&iss=\(AuthzKit.issuer)")!) }
+                return .redirect(AuthzKit.redirect(answering: opened.last!))
+            }
+        )
+        let f = fixture(browser: browser, logger: logger)
+
+        let grant = try await f.flow.authorize(scopes: ["openid"])
+
+        XCTAssertEqual(grant.code, "code-1")
+        let awaited = await browser.awaitCalls
+        XCTAssertEqual(awaited, 2, "the foreign and the state-less redirect were each stepped over")
+        let opened = await browser.opened
+        XCTAssertEqual(opened.count, 1, "no second login, no second browser")
+        let lines = logger.all
+        XCTAssertEqual(lines.count, 2)
+        let stored = await f.store.stored
+        XCTAssertFalse(
+            lines.contains { $0.contains("forged") || $0.contains(grant.state) || $0.contains("example.com") },
+            "the log names no value of the URL or of the request: \(lines)"
+        )
+        XCTAssertEqual(stored?.state, grant.state, "the request the browser was opened for is the one that was answered")
+    }
+
+    func testWhileRedirectsThatAreNotItsResponseArriveTheLoginKeepsWaitingWithItsRequestAndState() async throws {
+        let seen = Box(0)
+        let browser = ScriptedBrowser(
+            onAuthorize: { uri, _ in .redirect(AuthzKit.redirect(answering: uri, state: "forged-0")) },
+            onAwait: { _ in
+                let n = await seen.value + 1
+                await seen.set(n)
+                if n <= 5 { return .redirect(AuthzKit.redirect(answering: URL(string: "https://x.example.com/")!, state: "forged-\(n)")) }
+                try await Task.sleep(nanoseconds: 3_600_000_000_000)
+                throw CancellationError()
+            }
+        )
         let f = fixture(browser: browser)
-        await assertAuthorizeFails(.configuration(.stateMismatch), f)
+
+        let login = Task { try await f.flow.authorize(scopes: ["openid"]) }
+        await AuthzKit.waitUntil("every foreign redirect to be consumed") { await seen.value == 6 }
+
+        let stored = await f.store.stored
+        let state = await f.hub.current
+        let saves = await f.store.saveCount
+        let inFlight = await f.flow.authorizationInFlight
+        XCTAssertNotNil(stored, "the pending request is kept")
+        XCTAssertEqual(saves, 1)
+        XCTAssertEqual(state, .authorizing)
+        XCTAssertTrue(inFlight, "the login is still carried out, neither failed nor abandoned")
+        login.cancel()
+        _ = try? await login.value
+    }
+
+    func testTheUserDismissingTheBrowserAfterARedirectWasIgnoredStillEndsTheLoginAsACancel() async {
+        let browser = ScriptedBrowser(
+            onAuthorize: { uri, _ in .redirect(AuthzKit.redirect(answering: uri, state: "forged")) },
+            onAwait: { _ in .userCancelled }
+        )
+        let f = fixture(browser: browser)
+        await assertAuthorizeFails(.recoverable(.userCancelled), f)
         let stored = await f.store.stored
         let state = await f.hub.current
         XCTAssertNil(stored)
         XCTAssertEqual(state, .unauthenticated)
+    }
+
+    func testARedirectCarryingTheRightStateButNeitherCodeNorErrorIsMalformed() async {
+        let browser = ScriptedBrowser { uri, _ in .redirect(AuthzKit.redirect(answering: uri, code: nil)) }
+        let f = fixture(browser: browser)
+        await assertAuthorizeFails(.configuration(.malformedAuthorizationResponse), f)
+        let stored = await f.store.stored
+        XCTAssertNil(stored)
     }
 
     func testAMissingIssFailsWhenTheMetadataAdvertisedSupportAtRequestTime() async {
@@ -217,15 +298,25 @@ final class AuthorizationFlowTests: XCTestCase {
         XCTAssertEqual(awaits, 1)
     }
 
-    func testARedirectForAnUnknownStateIsNotSkippedAndFailsAsAMismatch() async {
+    func testARedirectForAStateNoRequestOfThisProcessIssuedIsSkippedToo() async throws {
+        // The abandoned-tab skip used to be limited to states this process itself had issued, and
+        // anything else failed as a mismatch. Now every redirect that is not the request's own is
+        // stepped over, however many.
+        let seen = Box(0)
         let browser = ScriptedBrowser(
             onAuthorize: { uri, _ in .redirect(AuthzKit.redirect(answering: uri, state: "never-issued")) },
-            onAwait: { opened in .redirect(AuthzKit.redirect(answering: opened.last!)) }
+            onAwait: { opened in
+                let n = await seen.value + 1
+                await seen.set(n)
+                if n <= 25 { return .redirect(AuthzKit.redirect(answering: opened.last!, state: "never-issued-\(n)")) }
+                return .redirect(AuthzKit.redirect(answering: opened.last!))
+            }
         )
         let f = fixture(browser: browser)
-        await assertAuthorizeFails(.configuration(.stateMismatch), f)
+        let grant = try await f.flow.authorize(scopes: ["openid"])
+        XCTAssertEqual(grant.code, "code-1")
         let awaits = await browser.awaitCalls
-        XCTAssertEqual(awaits, 0)
+        XCTAssertEqual(awaits, 26)
     }
 
     // MARK: Discovery-driven checks
@@ -639,22 +730,53 @@ final class AuthorizationFlowTests: XCTestCase {
         XCTAssertEqual(state, .authorizing)
     }
 
-    func testResumeRefusesARedirectWhoseStateIsNotTheRestoredOne() async {
+    func testResumeStepsOverRedirectsWhoseStateIsNotTheRestoredOneAndCompletesWithTheGenuine() async throws {
         let pending = AuthzKit.pending(state: "restored-state", createdAt: AuthzKit.now - 60)
+        let seen = Box(0)
         let browser = ScriptedBrowser(
             onAuthorize: { _, _ in .userCancelled },
-            onAwait: { _ in .redirect(AuthzKit.redirect(answering: URL(string: "https://x.example.com/?state=forged")!)) }
+            onAwait: { _ in
+                let n = await seen.value + 1
+                await seen.set(n)
+                let state = n == 1 ? "forged" : "restored-state"
+                return .redirect(AuthzKit.redirect(answering: URL(string: "https://x.example.com/?state=\(state)")!))
+            }
+        )
+        let store = MemoryPendingStore(pending)
+        let f = fixture(browser: browser, store: store)
+
+        let grant = try await f.flow.resumePendingAuthorization()
+
+        XCTAssertEqual(grant?.state, "restored-state")
+        let stored = await store.stored
+        XCTAssertNotNil(stored, "the request stays until the coordinator completes the login")
+    }
+
+    func testAResumeThatIsOnlyHandedForeignRedirectsKeepsItsRequestUntilItExpires() async {
+        // 50 ms of the ten minutes remain; nothing but a redirect that is not the request's arrives.
+        let pending = AuthzKit.pending(state: "restored-state", createdAt: AuthzKit.now - (PendingAuthorizationRequest.maxAge - 0.05))
+        let seen = Box(0)
+        let browser = ScriptedBrowser(
+            onAuthorize: { _, _ in .userCancelled },
+            onAwait: { _ in
+                if await seen.value == 0 {
+                    await seen.set(1)
+                    return .redirect(AuthzKit.redirect(answering: URL(string: "https://x.example.com/?state=forged")!))
+                }
+                try await Task.sleep(nanoseconds: 3_600_000_000_000)
+                throw CancellationError()
+            }
         )
         let store = MemoryPendingStore(pending)
         let f = fixture(browser: browser, store: store)
         do {
             _ = try await f.flow.resumePendingAuthorization()
-            XCTFail("expected stateMismatch")
+            XCTFail("expected pendingRequestExpired")
         } catch {
-            XCTAssertEqual(error as? OAuthError, .configuration(.stateMismatch))
+            XCTAssertEqual(error as? OAuthError, .recoverable(.pendingRequestExpired))
         }
-        let stored = await store.stored
-        XCTAssertNil(stored)
+        let awaited = await seen.value
+        XCTAssertEqual(awaited, 1, "the foreign redirect was consumed, and the resume went on waiting until the request's end")
     }
 
     func testResumeGivesUpWhenTheRedirectNeverComesWithinTheRemainingLifetime() async {

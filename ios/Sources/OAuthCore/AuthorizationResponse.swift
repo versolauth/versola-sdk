@@ -16,6 +16,15 @@ package enum AuthorizationResponseValidator {
         parseQuery(redirect)["state"]
     }
 
+    /// Whether `redirect` carries exactly `state`, compared in constant time; a redirect with no
+    /// `state` does not. How the flow tells the response to its request from any other redirect
+    /// for the same URI (scenario 15), and how a browser session tells that its own page ended
+    /// with something else.
+    package static func carries(_ redirect: URL, state: String) -> Bool {
+        guard let received = stateOf(redirect) else { return false }
+        return SecureTokens.constantTimeEquals(state, received)
+    }
+
     /// The query of `url` as a dictionary, tolerant of whatever the OS delivered: a malformed
     /// percent escape stays as typed instead of trapping or failing, a repeated name keeps its
     /// first value, a name without `=` has an empty value. Query only: the SDK requests

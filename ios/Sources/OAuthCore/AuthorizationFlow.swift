@@ -46,13 +46,6 @@ package actor AuthorizationFlow {
     private var awaitingRedirect = false
     private var gateQueue: [(id: UUID, continuation: CheckedContinuation<Void, Error>)] = []
 
-    /// `state` values of authorizations whose caller was cancelled while their tab was open: the
-    /// redirects a later call may have to step over. Bounded, because an app that cancels
-    /// repeatedly without ever redirecting would otherwise grow this without end; dropping the
-    /// oldest only restores the old behaviour for it, a state mismatch.
-    private var abandonedStates: [String] = []
-    private static let maxAbandonedStates = 8
-
     /// - Parameters:
     ///   - dpopKey: the key `dpop_jkt` commits to. Needed when `tokenBinding` is `.dpop`; a key
     ///     handed in alongside `.bearer` is ignored rather than quietly overriding the choice.
@@ -246,8 +239,9 @@ package actor AuthorizationFlow {
     /// The pending request is persisted before the browser opens, because the app can be killed
     /// between the two. A slot left behind by a cancelled caller is superseded, not protected:
     /// the app is asking for a new authorization and cannot be made to wait out the old slot's
-    /// ten minutes. The abandoned tab can still redirect, so its `state` is remembered and that
-    /// redirect is discarded rather than allowed to fail this call as a mismatch.
+    /// ten minutes. The abandoned tab can still redirect; what it delivers carries a `state` that
+    /// is not this request's, so it is ignored like any redirect that is not the awaited response
+    /// (`belongingTo`).
     ///
     /// On success the state stays `authorizing` and the pending request stays stored; the
     /// coordinator completes the login after the token exchange.
@@ -290,14 +284,15 @@ package actor AuthorizationFlow {
                 uri = try request.toUri(authorizationEndpoint: metadata.authorizationEndpoint)
             }
             // A request nobody awaits (a system cancel kept it, a resume was never started) is
-            // replaced by this one. Its tab, if it still exists, can redirect later: its `state`
-            // is remembered so that redirect is stepped over instead of failing this call.
-            if let leftover = try? await pendingStore.load() { rememberAbandoned(leftover.state) }
+            // replaced by this one. Its tab, if it still exists, can redirect later, with a `state`
+            // that is not this request's: that redirect is ignored.
             // Before the state changes and before the browser opens: the order is the point.
             try await pendingStore.save(pending)
             await states.set(.authorizing)
 
-            let options = BrowserSessionOptions(ephemeral: ephemeralBrowser, redirectURI: configuration.redirectUri)
+            let options = BrowserSessionOptions(
+                ephemeral: ephemeralBrowser, redirectURI: configuration.redirectUri, expectedState: pending.state
+            )
             let outcome: BrowserOutcome
             do {
                 // The user's time in the browser is not the SDK's retrying (`OperationBudget.paused`).
@@ -309,10 +304,9 @@ package actor AuthorizationFlow {
                 // follow. The request and the `authorizing` state go with it; left behind they
                 // would refuse every `login()` for ten minutes (`spec/state-machine.md`, the
                 // iOS note under cancel). Android's Custom Tab outlives its caller and keeps
-                // the slot; that difference is the platform's, not the state machine's. The
-                // state is still remembered as abandoned: a redirect the app hands in later
-                // through other means with that state is discarded rather than failed.
-                rememberAbandoned(pending.state)
+                // the slot; that difference is the platform's, not the state machine's. A redirect
+                // the app hands in later through other means carries a `state` that is no request's
+                // any more, and is ignored.
                 await abandonLogin()
                 throw CancellationError()
             } catch {
@@ -450,38 +444,37 @@ package actor AuthorizationFlow {
 
     // MARK: Internals
 
-    /// Consumes redirects until one answers `pending`. A tab abandoned by a cancelled caller can
-    /// redirect after this call started; that redirect carries a `state` this process issued
-    /// itself, so failing on it would lose a live authorization to a tab the user forgot about.
-    /// Each abandoned `state` is discarded once, which is also what bounds the loop; anything
-    /// else, an unknown `state` included, still reaches the validator.
+    /// Consumes redirects until one answers `pending` (scenario 15).
+    ///
+    /// A redirect answers it only when its `state` is the request's. The redirect URI is public (the
+    /// app's associated domains or URL scheme name it), so any other app, an old link or a tab the
+    /// user forgot about can hand the app a URL for it, and a redirect that is not the response to
+    /// this request must not be able to end it. Whatever else it carries is not looked at: it is
+    /// logged, without the URL, and the wait goes on, for the genuine redirect, the user dismissing
+    /// the browser, or (in a resume) the request's expiry. A redirect with no `state` at all is not
+    /// the response of a request that sent one either.
+    ///
+    /// This is where the stored request is read, which is why it holds for a cold start too: a
+    /// redirect handed to `handleRedirect` before anything waited was buffered, and is judged here
+    /// against the request the resume loaded. The comparison is constant-time.
     private func belongingTo(_ pending: PendingAuthorizationRequest, first: BrowserOutcome) async throws
         -> BrowserOutcome {
         var outcome = first
-        while isAbandoned(outcome, pending: pending) {
+        while !answers(outcome, pending: pending) {
+            logger?.warn("ignored a redirect that is not the response to the pending authorization request; still waiting for it")
             outcome = try await OperationBudget.paused { try await browser.awaitPendingRedirect() }
         }
         return outcome
     }
 
-    private func isAbandoned(_ outcome: BrowserOutcome, pending: PendingAuthorizationRequest) -> Bool {
-        guard case .redirect(let url) = outcome, let state = AuthorizationResponseValidator.stateOf(url),
-              state != pending.state, let index = abandonedStates.firstIndex(of: state) else { return false }
-        abandonedStates.remove(at: index)
-        return true
-    }
-
-    private func rememberAbandoned(_ state: String) {
-        abandonedStates.append(state)
-        if abandonedStates.count > Self.maxAbandonedStates { abandonedStates.removeFirst() }
+    private func answers(_ outcome: BrowserOutcome, pending: PendingAuthorizationRequest) -> Bool {
+        guard case .redirect(let url) = outcome else { return true }
+        return AuthorizationResponseValidator.carries(url, state: pending.state)
     }
 
     private func complete(
         _ outcome: BrowserOutcome, pending: PendingAuthorizationRequest, metadata: ProviderMetadata
     ) async throws -> AuthorizationGrant {
-        // Being answered is what stops this request being anyone's leftover, whichever way it
-        // ends: a resumed one is no longer abandoned, and a rejected one never will be.
-        abandonedStates.removeAll { $0 == pending.state }
         switch outcome {
         case .userCancelled:
             await abandonLogin()
