@@ -12,7 +12,7 @@ right and this file is stale.
 | Android SDK | platform 37.0, build-tools 36.0.0 | `compileSdk` 37 in every module; `minSdk` is 26 |
 | Android Gradle Plugin | 9.5.0 | pinned in `android/build.gradle.kts` |
 | Kotlin | 2.4.21 | pinned in `android/build.gradle.kts`; `explicitApi()` is on |
-| Gradle | 9.7.1 | through the wrapper, never a system Gradle |
+| Gradle | 9.8.2 | through the wrapper, never a system Gradle |
 | Xcode | 16.3 or newer, with an iOS simulator | `Package.swift` (swift-tools 6.0, Swift 6 language mode) |
 | Flutter | 3.47.8 (Dart 3.13.7) | pinned in `flutter/.fvmrc`, run through [fvm](https://fvm.app) (`brew install fvm`, then `fvm install` in `flutter/`) |
 | Python | 3.12 | `tools/validate-scenarios.py` |

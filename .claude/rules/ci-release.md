@@ -105,7 +105,7 @@ the `io.versola:oauth-android` release pin), `swift` (`/`), `pub` (`/flutter/ver
 `github-actions` and `pip` (`/tools`). Minor and patch updates are grouped into one PR per ecosystem
 per week; majors are separate so a breaking major blocks only itself. A Dependabot PR is reviewed
 like any other dependency change: licence, maintenance, what the release notes say. Known holds are
-documented where they live (OkHttp 5.4.0 pinned below 5.5.0, `android/okhttp/build.gradle.kts`).
+documented where they live (none is in force today: OkHttp was held at 5.4.0 until the build moved to compileSdk 37 for 5.5.x).
 `android/gradle/verification-metadata.xml` pins the checksum of every Gradle artefact, so a Gradle
 update PR (Dependabot's included) is red with "Dependency verification failed" until the file is
 regenerated and pushed to the branch; `develop.md` ("Dependency verification") has the command and

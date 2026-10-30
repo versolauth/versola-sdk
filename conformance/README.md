@@ -6,7 +6,7 @@ and asserts identical observable behaviour.
 
 **Status.** The Android driver exists as `android/conformance-android` (instrumented tests;
 nothing is published from it) and runs scenarios 01 and 21 — with the refresh, revocation and
-logout steps of 02, 11 and 18 and the blob-less replay of 22 — green against a stack staged
+logout steps of 02, 11 and 18, the edge-nonce half of 04 and the blob-less replay of 22 — green against a stack staged
 from `versolauth/versola` at `d6203f93`, from an emulator. The rest of the catalogue, the
 fault-injection proxy and the transcript comparison with the reference client are the order
 of work at the bottom. iOS has no driver for the Versola facade yet.
@@ -373,9 +373,12 @@ The capabilities `spec/conformance/README.md` lists, and where each lives:
 
 ## Running it
 
-Not yet. When it exists: `.github/workflows/conformance.yml` (nightly and on demand) stages
-the stack the way `versola`'s own CI does, boots the emulator, installs the driver and runs
-it with the stack's addresses as instrumentation arguments:
+In CI, the `scenarios` job of `.github/workflows/conformance.yml` stages the stack the way
+`versola`'s own CI does, boots the emulator, installs the driver and runs it with the stack's
+addresses as instrumentation arguments. It is on demand only, and has not run yet: the checkout of
+the private server repository needs the `VERSOLA_CHECKOUT_TOKEN` secret, which does not exist, and
+the nightly trigger takes over once it does. The same run by hand against a stack on the host (the
+emulator reaches it at `10.0.2.2`, or through `adb reverse`, `develop.md`):
 
 ```bash
 ./gradlew :conformance-android:connectedDebugAndroidTest \
