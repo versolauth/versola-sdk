@@ -86,8 +86,11 @@ val oauth = OAuthClient.create(context, configuration)
 - `create()` does no network I/O and no key generation. It restores persisted state: a stored
   grant yields `Authenticated`; a pending authorization request younger than ten minutes yields
   `Authorizing`; otherwise `Unauthenticated`. Discovery runs lazily on the first operation that
-  needs it and is cached on disk; the cache is refetched when it is older than 24 hours or when a
-  request fails in a way a changed endpoint could explain.
+  needs it and is cached on disk and in memory; the cache is refetched when it is older than its
+  lifetime (the provider's `Cache-Control: max-age` held between 5 minutes and 24 hours, 24 hours
+  when it says nothing; in a running process too, not only at start) or when a request fails in a
+  way a changed endpoint could explain. An expired document whose refetch fails is still served,
+  and the next try waits a minute.
 - `sessionState` is the source of truth. Every operation below publishes through it, including an
   authorization that finishes in a process other than the one that started it.
 - The redirect reaches the SDK without app code on Android (the SDK's redirect activity, declared
@@ -238,7 +241,9 @@ token handed to app code is one the app can log.
 
 Mandatory on every platform, before the token response is persisted (OIDC Core 3.1.3.7; on a refresh the rotated refresh token goes first, section 8):
 
-1. Signature with a key from `jwks_uri` (cached, refetched once on an unknown `kid`), algorithm in
+1. Signature with a key from `jwks_uri` (cached for the same lifetime as the discovery document, so
+   a withdrawn key stops being trusted within a day even in a long-running process, and an expired
+   set is never served when its refetch fails; refetched once on an unknown `kid`), algorithm in
    the closed set `RS256`, `PS256`, `ES256`, `ES384`, `ES512`, `RS384`, `RS512`, `PS384`, `PS512`,
    and in `id_token_signing_alg_values_supported` when advertised; `none` and HMAC algorithms are
    refused (a public client has no secret to verify with).
@@ -317,7 +322,7 @@ As `state-machine.md`'s persistence summary, minus the edge-mode rows, plus:
 
 | Item | Storage | Survives process death | Survives logout |
 |---|---|---|---|
-| JWKS | Disk, unencrypted | yes | yes |
+| JWKS, with the lifetime it was fetched with | Disk, unencrypted | yes, until the lifetime ends | yes |
 | Configuration hash (storage key) | Disk | yes | yes |
 
 Granted scopes are not persisted: `stepUp()` re-requests the configured scopes, or the ones its

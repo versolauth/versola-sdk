@@ -200,4 +200,117 @@ final class JwksTests: XCTestCase {
         let loaded = try await cache.load()
         XCTAssertEqual(loaded?.keys, [rsa])
     }
+
+    // MARK: - Expiry
+
+    /// A key set whose save time and lifetime the test chooses, standing in for the file on disk.
+    private actor AgedKeys: JwksCache {
+        var stored: JsonWebKeySet?
+        var at: Date?
+        var life: TimeInterval?
+        init(_ stored: JsonWebKeySet?, at: Date?, lifetime: TimeInterval? = nil) {
+            self.stored = stored
+            self.at = at
+            self.life = lifetime
+        }
+        func load() async throws -> JsonWebKeySet? { stored }
+        func save(_ set: JsonWebKeySet) async throws { stored = set }
+        func save(_ set: JsonWebKeySet, lifetime: TimeInterval?) async throws {
+            stored = set
+            life = lifetime
+            at = Date(timeIntervalSince1970: 1_800_000_000)
+        }
+        func savedAt() async throws -> Date? { at }
+        func lifetime() async throws -> TimeInterval? { life }
+    }
+
+    func testAKeySetIsFetchedAgainOnceItsMaxAgeHasElapsed() async throws {
+        let stub = JoseStubHTTP()
+        await stub.enqueue("/jwks.json", headers: ["Cache-Control": "public, max-age=600"], body: JoseTestTokens.jwks(rsa))
+        await stub.enqueue("/jwks.json", headers: ["Cache-Control": "max-age=600"], body: JoseTestTokens.jwks(ec))
+        let time = ManualClock()
+        let client = JwksClient(httpClient: stub, clock: time.clock)
+
+        let first = try await client.keys(uri: uri, forceRefresh: false)
+        time.advance(599)
+        let within = try await client.keys(uri: uri, forceRefresh: false)
+        time.advance(2)
+        let after = try await client.keys(uri: uri, forceRefresh: false)
+
+        XCTAssertTrue(first.fetched)
+        XCTAssertFalse(within.fetched, "still inside the provider's max-age")
+        XCTAssertTrue(after.fetched, "a withdrawn key does not stay trusted for the life of the process")
+        XCTAssertEqual(after.keys.keys.map(\.kid), ["ec"])
+        let count = await stub.requestCount()
+        XCTAssertEqual(count, 2)
+    }
+
+    func testWithoutACacheControlHeaderTheKeysLastADay() async throws {
+        let stub = JoseStubHTTP()
+        await stub.enqueue("/jwks.json", body: JoseTestTokens.jwks(rsa))
+        await stub.enqueue("/jwks.json", body: JoseTestTokens.jwks(rsa))
+        let time = ManualClock()
+        let client = JwksClient(httpClient: stub, clock: time.clock)
+
+        _ = try await client.keys(uri: uri, forceRefresh: false)
+        time.advance(24 * 3600 - 1)
+        let within = try await client.keys(uri: uri, forceRefresh: false)
+        time.advance(2)
+        let after = try await client.keys(uri: uri, forceRefresh: false)
+
+        XCTAssertFalse(within.fetched)
+        XCTAssertTrue(after.fetched)
+    }
+
+    func testAnExpiredSetIsNotServedWhenTheRefetchFails() async throws {
+        let stub = JoseStubHTTP()
+        await stub.enqueue("/jwks.json", headers: ["Cache-Control": "max-age=300"], body: JoseTestTokens.jwks(rsa))
+        await stub.enqueueFailure("/jwks.json")
+        let time = ManualClock()
+        let client = JwksClient(httpClient: stub, clock: time.clock)
+        _ = try await client.keys(uri: uri, forceRefresh: false)
+        time.advance(301)
+
+        let error = await joseThrown { _ = try await client.keys(uri: uri, forceRefresh: false) }
+
+        guard case .recoverable? = error as? OAuthError else { return XCTFail("\(String(describing: error))") }
+    }
+
+    func testAKeySetOnDiskOlderThanItsLifetimeIsNotUsedByAColdClient() async throws {
+        let time = ManualClock()
+        let stub = JoseStubHTTP()
+        await stub.enqueue("/jwks.json", body: JoseTestTokens.jwks(ec))
+        let stale = AgedKeys(JsonWebKeySet(keys: [rsa]), at: time.clock.now() - 3 * 3600, lifetime: 3600)
+
+        let loaded = try await JwksClient(httpClient: stub, cache: stale, clock: time.clock).keys(uri: uri, forceRefresh: false)
+
+        XCTAssertTrue(loaded.fetched)
+        XCTAssertEqual(loaded.keys.keys.map(\.kid), ["ec"])
+    }
+
+    func testAKeySetOnDiskInsideItsLifetimeIsUsedByAColdClient() async throws {
+        let time = ManualClock()
+        let stub = JoseStubHTTP()
+        let fresh = AgedKeys(JsonWebKeySet(keys: [rsa]), at: time.clock.now() - 1800, lifetime: 3600)
+
+        let loaded = try await JwksClient(httpClient: stub, cache: fresh, clock: time.clock).keys(uri: uri, forceRefresh: false)
+
+        XCTAssertFalse(loaded.fetched)
+        let count = await stub.requestCount()
+        XCTAssertEqual(count, 0)
+    }
+
+    func testAnUnknownKidStillCostsOneRefetchAfterTheExpiryWork() async throws {
+        // The rotation path is unchanged: a fresh set that lacks the `kid` is refetched once.
+        let stub = JoseStubHTTP()
+        await stub.enqueue("/jwks.json", body: JoseTestTokens.jwks(rsa))
+        await stub.enqueue("/jwks.json", body: JoseTestTokens.jwks(rsa, ec))
+        let client = JwksClient(httpClient: stub, clock: ManualClock().clock)
+        _ = try await client.keys(uri: uri, forceRefresh: false)
+
+        let forced = try await client.keys(uri: uri, forceRefresh: true)
+
+        XCTAssertTrue(forced.fetched)
+        XCTAssertEqual(forced.keys.keys.map(\.kid), ["rsa", "ec"])
+    }
 }

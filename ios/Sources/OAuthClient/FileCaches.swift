@@ -39,32 +39,49 @@ struct JSONFile<Value: Codable & Sendable>: Sendable {
     }
 }
 
+/// A document and how long it was to be trusted when it was saved (`CacheLifetime`). A file of
+/// the earlier format (the bare document) does not decode as this, is dropped as corrupt, and the
+/// document is fetched once more.
+struct Stored<Value: Codable & Sendable>: Codable, Sendable {
+    let value: Value
+    let lifetime: TimeInterval?
+}
+
 /// The discovered metadata on disk. The client points it at
 /// `Application Support/versola-oauth/<storageKey>/`. It survives logout on purpose: a re-login
 /// should not need a round trip to the discovery document.
 package actor FileProviderMetadataCache: ProviderMetadataCache {
-    private let file: JSONFile<ProviderMetadata>
+    private let file: JSONFile<Stored<ProviderMetadata>>
 
     package init(directory: URL) {
         file = JSONFile(directory: directory, name: "provider-metadata.json")
     }
 
-    package func load() async throws -> ProviderMetadata? { file.load() }
-    package func save(_ metadata: ProviderMetadata) async throws { try file.save(metadata) }
+    package func load() async throws -> ProviderMetadata? { file.load()?.value }
+    package func save(_ metadata: ProviderMetadata) async throws { try await save(metadata, lifetime: nil) }
+    package func save(_ metadata: ProviderMetadata, lifetime: TimeInterval?) async throws {
+        try file.save(Stored(value: metadata, lifetime: lifetime))
+    }
 
-    /// When the document was last written: the cache has no age in its contract, and the
-    /// client refetches a 24-hour-old one (`spec/oauth-sdk-api.md` section 4).
+    /// When the document was last written; with the lifetime it was saved with, the client
+    /// refetches a document older than that (`spec/oauth-sdk-api.md` section 4).
     package func savedAt() async throws -> Date? { file.modificationDate() }
+    package func lifetime() async throws -> TimeInterval? { file.load()?.lifetime }
 }
 
-/// The provider's key set on disk, unencrypted (package keys).
+/// The provider's key set on disk, unencrypted (package keys), expiring like the metadata.
 package actor FileJwksCache: JwksCache {
-    private let file: JSONFile<JsonWebKeySet>
+    private let file: JSONFile<Stored<JsonWebKeySet>>
 
     package init(directory: URL) {
         file = JSONFile(directory: directory, name: "jwks.json")
     }
 
-    package func load() async throws -> JsonWebKeySet? { file.load() }
-    package func save(_ set: JsonWebKeySet) async throws { try file.save(set) }
+    package func load() async throws -> JsonWebKeySet? { file.load()?.value }
+    package func save(_ set: JsonWebKeySet) async throws { try await save(set, lifetime: nil) }
+    package func save(_ set: JsonWebKeySet, lifetime: TimeInterval?) async throws {
+        try file.save(Stored(value: set, lifetime: lifetime))
+    }
+    package func savedAt() async throws -> Date? { file.modificationDate() }
+    package func lifetime() async throws -> TimeInterval? { file.load()?.lifetime }
 }

@@ -83,4 +83,36 @@ final class FileCachesTests: XCTestCase {
         let directoryValues = try directory.resourceValues(forKeys: [.isExcludedFromBackupKey])
         XCTAssertEqual(directoryValues.isExcludedFromBackup, true)
     }
+
+    func testTheLifetimeIsPersistedWithTheDocumentSoARestartHonoursIt() async throws {
+        let metadataCache = FileProviderMetadataCache(directory: directory)
+        try await metadataCache.save(metadata, lifetime: 900)
+        let keyCache = FileJwksCache(directory: directory)
+        try await keyCache.save(keys, lifetime: 600)
+
+        let restartedMetadata = FileProviderMetadataCache(directory: directory)
+        let restartedKeys = FileJwksCache(directory: directory)
+
+        let metadataLifetime = try await restartedMetadata.lifetime()
+        let keyLifetime = try await restartedKeys.lifetime()
+        XCTAssertEqual(metadataLifetime, 900)
+        XCTAssertEqual(keyLifetime, 600)
+        let loaded = try await restartedMetadata.load()
+        XCTAssertEqual(loaded, metadata)
+        let savedAt = try await restartedKeys.savedAt()
+        XCTAssertNotNil(savedAt)
+    }
+
+    /// The bare document an earlier version wrote is not this format: it reads as a miss and is
+    /// removed, so the document is fetched once more instead of being trusted with no lifetime.
+    func testAFileOfTheEarlierFormatIsAMissNotAnAgelessDocument() async throws {
+        let cache = FileJwksCache(directory: directory)
+        try await cache.save(keys)
+        let file = directory.appendingPathComponent("jwks.json")
+        try JSONEncoder().encode(keys).write(to: file)
+
+        let loaded = try await cache.load()
+
+        XCTAssertNil(loaded)
+    }
 }

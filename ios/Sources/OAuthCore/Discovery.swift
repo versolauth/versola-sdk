@@ -1,8 +1,29 @@
 import Foundation
 
+/// A fetched metadata document and how long the provider says it may be kept (`CacheLifetime`).
+package struct FetchedMetadata: Sendable {
+    package var metadata: ProviderMetadata
+    /// Already within the SDK's bounds; nil when the client has no HTTP answer to read it from.
+    package var lifetime: TimeInterval?
+
+    package init(metadata: ProviderMetadata, lifetime: TimeInterval? = nil) {
+        self.metadata = metadata
+        self.lifetime = lifetime
+    }
+}
+
 /// Fetches the provider's metadata document.
 package protocol DiscoveryClient: Sendable {
     func fetch(issuer: String) async throws -> ProviderMetadata
+    /// As `fetch`, with the lifetime the answer carried. A client with no headers to read answers
+    /// with none, and the default day applies.
+    func fetchWithLifetime(issuer: String) async throws -> FetchedMetadata
+}
+
+extension DiscoveryClient {
+    package func fetchWithLifetime(issuer: String) async throws -> FetchedMetadata {
+        FetchedMetadata(metadata: try await fetch(issuer: issuer))
+    }
 }
 
 /// OpenID Connect Discovery section 4.1: the well-known path is appended to the issuer, keeping
@@ -20,6 +41,10 @@ package struct HTTPDiscoveryClient: DiscoveryClient {
     }
 
     package func fetch(issuer: String) async throws -> ProviderMetadata {
+        try await fetchWithLifetime(issuer: issuer).metadata
+    }
+
+    package func fetchWithLifetime(issuer: String) async throws -> FetchedMetadata {
         let location = wellKnownURL(issuer: issuer)
         guard let url = URL(string: location), url.scheme != nil else {
             throw OAuthError.configuration(.invalidConfiguration(detail: "issuer is not a URL: \(issuer)"))
@@ -65,7 +90,10 @@ package struct HTTPDiscoveryClient: DiscoveryClient {
             throw ServerFailure.unexpected(response.statusCode)
         }
         do {
-            return try JSONDecoder().decode(ProviderMetadata.self, from: response.body)
+            return FetchedMetadata(
+                metadata: try JSONDecoder().decode(ProviderMetadata.self, from: response.body),
+                lifetime: CacheLifetime.of(response.header("Cache-Control"))
+            )
         } catch {
             throw OAuthError.configuration(.discoveryMalformed(detail: "the document is not valid metadata JSON"))
         }
@@ -88,6 +116,7 @@ package struct StaticDiscoveryClient: DiscoveryClient {
 package actor MemoryMetadataCache: ProviderMetadataCache {
     private var stored: ProviderMetadata?
     private var storedAt: Date?
+    private var storedLifetime: TimeInterval?
 
     package init(_ initial: ProviderMetadata? = nil) {
         stored = initial
@@ -96,25 +125,42 @@ package actor MemoryMetadataCache: ProviderMetadataCache {
 
     package func load() async throws -> ProviderMetadata? { stored }
     package func save(_ metadata: ProviderMetadata) async throws {
+        try await save(metadata, lifetime: nil)
+    }
+    package func save(_ metadata: ProviderMetadata, lifetime: TimeInterval?) async throws {
         stored = metadata
         storedAt = Date()
+        storedLifetime = lifetime
     }
     package func savedAt() async throws -> Date? { storedAt }
+    package func lifetime() async throws -> TimeInterval? { storedLifetime }
 }
 
-/// Discovery with its cache in front: at most one fetch per process, however many callers ask at
-/// once, and none at all when the cache already holds a document for this issuer.
+/// Discovery with its cache in front: at most one fetch per process at a time, however many
+/// callers ask at once, and none at all while a cached document is fresh.
+///
+/// Fresh means younger than the provider's `Cache-Control: max-age` (within `CacheLifetime`'s
+/// bounds, a day when it says nothing). That holds in memory as well as on disk: a rotated
+/// `token_endpoint` or `jwks_uri` is reached again without the app being restarted. The in-memory
+/// age is measured on the continuous clock; the disk copy's, which has to survive a restart, on
+/// the wall clock.
 package actor DiscoveryService {
     private let issuer: String
     private let client: DiscoveryClient
     private let cache: ProviderMetadataCache
     private var inMemory: ProviderMetadata?
+    /// When `inMemory` stops being fresh, in `Clock.uptime` seconds.
+    private var inMemoryExpiresAt: TimeInterval = 0
     /// The fetch in flight, so concurrent callers share it rather than each hitting the network.
     /// A caller that is cancelled stops waiting; it does not cancel the fetch the others need.
     private var inFlight: Task<ProviderMetadata, Error>?
     private let clock: Clock
     /// `spec/oauth-sdk-api.md` section 4: a cached document older than this is refetched.
-    static let maxAge: TimeInterval = 24 * 3600
+    static let maxAge: TimeInterval = CacheLifetime.defaultLifetime
+    /// After a refetch of an expired document fails and the old one is served, how long before
+    /// the next caller tries the network again: an outage must not put a full retry budget in
+    /// front of every call.
+    static let staleRetryInterval: TimeInterval = 60
 
     package init(issuer: String, client: DiscoveryClient, cache: ProviderMetadataCache, clock: Clock = .system) {
         self.issuer = issuer
@@ -124,7 +170,7 @@ package actor DiscoveryService {
     }
 
     package func metadata() async throws -> ProviderMetadata {
-        if let inMemory { return inMemory }
+        if let inMemory, clock.uptime() < inMemoryExpiresAt { return inMemory }
         if let inFlight { return try await inFlight.value }
         // Created and stored in the same actor turn: the body cannot start before `inFlight` is
         // set, and it clears it itself, so a late waiter cannot clear a newer task.
@@ -137,32 +183,37 @@ package actor DiscoveryService {
         defer { inFlight = nil }
         // A cache that cannot be read or written is a cache miss, never a failure: the document
         // is one round trip away, and the alternative is bricking login on a corrupt file.
-        var fallback: ProviderMetadata?
+        var fallback: ProviderMetadata? = inMemory
         if let cached = try? await cache.load(), (try? cached.validate(configuredIssuer: issuer)) != nil {
             // A document cached for another issuer belongs to a previous configuration of this
-            // app and is treated as absent. A fresh one is served as is; one older than a day
-            // is refetched (a rotated token_endpoint or jwks_uri is reachable again without the
-            // app being deleted), and kept as the answer when the refetch fails.
+            // app and is treated as absent. A fresh one is served as is; one older than its
+            // lifetime is refetched (a rotated token_endpoint or jwks_uri is reachable again
+            // without the app being deleted), and kept as the answer when the refetch fails.
             let age = (try? await cache.savedAt()).flatMap { $0 }.map { clock.now().timeIntervalSince($0) }
-            if let age, age >= 0, age < Self.maxAge {
+            let lifetime = (try? await cache.lifetime()).flatMap { $0 } ?? Self.maxAge
+            if let age, age >= 0, age < lifetime {
                 inMemory = cached
+                inMemoryExpiresAt = clock.uptime() + (lifetime - age)
                 return cached
             }
             fallback = cached
         }
-        let fetched: ProviderMetadata
+        let fetched: FetchedMetadata
         do {
-            fetched = try await client.fetch(issuer: issuer)
-            try fetched.validate(configuredIssuer: issuer)
+            fetched = try await client.fetchWithLifetime(issuer: issuer)
+            try fetched.metadata.validate(configuredIssuer: issuer)
         } catch {
             if let fallback {
                 inMemory = fallback
+                inMemoryExpiresAt = clock.uptime() + Self.staleRetryInterval
                 return fallback
             }
             throw error
         }
-        try? await cache.save(fetched)
-        inMemory = fetched
-        return fetched
+        let lifetime = fetched.lifetime ?? Self.maxAge
+        try? await cache.save(fetched.metadata, lifetime: fetched.lifetime)
+        inMemory = fetched.metadata
+        inMemoryExpiresAt = clock.uptime() + lifetime
+        return fetched.metadata
     }
 }

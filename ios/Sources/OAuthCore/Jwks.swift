@@ -3,11 +3,22 @@ import Foundation
 /// Process-local key cache, for tests and for an integrator who wants nothing on disk.
 package actor MemoryJwksCache: JwksCache {
     private var stored: JsonWebKeySet?
+    private var storedAt: Date?
+    private var storedLifetime: TimeInterval?
 
     package init() {}
 
     package func load() async throws -> JsonWebKeySet? { stored }
-    package func save(_ set: JsonWebKeySet) async throws { stored = set }
+    package func save(_ set: JsonWebKeySet) async throws {
+        try await save(set, lifetime: nil)
+    }
+    package func save(_ set: JsonWebKeySet, lifetime: TimeInterval?) async throws {
+        stored = set
+        storedAt = Date()
+        storedLifetime = lifetime
+    }
+    package func savedAt() async throws -> Date? { storedAt }
+    package func lifetime() async throws -> TimeInterval? { storedLifetime }
 }
 
 /// Fetches and caches the provider's JWK Set (`jwks_uri`).
@@ -34,14 +45,18 @@ package actor JwksClient {
 
     private let httpClient: HTTPClient
     private let cache: JwksCache
+    private let clock: Clock
     private var inMemory: JsonWebKeySet?
+    /// When `inMemory` stops being fresh, in `Clock.uptime` seconds (`CacheLifetime`).
+    private var inMemoryExpiresAt: TimeInterval = 0
     /// The fetch in progress, if any. An actor is reentrant at every `await`, so without this
     /// a burst of validations would each fetch; with it they share one request.
     private var inFlight: Task<JsonWebKeySet, Error>?
 
-    package init(httpClient: HTTPClient, cache: JwksCache = MemoryJwksCache()) {
+    package init(httpClient: HTTPClient, cache: JwksCache = MemoryJwksCache(), clock: Clock = .system) {
         self.httpClient = httpClient
         self.cache = cache
+        self.clock = clock
     }
 
     /// - Parameter forceRefresh: skip memory and the cache and fetch. Without it the key set
@@ -52,13 +67,16 @@ package actor JwksClient {
     ///   not a JWK Set.
     package func keys(uri: String, forceRefresh: Bool) async throws -> Loaded {
         if !forceRefresh {
-            if let inMemory { return Loaded(keys: inMemory, fetched: false) }
+            if let held = fresh() { return Loaded(keys: held, fetched: false) }
             // A cache that cannot be read is a miss, never a failure: the document is one
-            // request away.
-            if inFlight == nil, let stored = try? await cache.load() {
+            // request away. One older than its lifetime is a miss too: a key the provider has
+            // withdrawn is not trusted for as long as a file on disk survives.
+            if inFlight == nil, let stored = try? await cache.load(), let remaining = await cachedFreshness() {
                 // The await above let another caller in; keep what it may have stored.
-                if inMemory == nil { inMemory = stored }
-                if let inMemory { return Loaded(keys: inMemory, fetched: false) }
+                if let held = fresh() { return Loaded(keys: held, fetched: false) }
+                inMemory = stored
+                inMemoryExpiresAt = clock.uptime() + remaining
+                return Loaded(keys: stored, fetched: false)
             }
         }
         let task: Task<JsonWebKeySet, Error>
@@ -71,17 +89,33 @@ package actor JwksClient {
         return Loaded(keys: try await task.value, fetched: true)
     }
 
+    /// The key set held in memory, while it is within its lifetime.
+    private func fresh() -> JsonWebKeySet? {
+        guard let inMemory, clock.uptime() < inMemoryExpiresAt else { return nil }
+        return inMemory
+    }
+
+    /// How much of its lifetime the cached set has left (wall clock: it has to survive a restart),
+    /// nil when it is expired, of unknown age, or from the future.
+    private func cachedFreshness() async -> TimeInterval? {
+        guard let savedAt = (try? await cache.savedAt()).flatMap({ $0 }) else { return nil }
+        let lifetime = (try? await cache.lifetime()).flatMap { $0 } ?? CacheLifetime.defaultLifetime
+        let age = clock.now().timeIntervalSince(savedAt)
+        return age >= 0 && age < lifetime ? lifetime - age : nil
+    }
+
     private func fetchAndStore(_ uri: String) async throws -> JsonWebKeySet {
         defer { inFlight = nil }
-        let set = try await fetch(uri)
+        let (set, lifetime) = try await fetch(uri)
         inMemory = set
+        inMemoryExpiresAt = clock.uptime() + lifetime
         // Saved only once it parsed: a bad answer must not replace keys that worked. A failed
         // save costs a request next start, not this validation.
-        try? await cache.save(set)
+        try? await cache.save(set, lifetime: lifetime)
         return set
     }
 
-    private func fetch(_ uri: String) async throws -> JsonWebKeySet {
+    private func fetch(_ uri: String) async throws -> (JsonWebKeySet, TimeInterval) {
         guard let url = URL(string: uri), url.scheme != nil else {
             throw OAuthError.configuration(.discoveryMalformed(detail: "jwks_uri is not a URL"))
         }
@@ -107,7 +141,7 @@ package actor JwksClient {
             guard let set = JwksClient.parse(response.body) else {
                 throw OAuthError.configuration(.discoveryMalformed(detail: "jwks_uri did not serve a JWK Set"))
             }
-            return set
+            return (set, CacheLifetime.of(response.header("Cache-Control")))
         // A redirect that was not followed is a deployment fault no retry fixes.
         case 300...399:
             throw OAuthError.configuration(.discoveryMalformed(detail: "jwks_uri answered HTTP \(response.statusCode); redirects are not followed"))

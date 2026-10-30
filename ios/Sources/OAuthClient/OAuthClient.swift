@@ -422,8 +422,12 @@ private struct EndSessionOverride: DiscoveryClient {
     let delegate: DiscoveryClient
     let endSessionEndpoint: String?
     func fetch(issuer: String) async throws -> ProviderMetadata {
-        var metadata = try await delegate.fetch(issuer: issuer)
-        if let endSessionEndpoint { metadata.endSessionEndpoint = endSessionEndpoint }
-        return metadata
+        try await fetchWithLifetime(issuer: issuer).metadata
+    }
+
+    func fetchWithLifetime(issuer: String) async throws -> FetchedMetadata {
+        var fetched = try await delegate.fetchWithLifetime(issuer: issuer)
+        if let endSessionEndpoint { fetched.metadata.endSessionEndpoint = endSessionEndpoint }
+        return fetched
     }
 }

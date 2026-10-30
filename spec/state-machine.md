@@ -398,7 +398,7 @@ one grant to one device-installation; reusing it across users on a shared device
 | DPoP private key | Hardware keystore, non-exportable | yes | no (destroyed) |
 | DPoP nonce, per origin | Memory | no | no |
 | Clock skew offset | Memory | no | no |
-| Discovery metadata | Disk, unencrypted | yes | yes |
+| Discovery metadata, with the lifetime it was fetched with | Disk, unencrypted | yes, until the lifetime ends | yes |
 
 Discovery metadata is not credential material and is cached across logout deliberately: a
 re-login should not need a round trip to `/.well-known/openid-configuration`. The two native
