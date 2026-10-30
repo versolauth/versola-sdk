@@ -235,7 +235,11 @@ On a refresh the order is the other way round for the refresh token alone (secti
 token is stored first, and the ID token, its claims and that response's access token are kept only
 if the checks below pass:
 
-1. Signature with a key from `jwks_uri` (cached, refetched once on an unknown `kid`), algorithm in
+1. Signature with a key from `jwks_uri` (cached for what the provider's `Cache-Control: max-age`
+   or `Expires` says, held between 5 minutes and 24 hours and 24 hours when it says nothing, in
+   memory and on disk, so a withdrawn key stops being trusted within a day; an expired set whose
+   refetch fails is not served, the validation is `Recoverable`; refetched once on an unknown
+   `kid`), algorithm in
    the closed set `RS256`, `PS256`, `ES256`, `ES384`, `ES512`, `RS384`, `RS512`, `PS384`, `PS512`,
    and in `id_token_signing_alg_values_supported` when advertised; `none` and HMAC algorithms are
    refused (a public client has no secret to verify with).
@@ -337,6 +341,6 @@ refresh token issued, `offline_access` advertised but not configured, a response
 2. `login()` while `Authorizing` refused (section 5) versus cancelling the outstanding request.
 3. `stepUp()` takes the configured scopes by default (section 5); the Versola facade requires
    them as a parameter. The two differ in signature, not in what is sent.
-4. The 24-hour discovery cache age and the 30-second refresh skew: both fixed, not configurable.
+4. The 24-hour discovery cache age (and the key set's bounds of 5 minutes to 24 hours) and the 30-second refresh skew: all fixed, not configurable.
 5. Whether `authenticatedSession` on iOS should be a `URLSession` subclass or a wrapper; a wrapper
    keeps the surface small.

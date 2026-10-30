@@ -127,34 +127,51 @@ public class JsonWebKeySet internal constructor(public val keys: List<JsonWebKey
  * The raw document is stored rather than parsed keys so a cache written by one SDK version is
  * still readable by the next, and so a document that no longer parses is dropped like any
  * corrupt cache.
+ *
+ * What is kept expires ([CacheLifetime]): a provider withdraws a signing key by dropping it from
+ * the set, and a copy that outlived that would keep verifying tokens signed with it.
  */
 @VersolaInternalApi
 public interface JwksCache {
+    /** The document, or null when none is kept or the one kept has expired. */
     public suspend fun load(): String?
-    public suspend fun save(json: String)
+
+    /** Keeps [json] for [lifetimeMillis]. */
+    public suspend fun save(json: String, lifetimeMillis: Long)
     public suspend fun clear()
 }
 
-/** A plain file, written through a temporary so a crash never leaves half a document. */
+/**
+ * A plain file, written through a temporary so a crash never leaves half a document.
+ *
+ * Its expiry is the file's modification time, set at save to the instant the document stops being
+ * good: no second file to keep in step, nothing to parse, and a copy written before expiry
+ * existed has a modification time in the past and so reads as expired once, which is the safe way
+ * to migrate it.
+ */
 @VersolaInternalApi
 public class FileJwksCache(
     private val file: File,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) : JwksCache {
 
     override suspend fun load(): String? = withContext(Dispatchers.IO) {
         try {
-            if (file.exists()) file.readText() else null
+            if (file.exists() && CacheLifetime.isFresh(file.lastModified(), clock())) file.readText() else null
         } catch (e: IOException) {
             // Unreadable is a miss, never a failure: the document is one request away.
             null
         }
     }
 
-    override suspend fun save(json: String) {
+    override suspend fun save(json: String, lifetimeMillis: Long) {
         withContext(Dispatchers.IO) {
             file.parentFile?.mkdirs()
             val temporary = File(file.parentFile, file.name + ".tmp")
             temporary.writeText(json)
+            // A failure to stamp leaves the write time, which is already in the past: the copy
+            // then reads as expired, and the next call fetches. Safe, and not worth failing for.
+            temporary.setLastModified(clock() + lifetimeMillis)
             if (!temporary.renameTo(file)) temporary.delete()
         }
     }
@@ -166,12 +183,17 @@ public class FileJwksCache(
 
 /** Process-local, for tests and for an integrator who wants nothing on disk. */
 @VersolaInternalApi
-public class MemoryJwksCache : JwksCache {
+public class MemoryJwksCache(
+    private val clock: () -> Long = System::currentTimeMillis,
+) : JwksCache {
     private var document: String? = null
+    private var expiresAt = 0L
 
-    override suspend fun load(): String? = document
-    override suspend fun save(json: String) {
+    override suspend fun load(): String? = document?.takeIf { CacheLifetime.isFresh(expiresAt, clock()) }
+
+    override suspend fun save(json: String, lifetimeMillis: Long) {
         document = json
+        expiresAt = clock() + lifetimeMillis
     }
 
     override suspend fun clear() {
@@ -195,6 +217,8 @@ public class MemoryJwksCache : JwksCache {
 public class JwksClient(
     httpClient: OkHttpClient,
     private val cache: JwksCache = MemoryJwksCache(),
+    /** Wall clock, because the disk copy's expiry has to mean the same thing in the next process. */
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val httpClient: OkHttpClient = httpClient.newBuilder()
         .followRedirects(false)
@@ -203,19 +227,23 @@ public class JwksClient(
 
     private val mutex = Mutex()
     private var inMemory: JsonWebKeySet? = null
+    private var inMemoryExpiresAt = 0L
 
     /** A key set and whether this very call fetched it, which tells the caller a refetch would be a repeat. */
     internal class Loaded(val keys: JsonWebKeySet, val fetched: Boolean)
 
     /**
      * @param forceRefresh skip memory and the cache and fetch. Without it, the key set is
-     *   memory, then cache, then the network.
+     *   memory, then cache, then the network, and memory and cache are skipped once what they
+     *   hold has outlived its lifetime ([CacheLifetime]): an expired set is not served when the
+     *   refetch fails, because a key the provider withdrew is exactly what it would still vouch for.
      * @throws VersolaError.Recoverable(Network) when the provider cannot be reached.
      * @throws VersolaError.Configuration(DiscoveryMalformed) when the answer is not a JWK Set.
      */
     internal suspend fun keys(uri: String, forceRefresh: Boolean): Loaded = mutex.withLock {
         if (!forceRefresh) {
-            inMemory?.let { return@withLock Loaded(it, fetched = false) }
+            inMemory?.takeIf { CacheLifetime.isFresh(inMemoryExpiresAt, clock()) }
+                ?.let { return@withLock Loaded(it, fetched = false) }
             cache.load()?.let { stored ->
                 val parsed = try {
                     JsonWebKeySet.parse(stored)
@@ -226,13 +254,16 @@ public class JwksClient(
                 }
                 if (parsed != null) {
                     inMemory = parsed
+                    // The disk copy's own remaining lifetime is not visible here, so memory trusts
+                    // it for the longest a copy can be good for; the cache decides at the next load.
+                    inMemoryExpiresAt = clock() + CacheLifetime.MIN_MILLIS
                     return@withLock Loaded(parsed, fetched = false)
                 }
             }
         }
-        val body = fetch(uri)
+        val fetched = fetch(uri)
         val parsed = try {
-            JsonWebKeySet.parse(body)
+            JsonWebKeySet.parse(fetched.body)
         } catch (e: IllegalArgumentException) {
             throw VersolaError.Configuration(
                 VersolaError.Configuration.Detail.DiscoveryMalformed("jwks_uri did not serve a JWK Set: ${e.message}"),
@@ -240,18 +271,21 @@ public class JwksClient(
             )
         }
         // Saved only once it parsed: a bad answer must not replace keys that worked.
-        cache.save(body)
+        cache.save(fetched.body, fetched.lifetimeMillis)
         inMemory = parsed
+        inMemoryExpiresAt = clock() + fetched.lifetimeMillis
         Loaded(parsed, fetched = true)
     }
 
-    private suspend fun fetch(uri: String): String = retrying(originOf(uri)) { withContext(Dispatchers.IO) {
+    private class Fetched(val body: String, val lifetimeMillis: Long)
+
+    private suspend fun fetch(uri: String): Fetched = retrying(originOf(uri)) { withContext(Dispatchers.IO) {
         val request = Request.Builder().url(uri).header("Accept", "application/json").build()
         try {
             httpClient.newCall(request).execute().use { response ->
                 val payload = response.body.string()
                 when {
-                    response.isSuccessful -> payload
+                    response.isSuccessful -> Fetched(payload, CacheLifetime.of(response.headers, clock()))
                     // A redirect that was not followed is a deployment fault no retry fixes.
                     response.code in 300..399 -> throw VersolaError.Configuration(
                         VersolaError.Configuration.Detail.DiscoveryMalformed(
