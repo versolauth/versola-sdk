@@ -165,8 +165,8 @@ package actor DpopProofFactory: DpopProofSource {
         if !nonce.isEmpty { nonces[origin] = nonce }
     }
 
-    package func observe(serverDate: String?) async {
-        skew.learn(dateHeader: serverDate, deviceNow: clock.now())
+    package func observe(serverDate: String?, age: String?) async {
+        skew.learn(dateHeader: serverDate, age: age, deviceNow: clock.now())
     }
 
     package func nonce(for origin: String) async -> String? { nonces[origin] }

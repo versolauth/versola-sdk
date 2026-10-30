@@ -144,7 +144,8 @@ package protocol DpopProofSource: Sendable {
     /// The `Date` header of any response from a server the proofs are for, successful or not:
     /// the server's clock, from which the next proof's `iat` is corrected. Called before a
     /// retry is minted, so the single `invalid_dpop_proof` retry carries the corrected time.
-    func observe(serverDate: String?) async
+    /// `age` is the response's `Age` header: a cached answer's `Date` is not the server's now.
+    func observe(serverDate: String?, age: String?) async
     func nonce(for origin: String) async -> String?
     func clearNonces() async
 }

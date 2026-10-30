@@ -141,7 +141,7 @@ package struct HTTPUserInfoClient: UserInfoClient {
         }
 
         // The server's clock, off every answer: the retry of an `invalid_dpop_proof` is minted from it.
-        if let dpop { await dpop.observe(serverDate: response.header("Date")) }
+        if let dpop { await dpop.observe(serverDate: response.header("Date"), age: response.header("Age")) }
         // Every response may carry a nonce, not only a challenge: the next proof to this origin
         // should have it.
         let nonce = response.header("DPoP-Nonce")

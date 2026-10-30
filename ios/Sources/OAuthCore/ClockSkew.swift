@@ -21,6 +21,8 @@ package struct ClockSkew: Sendable {
     package static let maxOffset: TimeInterval = 30 * 24 * 3600
 
     /// Server time minus device time, nil until a response with a usable `Date` has been seen.
+    /// One for the client, whichever origin taught it, and the last response wins (Android's
+    /// design too): it is a fact about this device's clock, not about a server.
     package private(set) var offset: TimeInterval?
 
     package init() {}
@@ -30,7 +32,13 @@ package struct ClockSkew: Sendable {
     /// clock either way, and discarding a working correction would put every proof outside the
     /// server's leeway again. Only the preferred RFC 9110 section 5.6.7 form is read; guessing
     /// about an obsolete date format is worse than not correcting at all.
-    package mutating func learn(dateHeader: String?, deviceNow: Date) {
+    ///
+    /// A response with an `Age` other than `0` is a cache's, and its `Date` is when the origin
+    /// generated it, not now (RFC 9111 section 5.1): learning from it would shift the offset by
+    /// the age of the response, which the 30-day bound does nothing to prevent. It is skipped, and
+    /// so is an `Age` that cannot be read.
+    package mutating func learn(dateHeader: String?, age: String? = nil, deviceNow: Date) {
+        if let age, age.trimmingCharacters(in: .whitespaces) != "0" { return }
         guard let dateHeader, let server = HTTPDate.parse(dateHeader) else { return }
         let learned = server.timeIntervalSince(deviceNow)
         guard learned.isFinite, abs(learned) <= Self.maxOffset else { return }

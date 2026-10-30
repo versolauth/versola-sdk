@@ -1,3 +1,5 @@
+import Network
+import os
 import XCTest
 @testable import OAuthClient
 
@@ -50,7 +52,7 @@ private actor FakeDpop: DpopProofSource {
         nonces[origin] = nonce
     }
 
-    func observe(serverDate: String?) async { observedDates.append(serverDate) }
+    func observe(serverDate: String?, age: String?) async { observedDates.append(serverDate) }
 
     func nonce(for origin: String) async -> String? { nonces[origin] }
     func clearNonces() async { nonces = [:] }
@@ -389,6 +391,63 @@ final class AuthenticatedSessionTests: XCTestCase {
         XCTAssertEqual(requests.compactMap { $0.value(forHTTPHeaderField: "DPoP").flatMap { Self.iat(of: $0) } }, [1_699_999_100, 1_700_000_000])
         let renewals = await tokens.renewCount
         XCTAssertEqual(renewals, 0)
+    }
+
+    /// A loopback HTTP server that answers every request with a response a cache may keep. The
+    /// built-in HTTP protocol is the only thing that consults `URLCache` and reports a local-cache
+    /// fetch in the task's metrics, so this one test uses a real socket rather than the stub.
+    private final class CacheableServer: Sendable {
+        private let listener: NWListener
+        private let served = OSAllocatedUnfairLock(initialState: 0)
+        var requests: Int { served.withLock { $0 } }
+        let port: UInt16
+
+        init() async throws {
+            listener = try NWListener(using: .tcp, on: .any)
+            let served = self.served
+            listener.newConnectionHandler = { connection in
+                connection.start(queue: .global())
+                connection.receive(minimumIncompleteLength: 1, maximumLength: 65_536) { _, _, _, _ in
+                    served.withLock { $0 += 1 }
+                    let head = "HTTP/1.1 200 OK\r\nDate: Tue, 14 Nov 2023 21:53:20 GMT\r\nCache-Control: public, max-age=31536000\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"
+                    connection.send(content: Data(head.utf8), completion: .contentProcessed { _ in connection.cancel() })
+                }
+            }
+            let listener = self.listener
+            port = try await withCheckedThrowingContinuation { continuation in
+                listener.stateUpdateHandler = { state in
+                    switch state {
+                    case .ready: continuation.resume(returning: listener.port!.rawValue)
+                    case .failed(let error): continuation.resume(throwing: error)
+                    default: break
+                    }
+                }
+                listener.start(queue: .global())
+            }
+        }
+
+        func stop() { listener.cancel() }
+    }
+
+    func testAResponseTheUrlCacheServedIsNotTakenForTheServersClock() async throws {
+        let server = try await CacheableServer()
+        defer { server.stop() }
+        let origin = "http://127.0.0.1:\(server.port)"
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = URLCache(memoryCapacity: 1_000_000, diskCapacity: 0)
+        let dpop = FakeDpop()
+        let session = AuthenticatedSession(tokens: FakeTokens(current: dpopToken), scope: try scope([origin]), dpop: dpop, session: URLSession(configuration: configuration))
+        var request = URLRequest(url: URL(string: "\(origin)/v1/items")!)
+        request.cachePolicy = .returnCacheDataElseLoad
+
+        let (first, _) = try await session.data(for: request)
+        let (second, _) = try await session.data(for: request)
+
+        XCTAssertEqual(String(decoding: first, as: UTF8.self), "ok")
+        XCTAssertEqual(String(decoding: second, as: UTF8.self), "ok")
+        XCTAssertEqual(server.requests, 1, "the second answer came out of the URL cache")
+        let observed = await dpop.observedDates
+        XCTAssertEqual(observed, ["Tue, 14 Nov 2023 21:53:20 GMT", nil], "the network answer taught the clock; the cached one, stored earlier, did not")
     }
 
     private static func iat(of proof: String) -> Int? {

@@ -214,7 +214,7 @@ struct FixedDpopSource: DpopProofSource {
     func thumbprint() async throws -> String { jkt }
     func proof(method: String, url: URL, nonce: String?, accessToken: String?) async throws -> String { "proof" }
     func observe(nonce: String, origin: String) async {}
-    func observe(serverDate: String?) async {}
+    func observe(serverDate: String?, age: String?) async {}
     func nonce(for origin: String) async -> String? { nil }
     func clearNonces() async {}
 }

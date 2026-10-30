@@ -163,7 +163,7 @@ final class TokenClientTests: XCTestCase {
             return "proof-\(minted.count)"
         }
         func observe(nonce: String, origin: String) async { nonces[origin] = nonce }
-        func observe(serverDate: String?) async {}
+        func observe(serverDate: String?, age: String?) async {}
         func nonce(for origin: String) async -> String? { nonces[origin] }
         func clearNonces() async { nonces.removeAll() }
     }
@@ -308,6 +308,18 @@ final class TokenClientTests: XCTestCase {
         }
         let attempts = await http.requests.count
         XCTAssertEqual(attempts, 2)
+    }
+
+    func testADateFromACachedResponseIsNotLearnedFrom() async throws {
+        // An intermediary answers with a Date from twenty minutes ago and says so with Age.
+        let server = Date(timeIntervalSince1970: 1_700_000_000)
+        let http = RecordingHTTP { _ in
+            HTTPResponse(statusCode: 400, headers: ["Date": HTTPDate.format(server.addingTimeInterval(-1200)), "Age": "1200"], body: Data(#"{"error":"invalid_dpop_proof"}"#.utf8))
+        }
+        let factory = DpopProofFactory(key: SoftwareDpopKey(), clock: Clock(now: { server }))
+        _ = try? await client(http, dpop: factory, binding: .dpop(), metadata: metadata(dpop: true)).exchange(grant())
+        let iats = await http.requests.map { JoseTestTokens.decode($0.headers["DPoP"]!).claims["iat"] as? Int }
+        XCTAssertEqual(iats, [1_700_000_000, 1_700_000_000], "the retry was not shifted by the cached Date")
     }
 
     // MARK: - Revocation
