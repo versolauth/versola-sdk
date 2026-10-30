@@ -63,9 +63,10 @@ final class Scenario30LogoutBridgeTest: BridgeConformance {
         XCTAssertFalse(outcome.sessionEnded)
         XCTAssertFalse(outcome.tokenRevoked)
         let attempts = network.matching("POST", revocationPath)
-        XCTAssertFalse(attempts.isEmpty, "revocation attempts: \(attempts.count)")
+        // Exactly the allowance: revocation is repeated (`spec/retry-policy.md`, operations), so a
+        // single request is a failure of this scenario, and more than the allowance is another.
         // The default policy: the configuration message carries no retry policy, so the bridge must not have invented one.
-        XCTAssertLessThanOrEqual(attempts.count, bridge.native.configuration.retryPolicy.maxAttemptsPerOrigin, "revocation attempts: \(attempts.count)")
+        XCTAssertEqual(attempts.count, bridge.native.configuration.retryPolicy.maxAttemptsPerOrigin, "revocation attempts: \(attempts.count)")
         for attempt in attempts { assertRevocationRequest(attempt) }
         try await assertWiped(bridge)
     }

@@ -352,12 +352,7 @@ public final class OAuthClient: Sendable {
             },
             logger: logger,
             refreshTokens: .optional,
-            idTokenValidator: validator,
-            warmUp: {
-                // Only the key set: discovery is cached by then or is what the login needs anyway.
-                guard let uri = try? await discovery.metadata().jwksUri else { return }
-                _ = try? await jwks.keys(uri: uri, forceRefresh: false)
-            }
+            idTokenValidator: validator
         )
         let userInfo = HTTPUserInfoClient(
             userinfoEndpoint: { try await discovery.metadata().userinfoEndpoint },

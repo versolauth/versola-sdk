@@ -122,7 +122,7 @@ final class SessionCoordinatorTests: XCTestCase {
         TokenResponse(accessToken: "at-\(refresh ?? "none")-\(UUID().uuidString.prefix(4))", tokenType: "Bearer", expiresIn: expiresIn, refreshToken: refresh, idToken: idToken(subject: subject), scope: "openid")
     }
 
-    private func fixture(answers: [Result<TokenResponse, OAuthError>], policy: RefreshTokenPolicy = .optional, store: MemoryCredentials = MemoryCredentials(), retry: RetryPolicy? = nil, pending: PendingAuthorizationRequest? = nil, browser: ScriptedBrowser = ScriptedBrowser.answering(), clock injectedClock: TickingClock? = nil, validatorOverride: IdTokenValidator? = nil, warmUp: (@Sendable () async -> Void)? = nil) throws -> Fixture {
+    private func fixture(answers: [Result<TokenResponse, OAuthError>], policy: RefreshTokenPolicy = .optional, store: MemoryCredentials = MemoryCredentials(), retry: RetryPolicy? = nil, pending: PendingAuthorizationRequest? = nil, browser: ScriptedBrowser = ScriptedBrowser.answering(), clock injectedClock: TickingClock? = nil, validatorOverride: IdTokenValidator? = nil) throws -> Fixture {
         let clock = injectedClock ?? TickingClock(Date(timeIntervalSince1970: 1_700_000_000))
         let configuration = CoreConfiguration(issuer: Self.issuer, clientId: "mobile", redirectUri: URL(string: Self.redirect)!, postLogoutRedirectUri: URL(string: "https://app.example.com/signed-out"))
         let discovery = DiscoveryService(issuer: Self.issuer, client: StaticDiscoveryClient(metadata: AuthzKit.metadata()), cache: MemoryMetadataCache())
@@ -138,7 +138,7 @@ final class SessionCoordinatorTests: XCTestCase {
         let coordinator = SessionCoordinator(
             flow: flow, tokenClient: tokens, credentialStore: store,
             retryPolicy: try retry ?? RetryPolicy(maxAttemptsPerOrigin: 2, maxTotalAttempts: 2, initialBackoff: 0, backoffMultiplier: 1, maxBackoff: 0, totalBudget: 10),
-            clock: Clock(now: { clock.peek() }), logger: logger, refreshTokens: policy, idTokenValidator: validatorOverride ?? validator, warmUp: warmUp
+            clock: Clock(now: { clock.peek() }), logger: logger, refreshTokens: policy, idTokenValidator: validatorOverride ?? validator
         )
         return Fixture(coordinator: coordinator, flow: flow, store: store, tokens: tokens, validator: validator, logger: logger, clock: clock, pendingStore: pendingStore)
     }
@@ -735,28 +735,5 @@ final class SessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(made, 2)
         let state = await f.flow.states.current
         XCTAssertEqual(state, .unauthenticated)
-    }
-
-    /// "One request, no retries, failure ignored, before the browser opens" (`spec/retry-policy.md`).
-    func testTheKeySetIsWarmedBeforeTheBrowserOpensOutsideTheBudgetAndItsFailureIsIgnored() async throws {
-        let order = Box<[String]>([])
-        let seenBudget = Box<Bool?>(nil)
-        let browser = ScriptedBrowser { uri, _ in
-            await order.set(await order.value + ["browser"])
-            return .redirect(AuthzKit.redirect(answering: uri))
-        }
-        let f = try fixture(answers: [.success(response())], browser: browser, warmUp: {
-            await seenBudget.set(OperationBudget.current != nil)
-            await order.set(await order.value + ["warm-up"])
-        })
-
-        try await f.coordinator.operation { try await f.coordinator.login(scopes: ["openid"]) }
-
-        let seen = await order.value
-        XCTAssertEqual(Array(seen.prefix(2)), ["warm-up", "browser"], "the first warm-up precedes the browser")
-        let inBudget = await seenBudget.value
-        XCTAssertEqual(inBudget, false, "outside any budget: one attempt, no repeat")
-        let state = await f.flow.states.current
-        XCTAssertEqual(state, .authenticated, "and a warm-up that finds nothing is not a failure of the login")
     }
 }

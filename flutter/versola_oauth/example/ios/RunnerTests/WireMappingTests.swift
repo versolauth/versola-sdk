@@ -16,6 +16,26 @@ final class WireMappingTests: XCTestCase {
         XCTAssertEqual(network.attempts, 3)
         XCTAssertEqual(network.elapsedMillis, 1200)
 
+        let limited = OAuthError.recoverable(.server(status: 429, retryAfterMillis: 7000, attempts: 1, elapsedMillis: 40)).toMessage()
+        XCTAssertEqual(limited.category, .recoverable)
+        XCTAssertEqual(limited.kind, "server")
+        XCTAssertEqual(limited.status, 429)
+        XCTAssertEqual(limited.retryAfterMillis, 7000)
+        XCTAssertEqual(limited.attempts, 1)
+        XCTAssertEqual(limited.elapsedMillis, 40)
+        XCTAssertNil(limited.detail, "a server answer carries its status, never its body or a detail string")
+
+        let unavailable = OAuthError.recoverable(.server(status: 503, retryAfterMillis: nil, attempts: 3, elapsedMillis: 1750)).toMessage()
+        XCTAssertEqual(unavailable.kind, "server")
+        XCTAssertEqual(unavailable.status, 503)
+        XCTAssertNil(unavailable.retryAfterMillis, "no Retry-After stays absent across the bridge")
+        XCTAssertEqual(unavailable.attempts, 3)
+
+        // A call the cooldown refused sent nothing: zero attempts, and what is left of the wait.
+        let cooling = OAuthError.recoverable(.server(status: 429, retryAfterMillis: 20_000, attempts: 0, elapsedMillis: 0)).toMessage()
+        XCTAssertEqual(cooling.attempts, 0)
+        XCTAssertEqual(cooling.retryAfterMillis, 20_000)
+
         let interaction = OAuthError.reauthenticate(.interactionRequired(code: "login_required")).toMessage()
         XCTAssertEqual(interaction.category, .reauthenticate)
         XCTAssertEqual(interaction.kind, "interactionRequired")
