@@ -364,6 +364,25 @@ endpoints are kept for the same reason: a refresh in a later process signs for t
 discovery's `mtls_endpoint_aliases`, then to the plain endpoints — inferences, where the file
 is edge's own answer.
 
+**Record binding (Android).** The key provider wraps each encrypted item with the name of its
+slot in front of the secret (`credentials/refreshToken`, `credentials/rawIdToken`,
+`credentials/pendingRotation`, `pending-authorization`). AES-GCM authenticates the whole
+plaintext, so a valid blob moved from one slot to another does not open there and is read as
+the tampered ciphertext it is (`errors.md`: a sign-out). Items written by 0.1.0 carry no name and
+are read as they are, so an upgrade keeps the user signed in; each is rewritten bound the next
+time it is saved (the refresh token at every rotation, the pending request at every login). The
+format is one-way: an SDK that predates the binding reads a bound item as a garbled token, so
+rolling an app back to it signs the user out. The binding does not stop a stale copy of the
+same slot being put back; that needs a counter nothing here keeps.
+
+**One process.** Everything above, and everything the coordinator coordinates (the
+single-flight refresh, the authorize lock, the redirect hand-off), is per process. The SDK
+assumes it runs in the app's main process. An app that gives components their own
+`android:process` and uses the SDK there gets a second coordinator over the same files: two
+refreshes can race on one rotating refresh token (the loser's replay is `invalid_grant` and may
+revoke the token family), and DataStore does not support two processes over one file. This is
+not detected or coordinated; keep SDK calls in one process.
+
 ## Observability
 
 Each SDK exposes the current state as a stream — `Flow<SessionState>` on Android,

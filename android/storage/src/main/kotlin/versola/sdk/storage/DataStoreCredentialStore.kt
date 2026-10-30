@@ -55,11 +55,11 @@ public class DataStoreCredentialStore(
         // whether or not the wrap succeeded, or a failed save leaves the caller's buffer
         // readable for as long as whatever holds the reference keeps holding it.
         val wrappedToken = try {
-            keyProvider.wrap(refreshToken)
+            wrapping(REFRESH_TOKEN, refreshToken)
         } finally {
             refreshToken.fill(0)
         }
-        val wrappedIdToken = rawIdToken?.let { keyProvider.wrap(it.toByteArray(Charsets.UTF_8)) }
+        val wrappedIdToken = rawIdToken?.let { wrapping(ID_TOKEN, it.toByteArray(Charsets.UTF_8)) }
 
         dataStore.updateData { current ->
             CredentialBlob(
@@ -72,7 +72,7 @@ public class DataStoreCredentialStore(
 
     override suspend fun <T> useRefreshToken(block: suspend (ByteArray) -> T): T? {
         val wrapped = dataStore.data.first().refreshToken ?: return null
-        val plaintext = unwrapping(wrapped)
+        val plaintext = unwrapping(REFRESH_TOKEN, wrapped)
         return try {
             block(plaintext)
         } finally {
@@ -84,11 +84,11 @@ public class DataStoreCredentialStore(
 
     override suspend fun rawIdToken(): String? {
         val wrapped = dataStore.data.first().rawIdToken ?: return null
-        return unwrapping(wrapped).toString(Charsets.UTF_8)
+        return unwrapping(ID_TOKEN, wrapped).toUtf8AndZero()
     }
 
     override suspend fun savePendingRotation(idempotencyKey: String?) {
-        val wrapped = idempotencyKey?.let { keyProvider.wrap(it.toByteArray(Charsets.UTF_8)) }
+        val wrapped = idempotencyKey?.let { wrapping(PENDING_ROTATION, it.toByteArray(Charsets.UTF_8)) }
         dataStore.updateData { current ->
             CredentialBlob(
                 refreshToken = current.refreshToken,
@@ -100,7 +100,7 @@ public class DataStoreCredentialStore(
 
     override suspend fun pendingRotation(): String? {
         val wrapped = dataStore.data.first().pendingRotation ?: return null
-        return unwrapping(wrapped).toString(Charsets.UTF_8)
+        return unwrapping(PENDING_ROTATION, wrapped).toUtf8AndZero()
     }
 
     override suspend fun clear() {
@@ -109,6 +109,12 @@ public class DataStoreCredentialStore(
 
     public companion object {
         private val instances = HashMap<String, DataStoreCredentialStore>()
+
+        // The slot each secret is bound to ([RecordBinding]): a blob moved to another field
+        // does not open there.
+        private const val REFRESH_TOKEN = "credentials/refreshToken"
+        private const val ID_TOKEN = "credentials/rawIdToken"
+        private const val PENDING_ROTATION = "credentials/pendingRotation"
 
         /**
          * The store for [file], opened once per process and shared by every caller naming
@@ -129,14 +135,31 @@ public class DataStoreCredentialStore(
      * Anything else is sorted by [StorageFailure]: a verdict on the bytes (a tampered
      * ciphertext, an invalidated key) is a sign-out because `spec/errors.md` cannot tell the
      * two apart, and every other failure leaves the grant in place and the caller to retry.
+     * A blob that opens but names another slot is read as the tampered one it is.
      */
-    private suspend fun unwrapping(wrapped: ByteArray): ByteArray = try {
-        keyProvider.unwrap(wrapped)
+    private suspend fun unwrapping(record: String, wrapped: ByteArray): ByteArray = try {
+        RecordBinding.open(record, keyProvider.unwrap(wrapped))
     } catch (e: CancellationException) {
         throw e
     } catch (e: VersolaError) {
         throw e
     } catch (e: Exception) {
         throw StorageFailure.toError(e)
+    }
+
+    /** [secret] bound to [record], wrapped, with the sealed copy zeroed whether or not the wrap held. */
+    private suspend fun wrapping(record: String, secret: ByteArray): ByteArray {
+        val sealed = RecordBinding.seal(record, secret)
+        return try {
+            keyProvider.wrap(sealed)
+        } finally {
+            sealed.fill(0)
+        }
+    }
+
+    private fun ByteArray.toUtf8AndZero(): String = try {
+        toString(Charsets.UTF_8)
+    } finally {
+        fill(0)
     }
 }

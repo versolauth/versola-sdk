@@ -194,6 +194,36 @@ class FilePendingAuthorizationStoreTest {
     }
 
     @Test
+    fun `a request written by 0 1 0 without record binding is still read`() = runTest {
+        // The plaintext handed to the key provider was the bare JSON.
+        file.parentFile.mkdirs()
+        file.writeBytes(keyProvider.wrap(PendingAuthorizationCodec.encode(request)))
+
+        val restored = store.load()!!
+
+        assertEquals(request.state, restored.state)
+        assertArrayEquals(PendingAuthorizationCodec.encode(request), PendingAuthorizationCodec.encode(restored))
+    }
+
+    @Test
+    fun `a saved request is bound to its slot`() = runTest {
+        store.save(request)
+
+        val plaintext = String(keyProvider.unwrap(file.readBytes()), Charsets.ISO_8859_1)
+
+        assertTrue(plaintext.contains("pending-authorization"))
+    }
+
+    @Test
+    fun `a blob sealed for another slot is discarded, not read as a request`() = runTest {
+        file.parentFile.mkdirs()
+        file.writeBytes(keyProvider.wrap(RecordBinding.seal("credentials/rawIdToken", PendingAuthorizationCodec.encode(request))))
+
+        assertNull(store.load())
+        assertFalse(file.exists())
+    }
+
+    @Test
     fun `a truncated file is discarded rather than surfaced`() = runTest {
         file.parentFile.mkdirs()
         file.writeBytes(byteArrayOf(1, 2, 3))

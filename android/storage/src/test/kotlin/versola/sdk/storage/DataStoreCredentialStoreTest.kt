@@ -380,4 +380,74 @@ class DataStoreCredentialStoreTest {
             assertSame(VersolaError.Reauthenticate.Reason.CredentialsInvalidated, e.reason)
         }
     }
+
+    // What 0.1.0 wrote has no record binding: the wrapped plaintext is the bare secret. A user
+    // who upgrades must stay signed in, and the next save writes the bound form.
+
+    private suspend fun writeLegacyFile(refresh: String?, id: String?, rotation: String?) {
+        file.parentFile.mkdirs()
+        file.writeBytes(
+            CredentialBlob(
+                refreshToken = refresh?.let { keyProvider.wrap(it.toByteArray()) },
+                rawIdToken = id?.let { keyProvider.wrap(it.toByteArray()) },
+                pendingRotation = rotation?.let { keyProvider.wrap(it.toByteArray()) },
+            ).encode(),
+        )
+    }
+
+    @Test
+    fun `a grant written by 0 1 0 without record binding is still read`() = runTest {
+        writeLegacyFile(refreshToken, idToken, "idem-key-1")
+
+        assertTrue(store.hasGrant())
+        assertEquals(refreshToken, store.useRefreshToken { String(it) })
+        assertEquals(idToken, store.rawIdToken())
+        assertEquals("idem-key-1", store.pendingRotation())
+    }
+
+    @Test
+    fun `the next save rewrites a legacy grant bound to its slots, and it reads back`() = runTest {
+        writeLegacyFile("old-refresh-token", idToken, null)
+
+        store.save("rotated-refresh-token".toByteArray(), idToken)
+
+        // What the key provider was handed is now sealed with the slot's name.
+        val onDisk = CredentialBlob.decode(file.readBytes())
+        val refreshPlaintext = keyProvider.unwrap(onDisk.refreshToken!!)
+        assertTrue(String(refreshPlaintext, Charsets.ISO_8859_1).contains("credentials/refreshToken"))
+        assertEquals("rotated-refresh-token", store.useRefreshToken { String(it) })
+        assertEquals(idToken, store.rawIdToken())
+    }
+
+    @Test
+    fun `a legacy ID token survives a refresh that rotates only the refresh token`() = runTest {
+        writeLegacyFile("old-refresh-token", idToken, null)
+
+        store.save("rotated-refresh-token".toByteArray(), null)
+
+        assertEquals("rotated-refresh-token", store.useRefreshToken { String(it) })
+        assertEquals("the legacy ID token is kept as it was", idToken, store.rawIdToken())
+    }
+
+    @Test
+    fun `a blob moved to another slot does not open there`() = runTest {
+        // A valid wrapped ID token placed in the refresh token's field: without the binding it
+        // would be sent to the token endpoint as a refresh token.
+        store.save(refreshToken.toByteArray(), idToken)
+        val onDisk = CredentialBlob.decode(file.readBytes())
+        val moved = File(folder.newFolder(), "credentials")
+        moved.writeBytes(CredentialBlob(refreshToken = onDisk.rawIdToken, rawIdToken = onDisk.refreshToken).encode())
+        val swapped = DataStoreCredentialStore(moved, keyProvider, scope)
+
+        assertSignedOut { swapped.useRefreshToken { String(it) } }
+        assertSignedOut { swapped.rawIdToken() }
+    }
+
+    @Test
+    fun `a sealed record that is cut short is read as tampered, not as a token`() = runTest {
+        file.parentFile.mkdirs()
+        file.writeBytes(CredentialBlob(refreshToken = keyProvider.wrap(byteArrayOf(0, 'V'.code.toByte(), 'B'.code.toByte(), 2, 40))).encode())
+
+        assertSignedOut { store.useRefreshToken { String(it) } }
+    }
 }

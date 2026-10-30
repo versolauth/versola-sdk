@@ -28,7 +28,14 @@ public class FilePendingAuthorizationStore(
 ) : PendingAuthorizationStore {
 
     override suspend fun save(request: PendingAuthorizationRequest) {
-        val wrapped = keyProvider.wrap(PendingAuthorizationCodec.encode(request))
+        val encoded = PendingAuthorizationCodec.encode(request)
+        val sealed = RecordBinding.seal(RECORD, encoded)
+        val wrapped = try {
+            keyProvider.wrap(sealed)
+        } finally {
+            encoded.fill(0)
+            sealed.fill(0)
+        }
         withContext(Dispatchers.IO) {
             file.parentFile?.mkdirs()
             // Written to a sibling and renamed: a process killed mid-write must not leave a
@@ -52,7 +59,7 @@ public class FilePendingAuthorizationStore(
         // keystore hiccup, a cancelled caller) must not cost them the redirect that is on its
         // way: those surface, with the slot left where it is.
         val plaintext = try {
-            keyProvider.unwrap(wrapped)
+            RecordBinding.open(RECORD, keyProvider.unwrap(wrapped))
         } catch (e: CancellationException) {
             throw e
         } catch (e: VersolaError.Reauthenticate) {
@@ -90,3 +97,6 @@ public class FilePendingAuthorizationStore(
         }
     }
 }
+
+/** The slot the pending request is bound to ([RecordBinding]). */
+private const val RECORD = "pending-authorization"
