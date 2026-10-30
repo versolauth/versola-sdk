@@ -232,16 +232,6 @@ jobs:
           channel: stable
           cache: true
 
-      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
-        with:
-          distribution: temurin
-          java-version: "21"
-
-      - name: Install Android SDK platform
-        run: |
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" \
-            "platforms;android-37.0" "build-tools;36.0.0" > /dev/null
-
       # The checkout of a pull request is a detached merge commit that no branch points at, and
       # pub clones the repository's refs before it resolves `ref`, so a bare SHA is missing from
       # the clone ("Could not find git ref ... bad object", reproduced on a detached clone). A
@@ -252,3 +242,6 @@ jobs:
           tools/verify-consumer/flutter.sh "$(git rev-parse HEAD)"
         env:
           VERIFY_REPO_URL: file://${{ github.workspace }}
+          # iOS only: see flutter.sh. The Android half of a throwaway app resolves the published
+          # oauth-android, which a pull request's commit may be ahead of; verify-release builds both.
+          VERIFY_PLATFORMS: ios

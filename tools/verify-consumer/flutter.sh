@@ -39,9 +39,19 @@ command -v flutter > /dev/null || fail "flutter is not on PATH (pinned: $pinned)
 actual="$(flutter --version --machine | sed -n 's/.*"frameworkVersion"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')"
 [[ "$actual" == "$pinned" ]] || fail "Flutter $actual is installed, flutter/.fvmrc pins $pinned"
 
+# Which halves to build: "android ios" by default. A pull request builds only "ios": the plugin's
+# Android half resolves the PUBLISHED io.versola:oauth-android that its build.gradle.kts pins, so a
+# commit that already uses native API the last release lacks cannot build as a git dependency
+# until the release exists (the example app's APK in flutter.yml covers Android in the pull request,
+# against the checkout's own build). The release check builds both.
+platforms="${VERIFY_PLATFORMS:-android ios}"
+for platform in $platforms; do
+  [[ "$platform" == android || "$platform" == ios ]] || fail "VERIFY_PLATFORMS names android and/or ios, got '$platform'"
+done
+
 make_work_dir
 cd "$WORK"
-echo "verify-consumer: plugin $VERIFY_REPO_URL @ $ref, Flutter $pinned"
+echo "verify-consumer: plugin $VERIFY_REPO_URL @ $ref, Flutter $pinned, platforms: $platforms"
 
 flutter create --org com.example --platforms android,ios verify_app > "$WORK/create.log" 2>&1 \
   || { cat "$WORK/create.log" >&2; fail "flutter create failed"; }
@@ -70,11 +80,15 @@ grep -q 'IPHONEOS_DEPLOYMENT_TARGET = 17.4;' ios/Runner.xcodeproj/project.pbxpro
 
 flutter pub get
 
-echo "verify-consumer: flutter build apk --debug"
-flutter build apk --debug
-test -f build/app/outputs/flutter-apk/app-debug.apk || fail "flutter build apk produced no APK"
+if [[ " $platforms " == *" android "* ]]; then
+  echo "verify-consumer: flutter build apk --debug"
+  flutter build apk --debug
+  test -f build/app/outputs/flutter-apk/app-debug.apk || fail "flutter build apk produced no APK"
+fi
 
-if [[ "$(uname -s)" == "Darwin" ]]; then
+if [[ " $platforms " != *" ios "* ]]; then
+  echo "verify-consumer: the iOS build is not requested"
+elif [[ "$(uname -s)" == "Darwin" ]]; then
   echo "verify-consumer: flutter build ios --no-codesign --debug"
   flutter build ios --no-codesign --debug
 else

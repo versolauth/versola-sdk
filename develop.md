@@ -146,7 +146,7 @@ one against every pull request's commit.
 tools/verify-consumer/android.sh 0.1.0   # app with mavenCentral() + google() only, io.versola:oauth-android:0.1.0, assembleDebug (JDK 21, ANDROID_HOME)
 tools/verify-consumer/ios.sh 0.1.0       # SwiftPM package on the public repository at exactly 0.1.0, product VersolaOAuth, xcodebuild for the iOS simulator
 tools/verify-consumer/flutter.sh 0.1.0   # flutter create + versola_oauth as a git dependency at that ref, flutter build apk and (macOS) ios
-VERIFY_REPO_URL="file://$PWD" tools/verify-consumer/flutter.sh "$(git rev-parse HEAD)"   # the same, against your committed work
+VERIFY_REPO_URL="file://$PWD" VERIFY_PLATFORMS=ios tools/verify-consumer/flutter.sh "$(git rev-parse HEAD)"   # the same, iOS only, against your committed work (the APK needs the published oauth-android)
 ```
 
 `flutter.sh` takes any git ref and finds Flutter in `~/fvm/versions/<pinned>` when it is not on
