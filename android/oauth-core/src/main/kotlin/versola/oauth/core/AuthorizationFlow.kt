@@ -246,7 +246,7 @@ public class AuthorizationFlow(
         if (endpoint.isNullOrBlank()) return@withLock false
         val postLogoutRedirectUri = configuration.postLogoutRedirectUri?.value
         val expectedState = SecureTokens.generate(SecureRandom())
-        val uri = endSessionUri(endpoint, idTokenHint, postLogoutRedirectUri, expectedState)
+        val uri = endSessionUri(endpoint, idTokenHint, configuration.clientId, postLogoutRedirectUri, expectedState)
 
         val outcome = try {
             // Never ephemeral: the point is to end the session the shared browser holds.
@@ -269,17 +269,23 @@ public class AuthorizationFlow(
     }
 
     /**
-     * OpenID Connect RP-Initiated Logout §2. `state` goes whether or not a redirect URI does:
+     * OpenID Connect RP-Initiated Logout §2: `id_token_hint`, `client_id`, `post_logout_redirect_uri`
+     * when configured, and `state`. `state` goes whether or not a redirect URI does:
      * it costs nothing and is what lets the redirect be told apart from a stale one.
      */
     private fun endSessionUri(
         endpoint: String,
         idTokenHint: String?,
+        clientId: String,
         postLogoutRedirectUri: String?,
         state: String,
     ): String {
         val parameters = buildList {
             idTokenHint?.let { add("id_token_hint" to it) }
+            // RP-Initiated Logout §2: with no usable `id_token_hint` (an expired one is ignored, a
+            // session with none has none) it is what tells the provider which client is asking, and
+            // some validate `post_logout_redirect_uri` against it.
+            add("client_id" to clientId)
             postLogoutRedirectUri?.let { add("post_logout_redirect_uri" to it) }
             add("state" to state)
         }

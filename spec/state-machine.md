@@ -362,7 +362,7 @@ undecryptable. This is indistinguishable from tampering and is treated as sign-o
 
 `logout()` revokes the refresh token at `/revoke` (through `/native/revoke` under
 `BackChannel.Edge`, with a proof signed for the remembered `revocation_endpoint`), opens auth's
-`/logout` with `id_token_hint`, `post_logout_redirect_uri` and a `state`, then wipes local
+`/logout` with `id_token_hint`, `client_id`, `post_logout_redirect_uri` and a `state`, then wipes local
 state. Revocation comes first: a user who dismisses the signed-out page has still had the grant
 killed at the server. The `id_token_hint` is the last ID token held, which every refresh
 renews; auth silently ignores an expired hint and then has no session to end, so a session

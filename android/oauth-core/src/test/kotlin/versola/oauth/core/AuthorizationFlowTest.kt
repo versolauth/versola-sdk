@@ -821,6 +821,9 @@ class AuthorizationFlowTest {
         val uri = browser.launchedUri!!
         assertTrue(uri.startsWith("$ISSUER/logout?"))
         assertTrue(uri.contains("id_token_hint=the.id.token"))
+        // Right after the hint, and always: the provider learns which client asks even when the
+        // hint is expired or absent.
+        assertTrue(uri.contains("id_token_hint=the.id.token&client_id=mobile-app&"))
         assertTrue(uri.contains("post_logout_redirect_uri=https%3A%2F%2Fapp.example.com%2Fsigned-out"))
         assertTrue(stateOf(uri).length >= 22)
     }
@@ -842,6 +845,7 @@ class AuthorizationFlowTest {
         val uri = browser.launchedUri!!
         assertFalse(uri.contains("id_token_hint"))
         assertFalse(uri.contains("post_logout_redirect_uri"))
+        assertTrue("client_id still goes, without a hint", uri.contains("?client_id=mobile-app&"))
         assertTrue(uri.contains("state="))
     }
 
