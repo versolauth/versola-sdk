@@ -292,7 +292,12 @@ public class AuthorizationFlow(
         val outcome = try {
             // Never ephemeral: the point is to end the session the shared browser holds.
             // The user's time in the browser is not the SDK's retrying: see [outsideRetryBudget].
-            outsideRetryBudget { browser.authorize(uri, BrowserSessionOptions(redirectUri = postLogoutRedirectUri)) }
+            // Only a redirect carrying this request's `state` answers it, as for a login: another
+            // one is ignored and the wait goes on, for the provider's page, the user closing it, or
+            // a surface that ended with a redirect that is not the answer (then the browser throws
+            // `Configuration(StateMismatch)`, which is "not acknowledged" like every failure here).
+            val options = BrowserSessionOptions(ephemeral = false, redirectUri = postLogoutRedirectUri, expectedState = expectedState)
+            awaitingState(expectedState, outsideRetryBudget { browser.authorize(uri, options) })
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -300,13 +305,8 @@ public class AuthorizationFlow(
             // outlives this logout, which is exactly what the return value says.
             return@withLock false
         }
-        when (outcome) {
-            is BrowserOutcome.UserCancelled -> false
-            is BrowserOutcome.Redirect -> {
-                val state = AuthorizationResponseValidator.stateOf(outcome.uri)
-                state != null && SecureTokens.constantTimeEquals(expectedState, state)
-            }
-        }
+        // Whatever reached here carries this request's `state` or is the user's dismissal.
+        outcome is BrowserOutcome.Redirect
     }
 
     /**
@@ -410,10 +410,19 @@ public class AuthorizationFlow(
         pendingStore.save(pending)
         state.value = SessionState.Authorizing
 
-        val browserOptions = BrowserSessionOptions(ephemeral = ephemeralBrowser, redirectUri = configuration.redirectUri.value)
-            .also { it.expectedState = pending.state }
+        val browserOptions = BrowserSessionOptions(
+            ephemeral = ephemeralBrowser,
+            redirectUri = configuration.redirectUri.value,
+            expectedState = pending.state,
+        )
+        // Bounded by what is left of the request's ten minutes, as a resume is: a code the provider
+        // issues does not outlive them, and a redirect that is ignored while the login waits must not
+        // be able to keep it waiting for ever (spec/state-machine.md, scenario 15).
+        val remaining = PendingAuthorizationRequest.MAX_AGE_MILLIS - (clock() - pending.createdAtEpochMillis)
         val outcome = try {
-            belongingTo(pending, outsideRetryBudget { browser.authorize(uri, browserOptions) })
+            withTimeoutOrNull(remaining.coerceAtLeast(0)) {
+                belongingTo(pending, outsideRetryBudget { browser.authorize(uri, browserOptions) })
+            }
         } catch (e: CancellationException) {
             // The *caller* was cancelled, not the authorization. The browser may already be
             // in the foreground and its redirect may still arrive, so the slot and the
@@ -434,6 +443,13 @@ public class AuthorizationFlow(
             pendingStore.clear()
             state.value = settledState()
             throw e
+        }
+        if (outcome == null) {
+            // The request ran out while the browser was up: nothing can answer it any more, and the
+            // tab (if one is still open) cannot be closed from here. The slot goes with it.
+            pendingStore.clear()
+            state.value = settledState()
+            throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.PendingRequestExpired)
         }
         return complete(outcome, pending, metadata)
     }
@@ -522,19 +538,45 @@ public class AuthorizationFlow(
     private suspend fun belongingTo(
         pending: PendingAuthorizationRequest,
         first: BrowserOutcome,
-    ): BrowserOutcome {
+    ): BrowserOutcome = awaitingState(pending.state, first)
+
+    /** [belongingTo] for any request that carries a `state`: the authorization request, the end-session request. */
+    private suspend fun awaitingState(awaited: String, first: BrowserOutcome): BrowserOutcome {
         var outcome = first
-        while (!answers(outcome, pending)) {
-            logger?.warn("ignored a redirect that is not the response to the pending authorization request; still waiting for it")
+        val ignored = IgnoredRedirects()
+        while (!answers(outcome, awaited)) {
+            ignored.note(outcome as BrowserOutcome.Redirect)
             outcome = outsideRetryBudget { browser.awaitPendingRedirect() }
         }
         return outcome
     }
 
-    private fun answers(outcome: BrowserOutcome, pending: PendingAuthorizationRequest): Boolean {
+    private fun answers(outcome: BrowserOutcome, awaited: String): Boolean {
         val redirect = outcome as? BrowserOutcome.Redirect ?: return true
         val state = AuthorizationResponseValidator.stateOf(redirect.uri) ?: return false
-        return SecureTokens.constantTimeEquals(pending.state, state)
+        return SecureTokens.constantTimeEquals(awaited, state)
+    }
+
+    /**
+     * The one line about redirects that were ignored, at most one a second and counting what it
+     * leaves out: a loop of redirects (a misbehaving page, another app) must not be a loop of log
+     * lines. It names no value of the URL, except the `error` code if the redirect carried one that
+     * is a plain token: a provider that answers a request with an error and no `state` is the one
+     * case where the app's developer needs to know why the login waits (`spec/providers.md`). Never
+     * the description, which is free text.
+     */
+    private inner class IgnoredRedirects {
+        private var count = 0
+        private var lastLoggedAt = 0L
+
+        fun note(redirect: BrowserOutcome.Redirect) {
+            count++
+            val now = clock()
+            if (count > 1 && now - lastLoggedAt < LOG_INTERVAL_MILLIS) return
+            lastLoggedAt = now
+            val code = AuthorizationResponseValidator.errorCodeOf(redirect.uri)?.let { ", error=$it" }.orEmpty()
+            logger?.warn("ignored a redirect that is not the response to the request in progress ($count so far$code); still waiting for it")
+        }
     }
 
     private suspend fun complete(
@@ -677,6 +719,8 @@ public class AuthorizationFlow(
 
         @Volatile
         private var resumeSignal: CompletableDeferred<Unit>? = null
+
+        private const val LOG_INTERVAL_MILLIS = 1_000L
 
         /** The absent-probe sentinel; identity is what [restoresStoredGrant] compares. */
         private val NO_STORED_GRANT: suspend () -> Boolean = { false }

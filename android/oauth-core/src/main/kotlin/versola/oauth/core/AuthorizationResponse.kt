@@ -133,6 +133,19 @@ public object AuthorizationResponseValidator {
     }
 
     /**
+     * The `error` code a redirect carries, only when it is a plain token (RFC 6749 section 5.2 codes
+     * are), at most 64 characters: for the one log line about an ignored redirect, where a code
+     * from untrusted input must not be a way to put arbitrary text in a log. Null otherwise.
+     */
+    internal fun errorCodeOf(redirect: String): String? = try {
+        parseQueryOrThrowRaw(redirect)["error"]?.takeIf { ERROR_CODE.matches(it) }
+    } catch (e: Exception) {
+        null
+    }
+
+    private val ERROR_CODE = Regex("[A-Za-z0-9_.-]{1,64}")
+
+    /**
      * `spec/errors.md`, authorization endpoint table. Everything reachable without
      * `prompt=none` is a `Configuration` fault; the four that mean "the user has to sign in
      * again" are `Reauthenticate`. An unrecognised code is `Configuration` rather than a

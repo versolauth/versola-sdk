@@ -19,6 +19,8 @@ import java.security.MessageDigest
  */
 internal object RedirectDispatcher {
 
+    private const val NOTE_INTERVAL_NANOS = 1_000_000_000L
+
     /** An outcome, or the error the browser leg ended in ([fail]), thrown to the waiter. */
     private val outcomes = Channel<Result<BrowserOutcome>>(capacity = Channel.BUFFERED)
 
@@ -58,6 +60,30 @@ internal object RedirectDispatcher {
         expected = redirectUri
         expectedState = state
         this.logger = logger
+        ignored = 0
+    }
+
+    /** Intents ignored since the leg began, and when the last one was logged; see [noteIgnored]. */
+    private var ignored = 0
+    private var lastNoteNanos = 0L
+
+    /** The clock the one-line-a-second limit of [noteIgnored] reads; a test moves it. */
+    @Volatile
+    internal var nanoTime: () -> Long = System::nanoTime
+
+    private fun noteIgnored() {
+        val log = logger ?: return
+        val line: String? = synchronized(this) {
+            ignored++
+            val now = nanoTime()
+            if (ignored > 1 && now - lastNoteNanos < NOTE_INTERVAL_NANOS) {
+                null
+            } else {
+                lastNoteNanos = now
+                "ignored an intent at the redirect activity that is not the response to the login in progress ($ignored so far)"
+            }
+        }
+        line?.let(log::warn)
     }
 
     /**
@@ -80,7 +106,7 @@ internal object RedirectDispatcher {
      */
     fun accepts(uri: String): Boolean {
         val accepted = expected.let { it == null || sameRedirect(it, uri) } && answers(uri)
-        if (!accepted) logger?.warn("ignored an intent at the redirect activity that is not the response to the login in progress")
+        if (!accepted) noteIgnored()
         return accepted
     }
 
@@ -101,12 +127,14 @@ internal object RedirectDispatcher {
     /**
      * An Auth Tab ended with a redirect that is not the awaited response (see [answers]): the
      * tab closed itself with it, so nothing can follow from that tab and no dismissal can be
-     * observed any more. The wait ends as the user closing it would end it
+     * observed any more, and the wait cannot go on. It ends as a failure the app can see,
+     * `Configuration(StateMismatch)`, with the pending request wiped like for every failed browser
+     * leg: a provider that drops or rewrites `state` must not look like the user cancelling
      * (`spec/state-machine.md`, "A redirect that is not the awaited response").
      */
-    fun deliverUnansweredTabEnded() {
-        logger?.warn("an Auth Tab ended with a redirect that is not the response to the login in progress; the login is over")
-        deliverUserCancelled()
+    fun failUnansweredTabEnded() {
+        logger?.warn("an Auth Tab ended with a redirect that is not the response to the request in progress; the request is over")
+        fail(VersolaError.Configuration(VersolaError.Configuration.Detail.StateMismatch))
     }
 
     fun deliver(uri: String) {

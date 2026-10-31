@@ -73,9 +73,10 @@ internal class VersolaAuthTabActivity : ComponentActivity() {
             AuthTabIntent.RESULT_OK -> {
                 when {
                     resultUri == null -> RedirectDispatcher.deliverUserCancelled()
-                    // The tab has closed with a redirect that is not this login's response: another
-                    // request's, or none of the awaited one. Nothing more comes from it.
-                    !RedirectDispatcher.answers(resultUri.toString()) -> RedirectDispatcher.deliverUnansweredTabEnded()
+                    // The tab has closed with a redirect that is not this request's response: another
+                    // request's, or none of the awaited one. Nothing more comes from it, and the wait
+                    // ends as a visible failure (`Configuration(StateMismatch)`), not as a cancel.
+                    !RedirectDispatcher.answers(resultUri.toString()) -> RedirectDispatcher.failUnansweredTabEnded()
                     else -> RedirectDispatcher.deliver(resultUri.toString())
                 }
             }

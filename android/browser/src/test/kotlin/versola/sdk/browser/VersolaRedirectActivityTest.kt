@@ -31,7 +31,7 @@ private const val AUTHORIZE = "https://id.example.com/authorize?response_type=co
 
 /** What the flow hands its session: the redirect and the state of the request it waits for. */
 @OptIn(VersolaInternalApi::class)
-private fun awaiting(state: String?) = BrowserSessionOptions(redirectUri = REDIRECT).also { it.expectedState = state }
+private fun awaiting(state: String?) = BrowserSessionOptions(ephemeral = false, redirectUri = REDIRECT, expectedState = state)
 
 private class NoteTaker : VersolaLogger {
     val lines = mutableListOf<String>()
@@ -55,6 +55,7 @@ class VersolaRedirectActivityTest {
 
     @Before
     fun drainPreviousSessions() {
+        RedirectDispatcher.nanoTime = System::nanoTime
         RedirectDispatcher.drain()
     }
 
@@ -206,6 +207,8 @@ class VersolaRedirectActivityTest {
     fun `a redirect for the awaited URI with another state is ignored, and so is one with none`() {
         installLauncher()
         val notes = NoteTaker()
+        var now = 0L
+        RedirectDispatcher.nanoTime = { now }
         RedirectDispatcher.expect(REDIRECT, "s", notes)
 
         for (junk in listOf("$REDIRECT?code=c&state=junk", "$REDIRECT?code=c", "$REDIRECT?code=c&state=", "$REDIRECT?code=c&state=ss", "$REDIRECT?code=c&state=S")) {
@@ -216,8 +219,14 @@ class VersolaRedirectActivityTest {
             assertNull("$junk: nothing reaches the waiter", takeNow())
             assertNull("$junk: the app is not brought forward over the tab", shadowOf(application).nextStartedActivity)
         }
-        assertEquals("one line each", 5, notes.lines.size)
+        // At most one line a second, counting what it leaves out: five intents in the same instant
+        // are one line, and a later one is another that says how many there were.
+        assertEquals(1, notes.lines.size)
         assertTrue("no value of the URL in it: ${notes.lines}", notes.lines.none { "junk" in it || "app.example.com" in it })
+        now += 1_500_000_000L
+        open("$REDIRECT?code=c&state=junk")
+        assertEquals(2, notes.lines.size)
+        assertTrue("it counts: ${notes.lines.last()}", "(6 so far)" in notes.lines.last())
 
         // The awaited state is delivered, whatever else the query carries.
         open("$REDIRECT?code=c&state=s&iss=https%3A%2F%2Fid.example.com")

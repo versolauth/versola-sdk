@@ -254,9 +254,10 @@ class AuthTabAuthorizationSessionTest {
     }
 
     @Test
-    fun `an Auth Tab that closes with a redirect that is not the awaited response ends the login as a dismissal would, logging no value`() = runTest {
-        // Scenario 15. The tab closed itself with it: nothing can follow from that tab and no
-        // dismissal can be observed any more.
+    fun `an Auth Tab that closes with a redirect that is not the awaited response fails the request as a state mismatch, logging no value`() = runTest {
+        // Scenario 15. The tab closed itself with it: nothing can follow from that tab and no dismissal
+        // can be observed any more. A provider that drops or rewrites `state` must stay a visible
+        // failure, not look like the user cancelling.
         for (query in listOf("code=SECRETCODE&state=junk", "code=SECRETCODE")) {
             RedirectDispatcher.drain()
             logger.warnings.clear()
@@ -267,7 +268,8 @@ class AuthTabAuthorizationSessionTest {
 
             shadowOf(activity).receiveResult(started.intent, AuthTabIntent.RESULT_OK, Intent().setData(Uri.parse("$REDIRECT?$query")))
 
-            assertEquals(query, BrowserOutcome.UserCancelled, RedirectDispatcher.await())
+            val error = runCatching { RedirectDispatcher.await() }.exceptionOrNull() as VersolaError.Configuration
+            assertEquals(query, VersolaError.Configuration.Detail.StateMismatch, error.detail)
             assertTrue(activity.isFinishing)
             assertEquals(1, logger.warnings.size)
             assertTrue(logger.warnings.none { "SECRETCODE" in it || "junk" in it || "app.example.com" in it })
@@ -289,8 +291,8 @@ class AuthTabAuthorizationSessionTest {
     fun `the session tells the dispatcher which state its login awaits`() = runTest {
         installProvider(authTab = true)
         val session = AuthTabAuthorizationSession(application, logger)
-        val options = BrowserSessionOptions(redirectUri = REDIRECT)
-        @OptIn(VersolaInternalApi::class) options.expectedState = "s"
+        @OptIn(VersolaInternalApi::class)
+        val options = BrowserSessionOptions(ephemeral = false, redirectUri = REDIRECT, expectedState = "s")
 
         val pending = async { session.authorize(AUTHORIZE, options) }
         runCurrent()
