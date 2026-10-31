@@ -181,7 +181,17 @@ public sealed class VersolaError(
     ) : VersolaError("configuration: $detail", cause) {
 
         public sealed interface Detail {
-            /** `state` on the redirect did not match the persisted value. No token request is made. */
+            /**
+             * `state` on a redirect did not match the persisted value. No token request is made, and
+             * the pending request is wiped.
+             *
+             * Produced when the browser surface itself (an Auth Tab) ended on a redirect that is not
+             * the request's response: nothing can follow from it, and a provider that drops or
+             * rewrites `state` stays a visible failure rather than a cancel. A redirect that merely
+             * arrives while a login waits is not an error of it: it is not the awaited response and
+             * is ignored (`spec/state-machine.md`, scenario 15). [AuthorizationResponseValidator.validate]
+             * reports it too for a redirect handed to it directly.
+             */
             public data object StateMismatch : Detail
 
             /**

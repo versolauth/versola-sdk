@@ -67,6 +67,11 @@ public class AuthorizationFlow(
      * What the starter needs at the exchange travels in [PendingAuthorizationRequest.extension].
      */
     private val starter: AuthorizationStarter? = null,
+    /**
+     * Where the one line about an ignored redirect goes (see [belongingTo]); it names neither the
+     * URL nor any value in it.
+     */
+    private val logger: VersolaLogger? = null,
 ) {
 
     /**
@@ -287,7 +292,12 @@ public class AuthorizationFlow(
         val outcome = try {
             // Never ephemeral: the point is to end the session the shared browser holds.
             // The user's time in the browser is not the SDK's retrying: see [outsideRetryBudget].
-            outsideRetryBudget { browser.authorize(uri, BrowserSessionOptions(redirectUri = postLogoutRedirectUri)) }
+            // Only a redirect carrying this request's `state` answers it, as for a login: another
+            // one is ignored and the wait goes on, for the provider's page, the user closing it, or
+            // a surface that ended with a redirect that is not the answer (then the browser throws
+            // `Configuration(StateMismatch)`, which is "not acknowledged" like every failure here).
+            val options = BrowserSessionOptions(ephemeral = false, redirectUri = postLogoutRedirectUri, expectedState = expectedState)
+            awaitingState(expectedState, outsideRetryBudget { browser.authorize(uri, options) })
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -295,13 +305,8 @@ public class AuthorizationFlow(
             // outlives this logout, which is exactly what the return value says.
             return@withLock false
         }
-        when (outcome) {
-            is BrowserOutcome.UserCancelled -> false
-            is BrowserOutcome.Redirect -> {
-                val state = AuthorizationResponseValidator.stateOf(outcome.uri)
-                state != null && SecureTokens.constantTimeEquals(expectedState, state)
-            }
-        }
+        // Whatever reached here carries this request's `state` or is the user's dismissal.
+        outcome is BrowserOutcome.Redirect
     }
 
     /**
@@ -351,8 +356,8 @@ public class AuthorizationFlow(
      * A slot left behind by a cancelled caller is **superseded**, not protected: the app is
      * asking for a new authorization and cannot be made to wait out the old slot's ten
      * minutes, and the tab behind it may never redirect at all. The abandoned tab can still
-     * redirect, so its `state` is remembered and that redirect is discarded rather than
-     * allowed to fail this call as a mismatch.
+     * redirect; what it delivers carries a `state` that is not this request's, so it is
+     * ignored like any other redirect that is not the awaited response ([belongingTo]).
      */
     public suspend fun authorize(
         scopes: Set<String>,
@@ -400,15 +405,24 @@ public class AuthorizationFlow(
             starter.start(request, metadata, clock()).let { it.pending to it.browserUri }
         }
         // A request still in the slot is a leftover nobody awaits (else this call would not be here,
-        // the lock being held for as long as one is awaited): superseded, and its `state` remembered
-        // so that a redirect its tab still delivers is stepped over rather than failing this login.
-        pendingStore.load()?.let { rememberAbandoned(it.state) }
+        // the lock being held for as long as one is awaited): superseded. A redirect its tab still
+        // delivers carries another `state` than this request's and is ignored.
         pendingStore.save(pending)
         state.value = SessionState.Authorizing
 
-        val browserOptions = BrowserSessionOptions(ephemeral = ephemeralBrowser, redirectUri = configuration.redirectUri.value)
+        val browserOptions = BrowserSessionOptions(
+            ephemeral = ephemeralBrowser,
+            redirectUri = configuration.redirectUri.value,
+            expectedState = pending.state,
+        )
+        // Bounded by what is left of the request's ten minutes, as a resume is: a code the provider
+        // issues does not outlive them, and a redirect that is ignored while the login waits must not
+        // be able to keep it waiting for ever (spec/state-machine.md, scenario 15).
+        val remaining = PendingAuthorizationRequest.MAX_AGE_MILLIS - (clock() - pending.createdAtEpochMillis)
         val outcome = try {
-            belongingTo(pending, outsideRetryBudget { browser.authorize(uri, browserOptions) })
+            withTimeoutOrNull(remaining.coerceAtLeast(0)) {
+                belongingTo(pending, outsideRetryBudget { browser.authorize(uri, browserOptions) })
+            }
         } catch (e: CancellationException) {
             // The *caller* was cancelled, not the authorization. The browser may already be
             // in the foreground and its redirect may still arrive, so the slot and the
@@ -419,7 +433,6 @@ public class AuthorizationFlow(
             // will ever answer, which expires by itself within ten minutes. That is the safe
             // direction to be wrong in: a stale slot costs one expiry, while wiping a live
             // one loses an authorization the user has already completed.
-            rememberAbandoned(pending.state)
             throw e
         } catch (e: Exception) {
             // Launching or awaiting the browser failed outright (notably
@@ -430,6 +443,13 @@ public class AuthorizationFlow(
             pendingStore.clear()
             state.value = settledState()
             throw e
+        }
+        if (outcome == null) {
+            // The request ran out while the browser was up: nothing can answer it any more, and the
+            // tab (if one is still open) cannot be closed from here. The slot goes with it.
+            pendingStore.clear()
+            state.value = settledState()
+            throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.PendingRequestExpired)
         }
         return complete(outcome, pending, metadata)
     }
@@ -484,9 +504,9 @@ public class AuthorizationFlow(
         }
         if (preempted) {
             // A newer operation (a login, a sign-out) wants the lock. This request is its leftover:
-            // its tab may yet redirect, so its `state` is remembered, and the slot is left to whoever
-            // took over (a login's `save` replaces it, a sign-out's wipe clears it).
-            rememberAbandoned(pending.state)
+            // its tab may yet redirect, and that redirect is ignored by whoever waits next, its
+            // `state` being another's. The slot is left to whoever took over (a login's `save`
+            // replaces it, a sign-out's wipe clears it).
             return null
         }
         val answered = outcome
@@ -499,29 +519,64 @@ public class AuthorizationFlow(
     }
 
     /**
-     * Consumes redirects until one answers [pending].
+     * Consumes redirects until one answers [pending]: scenario 15.
      *
-     * A tab abandoned by a cancelled caller can redirect after this call has already drained
-     * whatever was buffered. That redirect carries a `state` this process issued itself, so
-     * failing on it would lose a live authorization to a tab the user forgot about. Each
-     * abandoned `state` is discarded exactly once, which is also what bounds this loop;
-     * everything else — an unknown `state` included — still reaches the validator.
+     * A redirect answers it only when its `state` is the request's. The redirect URI is public
+     * (the app's manifest or associated domains name it), so any other app, an old link or a tab
+     * the user forgot about can deliver a URL for it, and a redirect that is not the response to
+     * this request must not be able to end it. Whatever else it carries is not looked at: it is
+     * logged, without the URL, and the wait goes on, for the genuine redirect, the user
+     * dismissing the browser, or (in a resume) the request's expiry. A redirect with no `state`
+     * at all is not the response of a request that sent one either.
+     *
+     * This is where the stored request is read, which is why it holds for a cold start too: a
+     * redirect that started the process was buffered before anything expected it, and is judged
+     * here against the request the resume loaded. The comparison is constant-time.
+     *
+     * A [BrowserOutcome.UserCancelled] is the browser's own answer and passes through.
      */
     private suspend fun belongingTo(
         pending: PendingAuthorizationRequest,
         first: BrowserOutcome,
-    ): BrowserOutcome {
+    ): BrowserOutcome = awaitingState(pending.state, first)
+
+    /** [belongingTo] for any request that carries a `state`: the authorization request, the end-session request. */
+    private suspend fun awaitingState(awaited: String, first: BrowserOutcome): BrowserOutcome {
         var outcome = first
-        while (isAbandoned(outcome, pending)) {
+        val ignored = IgnoredRedirects()
+        while (!answers(outcome, awaited)) {
+            ignored.note(outcome as BrowserOutcome.Redirect)
             outcome = outsideRetryBudget { browser.awaitPendingRedirect() }
         }
         return outcome
     }
 
-    private fun isAbandoned(outcome: BrowserOutcome, pending: PendingAuthorizationRequest): Boolean {
-        val redirect = outcome as? BrowserOutcome.Redirect ?: return false
+    private fun answers(outcome: BrowserOutcome, awaited: String): Boolean {
+        val redirect = outcome as? BrowserOutcome.Redirect ?: return true
         val state = AuthorizationResponseValidator.stateOf(redirect.uri) ?: return false
-        return state != pending.state && forgetAbandoned(state)
+        return SecureTokens.constantTimeEquals(awaited, state)
+    }
+
+    /**
+     * The one line about redirects that were ignored, at most one a second and counting what it
+     * leaves out: a loop of redirects (a misbehaving page, another app) must not be a loop of log
+     * lines. It names no value of the URL, except the `error` code if the redirect carried one that
+     * is a plain token: a provider that answers a request with an error and no `state` is the one
+     * case where the app's developer needs to know why the login waits (`spec/providers.md`). Never
+     * the description, which is free text.
+     */
+    private inner class IgnoredRedirects {
+        private var count = 0
+        private var lastLoggedAt = 0L
+
+        fun note(redirect: BrowserOutcome.Redirect) {
+            count++
+            val now = clock()
+            if (count > 1 && now - lastLoggedAt < LOG_INTERVAL_MILLIS) return
+            lastLoggedAt = now
+            val code = AuthorizationResponseValidator.errorCodeOf(redirect.uri)?.let { ", error=$it" }.orEmpty()
+            logger?.warn("ignored a redirect that is not the response to the request in progress ($count so far$code); still waiting for it")
+        }
     }
 
     private suspend fun complete(
@@ -529,9 +584,6 @@ public class AuthorizationFlow(
         pending: PendingAuthorizationRequest,
         metadata: ProviderMetadata,
     ): AuthorizationGrant {
-        // Being answered is what stops this request being anyone's leftover, whichever way
-        // it ends: a resumed one is no longer abandoned, and a rejected one never will be.
-        forgetAbandoned(pending.state)
         return when (outcome) {
             is BrowserOutcome.UserCancelled -> {
                 pendingStore.clear()
@@ -668,29 +720,9 @@ public class AuthorizationFlow(
         @Volatile
         private var resumeSignal: CompletableDeferred<Unit>? = null
 
-        /**
-         * `state` values of authorizations whose caller was cancelled while their tab was
-         * open — the redirects a later call may have to step over. Process-wide and guarded
-         * by [AUTHORIZE_LOCK], for the same reason the lock itself is: the tabs and the
-         * dispatcher they redirect into are not per instance either.
-         *
-         * Bounded, because an app that cancels repeatedly without ever redirecting would
-         * otherwise grow this without end. Eight is far more open tabs than a user has, and
-         * dropping the oldest only restores the old behaviour for it: a mismatch.
-         */
+        private const val LOG_INTERVAL_MILLIS = 1_000L
+
         /** The absent-probe sentinel; identity is what [restoresStoredGrant] compares. */
         private val NO_STORED_GRANT: suspend () -> Boolean = { false }
-
-        private val ABANDONED_STATES = LinkedHashSet<String>()
-        private const val MAX_ABANDONED_STATES = 8
-
-        private fun rememberAbandoned(state: String) {
-            ABANDONED_STATES += state
-            while (ABANDONED_STATES.size > MAX_ABANDONED_STATES) {
-                ABANDONED_STATES.remove(ABANDONED_STATES.first())
-            }
-        }
-
-        private fun forgetAbandoned(state: String): Boolean = ABANDONED_STATES.remove(state)
     }
 }

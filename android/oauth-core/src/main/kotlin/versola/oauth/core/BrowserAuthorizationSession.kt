@@ -23,21 +23,42 @@ public sealed interface BrowserOutcome {
  * (`spec/oauth-sdk-api.md` section 6, `ephemeralBrowser`; section 13). Still URIs and flags
  * only: nothing here lets an implementation see a page, a cookie or a credential.
  */
-public class BrowserSessionOptions(
+public class BrowserSessionOptions @VersolaInternalApi constructor(
     /**
      * Open the browser without the user's shared browsing state: no cookies in, none kept.
      * Off by default because an ephemeral session breaks passkeys and single sign-on; a
      * browser that cannot honour it says so once and proceeds shared (best effort, as iOS's
      * `prefersEphemeralWebBrowserSession`).
      */
-    public val ephemeral: Boolean = false,
+    public val ephemeral: Boolean,
     /**
      * The URI the provider will redirect to, when the session can intercept it itself (Auth
      * Tab does, from its result; a Custom Tab relies on the redirect activity instead). Null
      * when there is none to expect, as for an end-session request without a post-logout URI.
      */
-    public val redirectUri: String? = null,
+    public val redirectUri: String?,
+    /**
+     * The `state` of the request this leg waits for the response to (the authorization request,
+     * or the end-session request), or null when the caller did not say. A session that can tell
+     * a redirect for another request apart before it disturbs the app (the redirect activity,
+     * which any app can start) uses it to drop one, and one whose own surface ends with a
+     * redirect that is not the response (an Auth Tab result) reports it. The decision about every
+     * redirect stays the flow's, which compares each with the request in constant time, so a
+     * session that ignores this loses nothing but those early answers. Wiring between the flow
+     * and the browser module, not API: set by [AuthorizationFlow], read by the sessions.
+     */
+    @VersolaInternalApi
+    public val expectedState: String?,
 ) {
+    // The two forms the class has always had: every parameter defaulted, and the explicit no-argument
+    // constructor Kotlin generates for it (the API dump holds both).
+    public constructor(
+        ephemeral: Boolean = false,
+        redirectUri: String? = null,
+    ) : this(ephemeral, redirectUri, null)
+
+    public constructor() : this(false, null, null)
+
     public companion object {
         public val Default: BrowserSessionOptions = BrowserSessionOptions()
     }

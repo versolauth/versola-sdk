@@ -16,6 +16,25 @@ package enum AuthorizationResponseValidator {
         parseQuery(redirect)["state"]
     }
 
+    /// The `error` code a redirect carries, only when it is a plain token (RFC 6749 section 5.2
+    /// codes are), at most 64 characters: for the one log line about an ignored redirect, where a
+    /// code from untrusted input must not be a way to put arbitrary text in a log. Nil otherwise.
+    package static func errorCode(of redirect: URL) -> String? {
+        guard let code = parseQuery(redirect)["error"], (1...64).contains(code.utf8.count),
+              code.utf8.allSatisfy({ ($0 >= 0x30 && $0 <= 0x39) || ($0 >= 0x41 && $0 <= 0x5A) || ($0 >= 0x61 && $0 <= 0x7A) || $0 == 0x5F || $0 == 0x2E || $0 == 0x2D })
+        else { return nil }
+        return code
+    }
+
+    /// Whether `redirect` carries exactly `state`, compared in constant time; a redirect with no
+    /// `state` does not. How the flow tells the response to its request from any other redirect
+    /// for the same URI (scenario 15), and how a browser session tells that its own page ended
+    /// with something else.
+    package static func carries(_ redirect: URL, state: String) -> Bool {
+        guard let received = stateOf(redirect) else { return false }
+        return SecureTokens.constantTimeEquals(state, received)
+    }
+
     /// The query of `url` as a dictionary, tolerant of whatever the OS delivered: a malformed
     /// percent escape stays as typed instead of trapping or failing, a repeated name keeps its
     /// first value, a name without `=` has an empty value. Query only: the SDK requests

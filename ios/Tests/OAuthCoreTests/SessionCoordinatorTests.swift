@@ -381,20 +381,31 @@ final class SessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(state, .unauthenticated)
     }
 
-    func testAResumedRedirectCarryingAnotherStateIsRefusedBeforeAnyTokenRequest() async throws {
-        let f = try fixture(answers: [.success(response())], pending: restoredPending(), browser: delivering(state: "forged"))
+    func testAResumedRedirectCarryingAnotherStateIsIgnoredAndTheResumeKeepsWaitingForItsOwn() async throws {
+        // Scenario 15, cold start: what the process finds buffered is judged against the request it
+        // just read, and the redirects that are not its answer neither fail nor wipe anything.
+        let calls = Box(0)
+        let browser = ScriptedBrowser(
+            onAuthorize: { _, _ in throw AssertionError("a cold-started process opens no browser") },
+            onAwait: { _ in
+                let n = await calls.value + 1
+                await calls.set(n)
+                let state: String? = n == 1 ? "forged" : (n == 2 ? nil : "restored-state")
+                let uri = URL(string: "https://x.example.com/" + (state.map { "?state=\($0)" } ?? ""))!
+                return .redirect(AuthzKit.redirect(answering: uri))
+            }
+        )
+        let f = try fixture(answers: [.success(response())], pending: restoredPending(), browser: browser)
 
-        let error = await resumeFails(f)
+        let resumed = try await f.coordinator.resumePendingLogin()
 
-        XCTAssertEqual(error, .configuration(.stateMismatch))
-        let calls = await f.tokens.calls
-        XCTAssertTrue(calls.isEmpty)
-        let stored = await f.store.refresh
-        XCTAssertNil(stored)
-        let pending = await f.pendingStore.stored
-        XCTAssertNil(pending)
+        XCTAssertNotNil(resumed)
+        let awaited = await calls.value
+        XCTAssertEqual(awaited, 3, "the two redirects that are not its answer were stepped over, the third answered")
+        let sent = await f.tokens.calls
+        XCTAssertEqual(sent.count, 1, "only the matching redirect's code was exchanged")
         let state = await f.flow.states.current
-        XCTAssertEqual(state, .unauthenticated)
+        XCTAssertEqual(state, .authenticated)
     }
 
     func testAResumedRedirectFromAnotherIssuerIsRefusedBeforeAnyTokenRequest() async throws {

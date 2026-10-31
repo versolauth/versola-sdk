@@ -6,6 +6,7 @@ import androidx.browser.customtabs.CustomTabsClient
 import versola.oauth.core.BrowserAuthorizationSession
 import versola.oauth.core.BrowserOutcome
 import versola.oauth.core.BrowserSessionOptions
+import versola.oauth.core.VersolaInternalApi
 import versola.oauth.core.VersolaLogger
 
 /**
@@ -26,6 +27,7 @@ import versola.oauth.core.VersolaLogger
  * end-session request with no post-logout URI) the fallback is used, since an Auth Tab has
  * nothing to return.
  */
+@OptIn(VersolaInternalApi::class)
 public class AuthTabAuthorizationSession(
     context: Context,
     private val logger: VersolaLogger? = null,
@@ -54,7 +56,7 @@ public class AuthTabAuthorizationSession(
         }
         // Anything buffered belongs to a session that no longer exists.
         RedirectDispatcher.drain()
-        RedirectDispatcher.expect(options.redirectUri)
+        RedirectDispatcher.expect(options.redirectUri, options.expectedState, logger)
         application.startActivity(VersolaAuthTabActivity.intent(application, uri, redirectUri, options.ephemeral, provider))
         return RedirectDispatcher.await()
     }

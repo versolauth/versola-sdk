@@ -76,10 +76,16 @@ package struct BrowserSessionOptions: Sendable, Equatable {
     package var ephemeral: Bool
     /// The URI the provider will redirect to; what `ASWebAuthenticationSession` matches on.
     package var redirectURI: URL?
+    /// The `state` of the authorization request this leg waits for the response to, or nil when the
+    /// leg is not one (an end-session request). A session whose own page can end with a redirect
+    /// uses it to tell that the surface ended with something that is not the response; the decision
+    /// about every redirect stays the flow's, which compares it with the persisted request.
+    package var expectedState: String?
 
-    package init(ephemeral: Bool = false, redirectURI: URL? = nil) {
+    package init(ephemeral: Bool = false, redirectURI: URL? = nil, expectedState: String? = nil) {
         self.ephemeral = ephemeral
         self.redirectURI = redirectURI
+        self.expectedState = expectedState
     }
 }
 

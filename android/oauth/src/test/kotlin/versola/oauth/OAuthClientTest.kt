@@ -47,7 +47,7 @@ private class RecordingLogger : VersolaLogger {
  * The browser of a process the redirect cold-started: nothing is opened, and what the OS
  * delivered is waiting in [outcome]. [awaited] counts how often the SDK asked for it.
  */
-private class ColdStartBrowser(private val outcome: () -> BrowserOutcome) : BrowserAuthorizationSession {
+private class ColdStartBrowser(private val outcome: suspend () -> BrowserOutcome) : BrowserAuthorizationSession {
     var awaited = 0
 
     override suspend fun authorize(uri: String): BrowserOutcome = throw AssertionError("a cold-started process opens no browser")
@@ -471,19 +471,49 @@ class OAuthClientTest {
     }
 
     @Test
-    fun `a redirect carrying another state is refused in a cold-started process before any token request`() = runTest {
+    fun `a redirect carrying another state is ignored in a cold-started process and the genuine one completes the sign-in`() = runTest {
+        // Scenario 15, cold start: the redirect that started the process may be someone else's. It is
+        // judged against the request the resume read, skipped, and what follows still answers.
         val killed = killedMidBrowser()
-        val cold = ColdStartBrowser { redirectFor(killed, state = "forged") }
+        tokenBody = { tokenResponse(refreshToken = true, nonce = killed.nonce) }
+        val answers = ArrayDeque(listOf(redirectFor(killed, state = "forged"), redirectFor(killed)))
+        val cold = ColdStartBrowser { answers.removeFirst() }
 
         val client = restartWith(killed, cold)
 
-        assertEquals(SessionState.Unauthenticated, client.sessionState.first { it != SessionState.Authorizing })
+        client.sessionState.first { it == SessionState.Authenticated }
+        assertEquals("the foreign redirect was stepped over and the next one answered", 2, cold.awaited)
+        assertEquals("only the genuine redirect's code was exchanged", 1, requests.count { it.url.encodedPath == "/token" })
+        assertEquals("alice", client.claims?.subject)
+        val ignored = logger.warnings.filter { it.contains("not the response") }
+        assertEquals(1, ignored.size)
+        assertTrue("the line names no value of the redirect: $ignored", ignored.none { it.contains("forged") || it.contains(killed.state) })
+    }
+
+    @Test
+    fun `a cold-started process handed only a redirect with another state keeps waiting with its request in place`() = runTest {
+        val killed = killedMidBrowser()
+        var calls = 0
+        val waiting = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val cold = ColdStartBrowser {
+            if (calls++ == 0) {
+                redirectFor(killed, state = "forged")
+            } else {
+                waiting.complete(Unit)
+                kotlinx.coroutines.awaitCancellation()
+            }
+        }
+
+        val client = restartWith(killed, cold)
+        waiting.await()
+
+        assertEquals(2, cold.awaited)
+        assertEquals(SessionState.Authorizing, client.sessionState.first())
         assertTrue(requests.none { it.url.encodedPath == "/token" })
         assertNull(client.claims)
-        assertTrue(logger.warnings.any { it.contains("StateMismatch") })
-        // The failed request is gone: a cold start after this one reports nothing pending.
-        OAuthClient.forgetAll()
-        assertEquals(SessionState.Unauthenticated, client(killed.configuration).sessionState.first())
+        assertTrue("nothing failed", logger.warnings.none { it.contains("failed") })
+        // That the request is still stored is the flow's own test (`clears` stays 0); a second client
+        // here would start a second resume that outlives the test and holds the process-wide lock.
     }
 
     @Test

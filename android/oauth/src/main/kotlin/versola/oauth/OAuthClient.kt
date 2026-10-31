@@ -430,6 +430,7 @@ public class OAuthClient private constructor(
                 // Pushes the request when the provider advertises PAR (or the policy says so),
                 // else sends the plain request; decided per login from the metadata.
                 starter = PushedAuthorizationStarter(core, httpClient, configuration.pushedAuthorization),
+                logger = logger,
             )
             val jwks = JwksClient(httpClient, FileJwksCache(File(directory, "jwks.json")))
             val validator = JwksIdTokenValidator(

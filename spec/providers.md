@@ -38,7 +38,12 @@ A provider works with the generic facade when it offers all of the following:
   (cleartext only on `localhost`, `127.0.0.1` or `[::1]`), on the issuer's origin or another.
 - The authorization code flow with PKCE `S256` (RFC 7636, RFC 8252) for a **public client**:
   `token_endpoint_auth_method` `none`, `client_id` in the token request body, no secret anywhere.
-- `response_type=code` with the `state` parameter echoed on the redirect (RFC 6749 section 4.1.2).
+- `response_type=code` with the `state` parameter echoed on the redirect (RFC 6749 section 4.1.2),
+  **error responses included** (section 4.1.2.1: `state` is REQUIRED there when the request carried
+  one). A redirect whose `state` is not the pending request's is not its response and is ignored
+  (`state-machine.md`, scenario 15), so a provider that answers an authorization error without
+  `state` is not heard: the login keeps waiting and ends only by the user's dismissal or the
+  request's ten minutes, with one log line naming the `error` code.
 - An ID token signed with an asymmetric algorithm from the closed set of API 11 (`RS256`,
   `PS256`, `ES256`, `ES384`, `ES512`, `RS384`, `RS512`, `PS384`, `PS512`), with keys at
   `jwks_uri`. `none` and HMAC algorithms are refused.

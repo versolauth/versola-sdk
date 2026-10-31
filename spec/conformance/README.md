@@ -31,7 +31,7 @@ behaviour must be the same. Scenarios 21–23 exist for what only the edge flow 
 | 12 | Process death with the browser foreground | any | 5, 11 |
 | 13 | Process death mid-rotation | bearer | 8, 14 |
 | 14 | Step-up and resume | any | 9, 14 |
-| 15 | `state` mismatch | any | 5, 11 |
+| 15 | A redirect whose `state` is not the pending request's is ignored | any | 5, 11 |
 | 16 | `iss` mismatch | any | 5, 11 |
 | 17 | Unregistered redirect URI | any | 5, 11 |
 | 18 | RP-initiated logout | any | 10, 14 |

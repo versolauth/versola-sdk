@@ -141,7 +141,8 @@ for API 36. If you cannot start an emulator, say the device tier was not run (`t
   scheme works but logs a warning, since any app can register it (F10). The redirect activity stays
   exported only as far as the manifest merge snippet needs, with transitions overridden to none.
   Any app can start it with an explicit intent, so it delivers only the redirect the login in
-  progress awaits (`RedirectDispatcher.accepts`: scheme, host, port and path), and it does not use
+  progress awaits (`RedirectDispatcher.accepts`: scheme, host, port and path, and the request's
+  `state` once the flow has said which; any other redirect is ignored, scenario 15), and it does not use
   `FLAG_ACTIVITY_CLEAR_TOP`, which would finish the screens above the launcher.
 - Never start the integrator's activities with implicit intents or put credentials in an intent
   extra.

@@ -172,8 +172,9 @@ Not every error comes from a server.
 
 | Condition | Category | Notes |
 |---|---|---|
-| `state` mismatch on redirect | `Configuration` | Hard failure. **No token request is made.** Either a bug or an injection attempt; both are unsafe to continue from. |
-| `iss` mismatch on redirect (RFC 9207) | `Configuration` | Same treatment. |
+| `state` of a redirect is not the pending request's, while a login waits for its redirect | none: the redirect is **ignored** | Not a response to this request, so not an error of it: no token request, the pending request and `Authorizing` kept, the wait continues until the genuine redirect, the user's dismissal or the request's expiry (`state-machine.md`, "A redirect that is not the awaited response"; scenario 15). |
+| The browser surface itself (an Auth Tab result, an `ASWebAuthenticationSession` completion) ended on a redirect whose `state` is not the request's | `Configuration`, detail `StateMismatch` | Hard failure, **no token request**, pending request wiped. The surface is gone, so the wait cannot go on; a provider that drops or rewrites `state` stays a visible failure rather than a cancel. `AuthorizationResponseValidator.validate` reports the same detail for a redirect handed to it directly. |
+| `iss` mismatch on redirect (RFC 9207), the `state` matching | `Configuration` | Hard failure, **no token request**, pending request wiped. |
 | Missing `code` and missing `error` on redirect | `Configuration` | |
 | User cancelled the browser | `Recoverable`, cause `UserCancelled` | Pending request wiped. Never retried automatically. |
 | The browser could not verify the redirect's `https` host as this app's App Link (Auth Tab `RESULT_VERIFICATION_FAILED` / `TIMED_OUT`) | `Configuration`, detail `InvalidConfiguration` | Android only. Pending request wiped; a deployment mistake (`assetlinks.json`), not something a retry fixes. |

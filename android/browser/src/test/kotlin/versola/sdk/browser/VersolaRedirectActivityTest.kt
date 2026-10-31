@@ -23,9 +23,25 @@ import org.robolectric.Shadows.shadowOf
 import org.robolectric.android.controller.ActivityController
 import versola.oauth.core.BrowserOutcome
 import versola.oauth.core.BrowserSessionOptions
+import versola.oauth.core.VersolaInternalApi
+import versola.oauth.core.VersolaLogger
 
 private const val REDIRECT = "https://app.example.com/oauth"
 private const val AUTHORIZE = "https://id.example.com/authorize?response_type=code&state=s"
+
+/** What the flow hands its session: the redirect and the state of the request it waits for. */
+@OptIn(VersolaInternalApi::class)
+private fun awaiting(state: String?) = BrowserSessionOptions(ephemeral = false, redirectUri = REDIRECT, expectedState = state)
+
+private class NoteTaker : VersolaLogger {
+    val lines = mutableListOf<String>()
+    override fun info(message: String) {
+        lines += message
+    }
+    override fun warn(message: String) {
+        lines += message
+    }
+}
 
 /**
  * The exported redirect activity is reachable by an explicit intent from any app, which skips
@@ -39,6 +55,7 @@ class VersolaRedirectActivityTest {
 
     @Before
     fun drainPreviousSessions() {
+        RedirectDispatcher.nanoTime = System::nanoTime
         RedirectDispatcher.drain()
     }
 
@@ -182,6 +199,95 @@ class VersolaRedirectActivityTest {
         open("$REDIRECT?code=c&state=s")
 
         assertEquals("$REDIRECT?code=c&state=s", (login.await() as BrowserOutcome.Redirect).uri)
+    }
+
+    // ---- scenario 15: a redirect for the awaited URI whose state is not the request's ----
+
+    @Test
+    fun `a redirect for the awaited URI with another state is ignored, and so is one with none`() {
+        installLauncher()
+        val notes = NoteTaker()
+        var now = 0L
+        RedirectDispatcher.nanoTime = { now }
+        RedirectDispatcher.expect(REDIRECT, "s", notes)
+
+        for (junk in listOf("$REDIRECT?code=c&state=junk", "$REDIRECT?code=c", "$REDIRECT?code=c&state=", "$REDIRECT?code=c&state=ss", "$REDIRECT?code=c&state=S")) {
+            val controller = open(junk)
+
+            assertTrue("$junk: the activity still finishes", controller.get().isFinishing)
+            assertFalse("$junk: not delivered, so the cancel detector is not silenced", RedirectDispatcher.redirectDelivered)
+            assertNull("$junk: nothing reaches the waiter", takeNow())
+            assertNull("$junk: the app is not brought forward over the tab", shadowOf(application).nextStartedActivity)
+        }
+        // At most one line a second, counting what it leaves out: five intents in the same instant
+        // are one line, and a later one is another that says how many there were.
+        assertEquals(1, notes.lines.size)
+        assertTrue("no value of the URL in it: ${notes.lines}", notes.lines.none { "junk" in it || "app.example.com" in it })
+        now += 1_500_000_000L
+        open("$REDIRECT?code=c&state=junk")
+        assertEquals(2, notes.lines.size)
+        assertTrue("it counts: ${notes.lines.last()}", "(6 so far)" in notes.lines.last())
+
+        // The awaited state is delivered, whatever else the query carries.
+        open("$REDIRECT?code=c&state=s&iss=https%3A%2F%2Fid.example.com")
+        assertTrue(RedirectDispatcher.redirectDelivered)
+    }
+
+    @Test
+    fun `after a redirect with another state was ignored a user's dismissal still ends the login and the genuine redirect still completes one`() = runTest {
+        val session = CustomTabsAuthorizationSession(application)
+        shadowOf(application).checkActivities(false)
+        val host = Robolectric.buildActivity(Activity::class.java).setup()
+        val login = async { session.authorize(AUTHORIZE, awaiting("s")) }
+        runCurrent()
+        host.pause().stop()
+
+        // Another app, or a stale link, fires the public redirect URI at the exported activity.
+        open("$REDIRECT?code=c&state=junk")
+        runCurrent()
+        assertFalse("the login is still waiting", login.isCompleted)
+
+        // The user closes the tab: the detector was never silenced, so that return is a cancel.
+        host.start().resume()
+        runCurrent()
+        assertEquals(BrowserOutcome.UserCancelled, login.await())
+    }
+
+    @Test
+    fun `after a redirect with another state was ignored the genuine one completes the login`() = runTest {
+        val session = CustomTabsAuthorizationSession(application)
+        shadowOf(application).checkActivities(false)
+        val login = async { session.authorize(AUTHORIZE, awaiting("s")) }
+        runCurrent()
+
+        open("$REDIRECT?code=c&state=junk")
+        open("$REDIRECT?code=c&state=another")
+        runCurrent()
+        assertFalse(login.isCompleted)
+        open("$REDIRECT?code=c&state=s")
+
+        assertEquals("$REDIRECT?code=c&state=s", (login.await() as BrowserOutcome.Redirect).uri)
+    }
+
+    @Test
+    fun `a login that names no state, an end-session leg, takes every redirect for its URI as before`() = runTest {
+        val session = CustomTabsAuthorizationSession(application)
+        val leg = async { session.authorize(AUTHORIZE, awaiting(null)) }
+        runCurrent()
+
+        open("$REDIRECT?state=whatever")
+
+        assertTrue(leg.await() is BrowserOutcome.Redirect)
+    }
+
+    @Test
+    fun `a new login forgets the previous one's awaited state`() {
+        RedirectDispatcher.expect(REDIRECT, "old")
+        RedirectDispatcher.drain()
+
+        open("$REDIRECT?code=c&state=anything")
+
+        assertTrue(RedirectDispatcher.redirectDelivered)
     }
 
     @Test
