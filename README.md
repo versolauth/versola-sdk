@@ -8,7 +8,7 @@ for iOS, with a Flutter (Dart) binding, and works with any standards-conforming 
 as Keycloak or Ory Hydra. If you use AppAuth today, it is an alternative that also does token
 refresh coordination, secure storage and ID-token signature validation for you.
 
-Documentation: <https://docs.versola.io>.
+Documentation: <https://docs.versola.io/sdk/overview>.
 
 ## Quick facts
 
