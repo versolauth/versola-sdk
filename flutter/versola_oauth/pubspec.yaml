@@ -2,7 +2,7 @@ name: versola_oauth
 description: >-
   Flutter binding of the Versola generic OAuth 2.0 / OpenID Connect SDK: a Pigeon bridge over
   the native Android and iOS facades. No protocol logic in Dart.
-version: 0.1.0
+version: 0.2.0
 repository: https://github.com/versolauth/versola-sdk
 # Publishing from the monorepo is dormant (release.yml); do not add a publish_to that enables it.
 
