@@ -512,9 +512,8 @@ class OAuthClientTest {
         assertTrue(requests.none { it.url.encodedPath == "/token" })
         assertNull(client.claims)
         assertTrue("nothing failed", logger.warnings.none { it.contains("failed") })
-        // The request is still there: a later process finds it and resumes.
-        OAuthClient.forgetAll()
-        assertEquals(SessionState.Authorizing, client(killed.configuration).sessionState.first())
+        // That the request is still stored is the flow's own test (`clears` stays 0); a second client
+        // here would start a second resume that outlives the test and holds the process-wide lock.
     }
 
     @Test
