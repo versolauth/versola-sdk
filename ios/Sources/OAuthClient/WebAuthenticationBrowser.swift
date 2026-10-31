@@ -4,23 +4,38 @@ import Foundation
 /// A redirect handed over by the app for an authorization this process did not start, with room
 /// for those that arrive before anyone is waiting: a cold-started process is handed the redirect
 /// before the resume has read the request it answers, and may be handed others (a stale link,
-/// another app) before or after it. They are kept in arrival order, up to `capacity`, the oldest
-/// dropped first, and the flow reads them against the request: the one that carries its `state`
-/// answers it and the others are stepped over. One waiter.
+/// another app) before or after it. They are kept in arrival order, up to `capacity`, and the flow
+/// reads them against the request: the one that carries its `state` answers it and the others are
+/// stepped over. One waiter.
+///
+/// When more arrive than fit, the oldest is dropped, except the first URL this process was ever
+/// handed while nothing waited: that is the one that started it (a Universal Link or a custom
+/// scheme opened against a terminated app), the likeliest to be the genuine response, and the
+/// others must not be able to push it out. The next oldest goes instead.
 actor PendingRedirects {
     static let capacity = 8
 
     private var buffered: [URL] = []
+    /// Whether `buffered[0]` is the launching URL, kept when the buffer overflows.
+    private var launchingFirst = false
+    private var sawFirst = false
     private var waiter: (id: Int, continuation: CheckedContinuation<URL, any Error>)?
     private var nextId = 0
 
     func deliver(_ url: URL) {
         if let waiter {
             self.waiter = nil
+            sawFirst = true
             waiter.continuation.resume(returning: url)
-        } else {
-            buffered.append(url)
-            if buffered.count > Self.capacity { buffered.removeFirst() }
+            return
+        }
+        if !sawFirst {
+            sawFirst = true
+            launchingFirst = true
+        }
+        buffered.append(url)
+        if buffered.count > Self.capacity {
+            if launchingFirst { buffered.remove(at: 1) } else { buffered.removeFirst() }
         }
     }
 
@@ -28,10 +43,14 @@ actor PendingRedirects {
     /// must not be mistaken for this one's.
     func drain() {
         buffered.removeAll()
+        launchingFirst = false
     }
 
     func next() async throws -> URL {
-        if !buffered.isEmpty { return buffered.removeFirst() }
+        if !buffered.isEmpty {
+            launchingFirst = false
+            return buffered.removeFirst()
+        }
         try Task.checkCancellation()
         nextId += 1
         let id = nextId
@@ -110,7 +129,7 @@ package final class WebAuthenticationBrowser: BrowserAuthorizationSession, Senda
         // A caller that was cancelled gets a cancellation, not an outcome it no longer wants.
         try Task.checkCancellation()
         let outcome = try Self.outcome(for: result.0, foreground: result.1, logger: logger).get()
-        return Self.ended(outcome, expectedState: options.expectedState, logger: logger)
+        return try Self.ended(outcome, expectedState: options.expectedState, logger: logger)
     }
 
     /// The redirect of an authorization this process did not start: whatever the app handed to
@@ -156,18 +175,21 @@ package final class WebAuthenticationBrowser: BrowserAuthorizationSession, Senda
     }
 
     /// What the session's own completion means when it carries a redirect that is not the response
-    /// to the login in progress (scenario 15). `ASWebAuthenticationSession` completes the moment its
-    /// page navigates to the callback URL, so the sheet is gone with that redirect: nothing can
+    /// to the request in progress (scenario 15). `ASWebAuthenticationSession` completes the moment
+    /// its page navigates to the callback URL, so the sheet is gone with that redirect: nothing can
     /// follow from it, no dismissal can be observed any more, and the genuine response cannot come
-    /// from it. Waiting on would leave a login that nobody can see or cancel, so it ends as the
-    /// user closing the sheet would end it (`userCancelled`, the request wiped) and not as a system
-    /// cancel, which an app retries silently. A URL another app opens reaches the SDK through
-    /// `handleRedirect`, not through the sheet, and the flow ignores it there.
-    static func ended(_ outcome: BrowserOutcome, expectedState: String?, logger: (any OAuthLogger)?) -> BrowserOutcome {
+    /// from it, so the wait cannot go on. It ends as a failure the app can see,
+    /// `configuration(.stateMismatch)`, and the pending request goes with it like for every failed
+    /// browser leg: a provider that drops or rewrites `state` must not look like the user cancelling,
+    /// and it is not a system cancel either, which an app retries silently and which would loop. A URL
+    /// another app opens reaches the SDK through `handleRedirect`, not through the sheet, and the
+    /// flow ignores it there.
+    static func ended(_ outcome: BrowserOutcome, expectedState: String?, logger: (any OAuthLogger)?) throws
+        -> BrowserOutcome {
         guard case .redirect(let url) = outcome, let expectedState,
               !AuthorizationResponseValidator.carries(url, state: expectedState) else { return outcome }
-        logger?.warn("the browser session ended with a redirect that is not the response to the login in progress; the login is over")
-        return .userCancelled
+        logger?.warn("the browser session ended with a redirect that is not the response to the request in progress; the request is over")
+        throw OAuthError.configuration(.stateMismatch)
     }
 
     /// `canceledLogin` is one code for two causes; `foreground` (read at the moment it arrived)

@@ -50,11 +50,12 @@ public enum OAuthError: Error, Sendable, Equatable {
     }
 
     public enum Configuration: Sendable, Equatable {
-        /// A redirect handed to `AuthorizationResponseValidator.validate` carried a `state` that is
-        /// not the pending request's. The flow no longer reports this for a waiting login: such a
-        /// redirect is not the awaited response and is ignored while the login keeps waiting
-        /// (`spec/state-machine.md`, scenario 15). The case stays because the validator keeps the
-        /// check and an app may already match on it.
+        /// A redirect carried a `state` that is not the pending request's, and the browser surface
+        /// itself (the `ASWebAuthenticationSession` completion) ended on it: nothing can follow from
+        /// it, the pending request is wiped, and a provider that drops or rewrites `state` stays a
+        /// visible failure rather than a cancel. A redirect that merely arrives while a login waits
+        /// is not an error of it: it is ignored (`spec/state-machine.md`, scenario 15).
+        /// `AuthorizationResponseValidator.validate` reports it too for a redirect handed to it directly.
         case stateMismatch
         case issuerMismatch(expected: String, received: String?)
         case malformedAuthorizationResponse

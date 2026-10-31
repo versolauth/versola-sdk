@@ -293,11 +293,17 @@ package actor AuthorizationFlow {
             let options = BrowserSessionOptions(
                 ephemeral: ephemeralBrowser, redirectURI: configuration.redirectUri, expectedState: pending.state
             )
-            let outcome: BrowserOutcome
+            // Bounded by what is left of the request's ten minutes, as a resume is: a code the
+            // provider issues does not outlive them, the sheet cannot outlive them either (the wait is
+            // cancelled, which dismisses it), and a redirect that is ignored while the login waits must
+            // not keep it waiting for ever (`spec/state-machine.md`, scenario 15).
+            let remaining = PendingAuthorizationRequest.maxAge - clock.now().timeIntervalSince(pending.createdAt)
+            let answered: BrowserOutcome?
             do {
                 // The user's time in the browser is not the SDK's retrying (`OperationBudget.paused`).
-                let first = try await OperationBudget.paused { try await browser.authorize(uri, options: options) }
-                outcome = try await belongingTo(pending, first: first)
+                answered = try await awaiting(pending, within: remaining) { [browser] in
+                    try await OperationBudget.paused { try await browser.authorize(uri, options: options) }
+                }
             } catch is CancellationError {
                 // The caller was cancelled, and on this platform that closed the sheet: the
                 // browser session's cancellation handler dismisses it, so no redirect can
@@ -310,12 +316,18 @@ package actor AuthorizationFlow {
                 await abandonLogin()
                 throw CancellationError()
             } catch {
-                // Launching or awaiting the browser failed outright (no browser available, say).
-                // Nothing is pending, so neither the request nor `authorizing` may survive: a
-                // later cold start would otherwise look resumable and wait for a redirect that
-                // can never arrive.
+                // Launching or awaiting the browser failed outright (no browser available, say, or
+                // the sheet ended on a redirect that is not the response: `stateMismatch`). Nothing
+                // is pending, so neither the request nor `authorizing` may survive: a later cold start
+                // would otherwise look resumable and wait for a redirect that can never arrive.
                 await abandonLogin()
                 throw error
+            }
+            guard let outcome = answered else {
+                // The request ran out while the sheet was up; the wait was cancelled, so the sheet
+                // is gone, and the slot goes with it.
+                await abandonLogin()
+                throw OAuthError.recoverable(.pendingRequestExpired)
             }
             return try await complete(outcome, pending: pending, metadata: metadata)
         }
@@ -358,7 +370,9 @@ package actor AuthorizationFlow {
             let remaining = PendingAuthorizationRequest.maxAge - now.timeIntervalSince(pending.createdAt)
             awaitingRedirect = true
             defer { awaitingRedirect = false }
-            guard let outcome = try await awaitRedirect(pending, within: remaining) else {
+            guard let outcome = try await awaiting(pending, within: remaining, start: {
+                try await OperationBudget.paused { try await self.browser.awaitPendingRedirect() }
+            }) else {
                 await abandonLogin()
                 throw OAuthError.recoverable(.pendingRequestExpired)
             }
@@ -366,14 +380,16 @@ package actor AuthorizationFlow {
         }
     }
 
-    /// The next redirect that answers `pending`, or nil when `seconds` pass first.
-    private func awaitRedirect(
-        _ pending: PendingAuthorizationRequest, within seconds: TimeInterval
+    /// The next redirect that answers `pending` once `start` has returned its first outcome (the
+    /// browser's own, or the next one handed to the app), or nil when `seconds` pass first.
+    private func awaiting(
+        _ pending: PendingAuthorizationRequest, within seconds: TimeInterval,
+        start: @escaping @Sendable () async throws -> BrowserOutcome
     ) async throws -> BrowserOutcome? {
         let nanoseconds = UInt64(max(seconds, 0) * 1_000_000_000)
         return try await withThrowingTaskGroup(of: BrowserOutcome?.self) { group in
             group.addTask {
-                let first = try await OperationBudget.paused { try await self.browser.awaitPendingRedirect() }
+                let first = try await start()
                 return try await self.belongingTo(pending, first: first)
             }
             group.addTask {
@@ -427,7 +443,13 @@ package actor AuthorizationFlow {
                 // match. The provider is not told of it, so nothing is expected to arrive there: the
                 // page ends the provider's session, the user dismisses it, `sessionEnded` is false.
                 let callback = postLogoutRedirectUri ?? configuration.redirectUri
-                outcome = try await OperationBudget.paused { try await browser.authorize(uri, options: BrowserSessionOptions(redirectURI: callback)) }
+                let options = BrowserSessionOptions(redirectURI: callback, expectedState: expectedState)
+                // Only a redirect carrying this request's `state` answers it, as for a login: another
+                // one is ignored and the wait goes on, for the provider's page or the user closing it.
+                // A sheet that ended on a redirect that is not the answer throws `stateMismatch`,
+                // which is "not acknowledged" like every failure here.
+                let first = try await OperationBudget.paused { try await browser.authorize(uri, options: options) }
+                outcome = try await awaitingState(expectedState, first: first)
             } catch is CancellationError {
                 throw CancellationError()
             } catch {
@@ -435,10 +457,9 @@ package actor AuthorizationFlow {
                 // which is exactly what the return value says.
                 return false
             }
-            guard case .redirect(let url) = outcome, let state = AuthorizationResponseValidator.stateOf(url) else {
-                return false
-            }
-            return SecureTokens.constantTimeEquals(expectedState, state)
+            // Whatever reached here carries this request's `state` or is a dismissal.
+            guard case .redirect = outcome else { return false }
+            return true
         }
     }
 
@@ -459,17 +480,32 @@ package actor AuthorizationFlow {
     /// against the request the resume loaded. The comparison is constant-time.
     private func belongingTo(_ pending: PendingAuthorizationRequest, first: BrowserOutcome) async throws
         -> BrowserOutcome {
+        try await awaitingState(pending.state, first: first)
+    }
+
+    /// `belongingTo` for any request that carries a `state`: the authorization request, the
+    /// end-session request.
+    private func awaitingState(_ awaited: String, first: BrowserOutcome) async throws -> BrowserOutcome {
         var outcome = first
-        while !answers(outcome, pending: pending) {
-            logger?.warn("ignored a redirect that is not the response to the pending authorization request; still waiting for it")
+        var ignored = 0
+        var lastLoggedAt: Date?
+        while case .redirect(let url) = outcome, !AuthorizationResponseValidator.carries(url, state: awaited) {
+            ignored += 1
+            // At most one line a second, counting the ones it leaves out: a loop of redirects (a
+            // misbehaving page, another app) must not be a loop of log lines. It names no value of the
+            // URL, except the `error` code if the redirect carried one that is a plain token: a
+            // provider that answers a request with an error and no `state` is the one case where the
+            // app's developer needs to know why the login waits (`spec/providers.md`). Never the
+            // description, which is free text.
+            let now = clock.now()
+            if lastLoggedAt.map({ now.timeIntervalSince($0) >= 1 }) ?? true {
+                lastLoggedAt = now
+                let code = AuthorizationResponseValidator.errorCode(of: url).map { ", error=\($0)" } ?? ""
+                logger?.warn("ignored a redirect that is not the response to the request in progress (\(ignored) so far\(code)); still waiting for it")
+            }
             outcome = try await OperationBudget.paused { try await browser.awaitPendingRedirect() }
         }
         return outcome
-    }
-
-    private func answers(_ outcome: BrowserOutcome, pending: PendingAuthorizationRequest) -> Bool {
-        guard case .redirect(let url) = outcome else { return true }
-        return AuthorizationResponseValidator.carries(url, state: pending.state)
     }
 
     private func complete(

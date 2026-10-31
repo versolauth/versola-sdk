@@ -1,3 +1,4 @@
+import os
 import XCTest
 @testable import OAuthCore
 
@@ -189,7 +190,7 @@ final class AuthorizationFlowTests: XCTestCase {
         let opened = await browser.opened
         XCTAssertEqual(opened.count, 1, "no second login, no second browser")
         let lines = logger.all
-        XCTAssertEqual(lines.count, 2)
+        XCTAssertEqual(lines.count, 1, "two ignored in the same instant are one line")
         let stored = await f.store.stored
         XCTAssertFalse(
             lines.contains { $0.contains("forged") || $0.contains(grant.state) || $0.contains("example.com") },
@@ -317,6 +318,148 @@ final class AuthorizationFlowTests: XCTestCase {
         XCTAssertEqual(grant.code, "code-1")
         let awaits = await browser.awaitCalls
         XCTAssertEqual(awaits, 26)
+    }
+
+    func testIgnoredRedirectsAreLoggedAtMostOncePerSecondCountingTheOnesTheLineLeavesOut() async throws {
+        let logger = LoggedLines()
+        let calls = Box(0)
+        let clock = Clock(now: { AuthzKit.now.addingTimeInterval(Double(Self.offset.withLock { $0 })) })
+        let hub = SessionStateHub()
+        let browser = ScriptedBrowser(
+            onAuthorize: { uri, _ in .redirect(AuthzKit.redirect(answering: uri, state: "stranger-0")) },
+            onAwait: { opened in
+                let n = await calls.value + 1
+                await calls.set(n)
+                // A second and a half passes between the third ignored redirect and the fourth.
+                if n == 3 { Self.offset.withLock { $0 = 1.5 } }
+                if n <= 4 { return .redirect(AuthzKit.redirect(answering: opened.last!, state: "stranger-\(n)")) }
+                return .redirect(AuthzKit.redirect(answering: opened.last!))
+            }
+        )
+        Self.offset.withLock { $0 = 0 }
+        let discovery = DiscoveryService(
+            issuer: AuthzKit.issuer, client: StaticDiscoveryClient(metadata: AuthzKit.metadata()), cache: MemoryMetadataCache())
+        let flow = AuthorizationFlow(
+            configuration: AuthzKit.configuration, discovery: discovery, pendingStore: MemoryPendingStore(), browser: browser,
+            states: hub, clock: clock, logger: logger
+        )
+
+        _ = try await flow.authorize(scopes: ["openid"])
+
+        let lines = logger.all
+        XCTAssertEqual(lines.count, 2, "\(lines)")
+        XCTAssertTrue(lines[0].contains("(1 so far"), lines[0])
+        XCTAssertTrue(lines[1].contains("(4 so far"), lines[1])
+    }
+
+    private static let offset = OSAllocatedUnfairLock(initialState: 0.0)
+
+    func testTheLogLineCarriesTheErrorCodeOfAnIgnoredProviderErrorNeverItsDescription() async {
+        // A provider that answers with an error and no state: nothing to match it with, so it is
+        // ignored, and the one thing the developer needs is why the login waits.
+        let logger = LoggedLines()
+        let calls = Box(0)
+        let browser = ScriptedBrowser(
+            onAuthorize: { _, _ in .redirect(URL(string: AuthzKit.redirect + "?error=access_denied&error_description=the+user+said+SECRET+words")!) },
+            onAwait: { _ in
+                let n = await calls.value + 1
+                await calls.set(n)
+                if n == 1 { return .redirect(URL(string: AuthzKit.redirect + "?error=%3Cscript%3Ealert(1)%3C%2Fscript%3E&state=other")!) }
+                return .userCancelled
+            }
+        )
+        let f = fixture(browser: browser, logger: logger)
+        await assertAuthorizeFails(.recoverable(.userCancelled), f)
+        let lines = logger.all
+        XCTAssertEqual(lines.count, 1)
+        XCTAssertTrue(lines[0].contains("error=access_denied"), lines[0])
+        XCTAssertFalse(lines[0].contains("SECRET") || lines[0].contains("script"), lines[0])
+    }
+
+    // MARK: A login that waits is bounded by its request's ten minutes
+
+    /// A clock that reads `creation` when the request is built and `later` from then on.
+    private func ticking(creation: Date, later: Date) -> Clock {
+        let calls = OSAllocatedUnfairLock(initialState: 0)
+        return Clock(now: { calls.withLock { n in defer { n += 1 }; return n == 0 ? creation : later } })
+    }
+
+    private func flowWith(clock: Clock, browser: BrowserAuthorizationSession, hasStoredGrant: Bool = false) -> Fixture {
+        let hub = SessionStateHub()
+        let store = MemoryPendingStore()
+        let discovery = DiscoveryService(
+            issuer: AuthzKit.issuer, client: StaticDiscoveryClient(metadata: AuthzKit.metadata()), cache: MemoryMetadataCache())
+        let flow = AuthorizationFlow(
+            configuration: AuthzKit.configuration, discovery: discovery, pendingStore: store, browser: browser,
+            states: hub, clock: clock, hasStoredGrant: { hasStoredGrant }
+        )
+        return Fixture(flow: flow, store: store, hub: hub)
+    }
+
+    func testALoginWhoseSheetNeverAnswersEndsWithTheRequestsExpiryAndTheSlotWiped() async {
+        let sleeping = ScriptedBrowser(onAuthorize: { _, _ in
+            try await Task.sleep(nanoseconds: 3_600_000_000_000)
+            throw CancellationError()
+        })
+        let clock = ticking(creation: AuthzKit.now, later: AuthzKit.now.addingTimeInterval(PendingAuthorizationRequest.maxAge - 0.05))
+        let f = flowWith(clock: clock, browser: sleeping)
+
+        await assertAuthorizeFails(.recoverable(.pendingRequestExpired), f)
+
+        let stored = await f.store.stored
+        let state = await f.hub.current
+        let inFlight = await f.flow.authorizationInFlight
+        XCTAssertNil(stored)
+        XCTAssertEqual(state, .unauthenticated)
+        XCTAssertFalse(inFlight)
+    }
+
+    func testALoginThatKeepsBeingHandedRedirectsThatAreNotItsResponseEndsTheSameWay() async {
+        let browser = ScriptedBrowser(
+            onAuthorize: { uri, _ in .redirect(AuthzKit.redirect(answering: uri, state: "stranger")) },
+            onAwait: { opened in
+                try await Task.sleep(nanoseconds: 10_000_000)
+                return .redirect(AuthzKit.redirect(answering: opened.last!, state: "stranger"))
+            }
+        )
+        let clock = ticking(creation: AuthzKit.now, later: AuthzKit.now.addingTimeInterval(PendingAuthorizationRequest.maxAge - 0.1))
+        let f = flowWith(clock: clock, browser: browser)
+
+        await assertAuthorizeFails(.recoverable(.pendingRequestExpired), f)
+
+        let stored = await f.store.stored
+        XCTAssertNil(stored)
+    }
+
+    func testALoginThatExpiresOverAStoredGrantSettlesAuthenticated() async {
+        let sleeping = ScriptedBrowser(onAuthorize: { _, _ in
+            try await Task.sleep(nanoseconds: 3_600_000_000_000)
+            throw CancellationError()
+        })
+        let clock = ticking(creation: AuthzKit.now, later: AuthzKit.now.addingTimeInterval(PendingAuthorizationRequest.maxAge))
+        let f = flowWith(clock: clock, browser: sleeping, hasStoredGrant: true)
+        await assertAuthorizeFails(.recoverable(.pendingRequestExpired), f)
+        let state = await f.hub.current
+        XCTAssertEqual(state, .authenticated)
+    }
+
+    func testALoginAnsweredInTimeIsNotTouchedByTheBound() async throws {
+        let clock = ticking(creation: AuthzKit.now, later: AuthzKit.now.addingTimeInterval(PendingAuthorizationRequest.maxAge - 1))
+        let f = flowWith(clock: clock, browser: ScriptedBrowser.answering())
+        let grant = try await f.flow.authorize(scopes: ["openid"])
+        XCTAssertEqual(grant.code, "code-1")
+    }
+
+    // MARK: A sheet that ended on a redirect that is not the response
+
+    func testASheetThatEndedOnAForeignStateFailsTheLoginAsAStateMismatchAndWipesTheRequest() async {
+        // What `WebAuthenticationBrowser` reports when its own session completes with it.
+        let f = fixture(browser: ScriptedBrowser.failing(OAuthError.configuration(.stateMismatch)))
+        await assertAuthorizeFails(.configuration(.stateMismatch), f)
+        let stored = await f.store.stored
+        let state = await f.hub.current
+        XCTAssertNil(stored)
+        XCTAssertEqual(state, .unauthenticated)
     }
 
     // MARK: Discovery-driven checks
@@ -861,13 +1004,50 @@ final class AuthorizationFlowTests: XCTestCase {
         XCTAssertFalse(options.ephemeral)
     }
 
-    func testEndSessionIsFalseForAWrongOrMissingState() async throws {
-        let (wrong, _) = endSessionFlow { _, _ in .redirect(URL(string: "\(AuthzKit.postLogout)?state=forged")!) }
-        let a = try await wrong.flow.endSession(idTokenHint: nil)
-        XCTAssertFalse(a)
-        let (missing, _) = endSessionFlow { _, _ in .redirect(URL(string: AuthzKit.postLogout)!) }
-        let b = try await missing.flow.endSession(idTokenHint: nil)
-        XCTAssertFalse(b)
+    func testARedirectForThePostLogoutUriWithAnotherOrNoStateIsIgnoredAndTheSignOutWaitsForTheRealOne() async throws {
+        let told = Box<String?>(nil)
+        let calls = Box(0)
+        let browser = ScriptedBrowser(
+            onAuthorize: { _, options in
+                await told.set(options.expectedState)
+                return .redirect(URL(string: "\(AuthzKit.postLogout)?state=forged")!)
+            },
+            onAwait: { opened in
+                let n = await calls.value + 1
+                await calls.set(n)
+                if n == 1 { return .redirect(URL(string: AuthzKit.postLogout)!) }
+                let state = AuthorizationResponseValidator.stateOf(opened[0])!
+                return .redirect(URL(string: "\(AuthzKit.postLogout)?state=\(state)")!)
+            }
+        )
+        let logger = LoggedLines()
+        let f = fixture(browser: browser, logger: logger)
+
+        let ended = try await f.flow.endSession(idTokenHint: nil)
+
+        XCTAssertTrue(ended, "the provider's own redirect acknowledged it")
+        let opened = await browser.opened
+        let awaited = await told.value
+        XCTAssertEqual(awaited, AuthorizationResponseValidator.stateOf(opened[0]), "the browser is told the state the sign-out sent")
+        XCTAssertEqual(logger.all.count, 1)
+    }
+
+    func testTheUserClosingTheSignedOutPageAfterAForeignRedirectWasIgnoredIsNotAcknowledged() async throws {
+        let browser = ScriptedBrowser(
+            onAuthorize: { _, _ in .redirect(URL(string: "\(AuthzKit.postLogout)?state=forged")!) },
+            onAwait: { _ in .userCancelled }
+        )
+        let f = fixture(browser: browser)
+        let ended = try await f.flow.endSession(idTokenHint: nil)
+        XCTAssertFalse(ended)
+        let awaited = await browser.awaitCalls
+        XCTAssertEqual(awaited, 1, "it waited on after the foreign redirect")
+    }
+
+    func testASignOutSheetThatEndedOnAForeignStateIsNotAcknowledgedAndThrowsNothing() async throws {
+        let (f, _) = endSessionFlow { _, _ in throw OAuthError.configuration(.stateMismatch) }
+        let ended = try await f.flow.endSession(idTokenHint: nil)
+        XCTAssertFalse(ended)
     }
 
     func testEndSessionWithoutAHintOmitsIt() async throws {
