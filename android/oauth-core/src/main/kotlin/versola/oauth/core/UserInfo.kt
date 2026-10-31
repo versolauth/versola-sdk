@@ -1,7 +1,6 @@
 package versola.oauth.core
 
 import java.io.IOException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
@@ -127,7 +126,7 @@ public class HttpUserInfoClient(
     private suspend fun attempt(url: String, accessToken: AccessToken): Outcome {
         val bound = accessToken.isDpopBound
 
-        return retrying(originOf(url)) { withContext(Dispatchers.IO) {
+        return retrying(originOf(url)) { withContext(SdkDispatchers.blocking) {
             // Built inside the repeated block: a DPoP proof is single-use (RFC 9449 section 11.1, a
             // resource server detects replay by `jti`), so every attempt carries a proof of its own.
             val builder = Request.Builder()

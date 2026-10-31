@@ -6,11 +6,11 @@ import androidx.datastore.core.handlers.ReplaceFileCorruptionHandler
 import java.io.File
 import kotlin.coroutines.cancellation.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.first
 import versola.oauth.core.CredentialKeyProvider
 import versola.oauth.core.CredentialStore
+import versola.oauth.core.SdkDispatchers
 import versola.oauth.core.VersolaError
 
 /**
@@ -36,7 +36,7 @@ import versola.oauth.core.VersolaError
 public class DataStoreCredentialStore(
     file: File,
     private val keyProvider: CredentialKeyProvider,
-    scope: CoroutineScope = CoroutineScope(Dispatchers.IO + SupervisorJob()),
+    scope: CoroutineScope = CoroutineScope(SdkDispatchers.blocking + SupervisorJob()),
 ) : CredentialStore {
 
     private val dataStore: DataStore<CredentialBlob> = DataStoreFactory.create(

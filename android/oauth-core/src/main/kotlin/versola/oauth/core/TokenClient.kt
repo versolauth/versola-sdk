@@ -1,7 +1,6 @@
 package versola.oauth.core
 
 import java.io.IOException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -299,7 +298,7 @@ public class TokenRequestExecutor(
         idempotencyKey?.let { builder.header("Idempotency-Key", it) }
         if (htu != null) builder.header("DPoP", checkNotNull(dpop).proof("POST", htu))
 
-        return withContext(Dispatchers.IO) {
+        return withContext(SdkDispatchers.blocking) {
             try {
                 httpClient.newCall(builder.build()).execute().use { response ->
                     val payload = response.body.string()
@@ -335,7 +334,7 @@ public class TokenRequestExecutor(
             .header("Accept", "application/json")
             .post(body.toRequestBody(FORM_MEDIA_TYPE))
         if (htu != null) builder.header("DPoP", checkNotNull(dpop).proof("POST", htu))
-        withContext(Dispatchers.IO) {
+        withContext(SdkDispatchers.blocking) {
             try {
                 httpClient.newCall(builder.build()).execute().use { response ->
                     if (response.isSuccessful) return@use

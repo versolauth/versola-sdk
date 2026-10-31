@@ -45,5 +45,5 @@ dependencies {
     implementation("androidx.test.ext:junit:1.3.0")
     // UI Automator drives Chrome, which is another app: Espresso cannot. Apache-2.0, Google,
     // released from the androidx.test repository.
-    implementation("androidx.test.uiautomator:uiautomator:2.3.0")
+    implementation("androidx.test.uiautomator:uiautomator:2.4.0")
 }

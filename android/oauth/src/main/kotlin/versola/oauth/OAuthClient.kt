@@ -4,7 +4,6 @@ import android.content.Context
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -39,6 +38,7 @@ import versola.oauth.core.ProviderMetadata
 import versola.oauth.core.ProviderMetadataCache
 import versola.oauth.core.PushedAuthorizationStarter
 import versola.oauth.core.RefreshTokenPolicy
+import versola.oauth.core.SdkDispatchers
 import versola.oauth.core.SessionCoordinator
 import versola.oauth.core.SessionState
 import versola.oauth.core.TokenBinding
@@ -243,9 +243,12 @@ public class OAuthClient private constructor(
      * of the app is safe. Errors arrive as [VersolaHttpException], because an interceptor may
      * raise nothing else without crashing an enqueued call; [call] unwraps them.
      *
-     * It blocks the calling thread while it waits for the token, a refresh included. Use `enqueue`
-     * or [call]; do not `execute()` many calls at once on `Dispatchers.IO`, whose threads the
-     * refresh itself needs, or they can hold all of them and hang the process.
+     * It blocks the calling thread while it waits for the token, a refresh included, so use `enqueue`
+     * or [call] where a thread is dear. `execute()` is safe from any thread that may block, a
+     * coroutine on `Dispatchers.IO` included, however many callers wait on one refresh: the refresh
+     * does its own work (the token request, discovery, the key set, storage, the DPoP key) on a
+     * dispatcher of the SDK's, so callers that have parked every thread of `Dispatchers.IO` cannot
+     * starve it. Each blocked caller still holds its own thread until the answer is in.
      */
     public fun interceptor(origins: Set<String> = configuration.protectedOrigins): Interceptor =
         VersolaInterceptor(coordinator, scopeOf(origins), proofs)
@@ -265,13 +268,13 @@ public class OAuthClient private constructor(
      * One authenticated call through [authenticatedClient], with the error taxonomy raised as itself.
      *
      * The call blocks a thread for its whole duration (OkHttp's `execute()`, and inside it the
-     * interceptor waits for the access token), and that thread is not one of `Dispatchers.IO`'s
-     * default view: the refresh such a call waits for dispatches its token request and its storage
-     * reads there, and 64 calls parked on `Dispatchers.IO` itself would hold every thread of it and
-     * starve the refresh they wait for, hanging the process. See [BLOCKING_CALLS].
+     * interceptor waits for the access token). That thread comes from a view of `Dispatchers.IO` with a
+     * quota of its own, 64 calls at most and the rest queued, so a burst of calls neither takes the
+     * threads the app's own work shares nor waits on them; what the refresh behind them needs runs
+     * on a dispatcher of the SDK's own.
      */
     public suspend fun call(request: Request, origins: Set<String> = configuration.protectedOrigins): Response =
-        withContext(BLOCKING_CALLS) {
+        withContext(SdkDispatchers.blockedCalls) {
             try {
                 authenticatedClient(origins).newCall(request).execute()
             } catch (e: VersolaHttpException) {
@@ -292,14 +295,6 @@ public class OAuthClient private constructor(
 
     public companion object {
         private val clients = ConcurrentHashMap<String, OAuthClient>()
-
-        /**
-         * Where [call] blocks. A view of `Dispatchers.IO` with a quota of its own, which `limitedParallelism`
-         * makes independent of the 64 threads the default view is capped at: the calls parked here, 64 of
-         * them at most, leave that view free for the refresh they are waiting on. Beyond 64 they queue,
-         * and queue behind nothing that needs them.
-         */
-        private val BLOCKING_CALLS: CoroutineDispatcher = Dispatchers.IO.limitedParallelism(64)
 
         /**
          * Where a cold-started process finishes the sign-in its redirect answers. The process,

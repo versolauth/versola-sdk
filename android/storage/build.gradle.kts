@@ -47,6 +47,9 @@ kotlin {
     compilerOptions {
         // Java 17 bytecode for consumers, whatever JDK runs the build (develop.md: 21).
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+        // The stores run their blocking work on the SDK's own dispatcher (SdkDispatchers), which sits
+        // behind the marker for the benefit of the modules of this repository.
+        optIn.add("versola.oauth.core.VersolaInternalApi")
     }
     explicitApi()
 }
