@@ -110,6 +110,25 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.ref_name }}
 
+      # An app built the way a customer's is, from that same unzipped bundle used as a local Maven
+      # repository, before anything is uploaded: Central releases are immutable, and until now the
+      # first build of a consumer against a release was verify-release.yml, after the publication.
+      # io.versola resolves from the bundle and from nothing else; Google and Maven Central serve
+      # the third-party dependencies and the plugins. The app resolves oauth-android and the five
+      # modules it names at the tag, by their Gradle metadata and by their POMs, and assembles. A
+      # failure stops the job before the upload. It needs no key (the signatures are Central's to
+      # verify) and cannot show that Central accepts or serves the bundle: verify-release.yml does
+      # that afterwards. No such check is possible for the Swift package or the Flutter plugin:
+      # the first is built at the tag by the swiftpm job this one waits for, the second resolves the tag by
+      # git, which does not exist before it is pushed. The step uses the JDK and the Android
+      # platform installed above; the script is at the repository root (working-directory), and
+      # the bundle is the one unzipped by the previous step.
+      - name: Build a consumer app against the bundle
+        working-directory: .
+        run: tools/verify-consumer/android-bundle.sh "$RUNNER_TEMP/bundle" "$RELEASE_TAG"
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+
       # The files the provenance job below attests: the AARs and JARs of the bundle, which are the
       # bytes Central serves. Handed over as an artifact so that the job holding the signing key and
       # the Portal token does not also hold `id-token` and `attestations` write.

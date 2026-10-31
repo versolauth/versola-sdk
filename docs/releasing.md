@@ -66,8 +66,9 @@ the products are gone, `VersolaOAuth` is the only one.
   which is what a published plugin needs; it also removes that computation.
 - `tools/verify-consumer/` and `verify-release.yml`: before the upload, `release.yml` checks the signed
   bundle (`check-bundle.sh`: every module present with sources and javadoc, checksums and a signature
-  beside every file, every POM naming the tag and only modules that are in the bundle); after the tag, throwaway apps outside the
-  repository install what was published (below, step 6). `android.sh X.Y.Z` builds an app with
+  beside every file, every POM naming the tag and only modules that are in the bundle) and builds a
+  throwaway Android app against it (`android-bundle.sh`, below, step 5); after the tag, throwaway apps
+  outside the repository install what was published (below, step 6). `android.sh X.Y.Z` builds an app with
   `mavenCentral()` and `google()` only against `io.versola:oauth-android:X.Y.Z`; `ios.sh X.Y.Z` builds a
   SwiftPM package that depends on the public repository at exactly that tag, for the simulator;
   `flutter.sh X.Y.Z` builds an app that takes `versola_oauth` as a git dependency at the tag, for Android
@@ -152,7 +153,15 @@ deployment can be dropped, rather than on Central.
    ```
 
    The Gradle task is the only thing between the sources and what is signed: check the list of
-   artefacts against the table above.
+   artefacts against the table above. To see what step 5 will see, unzip it and run the checks on
+   the directory (`develop.md`, "What a consumer installs"):
+
+   ```bash
+   bundle="$(mktemp -d)" && unzip -q build/central-bundle/versola-X.Y.Z.zip -d "$bundle"
+   cd .. && tools/verify-consumer/android-bundle.sh "$bundle" X.Y.Z
+   ```
+
+   (`check-bundle.sh` also reports the missing signatures of an unsigned bundle, as it should.)
 4. **Tag**, from the merged commit on `main`: `git tag X.Y.Z && git push origin X.Y.Z`. This is the
    maintainer's act and starts `release.yml`, which creates the GitHub release when the Android bundle
    has validated and the Swift package has built. A run that fails leaves the tag and no release: fix
@@ -163,8 +172,20 @@ deployment can be dropped, rather than on Central.
 5. **Central.** `maven-central` runs the tests, builds the signed bundle, **checks it**
    (the zip is unzipped and `check-bundle.sh` wants all six modules with sources and javadoc, checksums and
    a `.asc` beside every artefact file, and every POM naming the tag and only modules that are in the
-   bundle; a failure stops the job before anything is uploaded, so the Publish click below is on a
-   checked artefact), uploads it as
+   bundle), then **builds a consumer from it**: `android-bundle.sh` generates the same throwaway Android
+   app as `android.sh` (outside the repository, `compileSdk` 37, one dependency,
+   `io.versola:oauth-android:X.Y.Z`) with the unzipped bundle as a local Maven repository for
+   `io.versola` and as the only place that group can come from, and Google and Maven Central for the
+   third-party dependencies and the plugins. It resolves `oauth-android` and the five modules it names
+   at the tag twice, by their Gradle metadata and by their POMs alone, and runs `assembleDebug`. A
+   failure of either step stops the job before anything is uploaded, so the Publish click below is on a
+   checked artefact. What this proves is that a consumer resolves and compiles the SDK from these files
+   exactly as it will from Central. It does not prove that the signatures verify (the check above looks
+   for their presence; Central verifies them), nor that Central accepts the bundle and serves it: only
+   `verify-release.yml` after the publication shows that (step 6). The iOS and Flutter packages have no
+   such step: the `swiftpm` job, which `maven-central` waits for, already builds the tag from a clean
+   checkout before the upload, and the Flutter plugin resolves the tag by git, which does not exist
+   before the tag is pushed. The job then uploads it as
    `USER_MANAGED` (or `AUTOMATIC`, below) and waits for validation. A rejected bundle fails the job. A validated one waits in
    the Portal: look at it, then publish it there (or drop it). Central releases are immutable: a
    published version is never replaced, only superseded. Once a `USER_MANAGED` release has gone
