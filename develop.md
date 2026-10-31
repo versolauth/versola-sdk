@@ -222,11 +222,23 @@ tools/verify-consumer/android.sh 0.1.0   # app with mavenCentral() + google() on
 tools/verify-consumer/ios.sh 0.1.0       # SwiftPM package on the public repository at exactly 0.1.0, product VersolaOAuth, xcodebuild for the iOS simulator
 tools/verify-consumer/flutter.sh 0.1.0   # flutter create + versola_oauth as a git dependency at that ref, flutter build apk and (macOS) ios
 tools/verify-consumer/check-bundle.sh "$bundle" X.Y.Z   # an unzipped Central bundle: six modules, sources and javadoc, checksums, a .asc per file, POMs naming the version
+tools/verify-consumer/android-bundle.sh "$bundle" X.Y.Z # the android.sh app against that bundle (io.versola from it only), before anything is published
 ```
 
-`check-bundle.sh` is how `release.yml` checks the signed bundle before uploading it: build one with
-`./gradlew centralBundle -PreleaseVersion=9.9.9 -PallowUnsignedBundle`, `unzip` it somewhere and run
-the script on the directory; it reports the unsigned files, as it should for that bundle.
+`check-bundle.sh` and `android-bundle.sh` are how `release.yml` checks the signed bundle before
+uploading it. `check-bundle.sh` is static (files, checksums, signatures present, POMs).
+`android-bundle.sh` builds the throwaway app of `android.sh` against the unzipped bundle, which is
+the only repository for `io.versola` (Google and Maven Central serve the rest), so it needs JDK 21
+and `ANDROID_HOME` and no key. Build an unsigned bundle for a throwaway version, unzip it somewhere
+and run both on the directory (`check-bundle.sh` reports the unsigned files, as it should for that
+bundle; `android-bundle.sh` does not look at signatures):
+
+```bash
+(cd android && ./gradlew centralBundle -PreleaseVersion=9.9.9 -PallowUnsignedBundle)
+bundle="$(mktemp -d)" && unzip -q android/build/central-bundle/versola-9.9.9.zip -d "$bundle"
+tools/verify-consumer/check-bundle.sh "$bundle" 9.9.9
+tools/verify-consumer/android-bundle.sh "$bundle" 9.9.9
+```
 
 `flutter.sh` takes any git ref and finds Flutter in `~/fvm/versions/<pinned>` when it is not on
 `PATH`; `VERIFY_KEEP=1` keeps the generated app for a look. The Android and iOS scripts take a
