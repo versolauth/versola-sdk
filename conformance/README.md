@@ -347,8 +347,10 @@ What each test asserts, and runs:
   terminated app that the redirect cold-starts: the restored request survives, in this process and
   the next. On Android an intent for a URI that is not the redirect at all is ignored the same
   way (Custom Tabs leg). A redirect that ends the browser surface itself (an Auth Tab result, an
-  `ASWebAuthenticationSession` completion) cannot be produced by a third party and is proven one
-  tier down only (`ended(_:expectedState:logger:)` on iOS, the trampoline's result on Android).
+  `ASWebAuthenticationSession` completion) is a `Configuration(StateMismatch)` failure; only the
+  provider's own page can produce it, so it is proven one tier down only
+  (`ended(_:expectedState:logger:)` on iOS, the trampoline's result on Android). The expiry bound
+  and the sign-out's use of the same rule are unit-tier too.
 
 What it does not prove, and why (each is also a row in the PR's "Gaps left"):
 

@@ -121,9 +121,10 @@ final class ConfigurationError extends OAuthError {
 }
 
 enum ConfigurationDetail {
-  /// Reserved: the native flow no longer reports it for a waiting login, which ignores a redirect
-  /// whose `state` is not its request's (`spec/state-machine.md`, scenario 15). Kept because the
-  /// native error types keep the case.
+  /// The browser surface itself ended on a redirect whose `state` is not the request's, and the
+  /// pending request was wiped (`spec/state-machine.md`, scenario 15). A redirect that merely
+  /// arrives while a login waits is not reported: it is ignored. A provider that drops or rewrites
+  /// `state` ends up here.
   stateMismatch,
   issuerMismatch,
   malformedAuthorizationResponse,

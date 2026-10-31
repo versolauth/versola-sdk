@@ -22,22 +22,24 @@ assertions:
   - "No request reaches the token endpoint for the redirect whose state is not the persisted one, nor for one with no state."
   - "The login does not fail and `StateMismatch` is not surfaced; the session state stays Authorizing and the caller keeps waiting."
   - "The pending request is kept, unchanged: the state, the code verifier and the nonce persisted before the browser opened are the ones the genuine redirect is validated against."
-  - "The comparison is constant-time, and the log line that records the ignored redirect carries neither the state nor any other value of the URL."
+  - "The comparison is constant-time. The log line that records an ignored redirect is written at most once a second, counts the ones it leaves out, and carries neither the state nor any other value of the URL; the one exception is the redirect's error code when it is a plain token of at most 64 characters, never its description."
   - "The ignored redirect starts no second login and no second waiter: the number of browser sessions opened and of callers waiting is what it was before it arrived."
   - "A redirect carrying the correct state afterwards is honoured and completes the login, whether it arrives in the same process or in a cold-started one."
   - "A cold-started process that finds redirects buffered before it read the pending request skips every buffered redirect whose state is not the persisted one and validates the first that is, if any; the wait then continues for as long as the request lives."
   - "A redirect with the correct state is still validated in full: a wrong or missing `iss` (scenario 16) or a response with neither `code` nor `error` fails the login as before, and an `error` carrying the correct state is the provider's answer."
-  - "The dismissal of the browser by the user still ends the wait as UserCancelled after a redirect was ignored (Android: the cancel detection is not silenced by it); the wait ends at the latest when the pending request expires, ten minutes after it was persisted."
+  - "The dismissal of the browser by the user still ends the wait as UserCancelled after a redirect was ignored (Android: the cancel detection is not silenced by it)."
+  - "The wait ends at the latest when the pending request expires, ten minutes after it was persisted, for a login with its browser up as for a resume: Recoverable(PendingRequestExpired), the pending request wiped, the sheet dismissed where the SDK can."
+  - "A provider error response that carries no state is ignored like any redirect without one: the login keeps waiting, and the log line names the error code."
+  - "When the browser surface itself ends on a redirect whose state is not the persisted one (an Auth Tab result, an ASWebAuthenticationSession completion), the login fails as Configuration(StateMismatch) with no token request and the pending request wiped; it is neither UserCancelled nor SystemCancelled."
+  - "The sign-out applies the same rule to the state it sent: a redirect for the post-logout URI with another state, or none, is ignored and the wait goes on; only the redirect with that state reports the provider's session as ended."
 notes: >
   Replaces the earlier rule, which failed the login as Configuration(StateMismatch) and wiped the
   pending request. The redirect URI is public (the app's manifest or associated domains name it),
   so any other app or an old link can fire it at the SDK; a redirect that is not the response to
   the request in progress must not be able to end that request. Only a redirect carrying the
-  persisted state completes or fails the login. StateMismatch is still what
-  AuthorizationResponseValidator reports for a redirect it is handed directly, which the SDK's
-  flow no longer does for a waiting login. When the browser surface that delivered the
-  non-matching redirect has itself ended (iOS: the ASWebAuthenticationSession completion; Android:
-  an Auth Tab result) nothing can follow from it and no dismissal can be observed any more: the
-  login ends as UserCancelled and the pending request is wiped (spec/state-machine.md, the
-  cancel table). The device tier proves the part no JVM or macOS run models, in
-  android/conformance-browser and ios/BrowserLegHost.
+  persisted state completes or fails the login. StateMismatch is produced in exactly one case of the
+  flow, a browser surface that itself ended on a foreign state (nothing can follow from it, and the
+  failure must stay visible, not pass for a cancel), and by AuthorizationResponseValidator for a
+  redirect handed to it directly. The device tier proves the part no JVM or macOS run models, in
+  android/conformance-browser and ios/BrowserLegHost; the surface-ended case, which only the
+  provider's own page can produce, is proven at the unit tier.

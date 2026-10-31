@@ -334,7 +334,6 @@ public class Versola internal constructor(
                 dpopKey = dpopKey,
                 hasStoredGrant = credentialStore::hasGrant,
                 starter = nativeStarter?.let { EdgeAuthorizationStarter(configuration, tokenBinding, it) },
-                logger = logger,
             )
             val tokenClient: TokenClient = if (nativeStarter == null) {
                 HttpTokenClient(
