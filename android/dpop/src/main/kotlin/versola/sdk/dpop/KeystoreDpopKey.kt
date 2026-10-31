@@ -13,10 +13,10 @@ import java.security.ProviderException
 import java.security.Signature
 import java.security.interfaces.ECPublicKey
 import java.security.spec.ECGenParameterSpec
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import versola.oauth.core.SdkDispatchers
 import versola.oauth.core.VersolaError
 import versola.oauth.core.VersolaLogger
 
@@ -72,14 +72,14 @@ public class KeystoreDpopKey(
      */
     public suspend fun destroy() {
         mutex.withLock {
-            withContext(Dispatchers.IO) { destroy(alias) }
+            withContext(SdkDispatchers.blocking) { destroy(alias) }
             material = null
         }
     }
 
     override suspend fun sign(signingInput: ByteArray): ByteArray {
         val key = material().privateKey
-        return withContext(Dispatchers.IO) {
+        return withContext(SdkDispatchers.blocking) {
             val signature = Signature.getInstance("SHA256withECDSA")
             signature.initSign(key)
             signature.update(signingInput)
@@ -89,7 +89,7 @@ public class KeystoreDpopKey(
 
     private suspend fun material(): Material = mutex.withLock {
         material?.let { return@withLock it }
-        withContext(Dispatchers.IO) { load() ?: generate() }
+        withContext(SdkDispatchers.blocking) { load() ?: generate() }
             .also {
                 if (requireHardware && !it.attestation.isHardwareBacked) {
                     throw VersolaError.Configuration(

@@ -2,7 +2,6 @@ package versola.oauth.core
 
 import java.io.File
 import java.io.IOException
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -80,7 +79,7 @@ public class HttpDiscoveryClient(
 
     override suspend fun fetchWithLifetime(issuer: String): Pair<ProviderMetadata, Long> {
         val url = wellKnownUrl(issuer)
-        val fetched = retrying(originOf(url)) { withContext(Dispatchers.IO) {
+        val fetched = retrying(originOf(url)) { withContext(SdkDispatchers.blocking) {
             val request = Request.Builder().url(url).header("Accept", "application/json").build()
             try {
                 httpClient.newCall(request).execute().use { response ->
@@ -160,7 +159,7 @@ public class FileProviderMetadataCache(
         }
     }
 
-    override suspend fun expiresAtEpochMillis(): Long? = withContext(Dispatchers.IO) {
+    override suspend fun expiresAtEpochMillis(): Long? = withContext(SdkDispatchers.blocking) {
         try {
             read()?.expiresAt
         } catch (e: Exception) {
@@ -168,7 +167,7 @@ public class FileProviderMetadataCache(
         }
     }
 
-    override suspend fun load(): ProviderMetadata? = withContext(Dispatchers.IO) {
+    override suspend fun load(): ProviderMetadata? = withContext(SdkDispatchers.blocking) {
         try {
             read()?.metadata
         } catch (e: Exception) {
@@ -184,7 +183,7 @@ public class FileProviderMetadataCache(
     }
 
     override suspend fun save(metadata: ProviderMetadata, lifetimeMillis: Long) {
-        withContext(Dispatchers.IO) {
+        withContext(SdkDispatchers.blocking) {
             file.parentFile?.mkdirs()
             val temporary = File(file.parentFile, file.name + ".tmp")
             temporary.writeText(
@@ -195,7 +194,7 @@ public class FileProviderMetadataCache(
     }
 
     override suspend fun clear() {
-        withContext(Dispatchers.IO) { file.delete() }
+        withContext(SdkDispatchers.blocking) { file.delete() }
     }
 }
 

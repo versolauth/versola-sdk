@@ -11,9 +11,9 @@ import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import versola.oauth.core.CredentialKeyProvider
+import versola.oauth.core.SdkDispatchers
 import versola.oauth.core.UnlockPolicy
 import versola.oauth.core.VersolaError
 
@@ -106,7 +106,7 @@ internal class KeyWrapping(
     private val keys: StorageKeys,
 ) : CredentialKeyProvider {
 
-    override suspend fun wrap(plaintext: ByteArray): ByteArray = withContext(Dispatchers.IO) {
+    override suspend fun wrap(plaintext: ByteArray): ByteArray = withContext(SdkDispatchers.blocking) {
         translatingKeyFailures {
             try {
                 encrypt(plaintext)
@@ -121,7 +121,7 @@ internal class KeyWrapping(
         }
     }
 
-    override suspend fun unwrap(blob: ByteArray): ByteArray = withContext(Dispatchers.IO) {
+    override suspend fun unwrap(blob: ByteArray): ByteArray = withContext(SdkDispatchers.blocking) {
         // Too short to hold an IV and a tag: it can never authenticate, which is what a
         // GCM tag failure says, and the store reads that as a ciphertext that is gone for good.
         if (blob.size < IV_LENGTH + TAG_LENGTH_BITS / 8) {

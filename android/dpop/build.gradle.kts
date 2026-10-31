@@ -40,8 +40,10 @@ kotlin {
     compilerOptions {
         // Java 17 bytecode for consumers, whatever JDK runs the build (develop.md: 21).
         jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
-        // The instrumented tests prove the protocol core's JCA names on a real Android (the
-        // PSS family), which means reaching the core's wiring entry point for that.
+        // The key runs its blocking work on the SDK's own dispatcher (SdkDispatchers), and the
+        // instrumented tests prove the protocol core's JCA names on a real Android (the PSS
+        // family), which means reaching the core's wiring entry point for that. Both are behind
+        // the marker.
         optIn.add("versola.oauth.core.VersolaInternalApi")
     }
 }

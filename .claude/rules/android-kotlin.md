@@ -98,9 +98,21 @@ for API 36. If you cannot start an emulator, say the device tier was not run (`t
 
 - No `runBlocking` on a dispatcher the awaited work also needs. F2: the interceptor's
   `runBlocking` on `Dispatchers.IO` while the refresh path does `withContext(Dispatchers.IO)`
-  deadlocks at 64 concurrent callers. Prefer suspend-first paths and `Call.enqueue` bridged with
-  `suspendCancellableCoroutine`; where blocking is unavoidable (an OkHttp interceptor), the work it
-  waits on runs on a dispatcher it cannot starve, and the KDoc says the caller blocks.
+  deadlocks at 64 concurrent callers. The interceptor blocks its caller by necessity (OkHttp's
+  interceptor cannot suspend), and an app may do that from its own coroutines on `Dispatchers.IO`, so
+  the work it waits on runs on the SDK's own dispatcher: `SdkDispatchers.blocking` in `:oauth-core`
+  (`@VersolaInternalApi`, a view of `Dispatchers.IO` with a quota of its own, which the app's parked
+  threads do not count against). Blocking SDK work (HTTP, files, DataStore, Keystore, DPoP key)
+  uses it, never `Dispatchers.IO` directly; this is held in `:oauth-core`, `:storage`, `:dpop`,
+  `:oauth` and `:okhttp` by `SdkDispatchersTest` (it scans their main sources), and a new
+  suspension point on the refresh path takes the same dispatcher. A facade that parks threads of its
+  own for a whole call (`OAuthClient.call()`) uses `SdkDispatchers.blockedCalls`, never `blocking`:
+  64 parked calls would take the whole quota of the view their refresh needs. The Versola facade
+  (`:core`, `:sdk`) has not been moved. Prefer suspend-first paths and `Call.enqueue` bridged with
+  `suspendCancellableCoroutine`; where blocking is unavoidable, the KDoc says the caller blocks. A
+  change to scheduling proves itself with a saturation test (`IoSaturation`: every thread of
+  `Dispatchers.IO` held, the SDK's work given a hard deadline), in its own test class because a
+  regression is a hang.
 - Persistence runs in `withContext(NonCancellable)`: a token that came back from the server is
   saved even if the caller was cancelled, and a cancelled winner must not strand the callers
   coalesced behind it.

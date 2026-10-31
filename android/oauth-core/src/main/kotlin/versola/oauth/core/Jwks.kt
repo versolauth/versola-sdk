@@ -12,7 +12,6 @@ import java.security.spec.ECParameterSpec
 import java.security.spec.ECPoint
 import java.security.spec.ECPublicKeySpec
 import java.security.spec.RSAPublicKeySpec
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -162,7 +161,7 @@ public class FileJwksCache(
     private val clock: () -> Long = System::currentTimeMillis,
 ) : JwksCache {
 
-    override suspend fun load(staleForMillis: Long): String? = withContext(Dispatchers.IO) {
+    override suspend fun load(staleForMillis: Long): String? = withContext(SdkDispatchers.blocking) {
         try {
             if (!file.exists()) return@withContext null
             val stored = discoveryJson.decodeFromString(ExpiringDocument.serializer(), file.readText())
@@ -179,7 +178,7 @@ public class FileJwksCache(
     }
 
     override suspend fun save(json: String, lifetimeMillis: Long) {
-        withContext(Dispatchers.IO) {
+        withContext(SdkDispatchers.blocking) {
             file.parentFile?.mkdirs()
             val temporary = File(file.parentFile, file.name + ".tmp")
             temporary.writeText(
@@ -190,7 +189,7 @@ public class FileJwksCache(
     }
 
     override suspend fun clear() {
-        withContext(Dispatchers.IO) { file.delete() }
+        withContext(SdkDispatchers.blocking) { file.delete() }
     }
 }
 
@@ -335,7 +334,7 @@ public class JwksClient(
 
     private class Fetched(val body: String, val lifetimeMillis: Long)
 
-    private suspend fun fetch(uri: String): Fetched = retrying(originOf(uri)) { withContext(Dispatchers.IO) {
+    private suspend fun fetch(uri: String): Fetched = retrying(originOf(uri)) { withContext(SdkDispatchers.blocking) {
         val request = Request.Builder().url(uri).header("Accept", "application/json").build()
         try {
             httpClient.newCall(request).execute().use { response ->
