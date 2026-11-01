@@ -172,4 +172,59 @@ class DpopProofFactoryTest {
 
         assertEquals("https://Versola.kz:8443/a%2Fb/c", jwt.jwtClaimsSet.getStringClaim("htu"))
     }
+    // --- audit regressions ---
+
+    @Test
+    fun `AUDIT Z4 htu lowercases the host and drops an explicit default port, as the nonce key already does`() = runTest {
+        // AUDIT: Z4. htuOf keeps host case and `:443` as given while Origin.of normalises the nonce key. RFC 9449 §4.2
+        // htu is the target URI; the server compares a scheme-normalised form (RFC 3986 §6.2.3), so a proof for
+        // `https://Host:443/path` must read `https://host/path`. (The test `htu keeps the raw path and the port, and
+        // drops userinfo nothing` above pins the opposite for host case and will need updating with the fix.)
+        val claims = parse(factory().proof("GET", "https://Versola.KZ:443/resources/42?x=1")).jwtClaimsSet
+
+        assertEquals("https://versola.kz/resources/42", claims.getStringClaim("htu"))
+    }
+
+    @Test
+    fun `AUDIT Z4 htu drops userinfo`() = runTest {
+        val claims = parse(factory().proof("GET", "https://user:pass@versola.kz/resources/42")).jwtClaimsSet
+
+        assertEquals("https://versola.kz/resources/42", claims.getStringClaim("htu"))
+    }
+
+    @Test
+    fun `AUDIT Z4 htu keeps a non-default port and an IPv6 literal`() = runTest {
+        // Control: the normalisation must not eat what the server compares. Passes today.
+        assertEquals("http://localhost:8080/a", parse(factory().proof("GET", "http://localhost:8080/a?q=1")).jwtClaimsSet.getStringClaim("htu"))
+        assertEquals("https://[::1]:8443/a", parse(factory().proof("GET", "https://[::1]:8443/a")).jwtClaimsSet.getStringClaim("htu"))
+    }
+
+    @Test
+    fun `AUDIT Z7 a URL the proof builder refuses does not put its query into the exception message`() = runTest {
+        // AUDIT: Z7. The require(...) messages in Origin interpolate the whole URL, query included; an app
+        // that logs the exception, or a crash reporter, then holds `?token=...`.
+        val secret = "SECRET-QUERY-TOKEN-4f2a"
+        for (url in listOf("versola.kz/path?token=$secret", "https://?token=$secret", "https://[::1/path?token=$secret")) {
+            val error = runCatching { factory().proof("GET", url) }.exceptionOrNull()
+
+            assertTrue("expected the builder to refuse $url", error is IllegalArgumentException)
+            var cause: Throwable? = error
+            while (cause != null) {
+                assertTrue("exception text leaks the query: ${cause.message}", cause.message?.contains(secret) != true)
+                cause = cause.cause
+            }
+        }
+    }
+
+    @Test
+    fun `AUDIT Z7 the nonce cache refuses a malformed URL without echoing its query`() {
+        val secret = "SECRET-QUERY-TOKEN-4f2a"
+        val cache = DpopNonceCache()
+
+        val error = runCatching { cache.nonceFor("no-scheme.example/path?token=$secret") }.exceptionOrNull()
+
+        assertTrue(error is IllegalArgumentException)
+        assertTrue("exception text leaks the query: ${error?.message}", error?.message?.contains(secret) != true)
+    }
+
 }

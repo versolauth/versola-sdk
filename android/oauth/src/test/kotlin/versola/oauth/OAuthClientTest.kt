@@ -30,6 +30,7 @@ import versola.oauth.core.BrowserOutcome
 import versola.oauth.core.IdTokenRejection
 import versola.oauth.core.PushedAuthorization
 import versola.oauth.core.SessionState
+import versola.oauth.core.TokenBinding
 import versola.oauth.core.VersolaError
 import versola.oauth.core.VersolaLogger
 
@@ -95,8 +96,13 @@ class OAuthClientTest {
         browser = FakeBrowser(provider.issuer)
     }
 
+    private val realKeystore: java.security.Provider? = java.security.Security.getProvider("AndroidKeyStore")
+
     @After
     fun stop() {
+        java.security.Security.removeProvider("AndroidKeyStore")
+        realKeystore?.let { java.security.Security.insertProviderAt(it, 1) }
+        OAuthClient.forgetAll()
         OAuthClient.resumeScope = defaultResumeScope
         server.close()
     }
@@ -121,6 +127,7 @@ class OAuthClientTest {
         protectedOrigins: Set<String> = emptySet(),
         scopes: Set<String> = setOf("openid"),
         pushedAuthorization: PushedAuthorization = PushedAuthorization.Never,
+        tokenBinding: TokenBinding = TokenBinding.Bearer,
     ) = OAuthConfiguration(
         issuer = if (endpoints == null) provider.issuer else null,
         endpoints = endpoints,
@@ -130,6 +137,7 @@ class OAuthClientTest {
         scopes = scopes,
         protectedOrigins = protectedOrigins,
         pushedAuthorization = pushedAuthorization,
+        tokenBinding = tokenBinding,
         logger = logger,
     ).also { this.clientId = clientId }
 
@@ -542,4 +550,81 @@ class OAuthClientTest {
         OAuthClient.forgetAll()
         assertEquals(SessionState.Unauthenticated, client(killed.configuration).sessionState.first())
     }
+    // --- audit regressions (Z-series): each asserts the correct behaviour and fails on today's code ---
+
+    private fun installKeystore(): SharedNamespaceAndroidKeyStore = SharedNamespaceAndroidKeyStore().also {
+        java.security.Security.removeProvider("AndroidKeyStore")
+        java.security.Security.insertProviderAt(it, 1)
+    }
+
+    /** A provider that advertises ES256 DPoP proofs: without it the SDK sends no proof at all. */
+    private fun advertiseDpop() {
+        discoveryBody = { provider.discovery().replace("\"code_challenge_methods_supported\"", "\"dpop_signing_alg_values_supported\":[\"ES256\"],\"code_challenge_methods_supported\"") }
+        tokenBody = { dpopTokenBody() }
+    }
+
+    private fun dpopTokenBody() = tokenResponse(refreshToken = true).replace("\"token_type\":\"Bearer\"", "\"token_type\":\"DPoP\"")
+
+    private val refreshedBody = """{"access_token":"at2","token_type":"DPoP","expires_in":3600,"refresh_token":"rt2"}"""
+
+    private fun jwkOf(proof: String): String =
+        String(java.util.Base64.getUrlDecoder().decode(proof.substringBefore('.'))).substringAfter("\"jwk\":").substringBefore('}')
+
+    @Test
+    fun `AUDIT Z1 the storage key and the DPoP key are never generated under one Keystore alias`() = runTest {
+        // AUDIT: Z1 (HIGH). build() gives HardwareKeyProvider and KeystoreDpopKey the same alias
+        // "versola-oauth-<storageKey>"; the AndroidKeyStore alias namespace is shared by every key
+        // type and a generate under an existing alias replaces the entry, so each key destroys the other.
+        val keystore = installKeystore()
+        advertiseDpop()
+        val client = OAuthClient.create(application, configuration(tokenBinding = TokenBinding.Dpop()), browser = browser)
+
+        client.login()
+
+        assertEquals("an alias was reused by the other key type: ${keystore.overwrites}", emptyList<String>(), keystore.overwrites)
+        assertEquals("one AES storage key and one EC DPoP key, under two aliases", 2, keystore.generated.size)
+    }
+
+    @Test
+    fun `AUDIT Z1 a DPoP session survives a process restart with its refresh token readable and its jkt unchanged`() = runTest {
+        val keystore = installKeystore()
+        advertiseDpop()
+        val configuration = configuration(tokenBinding = TokenBinding.Dpop())
+        OAuthClient.create(application, configuration, browser = browser).login()
+        val jwkAtLogin = jwkOf(requests.last { it.url.encodedPath == "/token" }.headers["DPoP"]!!)
+        tokenBody = { refreshedBody }
+
+        // Process restart: new client objects, same files, same Keystore.
+        OAuthClient.forgetAll()
+        val restarted = OAuthClient.create(application, configuration, browser = browser)
+        val outcome = runCatching { restarted.refresh() }
+
+        assertTrue("the stored refresh token must still decrypt after a restart, got ${outcome.exceptionOrNull()} (overwrites: ${keystore.overwrites})", outcome.isSuccess)
+        val refresh = requests.last { it.url.encodedPath == "/token" }
+        assertTrue(refresh.body!!.utf8().contains("refresh_token=rt"))
+        assertEquals("the proof key must be the one the grant was bound to", jwkAtLogin, jwkOf(refresh.headers["DPoP"]!!))
+        assertEquals(SessionState.Authenticated, restarted.sessionState.first())
+    }
+
+    @Test
+    fun `AUDIT Z11 a DPoP key that vanished from the Keystore is a typed re-authentication, not a new key under the same grant`() = runTest {
+        // AUDIT: Z11 (PLAUSIBLE / design). The grant does not carry its jkt, so KeystoreDpopKey
+        // regenerates silently when the entry is gone and key loss shows only as a server rejection.
+        // The storage key is substituted here so the Z1 alias collision cannot be what ends the session.
+        val keystore = installKeystore()
+        advertiseDpop()
+        val configuration = configuration(tokenBinding = TokenBinding.Dpop())
+        client(configuration).login()
+        val tokenRequestsAtLogin = requests.count { it.url.encodedPath == "/token" }
+        keystore.generated.clear()
+        tokenBody = { refreshedBody }
+
+        OAuthClient.forgetAll()
+        val restarted = client(configuration)
+        val error = runCatching { restarted.refresh() }.exceptionOrNull()
+
+        assertTrue("expected a typed Reauthenticate, got $error", error is VersolaError.Reauthenticate)
+        assertEquals("no token request may be signed by a freshly minted key", tokenRequestsAtLogin, requests.count { it.url.encodedPath == "/token" })
+    }
+
 }
