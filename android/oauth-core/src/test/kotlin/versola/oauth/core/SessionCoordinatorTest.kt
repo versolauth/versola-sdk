@@ -407,6 +407,43 @@ class SessionCoordinatorTest {
         assertEquals(SessionState.Unauthenticated, second.sessionState.first())
     }
 
+    /** A validator that vouches for any token and reports [acr] as the authentication context it names. */
+    private class AcrReportingValidator(private val acr: String?) : IdTokenValidator {
+        override suspend fun validate(idToken: String, expectedNonce: String?, accessToken: String?, maxAge: Long?, previous: IdTokenClaims?, serverTime: java.time.Instant?): IdTokenClaims =
+            IdTokenClaims(
+                subject = "alice", issuer = "https://id.example.com", audience = listOf("mobile-app"),
+                issuedAt = java.time.Instant.EPOCH, expiresAt = java.time.Instant.EPOCH.plusSeconds(3600), acr = acr,
+            )
+    }
+
+    // AUDIT B15 (RFC 9470 section 6): a step-up asks for acr_values; an ID token that comes back at a
+    // different authentication context is not the step-up that was asked for. Design choice: a
+    // typed Configuration(IdTokenRejected(...)) failure, nothing persisted, rather than success.
+    @Test
+    fun `AUDIT B15 a step-up whose ID token carries another acr than the requested one is refused and persists nothing`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = generic(validator = AcrReportingValidator(acr = "urn:acr:B"))
+        tokenClient.exchangeResult = { issued(accessToken = "at", refreshToken = "rt", idToken = "h.p.s") }
+
+        val outcome = runCatching { coordinator.login(setOf("openid"), acrValues = listOf("urn:acr:A")) }
+
+        val error = outcome.exceptionOrNull()
+        assertTrue("the step-up succeeded at acr B: $outcome", error is VersolaError.Configuration)
+        assertTrue((error as VersolaError.Configuration).detail is VersolaError.Configuration.Detail.IdTokenRejected)
+        assertNull(credentialStore.refreshToken)
+        assertNull(coordinator.claims)
+    }
+
+    @Test
+    fun `AUDIT B15 a step-up whose ID token carries the requested acr succeeds`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = generic(validator = AcrReportingValidator(acr = "urn:acr:A"))
+        tokenClient.exchangeResult = { issued(accessToken = "at", refreshToken = "rt", idToken = "h.p.s") }
+
+        coordinator.login(setOf("openid"), acrValues = listOf("urn:acr:A"))
+
+        assertEquals("urn:acr:A", coordinator.claims?.acr)
+        assertEquals("rt", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+    }
+
     @Test
     fun `a missing ID token is refused when a validator is present`() = runTest {
         val (coordinator, tokenClient, credentialStore) = generic(validator = RecordingValidator())

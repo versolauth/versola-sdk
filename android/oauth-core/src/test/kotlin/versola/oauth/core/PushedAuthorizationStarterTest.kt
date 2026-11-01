@@ -376,4 +376,33 @@ class PushedAuthorizationStarterTest {
         assertTrue(error is VersolaError.Configuration)
         assertEquals(1, server.requestCount)
     }
+
+    // ---- AUDIT: regression tests for confirmed audit findings; each fails until the bug is fixed ----
+
+    private suspend fun pushWithExpiresIn(expiresIn: String): Result<StartedAuthorization> {
+        server.enqueue(
+            MockResponse.Builder()
+                .code(201)
+                .setHeader("Content-Type", "application/json")
+                .body("""{"request_uri":"urn:ietf:params:oauth:request_uri:abc","expires_in":$expiresIn}""")
+                .build(),
+        )
+        return runCatching { starter().start(request(), metadata(), nowEpochMillis = 0) }
+    }
+
+    @Test
+    fun `AUDIT B2 a PAR expires_in sent as a finite float is accepted`() = runTest {
+        val started = pushWithExpiresIn("60.0")
+
+        assertTrue("expires_in=60.0: ${started.exceptionOrNull()}", started.isSuccess)
+    }
+
+    @Test
+    fun `AUDIT B2 a PAR expires_in sent as a numeric string is accepted`() = runTest {
+        // Green today: kotlinx.serialization coerces a quoted integer. Kept so a fix to the float
+        // case cannot regress it.
+        val started = pushWithExpiresIn(""""60"""")
+
+        assertTrue("expires_in=\"60\": ${started.exceptionOrNull()}", started.isSuccess)
+    }
 }

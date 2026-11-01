@@ -732,4 +732,17 @@ class IdTokenValidatorTest {
 
         assertEquals(IdTokenRejection.Signature, rejection { validate(token) })
     }
+
+    // ---- AUDIT: regression tests for confirmed audit findings; each fails until the bug is fixed ----
+
+    @Test
+    fun `AUDIT B9 a token naming a kid is checked against the only suitable key even when that key has no kid`() = runTest {
+        // Many providers publish a one-key set without kid yet sign tokens with one. Choosing the
+        // single suitable key is not guessing: there is nothing else it could be.
+        serve(Jose.jwks(Jose.jwk(Jose.rsa, null)))
+
+        val claims = validate(rsToken())
+
+        assertEquals("user-1", claims.subject)
+    }
 }
