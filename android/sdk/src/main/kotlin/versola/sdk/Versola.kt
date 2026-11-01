@@ -208,6 +208,13 @@ public class Versola internal constructor(
     public companion object {
 
         /**
+         * TEST SEAM (internal): where the credential and pending-request wrapping key comes from.
+         * The Keystore does not exist on the JVM, so a Robolectric test that must get past the first
+         * wrap swaps it; nothing in production assigns it.
+         */
+        internal var keyProviders: () -> versola.oauth.core.CredentialKeyProvider = { HardwareKeyProvider() }
+
+        /**
          * Validates the configuration eagerly and wires the default implementations.
          *
          * [edgeBaseUrl] is separate configuration rather than something discovery could
@@ -292,7 +299,7 @@ public class Versola internal constructor(
             // unwrap.
             val credentialStore = DataStoreCredentialStore.forFile(
                 file = File(directory, "credentials"),
-                keyProvider = HardwareKeyProvider(),
+                keyProvider = keyProviders(),
             )
             val proofFactory = dpopKey?.let { DpopProofFactory(it) }
             // One factory across auth and edge, deliberately. Its `DpopNonceCache` is keyed by
@@ -327,7 +334,7 @@ public class Versola internal constructor(
                 discovery = discovery,
                 pendingStore = FilePendingAuthorizationStore(
                     file = File(directory, "pending-authorization"),
-                    keyProvider = HardwareKeyProvider(),
+                    keyProvider = keyProviders(),
                 ),
                 browser = browser ?: AuthTabAuthorizationSession(applicationContext, logger),
                 tokenBinding = tokenBinding,

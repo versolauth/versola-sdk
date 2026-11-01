@@ -42,8 +42,13 @@ private class FakeTokenSource(
         issued++
         unexpectedFailure?.let { throw it }
         onAccessToken?.invoke(issued)
-        return current
+        val value = current
+        afterRead?.invoke()
+        return value
     }
+
+    /** Runs after the cached value was read and before it is handed back: a read that has gone stale on arrival. */
+    var afterRead: (() -> Unit)? = null
 
     override suspend fun renewAccessToken(): AccessToken {
         renewals++
@@ -484,5 +489,34 @@ class VersolaInterceptorTest {
         assertEquals(listOf("mfa"), error.acrValues)
         assertEquals(1, tokens.stepUps)
         assertEquals(0, tokens.renewals)
+    }
+
+    // AUDIT: C11 - two calls both refused on token-0: each re-reads the cache (still token-0, nobody has
+    // rotated yet) and each then renews unconditionally, so one expiry spends two rotations. Under bearer
+    // rotation the second is a replay of a refresh token the first already spent.
+    @Test
+    fun `AUDIT C11 two calls refused on the same token rotate it once`() {
+        val seen401 = java.util.concurrent.CountDownLatch(2)
+        server.dispatcher = object : mockwebserver3.Dispatcher() {
+            override fun dispatch(request: mockwebserver3.RecordedRequest): MockResponse =
+                if (request.headers["Authorization"] == "DPoP token-0") status(401) else ok()
+        }
+        val perThreadCalls = ThreadLocal.withInitial { 0 }
+        tokens.afterRead = {
+            perThreadCalls.set(perThreadCalls.get() + 1)
+            // The second read of each caller is the post-401 cache check: hold both there until each
+            // has seen the 401, so neither has rotated when the other looks.
+            if (perThreadCalls.get() == 2) {
+                seen401.countDown()
+                seen401.await(10, java.util.concurrent.TimeUnit.SECONDS)
+            }
+        }
+        val http = client()
+        val callers = List(2) {
+            Thread { http.newCall(get()).execute().use { check(it.code == 200) } }.apply { start() }
+        }
+        callers.forEach { it.join(30_000) }
+
+        assertEquals("both refused calls renewed the same rejected token", 1, tokens.renewals)
     }
 }

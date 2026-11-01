@@ -99,4 +99,24 @@ class ForegroundReturnDetectorTest {
 
         assertTrue(cancels == 1)
     }
+
+    // AUDIT: C14 - onActivityResumed() reads ANY activity resuming after ANY activity stopped as the user
+    // dismissing the tab. The host app's own second activity (a splash handing over, a deep-link screen)
+    // resuming while the tab is still opening is not a dismissal. Unit tier only: that the tab is really
+    // still up is a device-tier fact; this pins that the heuristic does not equate "some activity resumed"
+    // with "the user cancelled".
+    @Test
+    fun `AUDIT C14 another host activity resuming while the tab is opening is not a cancel`() {
+        var cancelled = false
+        val detector = detector { cancelled = true }
+        val first = Robolectric.buildActivity(Activity::class.java).setup()
+
+        detector.arm()
+        // The tab opens over the first activity, which stops...
+        first.pause().stop()
+        // ...and a different activity of the host app comes up (not the one the login was started from).
+        Robolectric.buildActivity(Activity::class.java).setup()
+
+        assertFalse("activity B resuming after activity A stopped was reported as UserCancelled", cancelled)
+    }
 }
