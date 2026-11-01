@@ -8,9 +8,9 @@ import XCTest
 /// a fake that answers the redirect, the code exchange, ID-token validation against the stub's
 /// JWKS, the authenticated call, UserInfo, and sign-out. The Android `OAuthClientTest`'s twin.
 final class OAuthClientTests: XCTestCase {
-    private static let issuer = "https://id.example.com"
-    private static let redirect = "https://app.example.com/oauth"
-    private static let key = P256.Signing.PrivateKey()
+    static let issuer = "https://id.example.com"
+    static let redirect = "https://app.example.com/oauth"
+    static let key = P256.Signing.PrivateKey()
 
     /// Answers the authorization request with a redirect for its `state`, remembering the nonce.
     actor FakeBrowser: BrowserAuthorizationSession {
@@ -88,7 +88,7 @@ final class OAuthClientTests: XCTestCase {
     }
 
     /// Polls, yielding between looks; bounded, so a regression fails instead of hanging.
-    private func waitForState(_ expected: SessionState, of client: OAuthClient, file: StaticString = #filePath, line: UInt = #line) async {
+    func waitForState(_ expected: SessionState, of client: OAuthClient, file: StaticString = #filePath, line: UInt = #line) async {
         for _ in 0..<2_000_000 {
             if await client.sessionState == expected { return }
             await Task.yield()
@@ -96,15 +96,15 @@ final class OAuthClientTests: XCTestCase {
         XCTFail("timed out waiting for \(expected)", file: file, line: line)
     }
 
-    private func tokenRequests() -> Int { StubURLProtocol.requests.filter { $0.url?.path == "/token" }.count }
+    func tokenRequests() -> Int { StubURLProtocol.requests.filter { $0.url?.path == "/token" }.count }
 
-    private static func jwks() -> String {
+    static func jwks() -> String {
         let x963 = key.publicKey.x963Representation
         let x = x963[1..<33].base64URL, y = x963[33..<65].base64URL
         return #"{"keys":[{"kty":"EC","crv":"P-256","kid":"k1","alg":"ES256","use":"sig","x":"\#(x)","y":"\#(y)"}]}"#
     }
 
-    private static func idToken(nonce: String, subject: String = "alice", audience: String) -> String {
+    static func idToken(nonce: String, subject: String = "alice", audience: String) -> String {
         let now = Int(Date().timeIntervalSince1970)
         let header = Data(#"{"alg":"ES256","kid":"k1","typ":"JWT"}"#.utf8).base64URL
         let payload = Data(#"{"iss":"\#(issuer)","sub":"\#(subject)","aud":"\#(audience)","exp":\#(now + 3600),"iat":\#(now),"nonce":"\#(nonce)","auth_time":\#(now)}"#.utf8).base64URL
@@ -112,7 +112,7 @@ final class OAuthClientTests: XCTestCase {
         return "\(header).\(payload).\(signature)"
     }
 
-    private static func discovery(endSession: Bool = true) -> String {
+    static func discovery(endSession: Bool = true) -> String {
         var members = [
             #""issuer":"\#(issuer)""#, #""authorization_endpoint":"\#(issuer)/authorize""#, #""token_endpoint":"\#(issuer)/token""#,
             #""jwks_uri":"\#(issuer)/jwks""#, #""userinfo_endpoint":"\#(issuer)/userinfo""#, #""revocation_endpoint":"\#(issuer)/revoke""#,
@@ -122,9 +122,9 @@ final class OAuthClientTests: XCTestCase {
         return "{" + members.joined(separator: ",") + "}"
     }
 
-    private var browser = FakeBrowser()
-    private let logger = RecordingLogger()
-    private var clientId = "mobile-\(UUID().uuidString.prefix(8))"
+    var browser = FakeBrowser()
+    let logger = RecordingLogger()
+    var clientId = "mobile-\(UUID().uuidString.prefix(8))"
 
     override func setUp() async throws {
         browser = FakeBrowser()
@@ -155,7 +155,7 @@ final class OAuthClientTests: XCTestCase {
     }
 
     /// The stub handler is synchronous; the nonce the browser saw is read through a semaphore.
-    private static func blockingNonce(_ browser: FakeBrowser) -> String {
+    static func blockingNonce(_ browser: FakeBrowser) -> String {
         let semaphore = DispatchSemaphore(value: 0)
         let box = OSAllocatedUnfairLock(initialState: "")
         Task { let nonce = await browser.nonce ?? ""; box.withLock { $0 = nonce }; semaphore.signal() }
@@ -163,7 +163,7 @@ final class OAuthClientTests: XCTestCase {
         return box.withLock { $0 }
     }
 
-    private func configuration(scopes: Set<String> = ["openid", "profile"], logger: any OAuthLogger) throws -> OAuthConfiguration {
+    func configuration(scopes: Set<String> = ["openid", "profile"], logger: any OAuthLogger) throws -> OAuthConfiguration {
         try OAuthConfiguration(
             issuer: Self.issuer, clientId: clientId, redirectUri: Self.redirect,
             postLogoutRedirectUri: "https://app.example.com/signed-out", scopes: scopes,
@@ -172,11 +172,11 @@ final class OAuthClientTests: XCTestCase {
         )
     }
 
-    private func configuration(scopes: Set<String> = ["openid", "profile"]) throws -> OAuthConfiguration {
+    func configuration(scopes: Set<String> = ["openid", "profile"]) throws -> OAuthConfiguration {
         try configuration(scopes: scopes, logger: logger)
     }
 
-    private func client() async throws -> OAuthClient {
+    func client() async throws -> OAuthClient {
         try await OAuthClient.create(configuration: try configuration(), browser: browser, credentialStore: InMemoryCredentialStore(), pendingStore: InMemoryPendingAuthorizationStore())
     }
 

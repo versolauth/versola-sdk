@@ -180,7 +180,7 @@ public final class AuthenticatedSession: Sendable {
 /// `NoRedirectDelegate`, plus whether the response came out of the URL cache
 /// (`URLSessionTaskMetrics.resourceFetchType`), which `AuthenticatedSession` needs so that a
 /// stored response's `Date` is not taken for the server's clock.
-private final class CacheAwareNoRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+final class CacheAwareNoRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
     private let cached = OSAllocatedUnfairLock(initialState: false)
 
     var servedFromCache: Bool { cached.withLock { $0 } }

@@ -566,3 +566,47 @@ private actor SwappingTokens: AccessTokenSource {
         return next
     }
 }
+
+// MARK: - Audit regressions
+
+extension AuthenticatedSessionTests {
+    private var streamedPost: URLRequest {
+        var request = URLRequest(url: URL(string: "https://api.example.com/v1/items")!)
+        request.httpMethod = "POST"
+        request.httpBodyStream = InputStream(data: Data("body".utf8))
+        return request
+    }
+
+    /// AUDIT: W8. A `use_dpop_nonce` 401 on a request whose body is a stream must not be replayed:
+    /// the stream is consumed by the first send (the guard exists only in the refresh branch). The 401
+    /// is returned for the app to retry with a rebuilt body, and exactly one request is sent.
+    func testANonceChallengeOnAStreamedBodyIsReturnedNotReplayedWithAnExhaustedStream() async throws {
+        StubURLProtocol.install { _ in
+            .response(status: 401, headers: ["WWW-Authenticate": "DPoP error=\"use_dpop_nonce\"", "DPoP-Nonce": "nonce-A"])
+        }
+        let dpop = FakeDpop()
+
+        do {
+            let (_, response) = try await session(tokens: FakeTokens(current: dpopToken), dpop: dpop).data(for: streamedPost)
+            XCTAssertEqual(response.statusCode, 401)
+        } catch {
+            XCTFail("the exhausted stream was replayed and the second challenge became \(error)")
+        }
+        XCTAssertEqual(StubURLProtocol.requests.count, 1)
+    }
+
+    /// AUDIT: W8, the `invalid_dpop_proof` branch of the same loop.
+    func testAnInvalidProofOnAStreamedBodyIsReturnedNotReplayedWithAnExhaustedStream() async throws {
+        StubURLProtocol.install { _ in
+            .response(status: 401, headers: ["WWW-Authenticate": "DPoP error=\"invalid_dpop_proof\""])
+        }
+
+        do {
+            let (_, response) = try await session(tokens: FakeTokens(current: dpopToken), dpop: FakeDpop()).data(for: streamedPost)
+            XCTAssertEqual(response.statusCode, 401)
+        } catch {
+            XCTFail("the exhausted stream was replayed and the second refusal became \(error)")
+        }
+        XCTAssertEqual(StubURLProtocol.requests.count, 1)
+    }
+}
