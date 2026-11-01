@@ -7,6 +7,7 @@
 /// generated bridge (`src/messages.g.dart`) is not exported.
 library;
 
+export 'src/api.dart' show OAuthApi;
 export 'src/client.dart' show OAuthClient;
 export 'src/errors.dart';
 export 'src/types.dart';
