@@ -29,7 +29,8 @@ jobs:
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "21.0.13+9"
+          force-download: true
 
       # compileSdk 37 across every module (minSdk 26), so the build needs platform 37.0.
       # Installed explicitly rather than trusting whatever the runner image happens to ship:
@@ -97,7 +98,8 @@ jobs:
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "21.0.13+9"
+          force-download: true
 
       - name: Install Android SDK platform
         run: |

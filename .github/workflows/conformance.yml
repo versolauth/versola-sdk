@@ -76,7 +76,8 @@ jobs:
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "21.0.13+9"
+          force-download: true
 
       - name: Install Android SDK platform
         run: |
@@ -152,7 +153,8 @@ jobs:
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "21.0.13+9"
+          force-download: true
 
       - name: Install Android SDK platform
         run: |
@@ -354,7 +356,8 @@ jobs:
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
-          java-version: "25"
+          java-version: "25.0.5+8"
+          force-download: true
 
       - name: Set up Scala CLI
         uses: VirtusLab/scala-cli-setup@3f5bf11a33bb88343238780c18257c8fa43789e1 # v1.18.0
@@ -398,7 +401,8 @@ jobs:
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:
           distribution: temurin
-          java-version: "21"
+          java-version: "21.0.13+9"
+          force-download: true
 
       - name: Install Android SDK platform
         run: |
