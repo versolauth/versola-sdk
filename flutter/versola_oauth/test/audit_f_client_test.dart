@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:versola_oauth/src/client.dart' show createOAuthClientWithHost;
 import 'package:versola_oauth/src/mapping.dart' show toMessage;
 import 'package:versola_oauth/src/messages.g.dart';
 import 'package:versola_oauth/versola_oauth.dart';
@@ -247,13 +248,13 @@ void main() {
     test('AUDIT F6: a sub-second clockSkewTolerance is rejected, not truncated to whole seconds', () async {
       final host = FakeHost()..answers.add(CreateOk(handle: 'h'));
       await expectLater(
-        () async => OAuthClient.create(
+        () async => createOAuthClientWithHost(
           OAuthConfiguration(
             clientId: 'c',
             redirectUri: 'https://a.example.com/cb',
             clockSkewTolerance: const Duration(milliseconds: 1500),
           ),
-          host: host,
+          host,
         ),
         throwsArgumentError,
       );
