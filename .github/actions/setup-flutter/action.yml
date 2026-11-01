@@ -1,0 +1,81 @@
+name: Set up Flutter
+description: >-
+  Installs the Flutter SDK named by `version` from Flutter's own release archive, after checking
+  the archive against a SHA-256 recorded in this action. Puts `flutter` and `dart` on PATH.
+
+# Why this action exists instead of subosito/flutter-action: that action calls actions/cache@v5
+# by a tag inside its own definition, and the repository's SHA-pinning policy refuses that
+# reference before any step runs, whatever inputs are given. Every reference in this file is
+# either a shell command or nothing else, so the policy has nothing to refuse.
+#
+# A version is accepted only when a checksum is recorded for it below (fail closed). To move
+# Flutter, add the version and its archive checksums from Flutter's release manifests:
+#   https://storage.googleapis.com/flutter_infra_release/releases/releases_linux.json
+#   https://storage.googleapis.com/flutter_infra_release/releases/releases_macos.json
+# and change flutter/.fvmrc in the same pull request.
+
+inputs:
+  version:
+    description: Flutter version, X.Y.Z, as recorded in flutter/.fvmrc.
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Install Flutter
+      shell: bash
+      env:
+        FLUTTER_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+
+        version="$FLUTTER_VERSION"
+        [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected Flutter version: $version" >&2; exit 1; }
+
+        # The archive path and its SHA-256, per runner, from Flutter's release manifests.
+        case "$RUNNER_OS" in
+          Linux)
+            case "$version" in
+              3.47.8) archive="stable/linux/flutter_linux_${version}-stable.tar.xz"
+                      sha256="baf7dcc5a3dbba60fe863bf493a6cf203195621f7786eaa5a1bba02cd0d87dd2" ;;
+              *) echo "no checksum recorded for Flutter $version; see the note in this action" >&2; exit 1 ;;
+            esac ;;
+          macOS)
+            if [ "$(uname -m)" = "arm64" ]; then
+              case "$version" in
+                3.47.8) archive="stable/macos/flutter_macos_arm64_${version}-stable.zip"
+                        sha256="6114edc2dae3636cfefb7e4456a4510399ee856e324149b34dbacb509e329d05" ;;
+                *) echo "no checksum recorded for Flutter $version; see the note in this action" >&2; exit 1 ;;
+              esac
+            else
+              case "$version" in
+                3.47.8) archive="stable/macos/flutter_macos_${version}-stable.zip"
+                        sha256="b8a3c255a51a8c0c0943a4d5bdf9b26008c34f02febf69640c8aab413afd896f" ;;
+                *) echo "no checksum recorded for Flutter $version; see the note in this action" >&2; exit 1 ;;
+              esac
+            fi ;;
+          *) echo "unsupported runner: $RUNNER_OS" >&2; exit 1 ;;
+        esac
+
+        download="$RUNNER_TEMP/$(basename "$archive")"
+        curl --fail --silent --show-error --location --retry 3 \
+          --output "$download" \
+          "https://storage.googleapis.com/flutter_infra_release/releases/$archive"
+
+        # sha256sum on Linux, shasum on macOS; either refuses a mismatch with a non-zero status.
+        if command -v sha256sum >/dev/null 2>&1; then
+          echo "$sha256  $download" | sha256sum --check --strict -
+        else
+          echo "$sha256  $download" | shasum -a 256 --check -
+        fi
+
+        case "$download" in
+          *.tar.xz) tar --extract --xz --file "$download" --directory "$RUNNER_TEMP" ;;
+          *.zip) unzip -q "$download" -d "$RUNNER_TEMP" ;;
+        esac
+
+        flutter_bin="$RUNNER_TEMP/flutter/bin"
+        echo "$flutter_bin" >> "$GITHUB_PATH"
+        # The version the binary reports must be the one asked for, not whatever the archive holds.
+        "$flutter_bin/flutter" --version | grep -q "Flutter $version " \
+          || { echo "installed Flutter is not $version" >&2; exit 1; }

@@ -148,13 +148,9 @@ jobs:
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected Flutter version: $version" >&2; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - name: Install Flutter SDK
-        env:
-          FLUTTER_VERSION: ${{ steps.flutter.outputs.version }}
-        run: |
-          git clone --depth 1 --branch "$FLUTTER_VERSION" https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter-sdk"
-          echo "$RUNNER_TEMP/flutter-sdk/bin" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/flutter-sdk/bin/flutter" --version
+      - uses: ./.github/actions/setup-flutter
+        with:
+          version: ${{ steps.flutter.outputs.version }}
 
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
         with:

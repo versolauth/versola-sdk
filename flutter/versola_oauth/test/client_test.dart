@@ -1,5 +1,6 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:versola_oauth/src/client.dart';
 import 'package:versola_oauth/src/messages.g.dart';
 import 'package:versola_oauth/versola_oauth.dart';
 
@@ -77,7 +78,7 @@ ErrorMessage reauth() => ErrorMessage(
 
 Future<OAuthClient> created(FakeHost host, {String handle = 'h1'}) async {
   host.answers.insert(0, CreateOk(handle: handle));
-  return OAuthClient.create(configuration, host: host);
+  return createOAuthClientWithHost(configuration, host);
 }
 
 /// The event channel the generated `sessionStates` opens for [handle], with the native side
@@ -134,13 +135,13 @@ void main() {
         ),
       );
     await expectLater(
-      OAuthClient.create(
+      createOAuthClientWithHost(
         const OAuthConfiguration(
           issuer: 'https://other.example.com',
           clientId: 'app',
           redirectUri: 'nope',
         ),
-        host: host,
+        host,
       ),
       throwsA(
         isA<ConfigurationError>()
@@ -311,7 +312,7 @@ void main() {
     }
     host.answers.add(PlatformException(code: 'channel-error'));
     await expectLater(
-      OAuthClient.create(configuration, host: host),
+      createOAuthClientWithHost(configuration, host),
       throwsA(isA<ConfigurationError>()),
     );
   });

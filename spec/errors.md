@@ -219,8 +219,13 @@ Semantics are identical; spelling follows each language.
 | Base | `sealed class OAuthError` (`VersolaError` is a type alias in the Versola facade, ADR 0001) | `enum OAuthError: Error` | `sealed class OAuthError` |
 | Recoverable | `VersolaError.Recoverable(cause)` | `.recoverable(Cause)` | `Recoverable(cause)` |
 | Reauthenticate | `VersolaError.Reauthenticate(reason)` | `.reauthenticate(Reason)` | `Reauthenticate(reason)` |
-| Step-up | `VersolaError.StepUp(acrValues, maxAge)` | `.stepUp(acrValues:maxAge:)` | `StepUp(acrValues, maxAge)` |
+| Step-up | `VersolaError.StepUp(acrValues, maxAge)` | `.stepUp(acrValues:maxAge:)`; `stepUp(_:)` takes the caught case | `StepUp(acrValues, maxAge)` |
 | Configuration | `VersolaError.Configuration(detail)` | `.configuration(Detail)` | `Configuration(detail)` |
 
 An error crossing the Flutter bridge must keep its category. A `StepUp` arriving in Dart as a
 generic `PlatformException` is a defect in the bridge, not an acceptable lossy conversion.
+
+On Android's OkHttp path (`interceptor`, `authenticatedClient`), an SDK error is thrown as an
+`IOException` that carries the `VersolaError` with the same category. `IOException.versolaError()`
+returns that error, or `null` for a transport failure the SDK does not classify. An app should read
+the category through it, not through the exception type.

@@ -27,11 +27,13 @@ final class OAuthClient {
 
   /// Validates the configuration natively and wires (or finds) the native client. No network
   /// I/O and no key generation happen here.
-  static Future<OAuthClient> create(
-    OAuthConfiguration configuration, {
-    bridge.OAuthHostApi? host,
-  }) async {
-    final api = host ?? bridge.OAuthHostApi();
+  static Future<OAuthClient> create(OAuthConfiguration configuration) =>
+      _create(configuration, bridge.OAuthHostApi());
+
+  static Future<OAuthClient> _create(
+    OAuthConfiguration configuration,
+    bridge.OAuthHostApi api,
+  ) async {
     final result = await guarded(() => api.create(toMessage(configuration)));
     switch (result) {
       case bridge.CreateOk(:final handle):
@@ -314,3 +316,10 @@ final class OAuthClient {
     }
   }
 }
+
+/// Wiring for the tests: [OAuthClient.create] with the native host replaced. Lives under `src/`,
+/// which the package does not export, so the bridge type stays out of the public API.
+Future<OAuthClient> createOAuthClientWithHost(
+  OAuthConfiguration configuration,
+  bridge.OAuthHostApi host,
+) => OAuthClient._create(configuration, host);

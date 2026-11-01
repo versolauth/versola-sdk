@@ -21,7 +21,7 @@ Documentation: <https://docs.versola.io/sdk/overview>.
 | Providers | Any OpenID provider that meets the [contract](spec/providers.md); run in the SDK's tests against Keycloak 26.4 and Ory Hydra v26.2.0 |
 | Optional | DPoP (RFC 9449), pushed authorization requests (RFC 9126), refresh-token rotation, RP-initiated logout, token revocation |
 | Licence | Apache-2.0 |
-| Stability | The API is production ready. The major version is still 0, and interfaces change only when a change is required |
+| Stability | Pre-1.0.0. The major version is still 0, so the API can still change, but only when a change is required. Suggest API improvements by opening an issue |
 
 ## Features
 
@@ -269,12 +269,13 @@ For public clients that use the system browser, yes. It adds ID-token signature 
 storage and refresh coordination, and drops client secrets and embedded browsers. The migration
 guide is on the documentation website.
 
-### Is the API production ready?
+### Is the API stable?
 
-Yes. The Versola OAuth SDK treats its public API as production ready on Android, iOS and Flutter,
-even though the major version is still 0. We won't change an interface unless a change is
-required. When one is, the pull request that makes it says so and carries the regenerated API
-dump, and the minor version goes up; compatible additions and fixes raise only the patch version.
+Not yet. The API is pre-1.0.0: the major version is still 0, so an interface can still change while
+the SDK settles on Android, iOS and Flutter. We change one only when a change is required. The pull
+request that makes it says so and carries the regenerated API dump, and the minor version goes up;
+compatible additions and fixes raise only the patch version. If an API feels wrong for your app,
+open an issue with the call you wanted to write.
 
 ### How do I add it to my project?
 
