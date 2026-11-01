@@ -27,7 +27,6 @@ on:
       - "ios/Sources/OAuthCore/**"
       - "ios/Sources/OAuthClient/**"
       - "Package.swift"
-      - ".github/actions/flutter-setup/**"
       - ".github/workflows/flutter.yml"
   pull_request:
     # The same list as above: spelled out twice because the filter is per event, and a YAML
@@ -47,7 +46,6 @@ on:
       - "ios/Sources/OAuthCore/**"
       - "ios/Sources/OAuthClient/**"
       - "Package.swift"
-      - ".github/actions/flutter-setup/**"
       - ".github/workflows/flutter.yml"
 
 permissions:
@@ -78,12 +76,14 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
       # flutter/.fvmrc is the one place the version is chosen (develop.md); fvm itself is not
-      # installed here, the action fetches the same release.
-      - uses: ./.github/actions/flutter-setup # subosito/flutter-action v2.23.0
-        with:
-          flutter-version: ${{ steps.flutter.outputs.version }}
-          channel: stable
-          cache: true
+      # installed here; CI checks out the same official release.
+      - name: Install Flutter SDK
+        env:
+          FLUTTER_VERSION: ${{ steps.flutter.outputs.version }}
+        run: |
+          git clone --depth 1 --branch "$FLUTTER_VERSION" https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter-sdk"
+          echo "$RUNNER_TEMP/flutter-sdk/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/flutter-sdk/bin/flutter" --version
 
       - run: flutter pub get
       - run: flutter pub get
@@ -132,11 +132,13 @@ jobs:
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected Flutter version: $version" >&2; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - uses: ./.github/actions/flutter-setup # subosito/flutter-action v2.23.0
-        with:
-          flutter-version: ${{ steps.flutter.outputs.version }}
-          channel: stable
-          cache: true
+      - name: Install Flutter SDK
+        env:
+          FLUTTER_VERSION: ${{ steps.flutter.outputs.version }}
+        run: |
+          git clone --depth 1 --branch "$FLUTTER_VERSION" https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter-sdk"
+          echo "$RUNNER_TEMP/flutter-sdk/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/flutter-sdk/bin/flutter" --version
 
       # JDK 21 for Gradle, bytecode stays Java 17 (android.yml says why).
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
@@ -192,11 +194,13 @@ jobs:
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected Flutter version: $version" >&2; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - uses: ./.github/actions/flutter-setup # subosito/flutter-action v2.23.0
-        with:
-          flutter-version: ${{ steps.flutter.outputs.version }}
-          channel: stable
-          cache: true
+      - name: Install Flutter SDK
+        env:
+          FLUTTER_VERSION: ${{ steps.flutter.outputs.version }}
+        run: |
+          git clone --depth 1 --branch "$FLUTTER_VERSION" https://github.com/flutter/flutter.git "$RUNNER_TEMP/flutter-sdk"
+          echo "$RUNNER_TEMP/flutter-sdk/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/flutter-sdk/bin/flutter" --version
 
       - run: flutter pub get
         working-directory: flutter/versola_oauth/example
