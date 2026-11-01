@@ -1,5 +1,5 @@
 # Vendored from subosito/flutter-action v2.23.0 (1a449444c387b1966244ae4d4f8c696479add0b2).
-# Only the nested actions/cache references are pinned to satisfy the Actions policy.
+# Nested cache references are pinned and shell inputs use environment variables.
 name: Set up Flutter
 description: Setup your runner with Flutter environment
 author: Alif Rachmawadi
@@ -108,17 +108,27 @@ runs:
     - name: Set action inputs
       id: flutter-action
       shell: bash
+      env:
+        FLUTTER_VERSION: ${{ inputs.flutter-version }}
+        FLUTTER_VERSION_FILE: ${{ inputs.flutter-version-file }}
+        FLUTTER_ARCH: ${{ inputs.architecture }}
+        FLUTTER_CACHE_KEY: ${{ inputs.cache-key }}
+        FLUTTER_CACHE_PATH: ${{ inputs.cache-path }}
+        PUB_CACHE_KEY: ${{ inputs.pub-cache-key }}
+        PUB_CACHE_PATH: ${{ inputs.pub-cache-path }}
+        FLUTTER_GIT_SOURCE: ${{ inputs.git-source }}
+        FLUTTER_CHANNEL: ${{ inputs.channel }}
       run: |
-        $GITHUB_ACTION_PATH/setup.sh -p \
-          -n '${{ inputs.flutter-version }}' \
-          -f '${{ inputs.flutter-version-file }}' \
-          -a '${{ inputs.architecture }}' \
-          -k '${{ inputs.cache-key }}' \
-          -c '${{ inputs.cache-path }}' \
-          -l '${{ inputs.pub-cache-key }}' \
-          -d '${{ inputs.pub-cache-path }}' \
-          -g '${{ inputs.git-source }}' \
-          ${{ inputs.channel }}
+        "$GITHUB_ACTION_PATH/setup.sh" -p \
+          -n "$FLUTTER_VERSION" \
+          -f "$FLUTTER_VERSION_FILE" \
+          -a "$FLUTTER_ARCH" \
+          -k "$FLUTTER_CACHE_KEY" \
+          -c "$FLUTTER_CACHE_PATH" \
+          -l "$PUB_CACHE_KEY" \
+          -d "$PUB_CACHE_PATH" \
+          -g "$FLUTTER_GIT_SOURCE" \
+          "$FLUTTER_CHANNEL"
 
     - name: Cache Flutter
       id: cache-flutter
@@ -139,10 +149,16 @@ runs:
     - name: Run setup script
       shell: bash
       if: ${{ inputs.dry-run != 'true' && inputs.dry-run != true }}
+      env:
+        FLUTTER_VERSION: ${{ steps.flutter-action.outputs.VERSION }}
+        FLUTTER_ARCH: ${{ steps.flutter-action.outputs.ARCHITECTURE }}
+        FLUTTER_CACHE_PATH: ${{ steps.flutter-action.outputs.CACHE-PATH }}
+        PUB_CACHE_PATH: ${{ steps.flutter-action.outputs.PUB-CACHE-PATH }}
+        FLUTTER_CHANNEL: ${{ steps.flutter-action.outputs.CHANNEL }}
       run: |
-        $GITHUB_ACTION_PATH/setup.sh \
-          -n '${{ steps.flutter-action.outputs.VERSION }}' \
-          -a '${{ steps.flutter-action.outputs.ARCHITECTURE }}' \
-          -c '${{ steps.flutter-action.outputs.CACHE-PATH }}' \
-          -d '${{ steps.flutter-action.outputs.PUB-CACHE-PATH }}' \
-          ${{ steps.flutter-action.outputs.CHANNEL }}
+        "$GITHUB_ACTION_PATH/setup.sh" \
+          -n "$FLUTTER_VERSION" \
+          -a "$FLUTTER_ARCH" \
+          -c "$FLUTTER_CACHE_PATH" \
+          -d "$PUB_CACHE_PATH" \
+          "$FLUTTER_CHANNEL"
