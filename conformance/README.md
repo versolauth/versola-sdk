@@ -30,7 +30,7 @@ and #39 list, scenario by scenario, what is currently proven against stubs only.
 |---|---|---|---|
 | Unit | JVM, Robolectric | the rule | `android.yml`, `build` job |
 | Instrumented | Emulator, real Keystore | the platform half: key tiers, GCM wrapping, the auth window | `android.yml`, `instrumented` job (#30, #37) |
-| Conformance | Emulator + staged stack | the wiring: every scenario, against the server | **this directory, not built** |
+| Conformance | Emulator + staged stack (the Versola facade); Docker providers (the generic facade) | the wiring: every scenario, against the server or the provider | `conformance.yml`: `providers` runs scenarios 24 to 32 against Keycloak and Ory Hydra; `scenarios` is on demand and has not run yet (needs `VERSOLA_CHECKOUT_TOKEN`) |
 | Device | Firebase Test Lab | StrongBox, biometrics, Custom Tabs on real OEM builds | not started; needs a project and credentials |
 
 ## Shape
