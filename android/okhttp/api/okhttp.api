@@ -12,6 +12,10 @@ public final class versola/sdk/okhttp/VersolaHttpException : java/io/IOException
 	public final fun getError ()Lversola/oauth/core/VersolaError;
 }
 
+public final class versola/sdk/okhttp/VersolaHttpExceptionKt {
+	public static final fun versolaError (Ljava/io/IOException;)Lversola/oauth/core/VersolaError;
+}
+
 public final class versola/sdk/okhttp/VersolaInterceptor : okhttp3/Interceptor {
 	public fun <init> (Lversola/oauth/core/AccessTokenSource;Lokhttp3/HttpUrl;Lversola/oauth/core/DpopProofSource;)V
 	public fun <init> (Lversola/oauth/core/AccessTokenSource;Lversola/sdk/okhttp/RequestScope;Lversola/oauth/core/DpopProofSource;)V
