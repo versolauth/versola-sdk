@@ -27,6 +27,7 @@ on:
       - "ios/Sources/OAuthCore/**"
       - "ios/Sources/OAuthClient/**"
       - "Package.swift"
+      - ".github/actions/flutter-setup/**"
       - ".github/workflows/flutter.yml"
   pull_request:
     # The same list as above: spelled out twice because the filter is per event, and a YAML
@@ -46,6 +47,7 @@ on:
       - "ios/Sources/OAuthCore/**"
       - "ios/Sources/OAuthClient/**"
       - "Package.swift"
+      - ".github/actions/flutter-setup/**"
       - ".github/workflows/flutter.yml"
 
 permissions:
