@@ -142,7 +142,7 @@ val oauth = OAuthClient.create(context, configuration)
 |---|---|---|---|
 | `login(options)` | the redirect is validated and the code exchanged, or the browser is dismissed | nothing (the session is observable); `Authenticated` published after the grant is durably stored | `Recoverable(UserCancelled, SystemCancelled, Network, PendingRequestExpired)`, `Reauthenticate(AuthorizationDenied, InteractionRequired)`, `Configuration(...)` |
 | `logout(options)` | the local wipe is done; server-side steps are best effort | `LogoutOutcome(sessionEnded: Boolean, tokenRevoked: Boolean)`; `Unauthenticated` published unconditionally | never throws for a server-side failure; `Configuration` only for a misuse |
-| `accessToken()` | a token not within its refresh skew is available, refreshing once if needed (single-flight) | `AccessToken(value, type: Bearer or DPoP, expiresAt, scopes)` | `Reauthenticate(GrantRejected, SessionExpired)`, `Recoverable(Network, UnlockRequired)` |
+| `accessToken()` | a token not within its refresh skew is available, refreshing once if needed (single-flight) | `AccessToken(value, type: Bearer or DPoP)`; `expiresAt` and `scopes` are not exposed on any platform yet (section 16, question 6) | `Reauthenticate(GrantRejected, SessionExpired)`, `Recoverable(Network, UnlockRequired)` |
 | `refresh()` | the refresh completed | nothing | as `accessToken()` |
 | `claims` | — (property, memory) | `IdTokenClaims?` of the last validated ID token; null when unauthenticated. After a cold start the stored ID token is read back by the first operation (`accessToken()`, `userInfo()`, a refresh), without re-verifying it: it was validated before it was stored | — |
 | `userInfo()` | the UserInfo response is validated | `UserInfo` (the standard claims typed, the rest as a read-only map); `sub` must equal the ID token's `sub` (OIDC Core 5.3.2) | `Configuration(ProviderUnsupported)` when no endpoint, `Recoverable`, `Reauthenticate` |
@@ -375,7 +375,7 @@ handled in app code after `logout()` has wiped locally; the SDK does not special
 | Token | `suspend fun accessToken(): AccessToken` (`isDpopBound`; the scheme is `DPoP` if set, else `Bearer`) | `func accessToken() async throws -> AccessToken` (`tokenType` is `Bearer` or `DPoP`, in that spelling whatever the provider's `token_type` said; a type other than DPoP is `Bearer`, as on Android) | `Future<AccessToken> accessToken()` |
 | Claims | `val claims: IdTokenClaims?` | `var claims: IdTokenClaims? { get async }` | `Future<IdTokenClaims?> claims()` (a method, not a getter: the claims stay native, so the answer is asynchronous, and a `Future` getter would make `client.claims != null` always true) |
 | UserInfo | `suspend fun userInfo(): UserInfo` | `func userInfo() async throws -> UserInfo` | `Future<UserInfo> userInfo()` |
-| Step-up | `suspend fun stepUp(challenge, options)` | `func stepUp(acrValues:maxAge:options:) async throws` (the challenge is the `stepUp` case's payload) | `Future<void> stepUp(challenge, [options])` |
+| Step-up | `suspend fun stepUp(challenge, options)` | `func stepUp(_ challenge: OAuthError, options:) async throws` takes the caught `.stepUp` case; `func stepUp(acrValues:maxAge:options:) async throws` also exists | `Future<void> stepUp(challenge, [options])` |
 | HTTP | `interceptor(origins)`, `authenticatedClient(origins)` | `authenticatedSession(origins)` | `httpClient({origins})`, a `package:http` `Client`; `accessToken()` stays the escape hatch |
 | Browser leg | Auth Tab (androidx.browser, activity result) where the Custom Tabs provider supports it, Custom Tabs otherwise, any browser last; `WebView` unrepresentable | `ASWebAuthenticationSession` | native |
 | Redirect | an Auth Tab returns it as its result; otherwise the manifest-declared activity | `ASWebAuthenticationSession` returns it; `handleRedirect(_ url: URL) async -> Bool` feeds a Universal Link received while the app was cold to the pending authorization that `create()` resumes | native |
@@ -425,6 +425,12 @@ refresh token issued, `offline_access` advertised but not configured, a response
 4. The discovery and key-set cache lifetime bounds (5 minutes to 24 hours, 24 hours without `Cache-Control`) and the 30-second refresh skew: fixed, not configurable.
 5. Whether `authenticatedSession` on iOS should be a `URLSession` subclass or a wrapper; a wrapper
    keeps the surface small.
+6. `AccessToken` carries no expiry and no scopes on any platform, although the table above once listed
+   both. The SDK reads `expires_in` to schedule its own refresh, so `expiresAt` could be exposed for an
+   app that shows a session's end. Scopes are left out on purpose: the resource server decides what a
+   token may do, and an app that makes its own access decisions from scopes is making a mistake. Open:
+   expose `expiresAt` (a spec change first, then all three platforms and the bridge), or remove it from
+   the table.
 
 ## 17. Testing against the API
 

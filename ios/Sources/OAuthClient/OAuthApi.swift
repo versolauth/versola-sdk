@@ -16,7 +16,7 @@ public protocol OAuthApi: Sendable {
 
     func metadata() async throws -> ProviderMetadata
     func login(_ options: LoginOptions) async throws
-    func stepUp(acrValues: [String], maxAge: Int?, options: LoginOptions) async throws
+    func stepUp(_ challenge: OAuthError, options: LoginOptions) async throws
     func logout(_ options: LogoutOptions) async -> LogoutOutcome
     func accessToken() async throws -> AccessToken
     func refresh() async throws
@@ -27,8 +27,6 @@ public protocol OAuthApi: Sendable {
 /// The defaults a protocol cannot declare, so that `api.login()` reads as it does on the client.
 public extension OAuthApi {
     func login() async throws { try await login(.default) }
-    func stepUp(acrValues: [String], maxAge: Int?) async throws {
-        try await stepUp(acrValues: acrValues, maxAge: maxAge, options: .default)
-    }
+    func stepUp(_ challenge: OAuthError) async throws { try await stepUp(challenge, options: .default) }
     func logout() async -> LogoutOutcome { await logout(.default) }
 }

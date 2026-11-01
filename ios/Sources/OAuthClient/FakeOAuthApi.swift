@@ -69,7 +69,7 @@ public actor FakeOAuthApi: OAuthApi {
         setState(.authenticated)
     }
 
-    public func stepUp(acrValues: [String], maxAge: Int?, options: LoginOptions) throws {
+    public func stepUp(_ challenge: OAuthError, options: LoginOptions) throws {
         calls.append("stepUp")
         try throwScripted()
         setState(.authenticated)

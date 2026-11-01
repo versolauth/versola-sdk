@@ -24,3 +24,10 @@ import versola.oauth.core.VersolaError
 public class VersolaHttpException(
     public val error: VersolaError,
 ) : IOException(error.message, error)
+
+/**
+ * The [VersolaError] behind a failure of an authenticated OkHttp call, or null for a transport
+ * failure (no route, a reset socket) that the SDK does not classify. Saves an app from knowing
+ * about [VersolaHttpException] to read the category.
+ */
+public fun IOException.versolaError(): VersolaError? = (this as? VersolaHttpException)?.error

@@ -184,6 +184,15 @@ public final class OAuthClient: OAuthApi {
         }
     }
 
+    /// Answers the `OAuthError.stepUp` the app caught, the same way Kotlin's and Dart's
+    /// `stepUp` take the challenge. Any other error is a misuse, not a step-up.
+    public func stepUp(_ challenge: OAuthError, options: LoginOptions = .default) async throws {
+        guard case .stepUp(let acrValues, let maxAge) = challenge else {
+            throw OAuthError.configuration(.invalidConfiguration(detail: "stepUp needs an OAuthError.stepUp challenge"))
+        }
+        try await stepUp(acrValues: acrValues, maxAge: maxAge, options: options)
+    }
+
     /// Answers `OAuthError.stepUp` by re-authorizing at the authentication context the resource
     /// server asked for; the app then re-issues the refused call.
     public func stepUp(acrValues: [String], maxAge: Int?, options: LoginOptions = .default) async throws {
