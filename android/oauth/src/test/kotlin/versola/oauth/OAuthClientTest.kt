@@ -542,4 +542,70 @@ class OAuthClientTest {
         OAuthClient.forgetAll()
         assertEquals(SessionState.Unauthenticated, client(killed.configuration).sessionState.first())
     }
+
+    // AUDIT: C4 - the coordinator's default elapsedMillis is System.nanoTime(), which stops in deep sleep;
+    // OAuthClient wires only retryClock to elapsedRealtime. The cache must age with the device's real time.
+    @Test
+    fun `AUDIT C4 a cached access token ages with elapsedRealtime, so it is refreshed after the device slept past its lifetime`() = runTest {
+        val client = client()
+        client.login()
+        assertEquals(1, requests.count { it.url.encodedPath == "/token" })
+        assertEquals("at", client.accessToken().value)
+        assertEquals("a fresh token is served from memory", 1, requests.count { it.url.encodedPath == "/token" })
+
+        // Two hours of deep sleep: elapsedRealtime moves, a monotonic uptime clock does not.
+        val nanoBefore = System.nanoTime()
+        org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofHours(2))
+        val nanoMovedMillis = (System.nanoTime() - nanoBefore) / 1_000_000
+        assertTrue("precondition: System.nanoTime must not follow the shadowed clock (moved ${nanoMovedMillis}ms)", nanoMovedMillis < 60_000)
+        tokenBody = { tokenResponse(refreshToken = true, nonce = null).replace("\"at\"", "\"at-2\"") }
+        client.accessToken()
+
+        assertEquals("the 1 h token was served after 2 h of device time", 2, requests.count { it.url.encodedPath == "/token" })
+    }
+
+    // AUDIT: C5 - the default client has connect and read timeouts only: no overall deadline on a call.
+    @Test
+    fun `AUDIT C5 the default HTTP client has an overall call timeout`() {
+        val timeout = configuration().httpClient.callTimeoutMillis
+
+        assertTrue("callTimeoutMillis is $timeout; a slow-drip response can hold a call forever", timeout in 1..60_000)
+    }
+
+    // AUDIT: C8 - a login whose caller was cancelled leaves its slot 'for resume', but only a cold-start
+    // restore ever triggers the resume. The redirect that arrives afterwards must not be silently discarded.
+    @Test
+    fun `AUDIT C8 the redirect of a login whose caller was cancelled is consumed, not discarded`() = runTest {
+        OAuthClient.resumeScope = backgroundScope
+        val redirectArrives = CompletableDeferred<BrowserOutcome>()
+        val opened = CompletableDeferred<String>()
+        val live = FakeBrowser(provider.issuer)
+        val awaitingBrowser = object : BrowserAuthorizationSession by live {
+            override suspend fun authorize(uri: String, options: versola.oauth.core.BrowserSessionOptions): BrowserOutcome = authorize(uri)
+            override suspend fun authorize(uri: String): BrowserOutcome {
+                opened.complete(uri)
+                kotlinx.coroutines.awaitCancellation()
+            }
+            // What the redirect activity buffered while no login awaited it.
+            override suspend fun awaitPendingRedirect(): BrowserOutcome = redirectArrives.await()
+        }
+        val configuration = configuration()
+        val client = OAuthClient.create(application, configuration, browser = awaitingBrowser, keyProvider = ReversingKeyProvider)
+        val login = async(start = CoroutineStart.UNDISPATCHED) { runCatching { client.login() } }
+        val query = opened.await().substringAfter('?').split('&').associate { it.substringBefore('=') to it.substringAfter('=') }
+        login.cancelAndJoin()
+        tokenBody = { tokenResponse(refreshToken = true, nonce = query.getValue("nonce")) }
+
+        // The user finished signing in in the tab the cancelled login opened.
+        redirectArrives.complete(
+            BrowserOutcome.Redirect(
+                "$REDIRECT_URI?code=the-code&state=${query.getValue("state")}&iss=${java.net.URLEncoder.encode(provider.issuer, "UTF-8")}",
+            ),
+        )
+        val state = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            kotlinx.coroutines.withTimeoutOrNull(5_000) { client.sessionState.first { it != SessionState.Authorizing } }
+        }
+
+        assertEquals("nothing consumed the redirect: the client is still Authorizing", SessionState.Authenticated, state)
+    }
 }

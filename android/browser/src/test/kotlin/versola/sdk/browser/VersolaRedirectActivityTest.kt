@@ -334,4 +334,34 @@ class VersolaRedirectActivityTest {
             this.name = "${application.packageName}.$name"
         }
     }
+
+    // AUDIT: C15 - once the awaited redirect has been delivered nothing clears the expectation, so the exported
+    // activity keeps accepting (and foregrounding the host app for) any intent that matches the URI and state,
+    // and the buffer takes up to 64 of them. One expectation answers once.
+    @Test
+    fun `AUDIT C15 after the awaited redirect was delivered a repeat of it is not buffered again`() {
+        RedirectDispatcher.expect(REDIRECT, "s")
+        open("$REDIRECT?code=c&state=s")
+        assertEquals("$REDIRECT?code=c&state=s", (takeNow() as BrowserOutcome.Redirect).uri)
+
+        // The login is over; any app may now fire the same URI at the exported activity.
+        repeat(100) { open("$REDIRECT?code=junk$it&state=s") }
+
+        assertNull("an intent nobody awaits was buffered for the next login to find", takeNow())
+    }
+
+    // AUDIT: C15 - with no login awaited in a warm process, an intent is accepted and buffered because
+    // `expected` is null. NOTE: this is the state `a redirect with no expectation is delivered, as on a cold start`
+    // (above) pins as accepted; a fix must tell a cold start from a warm process (e.g. only a restored pending
+    // request opens the door) and update that test with it.
+    @Test
+    fun `AUDIT C15 with no login awaited in a warm process an arbitrary redirect is not accepted`() {
+        RedirectDispatcher.drain()
+
+        val controller = open("$REDIRECT?code=junk&state=whatever")
+
+        assertTrue(controller.get().isFinishing)
+        assertFalse("the redirect activity foregrounds the host app for an unawaited intent", RedirectDispatcher.redirectDelivered)
+        assertNull(takeNow())
+    }
 }

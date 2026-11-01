@@ -1,6 +1,7 @@
 package versola.oauth.core
 
 import java.io.File
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import kotlin.random.Random
 import mockwebserver3.MockResponse
@@ -612,5 +613,32 @@ class DiscoveryTest {
         val metadata = client.fetch(tenantIssuer)
 
         assertEquals(tenantIssuer, metadata.issuer)
+    }
+
+    // AUDIT: C10 - metadata() fetches under its mutex and every queued waiter repeats the whole fetch, so a
+    // cold cache against an unreachable provider costs N fetches (and N retry budgets above it), not one.
+    @Test
+    fun `AUDIT C10 concurrent metadata calls against an unreachable provider share one failed fetch`() = runTest {
+        var attempts = 0
+        val firstFetchStarted = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val unreachable = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val failing = object : DiscoveryClient {
+            override suspend fun fetch(issuer: String): ProviderMetadata {
+                attempts++
+                firstFetchStarted.complete(Unit)
+                unreachable.await()
+                throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.Network("provider unreachable"))
+            }
+        }
+        val service = DiscoveryService(issuer, failing, cache()) { testScheduler.currentTime }
+
+        val callers = List(5) { this.async { runCatching { service.metadata() } } }
+        firstFetchStarted.await()
+        testScheduler.runCurrent()
+        unreachable.complete(Unit)
+        val outcomes = callers.map { it.await() }
+
+        assertTrue(outcomes.all { it.isFailure })
+        assertTrue("5 concurrent callers made $attempts fetches; they should share one", attempts <= 1)
     }
 }
