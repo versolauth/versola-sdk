@@ -77,7 +77,7 @@ jobs:
 
       # flutter/.fvmrc is the one place the version is chosen (develop.md); fvm itself is not
       # installed here, the action fetches the same release.
-      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+      - uses: ./.github/actions/flutter-setup # subosito/flutter-action v2.23.0
         with:
           flutter-version: ${{ steps.flutter.outputs.version }}
           channel: stable
@@ -130,7 +130,7 @@ jobs:
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected Flutter version: $version" >&2; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+      - uses: ./.github/actions/flutter-setup # subosito/flutter-action v2.23.0
         with:
           flutter-version: ${{ steps.flutter.outputs.version }}
           channel: stable
@@ -190,7 +190,7 @@ jobs:
           [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected Flutter version: $version" >&2; exit 1; }
           echo "version=$version" >> "$GITHUB_OUTPUT"
 
-      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2.23.0
+      - uses: ./.github/actions/flutter-setup # subosito/flutter-action v2.23.0
         with:
           flutter-version: ${{ steps.flutter.outputs.version }}
           channel: stable
