@@ -435,26 +435,23 @@ refresh token issued, `offline_access` advertised but not configured, a response
 ## 17. Testing against the API
 
 An app's own code is tested against the client's operations, not against the protocol. So every
-platform exposes the operations of section 5 behind an interface, and the SDK ships a fake that
-implements it.
+platform exposes the operations of section 5 behind an interface, and the concrete client
+implements it. An app takes the interface in its own code, so a test can give it a mock or its own
+implementation.
 
-| Platform | Interface | Fake |
-|---|---|---|
-| Kotlin | `interface OAuthApi` in `versola.oauth` (`:oauth`) | `versola.oauth.testing.FakeOAuthApi` (same module) |
-| Swift | `protocol OAuthApi: Sendable` in `OAuthClient` (product `VersolaOAuth`) | `public actor FakeOAuthApi` in `OAuthClient` |
-| Dart | `abstract interface class OAuthApi` in `package:versola_oauth/versola_oauth.dart` | `FakeOAuthApi` in `package:versola_oauth/testing.dart` |
+| Platform | Interface |
+|---|---|
+| Kotlin | `interface OAuthApi` in `versola.oauth` (`:oauth`) |
+| Swift | `protocol OAuthApi: Sendable` in `OAuthClient` (product `VersolaOAuth`) |
+| Dart | `abstract interface class OAuthApi` in `package:versola_oauth/versola_oauth.dart` |
 
 - The interface holds the state (`sessionState`, `claims`), `metadata`, `login`, `stepUp`, `logout`,
   `accessToken`, `refresh`, `userInfo` and `keyAttestation`, with the same parameters, results and
   error categories as the concrete client. The HTTP helpers (`interceptor` and `authenticatedClient`
   on Android, `authenticatedSession` on iOS, `httpClient` on Flutter) stay on the concrete client:
-  they return platform HTTP types a fake cannot honour.
-- The concrete client implements the interface. An app that depends on `OAuthApi` can take the real
-  client in production and the fake in a test.
-- The fake performs no protocol work: no PKCE, no validation, no storage. It records each call and
-  returns what the test scripted, including any error category, so the app's handling of each
-  category can be tested without a network or a browser.
+  they return platform HTTP types an implementation of the interface cannot honour.
 - Errors and value types are constructible on every platform (`VersolaError.*`, `OAuthError`,
-  `RecoverableError` and the rest), so a test can script them directly.
-- Creating a real client is not part of the interface: `create` stays on the concrete type, and an
-  app's code takes an `OAuthApi`, not a client it constructs.
+  `RecoverableError` and the rest), so a test can produce each error category directly.
+- Creating a real client is not part of the interface: `create` stays on the concrete type.
+- The SDK ships no fake. A fake is a test double the app writes against the interface; the SDK does
+  not do protocol work for it.

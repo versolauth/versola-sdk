@@ -127,32 +127,3 @@ public final class versola/oauth/ProviderEndpoints {
 	public final fun getUserinfoEndpoint ()Ljava/lang/String;
 }
 
-public final class versola/oauth/testing/FakeOAuthApi : versola/oauth/OAuthApi {
-	public fun <init> ()V
-	public fun <init> (Lversola/oauth/core/SessionState;)V
-	public synthetic fun <init> (Lversola/oauth/core/SessionState;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public fun accessToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public final fun getCalls ()Ljava/util/List;
-	public fun getClaims ()Lversola/oauth/core/IdTokenClaims;
-	public final fun getError ()Lversola/oauth/core/VersolaError;
-	public final fun getLogoutOutcome ()Lversola/oauth/core/LogoutOutcome;
-	public final fun getMetadata ()Lversola/oauth/core/ProviderMetadata;
-	public fun getSessionState ()Lkotlinx/coroutines/flow/Flow;
-	public final fun getToken ()Lversola/oauth/core/AccessToken;
-	public final fun getUserInfo ()Lversola/oauth/core/UserInfo;
-	public fun keyAttestation (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun login (Lversola/oauth/LoginOptions;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun logout (Lversola/oauth/LogoutOptions;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun metadata (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun refresh (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun setClaims (Lversola/oauth/core/IdTokenClaims;)V
-	public final fun setError (Lversola/oauth/core/VersolaError;)V
-	public final fun setLogoutOutcome (Lversola/oauth/core/LogoutOutcome;)V
-	public final fun setMetadata (Lversola/oauth/core/ProviderMetadata;)V
-	public final fun setState (Lversola/oauth/core/SessionState;)V
-	public final fun setToken (Lversola/oauth/core/AccessToken;)V
-	public final fun setUserInfo (Lversola/oauth/core/UserInfo;)V
-	public fun stepUp (Lversola/oauth/core/VersolaError$StepUp;Lversola/oauth/LoginOptions;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun userInfo (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-}
-
