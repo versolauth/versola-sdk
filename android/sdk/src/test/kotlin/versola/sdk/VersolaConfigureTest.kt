@@ -234,4 +234,35 @@ class VersolaConfigureTest {
 
         assertEquals("the 1 h cooldown still held after 2 h of device time", 2, launched.size)
     }
+
+    @Test
+    fun `AUDIT Z3 a cleartext edgeBaseUrl is refused unless the host is loopback`() {
+        // AUDIT: Z3. edgeBaseUrl only has to parse as an http(s) URL today, so `http://edge.example.com` becomes the
+        // interceptor scope and tokens and proofs would travel in cleartext; RequestScope.origins and
+        // OAuthConfiguration.requireOrigin already enforce https-or-loopback.
+        for (backChannel in listOf(BackChannel.Auth, BackChannel.Edge)) {
+            val error = runCatching {
+                Versola.configure(
+                    application, "https://id.versola.io", "mobile-app", "https://app.example.com/oauth",
+                    edgeBaseUrl = "http://edge.example.com", backChannel = backChannel,
+                )
+            }.exceptionOrNull()
+
+            assertTrue("$backChannel: expected the typed Configuration error for a cleartext edge, got $error", error is VersolaError.Configuration)
+            assertTrue((error as VersolaError.Configuration).detail is VersolaError.Configuration.Detail.InvalidConfiguration)
+        }
+    }
+
+    @Test
+    fun `AUDIT Z3 a loopback edgeBaseUrl may stay cleartext, as the issuer rule allows`() {
+        for (edge in listOf("http://localhost:8080", "http://127.0.0.1:8080", "http://[::1]:8080")) {
+            val versola = Versola.configure(
+                application, "https://id.versola.io", "mobile-app", "https://app.example.com/oauth",
+                edgeBaseUrl = edge, backChannel = BackChannel.Edge,
+            )
+
+            assertNotNull(edge, versola.dpop)
+        }
+    }
+
 }

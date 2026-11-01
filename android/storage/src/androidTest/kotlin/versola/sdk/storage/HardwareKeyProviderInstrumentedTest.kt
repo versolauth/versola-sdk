@@ -167,4 +167,29 @@ class HardwareKeyProviderInstrumentedTest {
             // InvalidAlgorithmParameterException / IllegalStateException from the Keystore.
         }
     }
+    /**
+     * AUDIT: Z2, device tier. `key()` returns any existing alias without comparing its
+     * authentication properties to the policy, so an app that moves from None to OnAppUnlock keeps wrapping
+     * under the ungated key. Correct: the second provider either fails (typed) or leaves a gated key behind.
+     * On an emulator without a secure lock screen the Keystore refuses to create a gated key at all, which
+     * is also an acceptable "not silently reused" outcome; the assertion reads the key back with KeyInfo.
+     */
+    @Test
+    fun auditZ2AnUngatedKeyIsNotSilentlyReusedWhenThePolicyBecomesOnAppUnlock() = runTest {
+        HardwareKeyProvider(alias, UnlockPolicy.None).wrap("grant".toByteArray())
+
+        val outcome = runCatching { HardwareKeyProvider(alias, UnlockPolicy.OnAppUnlock).wrap("grant".toByteArray()) }
+
+        val key = (KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.getEntry(alias, null) as? KeyStore.SecretKeyEntry)?.secretKey
+        val gated = key?.let {
+            val factory = javax.crypto.SecretKeyFactory.getInstance(it.algorithm, "AndroidKeyStore")
+            (factory.getKeySpec(it, android.security.keystore.KeyInfo::class.java) as android.security.keystore.KeyInfo).isUserAuthenticationRequired
+        } == true
+        assertTrue(
+            "wrap under OnAppUnlock must have thrown or left a user-authentication-gated key; " +
+                "outcome=${outcome.exceptionOrNull() ?: "success"}, key gated=$gated",
+            outcome.isFailure || gated,
+        )
+    }
+
 }
