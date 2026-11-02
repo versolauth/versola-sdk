@@ -228,6 +228,7 @@ OAuthError errorFromMessage(ErrorMessage e) {
             ? null
             : Duration(milliseconds: e.retryAfterMillis!),
         origin: e.origin,
+        sdkCode: e.sdkCode,
       );
     case ErrorCategoryMessage.reauthenticate:
       final reason = byName(ReauthenticateReason.values, e.kind);
@@ -236,6 +237,7 @@ OAuthError errorFromMessage(ErrorMessage e) {
         e.message,
         code: e.code,
         detail: reason == null ? e.kind : null,
+        sdkCode: e.sdkCode,
       );
     case ErrorCategoryMessage.stepUp:
       return StepUpError(
@@ -262,6 +264,7 @@ OAuthError errorFromMessage(ErrorMessage e) {
         received: e.received,
         field: e.field,
         capability: e.capability,
+        sdkCode: e.sdkCode,
         idTokenRejection: e.idTokenRejection == null
             ? null
             : rejection ?? IdTokenRejection.unknown,

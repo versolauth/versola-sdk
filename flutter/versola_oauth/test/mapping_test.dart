@@ -4,6 +4,89 @@ import 'package:versola_oauth/src/messages.g.dart';
 import 'package:versola_oauth/versola_oauth.dart';
 
 void main() {
+  group('sdkCode (the stable code of spec/errors.md)', () {
+    ErrorMessage message(
+      ErrorCategoryMessage category,
+      String kind, {
+      String? sdkCode,
+      String? code,
+    }) => ErrorMessage(
+      category: category,
+      kind: kind,
+      message: 'm',
+      code: code,
+      sdkCode: sdkCode,
+    );
+
+    test(
+      'the native code crosses unchanged and is apart from the provider code',
+      () {
+        final e = errorFromMessage(
+          message(
+            ErrorCategoryMessage.configuration,
+            'tokenRequestRejected',
+            sdkCode: 'configuration.token_request_rejected',
+            code: 'invalid_scope',
+          ),
+        ) as ConfigurationError;
+        expect(e.sdkCode, 'configuration.token_request_rejected');
+        expect(e.code, 'invalid_scope');
+      },
+    );
+
+    test('a case this Dart does not know keeps the native code, never a guessed one', () {
+      final e = errorFromMessage(
+        message(
+          ErrorCategoryMessage.recoverable,
+          'somethingNew',
+          sdkCode: 'recoverable.something_new',
+        ),
+      );
+      expect(e, isA<RecoverableError>());
+      expect(e.sdkCode, 'recoverable.something_new');
+    });
+
+    test('an error built in Dart derives the same code from its case', () {
+      expect(
+        const RecoverableError(
+          RecoverableCause.pendingRequestExpired,
+          'm',
+        ).sdkCode,
+        'recoverable.pending_request_expired',
+      );
+      expect(
+        const ReauthenticateError(
+          ReauthenticateReason.sessionRejected,
+          'm',
+        ).sdkCode,
+        'reauthenticate.session_rejected',
+      );
+      expect(const StepUpError('m', acrValues: ['c2']).sdkCode, 'step_up');
+      expect(
+        const ConfigurationError(
+          ConfigurationDetail.stateMismatch,
+          'm',
+        ).sdkCode,
+        'configuration.state_mismatch',
+      );
+    });
+
+    test('the code does not depend on the payload', () {
+      expect(
+        const RecoverableError(
+          RecoverableCause.network,
+          'a',
+          attempts: 1,
+        ).sdkCode,
+        const RecoverableError(
+          RecoverableCause.network,
+          'b',
+          attempts: 9,
+        ).sdkCode,
+      );
+    });
+  });
+
   group('errorFromMessage', () {
     test('rebuilds every category with its payload', () {
       final recoverable = errorFromMessage(

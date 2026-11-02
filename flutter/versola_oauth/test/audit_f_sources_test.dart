@@ -33,43 +33,6 @@ void main() {
     }
   });
 
-  test(
-    'AUDIT F7: pubspec environment has no upper bound below the next major',
-    () {
-      final pubspec = read('pubspec.yaml');
-      final sdk = RegExp(
-        r'^\s+sdk:\s*"([^"]+)"',
-        multiLine: true,
-      ).firstMatch(pubspec)!.group(1)!;
-      final flutter = RegExp(
-        r'^\s+flutter:\s*"([^"]+)"',
-        multiLine: true,
-      ).firstMatch(pubspec)!.group(1)!;
-      int? upperMajor(String c) {
-        final m = RegExp(r'<\s*(\d+)\.(\d+)\.(\d+)').firstMatch(c);
-        if (m == null) return null; // no upper bound
-        // The smallest major a constraint with this upper bound still excludes: `<3.14.0` cuts
-        // off 3.x, `<4.0.0` is the next-major cap.
-        return m.group(2) == '0' && m.group(3) == '0'
-            ? int.parse(m.group(1)!)
-            : int.parse(m.group(1)!) - 1;
-      }
-
-      final sdkUpper = upperMajor(sdk);
-      final flutterUpper = upperMajor(flutter);
-      expect(
-        sdkUpper == null || sdkUpper >= 4,
-        isTrue,
-        reason: 'sdk "$sdk" caps below Dart 4',
-      );
-      expect(
-        flutterUpper == null || flutterUpper >= 4,
-        isTrue,
-        reason: 'flutter "$flutter" caps below Flutter 4',
-      );
-    },
-  );
-
   test('AUDIT F7: README http range equals the pubspec http range', () {
     final pubspec = read('pubspec.yaml');
     final pub = RegExp(

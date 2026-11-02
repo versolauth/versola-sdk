@@ -79,9 +79,13 @@ internal fun KeyAttestation.toWireName(): String = when (this) {
 /**
  * Flattens the taxonomy for the wire. `category` is the contract; `kind` is the case name in
  * the spelling Dart's enums use, so the sealed hierarchy is rebuilt case for case. The text
- * is the SDK's own message, which never carries a credential (`security.md`).
+ * is the SDK's own message, which never carries a credential (`security.md`). `sdkCode` is the
+ * error's stable `code` (`spec/errors.md`, "Stable codes"), distinct from `code`, which is the
+ * provider's OAuth error code.
  */
-internal fun VersolaError.toMessage(): ErrorMessage = when (this) {
+internal fun VersolaError.toMessage(): ErrorMessage = toKindMessage().copy(sdkCode = code)
+
+private fun VersolaError.toKindMessage(): ErrorMessage = when (this) {
     is VersolaError.Recoverable -> when (val c = reason) {
         Cause.UserCancelled -> recoverable("userCancelled")
         Cause.SystemCancelled -> recoverable("systemCancelled")
@@ -141,6 +145,7 @@ internal fun Throwable.toErrorMessage(): ErrorMessage = (this as? VersolaError)?
         kind = "invalidConfiguration",
         message = "configuration: unexpected ${this::class.simpleName}",
         detail = "unexpected ${this::class.simpleName}",
+        sdkCode = "configuration.invalid_configuration",
     )
 
 private fun VersolaError.recoverable(kind: String) =

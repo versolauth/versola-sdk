@@ -123,6 +123,7 @@ extension Error {
         let name = String(describing: type(of: self))
         var m = ErrorMessage(category: .configuration, kind: "invalidConfiguration", message: "configuration: unexpected \(name)")
         m.detail = "unexpected \(name)"
+        m.sdkCode = "configuration.invalid_configuration"
         return m
     }
 }
@@ -184,6 +185,8 @@ extension OAuthError {
             case .hardwareBindingUnavailable(let detail): m.kind = "hardwareBindingUnavailable"; m.detail = detail
             }
         }
+        // The stable `code` of `spec/errors.md`, distinct from `m.code`, the provider's OAuth error code.
+        m.sdkCode = code
         return m
     }
 }

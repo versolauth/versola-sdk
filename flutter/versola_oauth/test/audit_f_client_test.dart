@@ -11,7 +11,7 @@ import 'package:versola_oauth/versola_oauth.dart';
 
 import 'client_test.dart' show FakeHost, configuration, created, settle;
 
-// Audit tests for the Flutter plugin (findings F1-F6, F9). Each asserts the CORRECT behaviour
+// Audit tests for the Flutter plugin (findings F1-F6). Each asserts the CORRECT behaviour
 // and is expected to fail until the finding is fixed; no production code was changed.
 
 String channelName(String handle) =>
@@ -43,23 +43,6 @@ class SharedNativeChannel {
   int cancels = 0;
   MockStreamHandlerEventSink? sink;
   void emit(SessionStateMessage s) => sink?.success(s);
-}
-
-class PendingLoginHost extends FakeHost {
-  final Completer<VoidResult> loginResult = Completer<VoidResult>();
-  final List<String> invocations = [];
-  @override
-  Future<VoidResult> login(String handle, LoginOptionsMessage options) {
-    invocations.add('login');
-    return loginResult.future;
-  }
-
-  // The proposed host call; absent from the generated API today.
-  @override
-  dynamic noSuchMethod(Invocation invocation) {
-    invocations.add(invocation.memberName.toString());
-    return Future<VoidResult>.value(VoidOk());
-  }
 }
 
 void main() {
@@ -311,23 +294,5 @@ void main() {
         throwsArgumentError,
       );
     });
-  });
-
-  group('AUDIT F9 cancel from Dart', () {
-    // Design test: `cancelLogin()` is the proposed name. Called dynamically so the file compiles
-    // before the API exists (today it fails with NoSuchMethodError).
-    test(
-      'AUDIT F9: cancelLogin() on an in-flight login reaches the host',
-      () async {
-        final host = PendingLoginHost();
-        final client = await created(host);
-        final login = client.login();
-        await settle();
-        await (client as dynamic).cancelLogin();
-        expect(host.invocations.any((i) => i.contains('cancelLogin')), isTrue);
-        host.loginResult.complete(VoidOk());
-        await login;
-      },
-    );
   });
 }

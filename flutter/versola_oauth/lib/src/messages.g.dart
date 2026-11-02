@@ -584,6 +584,7 @@ class ErrorMessage {
     this.field,
     this.capability,
     this.idTokenRejection,
+    this.sdkCode,
   });
 
   ErrorCategoryMessage category;
@@ -624,6 +625,10 @@ class ErrorMessage {
 
   String? idTokenRejection;
 
+  /// The native error's stable `code` (`spec/errors.md`, "Stable codes"), e.g.
+  /// `configuration.state_mismatch`. Not [code], which is the provider's OAuth error code.
+  String? sdkCode;
+
   List<Object?> _toList() {
     return <Object?>[
       category,
@@ -644,6 +649,7 @@ class ErrorMessage {
       field,
       capability,
       idTokenRejection,
+      sdkCode,
     ];
   }
 
@@ -672,6 +678,7 @@ class ErrorMessage {
       field: result[15] as String?,
       capability: result[16] as String?,
       idTokenRejection: result[17] as String?,
+      sdkCode: result[18] as String?,
     );
   }
 
@@ -701,7 +708,8 @@ class ErrorMessage {
         _deepEquals(received, other.received) &&
         _deepEquals(field, other.field) &&
         _deepEquals(capability, other.capability) &&
-        _deepEquals(idTokenRejection, other.idTokenRejection);
+        _deepEquals(idTokenRejection, other.idTokenRejection) &&
+        _deepEquals(sdkCode, other.sdkCode);
   }
 
   @override
@@ -710,7 +718,7 @@ class ErrorMessage {
 
   @override
   String toString() {
-    return 'ErrorMessage(category: $category, kind: $kind, message: $message, code: $code, errorDescription: $errorDescription, detail: $detail, acrValues: $acrValues, maxAge: $maxAge, attempts: $attempts, elapsedMillis: $elapsedMillis, status: $status, retryAfterMillis: $retryAfterMillis, origin: $origin, expected: $expected, received: $received, field: $field, capability: $capability, idTokenRejection: $idTokenRejection)';
+    return 'ErrorMessage(category: $category, kind: $kind, message: $message, code: $code, errorDescription: $errorDescription, detail: $detail, acrValues: $acrValues, maxAge: $maxAge, attempts: $attempts, elapsedMillis: $elapsedMillis, status: $status, retryAfterMillis: $retryAfterMillis, origin: $origin, expected: $expected, received: $received, field: $field, capability: $capability, idTokenRejection: $idTokenRejection, sdkCode: $sdkCode)';
   }
 }
 

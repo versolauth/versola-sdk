@@ -56,7 +56,11 @@ abstract interface class OAuthClient {
 
   /// Opens the system browser, validates the redirect, exchanges the code, validates the ID
   /// token and persists the grant, natively; `authenticated` is published after the grant is
-  /// durably stored. While `authorizing` it is refused: observe [sessionStates] first. A
+  /// durably stored. A second `login()` while one is in flight joins it when it asks for the same
+  /// thing (same scopes, prompt, `acr_values`, `max_age`, parameters and `ephemeralBrowser`): both
+  /// futures complete with the one result, one browser opens and one code is exchanged, so a
+  /// double-tapped button is not an error. One that asks for something else is refused with a
+  /// [ConfigurationError] (`invalidConfiguration`): observe [sessionStates] before asking. A
   /// redirect that reaches a cold-started process finishes the pending request on its own and
   /// the result arrives on [sessionStates] (`spec/oauth-sdk-api.md` section 4).
   Future<void> login([LoginOptions? options]);

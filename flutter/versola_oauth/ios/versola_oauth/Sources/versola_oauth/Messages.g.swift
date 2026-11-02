@@ -604,6 +604,9 @@ struct ErrorMessage: Hashable, CustomStringConvertible {
   var field: String? = nil
   var capability: String? = nil
   var idTokenRejection: String? = nil
+  /// The native error's stable `code` (`spec/errors.md`, "Stable codes"), e.g.
+  /// `configuration.state_mismatch`. Not [code], which is the provider's OAuth error code.
+  var sdkCode: String? = nil
 
 
   // swift-format-ignore: AlwaysUseLowerCamelCase
@@ -626,6 +629,7 @@ struct ErrorMessage: Hashable, CustomStringConvertible {
     let field: String? = nilOrValue(pigeonVar_list[15])
     let capability: String? = nilOrValue(pigeonVar_list[16])
     let idTokenRejection: String? = nilOrValue(pigeonVar_list[17])
+    let sdkCode: String? = nilOrValue(pigeonVar_list[18])
 
     return ErrorMessage(
       category: category,
@@ -645,7 +649,8 @@ struct ErrorMessage: Hashable, CustomStringConvertible {
       received: received,
       field: field,
       capability: capability,
-      idTokenRejection: idTokenRejection
+      idTokenRejection: idTokenRejection,
+      sdkCode: sdkCode
     )
   }
   func toList() -> [Any?] {
@@ -668,13 +673,14 @@ struct ErrorMessage: Hashable, CustomStringConvertible {
       field,
       capability,
       idTokenRejection,
+      sdkCode,
     ]
   }
   static func == (lhs: ErrorMessage, rhs: ErrorMessage) -> Bool {
     if Swift.type(of: lhs) != Swift.type(of: rhs) {
       return false
     }
-    return MessagesPigeonInternal.deepEquals(lhs.category, rhs.category) && MessagesPigeonInternal.deepEquals(lhs.kind, rhs.kind) && MessagesPigeonInternal.deepEquals(lhs.message, rhs.message) && MessagesPigeonInternal.deepEquals(lhs.code, rhs.code) && MessagesPigeonInternal.deepEquals(lhs.errorDescription, rhs.errorDescription) && MessagesPigeonInternal.deepEquals(lhs.detail, rhs.detail) && MessagesPigeonInternal.deepEquals(lhs.acrValues, rhs.acrValues) && MessagesPigeonInternal.deepEquals(lhs.maxAge, rhs.maxAge) && MessagesPigeonInternal.deepEquals(lhs.attempts, rhs.attempts) && MessagesPigeonInternal.deepEquals(lhs.elapsedMillis, rhs.elapsedMillis) && MessagesPigeonInternal.deepEquals(lhs.status, rhs.status) && MessagesPigeonInternal.deepEquals(lhs.retryAfterMillis, rhs.retryAfterMillis) && MessagesPigeonInternal.deepEquals(lhs.origin, rhs.origin) && MessagesPigeonInternal.deepEquals(lhs.expected, rhs.expected) && MessagesPigeonInternal.deepEquals(lhs.received, rhs.received) && MessagesPigeonInternal.deepEquals(lhs.field, rhs.field) && MessagesPigeonInternal.deepEquals(lhs.capability, rhs.capability) && MessagesPigeonInternal.deepEquals(lhs.idTokenRejection, rhs.idTokenRejection)
+    return MessagesPigeonInternal.deepEquals(lhs.category, rhs.category) && MessagesPigeonInternal.deepEquals(lhs.kind, rhs.kind) && MessagesPigeonInternal.deepEquals(lhs.message, rhs.message) && MessagesPigeonInternal.deepEquals(lhs.code, rhs.code) && MessagesPigeonInternal.deepEquals(lhs.errorDescription, rhs.errorDescription) && MessagesPigeonInternal.deepEquals(lhs.detail, rhs.detail) && MessagesPigeonInternal.deepEquals(lhs.acrValues, rhs.acrValues) && MessagesPigeonInternal.deepEquals(lhs.maxAge, rhs.maxAge) && MessagesPigeonInternal.deepEquals(lhs.attempts, rhs.attempts) && MessagesPigeonInternal.deepEquals(lhs.elapsedMillis, rhs.elapsedMillis) && MessagesPigeonInternal.deepEquals(lhs.status, rhs.status) && MessagesPigeonInternal.deepEquals(lhs.retryAfterMillis, rhs.retryAfterMillis) && MessagesPigeonInternal.deepEquals(lhs.origin, rhs.origin) && MessagesPigeonInternal.deepEquals(lhs.expected, rhs.expected) && MessagesPigeonInternal.deepEquals(lhs.received, rhs.received) && MessagesPigeonInternal.deepEquals(lhs.field, rhs.field) && MessagesPigeonInternal.deepEquals(lhs.capability, rhs.capability) && MessagesPigeonInternal.deepEquals(lhs.idTokenRejection, rhs.idTokenRejection) && MessagesPigeonInternal.deepEquals(lhs.sdkCode, rhs.sdkCode)
   }
 
   func hash(into hasher: inout Hasher) {
@@ -697,10 +703,11 @@ struct ErrorMessage: Hashable, CustomStringConvertible {
     MessagesPigeonInternal.deepHash(value: field, hasher: &hasher)
     MessagesPigeonInternal.deepHash(value: capability, hasher: &hasher)
     MessagesPigeonInternal.deepHash(value: idTokenRejection, hasher: &hasher)
+    MessagesPigeonInternal.deepHash(value: sdkCode, hasher: &hasher)
   }
 
   public var description: String {
-    return "ErrorMessage(category: \(String(describing: category)), kind: \(String(describing: kind)), message: \(String(describing: message)), code: \(String(describing: code)), errorDescription: \(String(describing: errorDescription)), detail: \(String(describing: detail)), acrValues: \(String(describing: acrValues)), maxAge: \(String(describing: maxAge)), attempts: \(String(describing: attempts)), elapsedMillis: \(String(describing: elapsedMillis)), status: \(String(describing: status)), retryAfterMillis: \(String(describing: retryAfterMillis)), origin: \(String(describing: origin)), expected: \(String(describing: expected)), received: \(String(describing: received)), field: \(String(describing: field)), capability: \(String(describing: capability)), idTokenRejection: \(String(describing: idTokenRejection)))"
+    return "ErrorMessage(category: \(String(describing: category)), kind: \(String(describing: kind)), message: \(String(describing: message)), code: \(String(describing: code)), errorDescription: \(String(describing: errorDescription)), detail: \(String(describing: detail)), acrValues: \(String(describing: acrValues)), maxAge: \(String(describing: maxAge)), attempts: \(String(describing: attempts)), elapsedMillis: \(String(describing: elapsedMillis)), status: \(String(describing: status)), retryAfterMillis: \(String(describing: retryAfterMillis)), origin: \(String(describing: origin)), expected: \(String(describing: expected)), received: \(String(describing: received)), field: \(String(describing: field)), capability: \(String(describing: capability)), idTokenRejection: \(String(describing: idTokenRejection)), sdkCode: \(String(describing: sdkCode)))"
   }
 }
 

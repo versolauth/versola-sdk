@@ -6,6 +6,7 @@
 - **`OAuthConfiguration` and `LoginOptions` are no longer `const`**: they copy the collections they are given and expose them unmodifiable, so a set the app changes later cannot alter a configuration already handed over. Drop `const` at the call site. `login()` and `stepUp()` take an optional `LoginOptions?`.
 - **Value equality** for the configuration, login options, access token, claims, logout outcome, user info and every `OAuthError`.
 - **`create` throws `UnsupportedError` off Android and iOS** instead of a channel-failure `ConfigurationError`.
+- **`OAuthError.sdkCode`**: the stable, payload-independent code of the case (`configuration.state_mismatch`, `recoverable.network`, `step_up`; the list is in `spec/errors.md`), supplied by the native SDK. It is a separate name because `ConfigurationError.code` and `ReauthenticateError.code` already carry the provider's OAuth error code.
 - **A `Duration` the bridge would truncate is refused** with an `ArgumentError` (`clockSkewTolerance` below whole seconds, a retry duration below whole milliseconds).
 
 ### Fixes

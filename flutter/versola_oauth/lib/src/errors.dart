@@ -1,4 +1,8 @@
+// ignore_for_file: prefer_initializing_formals
 import 'package:flutter/foundation.dart' show listEquals;
+
+String _snake(String camel) =>
+    camel.replaceAllMapped(RegExp('[A-Z]'), (m) => '_${m[0]!.toLowerCase()}');
 
 /// The error taxonomy of `spec/errors.md`: four categories, and the category is the contract.
 /// Mirrors the native `VersolaError` / `OAuthError` case for case, so an app switches on the
@@ -8,6 +12,16 @@ sealed class OAuthError implements Exception {
 
   /// A short, log-safe description.
   final String message;
+
+  /// The stable machine-readable code of this case (`spec/errors.md`, "Stable codes"), for logs,
+  /// analytics and branching: `recoverable.network`, `configuration.state_mismatch`, `step_up`.
+  /// It names the case, never the payload, and is the same on every platform. It is **not**
+  /// `ConfigurationError.code` or `ReauthenticateError.code`, which carry the provider's OAuth
+  /// error code (`invalid_scope`); those names predate the stable codes, so this one is `sdkCode`.
+  ///
+  /// The value is the native SDK's own. An error built in Dart (a test fake) derives it from its
+  /// case, by the same rule.
+  String get sdkCode;
 
   @override
   String toString() => message;
@@ -24,7 +38,9 @@ final class RecoverableError extends OAuthError {
     this.status,
     this.retryAfter,
     this.origin,
-  });
+    String? sdkCode,
+  }) : _sdkCode = sdkCode;
+  final String? _sdkCode;
   final RecoverableCause cause;
   final String? detail;
   final int? attempts;
@@ -43,8 +59,12 @@ final class RecoverableError extends OAuthError {
   final String? origin;
 
   @override
+  String get sdkCode => _sdkCode ?? 'recoverable.${_snake(cause.name)}';
+
+  @override
   bool operator ==(Object other) =>
       other is RecoverableError &&
+      sdkCode == other.sdkCode &&
       message == other.message &&
       cause == other.cause &&
       detail == other.detail &&
@@ -56,6 +76,7 @@ final class RecoverableError extends OAuthError {
 
   @override
   int get hashCode => Object.hash(
+    sdkCode,
     message,
     cause,
     detail,
@@ -91,7 +112,9 @@ final class ReauthenticateError extends OAuthError {
     super.message, {
     this.code,
     this.detail,
-  });
+    String? sdkCode,
+  }) : _sdkCode = sdkCode;
+  final String? _sdkCode;
   final ReauthenticateReason reason;
   final String? code;
 
@@ -100,8 +123,12 @@ final class ReauthenticateError extends OAuthError {
   final String? detail;
 
   @override
+  String get sdkCode => _sdkCode ?? 'reauthenticate.${_snake(reason.name)}';
+
+  @override
   bool operator ==(Object other) =>
       other is ReauthenticateError &&
+      sdkCode == other.sdkCode &&
       message == other.message &&
       reason == other.reason &&
       code == other.code &&
@@ -128,6 +155,10 @@ enum ReauthenticateReason {
 /// RFC 9470: the resource server wants a stronger authentication context.
 final class StepUpError extends OAuthError {
   const StepUpError(super.message, {required this.acrValues, this.maxAge});
+
+  @override
+  String get sdkCode => 'step_up';
+
   final List<String> acrValues;
   final int? maxAge;
 
@@ -155,7 +186,9 @@ final class ConfigurationError extends OAuthError {
     this.field,
     this.capability,
     this.idTokenRejection,
-  });
+    String? sdkCode,
+  }) : _sdkCode = sdkCode;
+  final String? _sdkCode;
   final ConfigurationDetail detail;
   final String? code;
   final String? description;
@@ -167,8 +200,14 @@ final class ConfigurationError extends OAuthError {
   final IdTokenRejection? idTokenRejection;
 
   @override
+  String get sdkCode =>
+      _sdkCode ??
+      'configuration.${_snake(detail == ConfigurationDetail.unknown ? (text ?? 'unknown') : detail.name)}';
+
+  @override
   bool operator ==(Object other) =>
       other is ConfigurationError &&
+      sdkCode == other.sdkCode &&
       message == other.message &&
       detail == other.detail &&
       code == other.code &&
