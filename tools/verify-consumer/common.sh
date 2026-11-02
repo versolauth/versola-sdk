@@ -53,7 +53,7 @@ render_templates() { # dir NAME=value...
 #
 #   prepare_android_consumer <version>       a fresh app in WORK, the current directory is the app
 #   set_android_repositories <text>          what the settings file's repositories block holds
-#   check_android_resolution <version> <hint>   all six modules resolve at <version>
+#   check_android_resolution <version> <hint>   oauth-android resolves at <version> and nothing else under io.versola
 #   assemble_android_consumer                assembleDebug and the APK
 #
 # Gradle version, AGP and Kotlin are read from this repository, so the consumer is built with the
@@ -114,17 +114,15 @@ check_android_resolution() { # version unresolved-hint
     grep -B1 "FAILED" "$WORK/dependencies.txt" >&2
     fail "a dependency did not resolve ($hint)"
   fi
-  # Gradle settles a conflict between two requests for a module by taking the higher, so a metadata
-  # file naming an older release of a module would resolve to <version> and look fine; the report
-  # still prints the request ("io.versola:oauth-core:0.1.0 -> 0.2.0"), and that is a failure too.
-  if grep -E 'io\.versola:[a-z-]+:' "$WORK/dependencies.txt" | grep -vE "io\.versola:[a-z-]+:$version( |$)"; then
-    fail "something under io.versola asks for a version other than $version (the lines above)"
+  # The SDK is one artefact: nothing else under io.versola may be asked for. A POM that still named
+  # oauth-core or dpop-android would resolve from Central at 0.1.0 or 0.2.0 and look fine, and bring
+  # a second copy of every class with it.
+  if grep -E 'io\.versola:' "$WORK/dependencies.txt" | grep -vE "io\.versola:oauth-android:$version( |$)"; then
+    fail "something under io.versola other than oauth-android:$version is on the classpath (the lines above)"
   fi
-  for artifact in oauth-android oauth-core dpop-android storage-android browser-android okhttp-android; do
-    grep -qE "io\.versola:$artifact:$version( |$)" "$WORK/dependencies.txt" \
-      || { cat "$WORK/dependencies.txt" >&2; fail "io.versola:$artifact:$version is not in the resolved runtime classpath"; }
-    echo "verify-consumer: resolved io.versola:$artifact:$version"
-  done
+  grep -qE "io\.versola:oauth-android:$version( |$)" "$WORK/dependencies.txt" \
+    || { cat "$WORK/dependencies.txt" >&2; fail "io.versola:oauth-android:$version is not in the resolved runtime classpath"; }
+  echo "verify-consumer: resolved io.versola:oauth-android:$version, and nothing else under io.versola"
 }
 
 assemble_android_consumer() {

@@ -13,15 +13,11 @@
 # naming a version the bundle lacks, fails here instead of resolving from Central. google() and
 # mavenCentral() stay for the third-party dependencies (OkHttp, AndroidX, Kotlin) and the plugins.
 #
-# The release is read twice, because consumers read it in two ways. First by its Gradle metadata
-# (.module), which is what a Gradle build takes when it is there, and the app is assembled from
-# that. Then by its POMs alone, which is what a Maven consumer and anything that ignores Gradle
-# metadata takes (on a copy of the bundle without the .module files: a Gradle build reads the
-# metadata whenever a POM points to it): the same six modules must resolve at the version from the
-# POMs too. Either one broken fails the script.
+# The release is read from its POM (the SDK is published without Gradle metadata: a Gradle metadata
+# file describes a component, and the one AAR is merged from several modules, see
+# android/gradle/publishing.gradle.kts), which is what Gradle, Maven and everything else take.
 #
-# What it proves: a consumer resolves oauth-android and the five modules its metadata names from
-# these files, and compiles and packages against them. What it does not prove: that the signatures
+# What it proves: a consumer resolves oauth-android, with no other io.versola module, from these files, and compiles and packages against them. What it does not prove: that the signatures
 # verify (check-bundle.sh looks for their presence; Central verifies them), that Central accepts
 # the bundle, or that Central serves it (android.sh after the publication proves that).
 #
@@ -51,15 +47,7 @@ bundle_repositories() { # directory metadata-sources
 
 hint="the bundle at $dir does not provide it"
 prepare_android_consumer "$version"
-set_android_repositories "$(bundle_repositories "$dir" 'gradleMetadata()')"
-check_android_resolution "$version" "$hint, by its Gradle metadata"
+set_android_repositories "$(bundle_repositories "$dir" 'mavenPom(); artifact()')"
+check_android_resolution "$version" "$hint"
 assemble_android_consumer
-
-echo "verify-consumer: resolved and assembled from the Gradle metadata, now the POMs alone"
-pom_only="$WORK/bundle-poms-only"
-cp -R "$dir" "$pom_only"
-find "$pom_only" -name '*.module*' -delete
-[[ "$pom_only" =~ ^[A-Za-z0-9._/+-]+$ ]] || fail "the work directory '$pom_only' may only hold letters, digits and . _ / + -"
-set_android_repositories "$(bundle_repositories "$pom_only" 'mavenPom(); artifact()')"
-check_android_resolution "$version" "$hint, by its POMs"
 echo "verify-consumer: android OK from the bundle ($version)"

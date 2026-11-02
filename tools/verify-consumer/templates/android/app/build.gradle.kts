@@ -30,8 +30,7 @@ kotlin {
 }
 
 dependencies {
-    // The one line a consumer writes. oauth-core, dpop-android, storage-android, browser-android
-    // and okhttp-android come in transitively from the POM; if any of them is missing from
-    // Central, or the POM names a different version, resolution fails.
+    // The one line a consumer writes. The SDK is one artefact: its AAR holds the protocol engine, the
+    // DPoP, storage, browser and OkHttp parts, and its POM names only third-party libraries.
     implementation("io.versola:oauth-android:@VERSION@")
 }

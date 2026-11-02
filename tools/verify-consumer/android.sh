@@ -6,9 +6,8 @@
 # The app has `mavenCentral()` and `google()` and nothing else, one
 # `implementation("io.versola:oauth-android:<version>")`, compileSdk 37 and minSdk 26, and a
 # Kotlin file that names OAuthClient and OAuthConfiguration. `./gradlew assembleDebug` therefore
-# fails unless Maven Central serves the AAR, its POM and Gradle metadata, and every module they
-# name (oauth-core, dpop-android, storage-android, browser-android, okhttp-android), and unless
-# the AARs compile and their manifests merge. It does not use android/ in this repository: a build
+# fails unless Maven Central serves the AAR and its POM, and unless the AAR compiles and its
+# manifest merges. It does not use android/ in this repository: a build
 # against the repository would prove the sources, which android.yml already does, not the release.
 #
 # Needs JDK 21 on JAVA_HOME (develop.md) and ANDROID_HOME with platform android-37.0 (develop.md;
