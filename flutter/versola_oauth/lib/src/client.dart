@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:http/http.dart' as http;
 
+import 'api.dart';
 import 'errors.dart';
 import 'http_client.dart';
 import 'mapping.dart';
@@ -16,7 +17,7 @@ import 'types.dart';
 /// [create] with the same issuer and client id reaches the same native client, and a different
 /// configuration for the same pair is refused natively with a [ConfigurationError]. Every
 /// method throws an [OAuthError] and nothing else.
-final class OAuthClient {
+final class OAuthClient implements OAuthApi {
   OAuthClient._(this.configuration, this._handle, this._host);
 
   final OAuthConfiguration configuration;
@@ -79,6 +80,7 @@ final class OAuthClient {
   /// state from the one it subscribes at: the first listener gets the restored state first, a
   /// later one gets the latest state (which it may have missed) and then every change. There is
   /// one native subscription per client, however many listeners; it ends with the last one.
+  @override
   Stream<SessionState> sessionStates() => Stream<SessionState>.multi((c) {
     final last = _last;
     if (last != null) c.add(last);
@@ -87,6 +89,7 @@ final class OAuthClient {
   }, isBroadcast: true);
 
   /// The current state, restored first. A method, not a getter: it asks native every time.
+  @override
   Future<SessionState> currentSessionState() async {
     switch (await guarded(() => _host.sessionState(_handle))) {
       case bridge.SessionStateOk(:final state):
@@ -99,6 +102,7 @@ final class OAuthClient {
   /// The claims of the validated ID token of this session, or null when there is no session.
   /// A method, not a getter: it asks native every time, so `client.claims != null` cannot
   /// silently be always true.
+  @override
   Future<IdTokenClaims?> claims() async {
     switch (await guarded(() => _host.claims(_handle))) {
       case bridge.ClaimsOk(:final claims):
@@ -113,11 +117,13 @@ final class OAuthClient {
   /// durably stored. While `authorizing` it is refused: observe [sessionStates] first. A
   /// redirect that reaches a cold-started process finishes the pending request on its own and
   /// the result arrives on [sessionStates] (`spec/oauth-sdk-api.md` section 4).
+  @override
   Future<void> login([LoginOptions options = const LoginOptions()]) =>
       unwrapVoid(_host.login(_handle, loginOptionsToMessage(options)));
 
   /// Answers a [StepUpError] by re-authorizing at the authentication context the resource
   /// server asked for; the app then re-issues the refused call.
+  @override
   Future<void> stepUp(
     StepUpError challenge, [
     LoginOptions options = const LoginOptions(),
@@ -132,6 +138,7 @@ final class OAuthClient {
 
   /// Signs out (`spec/oauth-sdk-api.md` section 12): revokes, ends the provider's session
   /// through the browser, wipes locally; the wipe is unconditional.
+  @override
   Future<LogoutOutcome> logout([
     LogoutOptions options = const LogoutOptions(),
   ]) async {
@@ -155,6 +162,7 @@ final class OAuthClient {
   /// The access token, refreshed natively first if it is at or within its refresh skew. The
   /// one credential that crosses the bridge (issue #46 decision 7); never cached in Dart, so
   /// single-flight refresh stays native.
+  @override
   Future<AccessToken> accessToken() async {
     switch (await guarded(() => _host.accessToken(_handle))) {
       case bridge.AccessTokenOk(:final token):
@@ -165,9 +173,11 @@ final class OAuthClient {
   }
 
   /// Spends the refresh token now, once, whatever the access token's remaining lifetime.
+  @override
   Future<void> refresh() => unwrapVoid(_host.refresh(_handle));
 
   /// `GET` on the UserInfo endpoint with the session's token; `sub` must equal the ID token's.
+  @override
   Future<UserInfo> userInfo() async {
     switch (await guarded(() => _host.userInfo(_handle))) {
       case bridge.UserInfoOk(:final userInfo):
@@ -307,6 +317,7 @@ final class OAuthClient {
   /// `software`), or null under bearer. Asking this generates the key natively, so under
   /// `TokenBinding.dpopRequireHardware` on a device that cannot honour it this throws a
   /// [ConfigurationError] (`hardwareBindingUnavailable`).
+  @override
   Future<String?> keyAttestation() async {
     switch (await guarded(() => _host.keyAttestation(_handle))) {
       case bridge.KeyAttestationOk(:final tier):
