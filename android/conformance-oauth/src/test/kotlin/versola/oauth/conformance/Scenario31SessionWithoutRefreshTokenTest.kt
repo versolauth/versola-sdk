@@ -1,5 +1,6 @@
 package versola.oauth.conformance
 
+import java.time.Duration
 import kotlin.time.Duration.Companion.minutes
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -13,6 +14,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.robolectric.shadows.ShadowSystemClock
 import versola.oauth.core.SessionState
 import versola.oauth.core.VersolaError
 
@@ -48,6 +50,7 @@ class Scenario31SessionWithoutRefreshTokenTest : ProviderConformance() {
                 repeat(40) {
                     client.accessToken()
                     withContext(Dispatchers.Default) { delay(1000) }
+                    passOneSecond()
                 }
             }
         }
@@ -78,6 +81,7 @@ class Scenario31SessionWithoutRefreshTokenTest : ProviderConformance() {
                 repeat(40) {
                     client.call(request).close()
                     withContext(Dispatchers.Default) { delay(1000) }
+                    passOneSecond()
                 }
             }
         }
@@ -87,5 +91,15 @@ class Scenario31SessionWithoutRefreshTokenTest : ProviderConformance() {
         assertEquals(SessionState.Unauthenticated, client.state())
         assertNull(client.claims)
         assertEquals(1, browser.opened.size)
+    }
+
+    /**
+     * The SDK measures an access token's age on `SystemClock.elapsedRealtime()` (it keeps counting in
+     * deep sleep, `AUDIT C4`), and Robolectric's copy of that clock stands still until it is advanced.
+     * The wait above is real time, so the shadow clock is advanced by the second just waited: what a
+     * device's clock does by itself.
+     */
+    private fun passOneSecond() {
+        ShadowSystemClock.advanceBy(Duration.ofSeconds(1))
     }
 }
