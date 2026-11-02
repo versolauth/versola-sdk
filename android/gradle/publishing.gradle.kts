@@ -120,6 +120,33 @@ val mergedAar = tasks.register("mergedReleaseAar") {
             "the merged manifest lost VersolaRedirectActivity"
         }
 
+        // What a consumer's Android Gradle Plugin checks before it compiles against the AAR: the highest
+        // `minCompileSdk` (and its extension) and `minAndroidGradlePluginVersion` any merged module needs.
+        // `:oauth`'s own file would say 21 while `:dpop` asks for 31, which is the claim a release made
+        // per AAR (0.2.0) and this one artefact must keep.
+        val aarMetadataEntry = "META-INF/com/android/build/gradle/aar-metadata.properties"
+        val metadata = (listOf(own) + others.map { it.second }).map { aar ->
+            ZipFile(aar).use { zip ->
+                java.util.Properties().apply { zip.getInputStream(zip.getEntry(aarMetadataEntry)).use { load(it) } }
+            }
+        }
+        fun version(text: String) = text.split('.').map { it.toIntOrNull() ?: 0 }
+        val newestSdk = metadata.maxWithOrNull(
+            compareBy<java.util.Properties>({ it.getProperty("minCompileSdk").toInt() }, { it.getProperty("minCompileSdkExtension").toInt() }),
+        )!!
+        val newestAgp = metadata.map { it.getProperty("minAndroidGradlePluginVersion") }
+            .maxWithOrNull { x, y -> version(x).zip(version(y)).map { (l, r) -> l.compareTo(r) }.firstOrNull { it != 0 } ?: 0 }!!
+        val mergedMetadata = metadata.first().let { base ->
+            listOf(
+                "aarFormatVersion=${base.getProperty("aarFormatVersion")}",
+                "aarMetadataVersion=${base.getProperty("aarMetadataVersion")}",
+                "minCompileSdk=${newestSdk.getProperty("minCompileSdk")}",
+                "minCompileSdkExtension=${newestSdk.getProperty("minCompileSdkExtension")}",
+                "minAndroidGradlePluginVersion=$newestAgp",
+                "coreLibraryDesugaringEnabled=${metadata.any { it.getProperty("coreLibraryDesugaringEnabled") == "true" }}",
+            ).joinToString("\n", postfix = "\n")
+        }
+
         ZipOutputStream(target.outputStream()).use { out ->
             fun put(name: String, bytes: ByteArray) {
                 out.putNextEntry(ZipEntry(name).apply { time = 0L })
@@ -128,10 +155,13 @@ val mergedAar = tasks.register("mergedReleaseAar") {
             }
             ZipFile(own).use { zip ->
                 for (entry in entries(zip)) {
-                    if (entry.isDirectory || entry.name == "classes.jar" || entry.name == "AndroidManifest.xml") continue
+                    if (entry.isDirectory || entry.name == "classes.jar" || entry.name == "AndroidManifest.xml" ||
+                        entry.name == aarMetadataEntry
+                    ) continue
                     put(entry.name, zip.getInputStream(entry).readBytes())
                 }
             }
+            put(aarMetadataEntry, mergedMetadata.toByteArray())
             put("AndroidManifest.xml", manifest.toByteArray())
             put("classes.jar", merged.toByteArray())
         }
