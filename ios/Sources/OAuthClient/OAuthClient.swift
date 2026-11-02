@@ -11,7 +11,7 @@ import OAuthCore
 /// (bearer tokens, no `offline_access` added, PAR when advertised, nothing sent that a
 /// standard does not define) and the surface. Provider differences are capabilities read from
 /// discovery, never a branch on an issuer (`spec/providers.md`).
-public final class OAuthClient: Sendable {
+public final class OAuthClient: OAuthApi {
     public let configuration: OAuthConfiguration
     private let flow: AuthorizationFlow
     private let coordinator: SessionCoordinator

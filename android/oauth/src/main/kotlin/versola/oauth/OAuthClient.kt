@@ -78,7 +78,7 @@ public class OAuthClient private constructor(
     private val userInfoClient: UserInfoClient,
     private val proofs: DpopProofFactory?,
     private val dpopKey: KeystoreDpopKey?,
-) {
+) : OAuthApi {
 
     /**
      * The state machine of `spec/state-machine.md`, observable. Cold, and its first emission is
@@ -87,7 +87,7 @@ public class OAuthClient private constructor(
      * finished by the SDK itself, and the result arrives here as `Authenticated` or as the
      * state the failure settles on; the app has nothing to call.
      */
-    public val sessionState: Flow<SessionState> get() = flow.sessionState
+    override val sessionState: Flow<SessionState> get() = flow.sessionState
 
     /**
      * The state now, after the restore a cold start owes (a stored grant yields `Authenticated`, a
@@ -95,16 +95,16 @@ public class OAuthClient private constructor(
      * screen and a home screen, an `Activity.onCreate` say, and has no use for a stream; a later
      * change is [sessionState]'s to report.
      */
-    public suspend fun currentSessionState(): SessionState = flow.sessionState.first()
+    override suspend fun currentSessionState(): SessionState = flow.sessionState.first()
 
     /**
      * The claims of the validated ID token of this session, or null when there is no session.
      * Memory only; the raw token and the `nonce` are not exposed.
      */
-    public val claims: IdTokenClaims? get() = coordinator.claims
+    override val claims: IdTokenClaims? get() = coordinator.claims
 
     /** The provider's metadata, discovered once and cached on disk across restarts and logout. */
-    public suspend fun metadata(): ProviderMetadata = coordinator.retryScope.operation { flow.metadata() }
+    override suspend fun metadata(): ProviderMetadata = coordinator.retryScope.operation { flow.metadata() }
 
     /**
      * Opens the system browser, validates the redirect, exchanges the code, validates the ID
@@ -118,7 +118,7 @@ public class OAuthClient private constructor(
      * fail together. A call asking for something else while one is in flight is refused with
      * `Configuration(InvalidConfiguration)`: the app observes [sessionState] before asking.
      */
-    public suspend fun login(options: LoginOptions = LoginOptions.Default) {
+    override suspend fun login(options: LoginOptions) {
         try {
             coordinator.login(
                 scopes = (options.scopes ?: configuration.scopes) + "openid",
@@ -139,7 +139,7 @@ public class OAuthClient private constructor(
      * resource server asked for, then leaves the app to re-issue the refused call. The scopes
      * are the configured ones unless [options] says otherwise.
      */
-    public suspend fun stepUp(challenge: VersolaError.StepUp, options: LoginOptions = LoginOptions.Default) {
+    override suspend fun stepUp(challenge: VersolaError.StepUp, options: LoginOptions) {
         try {
             coordinator.login(
                 scopes = (options.scopes ?: configuration.scopes) + "openid",
@@ -186,7 +186,7 @@ public class OAuthClient private constructor(
      * unconditional: `Unauthenticated` is reached whatever the two server-side steps did, and
      * the outcome says which of them succeeded.
      */
-    public suspend fun logout(options: LogoutOptions = LogoutOptions.Default): LogoutOutcome =
+    override suspend fun logout(options: LogoutOptions): LogoutOutcome =
         coordinator.logout(revoke = options.revoke, endSession = options.endSession)
 
     /**
@@ -198,10 +198,10 @@ public class OAuthClient private constructor(
      * the value ever passing through application code; a token handed out here is one an
      * integrator can log.
      */
-    public suspend fun accessToken(): AccessToken = coordinator.accessToken()
+    override suspend fun accessToken(): AccessToken = coordinator.accessToken()
 
     /** Spends the refresh token now, once, whatever the access token's remaining lifetime. */
-    public suspend fun refresh() {
+    override suspend fun refresh() {
         coordinator.refresh()
     }
 
@@ -210,7 +210,7 @@ public class OAuthClient private constructor(
      * the ID token's (OpenID Connect Core 5.3.2); a provider without the endpoint is
      * `Configuration(ProviderUnsupported)`.
      */
-    public suspend fun userInfo(): UserInfo = coordinator.retryScope.operation {
+    override suspend fun userInfo(): UserInfo = coordinator.retryScope.operation {
         // After a cold start the claims are read back from the stored ID token first.
         val subject = coordinator.restoreClaims()?.subject
             // No session to ask for: not `GrantRejected`, which says the token endpoint answered
@@ -268,7 +268,7 @@ public class OAuthClient private constructor(
      * Which Keystore tier the DPoP key reached, or null under [TokenBinding.Bearer]. Suspending
      * because the key is generated on first use; asking this is what generates it.
      */
-    public suspend fun keyAttestation(): KeyAttestation? = dpopKey?.attestation()
+    override suspend fun keyAttestation(): KeyAttestation? = dpopKey?.attestation()
 
     /**
      * An OkHttp **application** interceptor that attaches the session to every request whose
