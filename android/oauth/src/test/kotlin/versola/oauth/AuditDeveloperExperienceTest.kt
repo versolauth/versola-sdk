@@ -106,23 +106,42 @@ class AuditDeveloperExperienceTest {
     private fun create(configuration: OAuthConfiguration) =
         OAuthClient.create(application, configuration, browser = browser, keyProvider = ReversingKeyProvider)
 
-    // AUDIT: D1 (design). A double-tapped login button is a user action, not a deployment
-    // mistake; `Configuration` means "never catch in production" (spec/errors.md:14), so the
-    // refusal must not be one.
+    // AUDIT: D1 (decided 2026-11-02). A double-tapped login button is a user action, not a
+    // deployment mistake: the same call made while one is in flight joins it. One browser, one
+    // token request, and both calls return together.
     @Test
-    fun `AUDIT D1 a second login while one is in progress is not a Configuration error`() = runTest {
+    fun `AUDIT D1 a second identical login while one is in progress joins it`() = runTest {
         browser.hold = CompletableDeferred()
         val client = create(configuration())
-        val first = async(start = CoroutineStart.UNDISPATCHED) { client.login() }
+        val first = async(start = CoroutineStart.UNDISPATCHED) { runCatching { client.login() } }
         browser.opened.await()
         assertTrue(client.sessionState.first() == SessionState.Authorizing)
-
-        val error = runCatching { client.login() }.exceptionOrNull()
+        val second = async(start = CoroutineStart.UNDISPATCHED) { runCatching { client.login() } }
 
         browser.hold!!.complete(Unit)
-        first.await()
-        assertTrue("the second login() must be refused with a VersolaError, was: $error", error is VersolaError)
-        assertFalse("a double tap must not be Configuration: $error", error is VersolaError.Configuration)
+
+        assertTrue("the first login: ${first.await()}", first.await().isSuccess)
+        assertTrue("the second login joined it, was: ${second.await()}", second.await().isSuccess)
+        assertTrue("one browser", browser.launched.size == 1)
+        assertTrue("one token request", requests.count { it.url.encodedPath == "/token" } == 1)
+        assertTrue(client.sessionState.first() == SessionState.Authenticated)
+    }
+
+    // A call that asks for something else while one is in flight can be neither joined nor replace
+    // it: refused, and the one in flight is undisturbed.
+    @Test
+    fun `AUDIT D1 a login for something else while one is in progress is refused and leaves it alone`() = runTest {
+        browser.hold = CompletableDeferred()
+        val client = create(configuration())
+        val first = async(start = CoroutineStart.UNDISPATCHED) { runCatching { client.login() } }
+        browser.opened.await()
+
+        val other = runCatching { client.login(LoginOptions(scopes = setOf("email"))) }.exceptionOrNull()
+
+        browser.hold!!.complete(Unit)
+        assertTrue("the refusal is a VersolaError, was: $other", other is VersolaError.Configuration)
+        assertTrue("the first login: ${first.await()}", first.await().isSuccess)
+        assertTrue("one browser", browser.launched.size == 1)
     }
 
     // AUDIT: D3. userInfo() with no session says Reauthenticate(GrantRejected), which is documented
@@ -175,25 +194,9 @@ class AuditDeveloperExperienceTest {
         )
     }
 
-    // AUDIT: D4 (design). Application interceptors on the app-supplied OkHttpClient are cloned into
-    // the SDK's own requests: a body-logging interceptor then prints the SDK's token and refresh
-    // tokens. The SDK's token-endpoint traffic must not pass through them.
-    @Test
-    fun `AUDIT D4 token and refresh requests do not pass through application interceptors`() = runTest {
-        val seen = CopyOnWriteArrayList<String>()
-        val recording = Interceptor { chain ->
-            seen += chain.request().url.encodedPath
-            val response: Response = chain.proceed(chain.request())
-            response
-        }
-        val client = create(configuration(httpClient = OkHttpClient.Builder().addInterceptor(recording).build()))
-
-        client.login()
-        client.refresh()
-
-        assertTrue("the server saw /token (login + refresh)", requests.count { it.url.encodedPath == "/token" } == 2)
-        assertFalse("an application interceptor saw the token endpoint: $seen", "/token" in seen)
-    }
+    // Application interceptors on the app's OkHttpClient see the SDK's own requests, token requests
+    // included: decided to keep (2026-11-02) and to document on `OAuthConfiguration.httpClient`, since
+    // dropping them would also drop what a gateway needs on those requests. No test pins the leak.
 
     // AUDIT: D5 (design). The https redirect URI resolves to no activity of this app (the SDK's
     // VersolaRedirectActivity carries no intent filter until the app adds one), and nothing at

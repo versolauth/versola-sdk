@@ -278,6 +278,99 @@ public class SessionCoordinator(
         maxAge: Long? = null,
         parameters: AuthorizationParameters = AuthorizationParameters(),
         ephemeralBrowser: Boolean = false,
+        /**
+         * Refuse, with `Configuration(InvalidConfiguration)`, a call that finds an authorization in
+         * flight in this process that is not the same call (`spec/oauth-sdk-api.md` section 5). A
+         * call that is the same one joins it instead, whatever this says. Off, such a call waits its
+         * turn for the browser, as the Versola facade's always did.
+         */
+        refuseWhileAuthorizing: Boolean = false,
+    ): TokenResponse {
+        val request = LoginRequest(scopes, acrValues, maxAge, parameters, ephemeralBrowser)
+        while (true) {
+            val running = LoginFlight(request)
+            val joined: LoginFlight? = synchronized(loginLock) {
+                val current = loginFlight
+                when {
+                    current != null && current.request.sameAs(request) -> current
+                    current == null && refuseWhileAuthorizing && flow.authorizationInFlight -> throw VersolaError.Configuration(
+                        VersolaError.Configuration.Detail.InvalidConfiguration(
+                            "an authorization is already in progress; observe sessionState before asking again",
+                        ),
+                    )
+                    current != null && refuseWhileAuthorizing -> throw VersolaError.Configuration(
+                        VersolaError.Configuration.Detail.InvalidConfiguration(
+                            "an authorization is already in progress for a different request; observe sessionState before asking again",
+                        ),
+                    )
+                    else -> {
+                        if (current == null) loginFlight = running
+                        null
+                    }
+                }
+            }
+            if (joined != null) {
+                // The same call, made twice: one browser, one exchange, one answer. When the first
+                // caller walks away the answer never comes, and this one asks for itself, which
+                // supersedes what the first left behind like any new `login()`.
+                val outcome = joined.done.await() ?: continue
+                return outcome.getOrThrow()
+            }
+            val owned = synchronized(loginLock) { loginFlight === running }
+            val result = try {
+                Result.success(loginOnce(request))
+            } catch (e: CancellationException) {
+                if (owned) endLoginFlight(running, null)
+                throw e
+            } catch (e: Throwable) {
+                Result.failure(e)
+            }
+            if (owned) endLoginFlight(running, result)
+            return result.getOrThrow()
+        }
+    }
+
+    private class LoginRequest(
+        val scopes: Set<String>,
+        val acrValues: List<String>,
+        val maxAge: Long?,
+        val parameters: AuthorizationParameters,
+        val ephemeralBrowser: Boolean,
+    ) {
+        /** Field by field: [AuthorizationParameters] is not a data class, and what is sent is what counts. */
+        fun sameAs(other: LoginRequest): Boolean =
+            scopes == other.scopes && acrValues == other.acrValues && maxAge == other.maxAge &&
+                ephemeralBrowser == other.ephemeralBrowser &&
+                parameters.prompt == other.parameters.prompt && parameters.loginHint == other.parameters.loginHint &&
+                parameters.uiLocales == other.parameters.uiLocales && parameters.resources == other.parameters.resources &&
+                parameters.extra == other.parameters.extra
+    }
+
+    /** The `login()` running now and the answer its joiners wait for; null when its caller walked away. */
+    private class LoginFlight(val request: LoginRequest) {
+        val done = CompletableDeferred<Result<TokenResponse>?>()
+    }
+
+    private val loginLock = Any()
+
+    @Volatile
+    private var loginFlight: LoginFlight? = null
+
+    private fun endLoginFlight(flight: LoginFlight, outcome: Result<TokenResponse>?) {
+        synchronized(loginLock) { if (loginFlight === flight) loginFlight = null }
+        flight.done.complete(outcome)
+    }
+
+    private suspend fun loginOnce(request: LoginRequest): TokenResponse = loginBody(
+        request.scopes, request.acrValues, request.maxAge, request.parameters, request.ephemeralBrowser,
+    )
+
+    private suspend fun loginBody(
+        scopes: Set<String>,
+        acrValues: List<String>,
+        maxAge: Long?,
+        parameters: AuthorizationParameters,
+        ephemeralBrowser: Boolean,
     ): TokenResponse = retryScope.operation {
         // OpenID Connect Core §11: a refresh token is issued for a grant that asked for
         // `offline_access`, and auth issues none otherwise. This session model has nothing to

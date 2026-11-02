@@ -44,6 +44,19 @@ two errors of one case carry the same `code`. The set is closed and shared by ev
 | `StepUp` | `step_up` |
 | `Configuration` | `configuration.state_mismatch`, `configuration.issuer_mismatch`, `configuration.malformed_authorization_response`, `configuration.authorization_rejected`, `configuration.token_request_rejected`, `configuration.token_response_malformed`, `configuration.discovery_field_missing`, `configuration.discovery_issuer_mismatch`, `configuration.discovery_malformed`, `configuration.invalid_configuration`, `configuration.no_browser_available`, `configuration.id_token_rejected`, `configuration.user_info_rejected`, `configuration.provider_unsupported`, `configuration.hardware_binding_unavailable`, and `configuration.<name>` for a case a facade adds (the Versola facade's edge errors name theirs) |
 
+## A body that is not JSON
+
+Discovery and the token endpoint answer 2xx with a body that is not JSON at all (an HTML page from a
+proxy or a captive portal, an empty body): `Recoverable(Network)`, whose detail names the endpoint,
+the status and the content type, never the body (it travels into logs, and a token response is
+credential material). It is the user's network and a later attempt may not meet it, so it is not a
+deployment fault. Whether it is repeated is the retry policy's (`retry-policy.md`, classification):
+discovery yes, a refresh by the same rules as a transport failure, the `authorization_code` exchange
+no. A JSON body of the wrong shape (a missing `access_token`, a field of the wrong type) is the
+provider's own mistake and stays `Configuration(TokenResponseMalformed)` or
+`Configuration(DiscoveryMalformed)`. A 3xx is not followed and is `Configuration(InvalidConfiguration)`
+at every endpoint: a redirect from an endpoint is a deployment fault (`retry-policy.md`).
+
 ## Token endpoint — `POST /token`
 
 From `versola.oauth.token.model.ErrorCode` and `TokenEndpointError`.

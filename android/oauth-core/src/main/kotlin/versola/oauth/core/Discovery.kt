@@ -129,6 +129,9 @@ public class HttpDiscoveryClient(
                 httpClient.newCall(request).execute().use { response ->
                     val payload = response.body.string()
                     when {
+                        // A 2xx that is not JSON at all is a proxy's or a captive portal's page, not the
+                        // provider's: the user's network, which a later attempt may not meet (`AUDIT D1`).
+                        response.isSuccessful && !isJson(payload) -> throw notJsonFailure(response.code, response.header("Content-Type"), "discovery")
                         response.isSuccessful -> payload to CacheLifetime.of(response.headers, System.currentTimeMillis())
                         // 408, 429 and 5xx are the provider having a bad moment: transport-shaped,
                         // repeated under the operation's budget (`spec/retry-policy.md`).
@@ -339,6 +342,37 @@ public class DiscoveryService internal constructor(
 
 /** How long a document served stale because the provider was unreachable is trusted before the next try. */
 private const val RETRY_AFTER_OUTAGE_MILLIS = 60_000L
+
+/**
+ * Whether [body] is a JSON object or array. A document of the wrong shape is the provider's mistake,
+ * not a proxy's, so it is not rejected here; but a bare word is no document either, and the parser
+ * would take `<html>` or `OK` for a lenient primitive.
+ */
+internal fun isJson(body: String): Boolean {
+    val first = body.firstOrNull { !it.isWhitespace() }
+    if (first != '{' && first != '[') return false
+    return try {
+        discoveryJson.parseToJsonElement(body)
+        true
+    } catch (e: kotlinx.serialization.SerializationException) {
+        false
+    }
+}
+
+/**
+ * The `Recoverable(Network)` for a success status whose body is not JSON, with the status and the
+ * content type and none of the body: it is a page that travels into logs, and a token endpoint's
+ * answer is credential material. `Network`, because it is what a transport that went wrong in the
+ * middle looks like, and so it is repeated as one under the operation's budget where repeating is
+ * safe (`spec/errors.md`, "Not JSON").
+ */
+internal fun notJsonFailure(status: Int, contentType: String?, what: String): VersolaError.Recoverable =
+    VersolaError.Recoverable(
+        VersolaError.Recoverable.Cause.Network(
+            "$what answered HTTP $status with a body that is not JSON" +
+                (contentType?.let { " (Content-Type ${it.substringBefore(';').trim().take(64)})" } ?: ""),
+        ),
+    )
 
 /**
  * What a parse failure may say about itself: the exception's class and, for a kotlinx.serialization

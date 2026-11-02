@@ -153,12 +153,25 @@ class DiscoveryTest {
     }
 
     @Test
-    fun `a body that is not the metadata document is Configuration`() = runTest {
-        server.enqueue(MockResponse.Builder().code(200).body("<html>not json</html>").build())
+    fun `a JSON body that is not the metadata document is Configuration`() = runTest {
+        server.enqueue(MockResponse.Builder().code(200).body("""{"issuer":["not","a","string"]}""").build())
 
         val error = failure { client.fetch(issuer) } as VersolaError.Configuration
 
         assertTrue(error.detail is VersolaError.Configuration.Detail.DiscoveryMalformed)
+    }
+
+    // Decided 2026-11-02 (AUDIT D1): a page that is not JSON at all is a proxy's or a captive portal's,
+    // the user's network, so it is `Recoverable(Network)` and says nothing of the page.
+    @Test
+    fun `a body that is not JSON is a Recoverable network failure that does not echo it`() = runTest {
+        server.enqueue(MockResponse.Builder().code(200).setHeader("Content-Type", "text/html").body("<html>SECRET-PAGE</html>").build())
+
+        val thrown = failure { client.fetch(issuer) }
+        val error = thrown as? VersolaError.Recoverable ?: throw AssertionError("expected Recoverable, was $thrown")
+
+        val network = error.reason as VersolaError.Recoverable.Cause.Network
+        assertTrue(network.detail, "text/html" in network.detail && "SECRET-PAGE" !in network.detail)
     }
 
     @Test

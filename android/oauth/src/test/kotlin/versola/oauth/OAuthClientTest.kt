@@ -245,7 +245,7 @@ class OAuthClientTest {
     }
 
     @Test
-    fun `login while an authorization is outstanding is refused, not queued`() = runTest {
+    fun `a login for something else while an authorization is outstanding is refused, not queued`() = runTest {
         browser.hold = kotlinx.coroutines.CompletableDeferred()
         val client = client()
         val first = async(start = CoroutineStart.UNDISPATCHED) { client.login() }
@@ -253,7 +253,8 @@ class OAuthClientTest {
         browser.opened.await()
         assertEquals(SessionState.Authorizing, client.sessionState.first())
 
-        val error = runCatching { client.login() }.exceptionOrNull() as VersolaError.Configuration
+        // The same call joins the one in flight (`AUDIT D1`); a call for something else is refused.
+        val error = runCatching { client.login(LoginOptions(scopes = setOf("email"))) }.exceptionOrNull() as VersolaError.Configuration
 
         assertTrue(error.detail is VersolaError.Configuration.Detail.InvalidConfiguration)
         assertEquals(1, browser.launched.size)
@@ -404,10 +405,16 @@ class OAuthClientTest {
     private suspend fun kotlinx.coroutines.test.TestScope.killedMidBrowser(): KilledLogin {
         val configuration = configuration()
         browser.hold = CompletableDeferred()
+        // A caller that is cancelled leaves its request to be finished in the background of the live
+        // process (`AUDIT C8`); a process that is *killed* leaves nothing running, so what the live one
+        // started is cancelled with it.
+        val deadProcess = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob())
+        OAuthClient.resumeScope = deadProcess
         val login = async(start = CoroutineStart.UNDISPATCHED) { runCatching { client(configuration).login() } }
         browser.opened.await()
         val query = browser.launched.single().substringAfter('?').split('&').associate { it.substringBefore('=') to it.substringAfter('=') }
         login.cancelAndJoin()
+        deadProcess.coroutineContext[kotlinx.coroutines.Job]!!.cancelAndJoin()
         OAuthClient.forgetAll()
         return KilledLogin(configuration, query.getValue("state"), query.getValue("nonce"))
     }

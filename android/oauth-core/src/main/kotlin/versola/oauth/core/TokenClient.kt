@@ -321,7 +321,7 @@ public class TokenRequestExecutor(
                     // satisfy (scenario 04).
                     dpop?.observe(htu ?: url, response.headers.dateForClockSkew(), nonce)
                     if (response.isSuccessful) {
-                        Attempt.Issued(issued(payload, response.header("Date"), response.header("Age")))
+                        Attempt.Issued(issued(payload, response.code, response.header("Content-Type"), response.header("Date"), response.header("Age")))
                     } else {
                         onStatus(response.code)?.let { throw it }
                         rejected(response.code, payload, nonce, response.headers("WWW-Authenticate"), response.headers)
@@ -378,7 +378,11 @@ public class TokenRequestExecutor(
         }
     }
 
-    private fun issued(payload: String, dateHeader: String?, ageHeader: String?): TokenResponse {
+    private fun issued(payload: String, status: Int, contentType: String?, dateHeader: String?, ageHeader: String?): TokenResponse {
+        // Not JSON at all is a proxy's or a captive portal's page (`AUDIT D1`): `Recoverable`, with
+        // nothing of the body in it. JSON of the wrong shape is the provider's own mistake and stays
+        // `Configuration(TokenResponseMalformed)`, below.
+        if (!isJson(payload)) throw notJsonFailure(status, contentType, "the token endpoint")
         val parsed = try {
             discoveryJson.decodeFromString(TokenResponsePayload.serializer(), payload)
         } catch (e: Exception) {

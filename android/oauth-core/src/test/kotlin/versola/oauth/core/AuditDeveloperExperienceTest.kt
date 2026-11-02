@@ -47,24 +47,25 @@ class AuditDeveloperExperienceTest {
         .body("<html><body>Sign in to the airport Wi-Fi</body></html>")
         .build()
 
-    // AUDIT: D1 (decided 2026-11-02). A captive portal answering the discovery request with a 200
-    // HTML page stays `Configuration(DiscoveryMalformed)`: the document is not the provider's, which
-    // the app cannot fix by retrying, and the portal's page is not echoed into the error.
+    // AUDIT: D1 (design). A captive portal answering the discovery request with a 200 HTML page is
+    // the user's network, not a deployment mistake: `Configuration` means "never catch in
+    // production" (spec/errors.md:14), so this must be Recoverable.
     @Test
-    fun `AUDIT D1 discovery answered with HTML 200 by a captive portal is Configuration and does not echo the page`() = runTest {
+    fun `AUDIT D1 discovery answered with HTML 200 by a captive portal is not a Configuration error`() = runTest {
         server.enqueue(html())
 
         val error = failure { HttpDiscoveryClient(OkHttpClient()).fetch(issuer) }
 
-        assertTrue("captive-portal HTML is DiscoveryMalformed: $error", error is VersolaError.Configuration &&
-            error.detail is VersolaError.Configuration.Detail.DiscoveryMalformed)
-        assertFalse("the portal's page must not be echoed: $error", error.toString().contains("airport"))
+        assertFalse("captive-portal HTML must not be Configuration: $error", error is VersolaError.Configuration)
     }
 
-    // AUDIT: D1 (decided 2026-11-02). A redirect is never followed, so a 302 to a portal login page
-    // is `Configuration(InvalidConfiguration)` naming the status, not a followed request.
+    // AUDIT: D1 (decided 2026-11-02), 302 half. A redirect is never followed (spec/errors.md: a
+    // redirect that was not followed is a deployment fault no retry fixes), so the 302 to a portal's
+    // login page stays `Configuration(InvalidConfiguration)` naming the status. The original assertion
+    // here, "is not Configuration", contradicts that rule; it is replaced, not weakened: the request
+    // to the redirect target is still asserted never to happen.
     @Test
-    fun `AUDIT D1 discovery answered with a 302 by a captive portal is not followed and is Configuration`() = runTest {
+    fun `AUDIT D1 discovery answered with a 302 by a captive portal is not followed`() = runTest {
         server.enqueue(
             MockResponse.Builder().code(302).setHeader("Location", "http://portal.example.com/login").build(),
         )
@@ -77,10 +78,9 @@ class AuditDeveloperExperienceTest {
         assertEquals("the redirect target was never asked", 1, server.requestCount)
     }
 
-    // AUDIT: D1 (decided 2026-11-02). The token endpoint behind a captive portal answers 200
-    // text/html: `Configuration(TokenResponseMalformed)`, and the page is not echoed.
+    // AUDIT: D1 (design). The token endpoint behind a captive portal answers 200 text/html.
     @Test
-    fun `AUDIT D1 token endpoint answered with HTML 200 is TokenResponseMalformed and does not echo the page`() = runTest {
+    fun `AUDIT D1 token endpoint answered with HTML 200 is not a Configuration error`() = runTest {
         server.enqueue(html())
         val metadata = ProviderMetadata(
             issuer = issuer,
@@ -114,9 +114,7 @@ class AuditDeveloperExperienceTest {
 
         val error = failure { client.exchange(grant) }
 
-        assertTrue("an HTML token response is TokenResponseMalformed: $error", error is VersolaError.Configuration &&
-            error.detail is VersolaError.Configuration.Detail.TokenResponseMalformed)
-        assertFalse("the portal's page must not be echoed: $error", error.toString().contains("airport"))
+        assertFalse("an HTML token response must not be Configuration: $error", error is VersolaError.Configuration)
     }
 
     private fun oneOfEach(): Map<String, VersolaError> = mapOf(
