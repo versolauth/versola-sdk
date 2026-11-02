@@ -26,7 +26,7 @@ The Android SDK is now one Maven artifact, a 2026-11-01 audit of the SDK is fixe
 
 ### Flutter: changes to the Dart API
 
-- **`OAuthClient` is an interface** (`abstract interface class`), so an app can fake it in its tests. `OAuthClient.create` is unchanged.
+- **`OAuthClient` is an interface** (`abstract interface class`, extending `OAuthApi`, which is exported too), so an app can fake it in its tests. `OAuthClient.create` is unchanged except that it no longer takes the `host` parameter, which exposed the generated bridge type.
 - **`OAuthConfiguration` and `LoginOptions` are no longer `const`**: they copy the collections they are given and expose them unmodifiable, so a set the app changes later cannot alter a configuration already handed over. Drop `const` at the call site. `login()` and `stepUp()` take an optional `LoginOptions?`.
 - **Value equality** for the configuration, login options, access token, claims, logout outcome, user info and every `OAuthError`.
 - **`create` throws `UnsupportedError` off Android and iOS** instead of a channel-failure `ConfigurationError`.

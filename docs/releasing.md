@@ -105,6 +105,11 @@ the products are gone, `VersolaOAuth` is the only one.
   GitHub release with generated notes and the dispatch of `verify-release.yml`. The
   Central job runs in the GitHub environment `maven-central`. `publish-pubdev.yml` is the dormant
   pub.dev counterpart.
+- **Release notes** are written by hand and kept in `docs/release-notes/X.Y.Z.md` (what is new, fixes,
+  upgrading, requirements), because the generated notes are only a list of pull requests. The workflow
+  creates the release with the generated ones; the maintainer replaces them after it:
+  `gh release edit X.Y.Z --notes-file docs/release-notes/X.Y.Z.md`. Write the file in the pull request
+  that prepares the release, from the merged pull requests since the previous tag.
 
 - Provenance and the dependency graph. After the upload a separate `provenance` job of `release.yml` attests the build provenance
   of every AAR and JAR in the bundle (`actions/attest-build-provenance`, signed through GitHub's
