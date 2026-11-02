@@ -14,6 +14,7 @@ import versola.oauth.core.VersolaError
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.Interceptor
+import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 
@@ -31,9 +32,15 @@ import okhttp3.Response
  * spends the session coordinator's budget rather than opening a second one beside it. Transport
  * failures are OkHttp's `retryOnConnectionFailure` to handle, below this layer.
  *
- * Constructed by `Versola.interceptor()` for the ordinary case. The constructor is public for
- * the wiring that does not go through the facade — a conformance harness, an app assembling the
- * modules itself — and takes exactly the three things the behaviour needs.
+ * Wiring, not API: it is behind the opt-in marker and reached through the facades' `httpClient()`,
+ * `authenticatedClient()` and `call()`, which build the client around it with redirects switched
+ * off ([authenticated]). It cannot be made safe on a client that follows redirects: it is an
+ * application interceptor, so OkHttp follows a `Location` below it, inside the one call it sees,
+ * and sends the headers it attached (the `DPoP` proof, which OkHttp does not strip as it does
+ * `Authorization`) to the next hop, the same proof for another URL or any proof at all to another
+ * host (`AUDIT Z6`). So the one way to install it, [authenticated], is the one that sets the
+ * client's redirect policy, and a public `interceptor()` that an app could add to its own client
+ * (which follows redirects unless told not to) no longer exists.
  *
  * It blocks the calling thread while [tokens] answers, a refresh included. Whether many callers may
  * do that from `Dispatchers.IO` depends on [tokens]: the generic `OAuthClient`'s runs everything the
@@ -41,7 +48,7 @@ import okhttp3.Response
  * facade's edge back channel, that dispatches to `Dispatchers.IO` itself can be starved by callers
  * that have parked every thread of it here.
  */
-@OptIn(VersolaInternalApi::class)
+@VersolaInternalApi
 public class VersolaInterceptor(
     private val tokens: AccessTokenSource,
     /** Which requests get the token; everything else passes through untouched. */
@@ -329,6 +336,7 @@ private fun Request.isReplayable(): Boolean {
  * the generic facade's is the set of protected origins its configuration lists
  * (`spec/oauth-sdk-api.md` section 10).
  */
+@VersolaInternalApi
 public fun interface RequestScope {
     public fun includes(url: HttpUrl): Boolean
 
@@ -357,3 +365,16 @@ public fun interface RequestScope {
         }
     }
 }
+
+/**
+ * [base] with [interceptor] installed and redirects switched off, which is the only way the
+ * interceptor is made safe: a redirect is returned as the response it is (a 3xx the app sees),
+ * never followed with the proof of another request in its headers. The one place the facades
+ * build an authenticated client from.
+ */
+@VersolaInternalApi
+public fun authenticated(base: OkHttpClient, interceptor: Interceptor): OkHttpClient = base.newBuilder()
+    .followRedirects(false)
+    .followSslRedirects(false)
+    .addInterceptor(interceptor)
+    .build()

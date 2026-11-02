@@ -155,7 +155,7 @@ val oauth = OAuthClient.create(context, configuration)
 | `userInfo()` | the UserInfo response is validated | `UserInfo` (the standard claims typed, the rest as a read-only map); `sub` must equal the ID token's `sub` (OIDC Core 5.3.2) | `Configuration(ProviderUnsupported)` when no endpoint, `Recoverable`, `Reauthenticate` (`SessionExpired` with no session) |
 | `stepUp(challenge, options)` | as `login()` | re-authorizes with the challenge's `acr_values` and `max_age` and the configured scopes (or the options'); the app re-issues the refused call | as `login()` |
 | `metadata()` | discovery is cached | `ProviderMetadata` | `Configuration(Discovery*)`, `Recoverable(Network or Server)` |
-| `authenticatedClient(origins)` / `interceptor(origins)` / `authenticatedSession(origins)` | — | section 10 | — |
+| `authenticatedClient(origins)` / `authenticatedSession(origins)` | — | section 10 | — |
 | `keyAttestation()` | the DPoP key exists | `KeyAttestation?` (null under `Bearer`) | — |
 
 `login()` while `Authenticated` starts a new authorization and, on success, replaces the stored
@@ -275,7 +275,7 @@ The platform's HTTP client with the session attached, so most integrators never 
 
 | Platform | Shape |
 |---|---|
-| Android | `interceptor(origins)`: an OkHttp application interceptor; `authenticatedClient(origins)`: the configured client plus the interceptor, redirects off |
+| Android | `authenticatedClient(origins)`: the configured client plus an OkHttp application interceptor, redirects off. The interceptor is not offered on its own: it cannot be made safe on a client that follows redirects, since OkHttp follows a `Location` below an application interceptor and would send the `DPoP` proof to the next hop (another URL, or another host), so the one client it is installed on is the one with redirects switched off |
 | iOS | `authenticatedSession(origins)`: a `URLSession` wrapper (`data(for:)`) that attaches the token and handles the retries |
 | Flutter | `httpClient({origins})`: a `package:http` `Client` (`BaseClient`) whose `send` hands the request to the native authenticated client above and returns its response, so the token, the DPoP key and its proofs and the refresh never reach Dart; an app wraps it with its own interceptors, ours innermost |
 
@@ -394,7 +394,7 @@ handled in app code after `logout()` has wiped locally; the SDK does not special
 | Claims | `val claims: IdTokenClaims?` | `var claims: IdTokenClaims? { get async }` | `Future<IdTokenClaims?> claims()` (a method, not a getter: the claims stay native, so the answer is asynchronous, and a `Future` getter would make `client.claims != null` always true) |
 | UserInfo | `suspend fun userInfo(): UserInfo` | `func userInfo() async throws -> UserInfo` | `Future<UserInfo> userInfo()` |
 | Step-up | `suspend fun stepUp(challenge, options)` | `func stepUp(_ challenge: OAuthError, options:) async throws` takes the caught `.stepUp` case; `func stepUp(acrValues:maxAge:options:) async throws` also exists | `Future<void> stepUp(challenge, [options])` |
-| HTTP | `interceptor(origins)`, `authenticatedClient(origins)` | `authenticatedSession(origins)` | `httpClient({origins})`, a `package:http` `Client`; `accessToken()` stays the escape hatch |
+| HTTP | `authenticatedClient(origins)` | `authenticatedSession(origins)` | `httpClient({origins})`, a `package:http` `Client`; `accessToken()` stays the escape hatch |
 | Browser leg | Auth Tab (androidx.browser, activity result) where the Custom Tabs provider supports it, Custom Tabs otherwise, any browser last; `WebView` unrepresentable | `ASWebAuthenticationSession` | native |
 | Redirect | an Auth Tab returns it as its result; otherwise the manifest-declared activity | `ASWebAuthenticationSession` returns it; `handleRedirect(_ url: URL) async -> Bool` feeds a Universal Link received while the app was cold to the pending authorization that `create()` resumes | native |
 | Errors | `sealed class VersolaError : Exception` (the rename to `OAuthError` is deferred, ADR 0001) | `enum OAuthError: Error, Sendable` with the same four cases and payloads | `sealed class OAuthError implements Exception` |

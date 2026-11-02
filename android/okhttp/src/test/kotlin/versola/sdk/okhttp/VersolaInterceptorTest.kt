@@ -557,47 +557,43 @@ class VersolaInterceptorTest {
         assertEquals("the token endpoint's proof must still be stamped from the device clock", deviceNow / 1000, iatOf(proofToTokenEndpoint))
     }
 
-    private fun redirecting(base: HttpUrl = edge): OkHttpClient = OkHttpClient.Builder()
-        .followRedirects(true)
-        .followSslRedirects(true)
-        .addInterceptor(VersolaInterceptor(tokens, RequestScope.origins(setOf("${base.scheme}://${base.host}:${base.port}")), proofs))
-        .build()
+    /**
+     * The client as the facades build it: [authenticated], which switches redirects off. A bare
+     * interceptor on a client that follows them cannot be made safe (OkHttp follows a `Location`
+     * below an application interceptor and re-sends the `DPoP` header, which it does not strip as it
+     * does `Authorization`), so that wiring is not public (`AUDIT Z6`).
+     */
+    private fun redirecting(base: HttpUrl = edge): OkHttpClient = authenticated(
+        OkHttpClient.Builder().followRedirects(true).followSslRedirects(true).build(),
+        VersolaInterceptor(tokens, RequestScope.origins(setOf("${base.scheme}://${base.host}:${base.port}")), proofs),
+    )
 
     @Test
-    fun `AUDIT Z6 a cross-origin redirect followed by the client carries neither Authorization nor DPoP to the other host`() {
-        // AUDIT: Z6. With a bare interceptor() on a client that follows redirects, OkHttp strips Authorization on
-        // a cross-origin redirect but not the DPoP proof header, which is a bearer-ish artefact for that token.
+    fun `AUDIT Z6 a cross-origin redirect is returned to the app and never followed with a proof`() {
         val other = MockWebServer().apply { start() }
         try {
             other.enqueue(ok())
             server.enqueue(MockResponse.Builder().code(302).setHeader("Location", other.url("/landing").toString()).build())
 
-            redirecting().newCall(get()).execute().close()
+            val response = redirecting().newCall(get()).execute().use { it.code }
 
-            val first = server.takeRequest()
-            assertEquals("proof-1", first.headers["DPoP"])
-            val landed = other.takeRequest()
-            assertNull("Authorization reached the redirect target", landed.headers["Authorization"])
-            assertNull("the DPoP proof reached the redirect target", landed.headers["DPoP"])
+            assertEquals("proof-1", server.takeRequest().headers["DPoP"])
+            assertEquals("the 302 is the app's to see", 302, response)
+            assertEquals("nothing reached the redirect target, neither Authorization nor DPoP", 0, other.requestCount)
         } finally {
             other.close()
         }
     }
 
     @Test
-    fun `AUDIT Z6 a same-origin redirect does not re-send the first request's proof for another URL`() {
-        // AUDIT: Z6. The proof is for htu=/resources/r/thing and one jti; a redirect to /resources/r/moved
-        // re-sends that same header, a stale proof (wrong htu, replayed jti) the resource server must refuse.
+    fun `AUDIT Z6 a same-origin redirect is returned to the app and the first request's proof is not re-sent`() {
         server.enqueue(MockResponse.Builder().code(302).setHeader("Location", "/resources/r/moved").build())
         server.enqueue(ok())
 
-        redirecting().newCall(get()).execute().close()
+        val response = redirecting().newCall(get()).execute().use { it.code }
 
-        val first = server.takeRequest()
-        if (server.requestCount > 1) {
-            val second = server.takeRequest()
-            assertNotEquals("the redirected request re-sent the stale proof", first.headers["DPoP"], second.headers["DPoP"])
-        }
+        assertEquals(302, response)
+        assertEquals("the redirected request was never made, so no stale proof was re-sent", 1, server.requestCount)
     }
 
     @Test

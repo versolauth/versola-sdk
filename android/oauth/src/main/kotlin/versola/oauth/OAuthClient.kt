@@ -56,6 +56,7 @@ import versola.sdk.dpop.KeystoreDpopKey
 import versola.sdk.okhttp.RequestScope
 import versola.sdk.okhttp.VersolaHttpException
 import versola.sdk.okhttp.VersolaInterceptor
+import versola.sdk.okhttp.authenticated
 import versola.sdk.storage.DataStoreCredentialStore
 import versola.sdk.storage.FilePendingAuthorizationStore
 import versola.sdk.storage.HardwareKeyProvider
@@ -274,8 +275,9 @@ public class OAuthClient private constructor(
      * origin is in [origins] and nothing else: `Authorization: Bearer` or `DPoP` with a proof,
      * one refresh and one replay on a 401, one nonce retry, and RFC 9470's step-up challenge
      * surfaced as [VersolaError.StepUp] (`spec/oauth-sdk-api.md` section 10). A request to any
-     * other origin passes through untouched, so installing it on a client shared with the rest
-     * of the app is safe. Errors arrive as [VersolaHttpException], because an interceptor may
+     * other origin passes through untouched. Not offered on its own: on a client that follows
+     * redirects its `DPoP` proof would go to whatever a `Location` names, so it is installed only
+     * on the client [authenticatedClient] builds, with redirects off. Errors arrive as [VersolaHttpException], because an interceptor may
      * raise nothing else without crashing an enqueued call; [call] unwraps them.
      *
      * It blocks the calling thread while it waits for the token, a refresh included, so use `enqueue`
@@ -285,19 +287,15 @@ public class OAuthClient private constructor(
      * dispatcher of the SDK's, so callers that have parked every thread of `Dispatchers.IO` cannot
      * starve it. Each blocked caller still holds its own thread until the answer is in.
      */
-    public fun interceptor(origins: Set<String> = configuration.protectedOrigins): Interceptor =
+    private fun interceptor(origins: Set<String>): Interceptor =
         VersolaInterceptor(coordinator, scopeOf(origins), proofs)
 
     /**
-     * The configured HTTP client plus [interceptor], with redirects switched off: a `Location`
+     * The configured HTTP client plus the interceptor above, with redirects switched off: a `Location`
      * from a protected origin would otherwise repeat the request, token included, at another.
      */
     public fun authenticatedClient(origins: Set<String> = configuration.protectedOrigins): OkHttpClient =
-        configuration.httpClient.newBuilder()
-            .followRedirects(false)
-            .followSslRedirects(false)
-            .addInterceptor(interceptor(origins))
-            .build()
+        authenticated(configuration.httpClient, interceptor(origins))
 
     /**
      * One authenticated call through [authenticatedClient], with the error taxonomy raised as itself.

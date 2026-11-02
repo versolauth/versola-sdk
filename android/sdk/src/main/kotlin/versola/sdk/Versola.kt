@@ -34,6 +34,7 @@ import versola.sdk.dpop.KeyAttestation
 import versola.sdk.dpop.KeystoreDpopKey
 import versola.sdk.okhttp.VersolaHttpException
 import versola.sdk.okhttp.VersolaInterceptor
+import versola.sdk.okhttp.authenticated
 import versola.sdk.storage.DataStoreCredentialStore
 import versola.sdk.storage.FilePendingAuthorizationStore
 import versola.sdk.storage.HardwareKeyProvider
@@ -170,22 +171,14 @@ public class Versola internal constructor(
      * `HttpTokenClient` switches them off: a `Location` from anything answering as edge would
      * repeat the request — and the proof minted for *this* origin — at another one.
      */
-    public fun httpClient(): OkHttpClient = baseHttpClient.newBuilder()
-        .followRedirects(false)
-        .followSslRedirects(false)
-        .addInterceptor(interceptor())
-        .build()
+    public fun httpClient(): OkHttpClient = authenticated(baseHttpClient, interceptor())
 
     /**
-     * The same behaviour for an app that already has an `OkHttpClient` it is not going to give
-     * up. Add it as an **application** interceptor.
-     *
-     * Requests that do not address edge pass through untouched, so installing this on a client
-     * shared with the rest of the app — including the one `configure()` was given — is safe.
-     * What such a client does not get is [httpClient]'s redirect policy, which is the
-     * integrator's to set.
+     * The authentication behind [httpClient] and [call]. Not offered on its own: an application
+     * interceptor on a client that follows redirects would send its `DPoP` proof to whatever a
+     * `Location` names, so the only client it is installed on is the one built with redirects off.
      */
-    public fun interceptor(): Interceptor = VersolaInterceptor(coordinator, requireEdge(), dpop)
+    private fun interceptor(): Interceptor = VersolaInterceptor(coordinator, requireEdge(), dpop)
 
     /**
      * One authenticated call, with the error taxonomy raised as itself.
