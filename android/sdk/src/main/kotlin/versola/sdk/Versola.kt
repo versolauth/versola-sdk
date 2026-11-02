@@ -228,7 +228,7 @@ public class Versola internal constructor(
             clientId: String,
             redirectUri: String,
             logger: VersolaLogger = AndroidLogger(),
-            httpClient: OkHttpClient = defaultHttpClient(),
+            httpClient: OkHttpClient = defaultHttpClient,
             // Appended rather than inserted: every parameter before this one keeps the
             // position it had in #5, so a call written against that signature still compiles.
             tokenBinding: TokenBinding = TokenBinding.Dpop(),
@@ -258,19 +258,116 @@ public class Versola internal constructor(
              */
             browser: BrowserAuthorizationSession? = null,
         ): Versola {
+            // Validated first, so a refused configuration is refused the same way every time.
             val configuration = VersolaConfiguration.create(issuer, clientId, redirectUri, postLogoutRedirectUri)
-            configuration.redirectUriWarning?.let(logger::warn)
             // Parsed at configuration time, not at the first call: a base URL that is not a
             // URL is a deployment mistake, and `spec/errors.md` has those fail where they are
             // one line to fix rather than behind a login screen.
             val edge = edgeBaseUrl?.let {
-                it.toHttpUrlOrNull() ?: throw VersolaError.Configuration(
+                val url = it.toHttpUrlOrNull() ?: throw VersolaError.Configuration(
                     VersolaError.Configuration.Detail.InvalidConfiguration(
                         "edgeBaseUrl must be an absolute http or https URL: $it",
                     ),
                 )
+                // Tokens and proofs go to this origin: https, or cleartext to the developer's own
+                // machine only, as the issuer and the generic facade's protected origins (`AUDIT Z3`).
+                if (url.scheme != "https" && url.host !in LOOPBACK_HOSTS) {
+                    throw VersolaError.Configuration(
+                        VersolaError.Configuration.Detail.InvalidConfiguration(
+                            "edgeBaseUrl must be https (http only on a loopback host: localhost, 127.0.0.1, [::1]): $it",
+                        ),
+                    )
+                }
+                url
             }
 
+            // The combinations the flow refuses one at a time are refused here with one message naming
+            // the knob, before the registry below: a refused configuration is refused whatever instance
+            // exists.
+            if (backChannel == BackChannel.Edge) {
+                if (edge == null) {
+                    throw VersolaError.Configuration(
+                        VersolaError.Configuration.Detail.InvalidConfiguration(
+                            "BackChannel.Edge needs edgeBaseUrl: the native endpoints are edge's",
+                        ),
+                    )
+                }
+                if (tokenBinding !is TokenBinding.Dpop) {
+                    throw VersolaError.Configuration(
+                        VersolaError.Configuration.Detail.InvalidConfiguration(
+                            "BackChannel.Edge needs TokenBinding.Dpop: edge's native endpoints accept no bearer presentation",
+                        ),
+                    )
+                }
+            }
+            // One instance per process, because the storage directory below is one per app: a second
+            // `configure()` (every `Activity.onCreate`, every rotation) with the same configuration
+            // returns the first instance instead of building a second coordinator, with its own refresh
+            // epoch and token cache, over the one credential store, so a `logout()` on one could not
+            // fence the other's in-flight refresh (`AUDIT C2`). A different configuration is refused,
+            // like `OAuthClient.create`. `logger` and `browser` of a later call are not part of it and
+            // are ignored: the first is kept.
+            val fingerprint = listOf(
+                issuer, clientId, redirectUri, postLogoutRedirectUri, tokenBinding.toString(), edgeBaseUrl, backChannel,
+                listOf(
+                    retryPolicy.maxAttemptsPerOrigin, retryPolicy.maxTotalAttempts, retryPolicy.initialBackoff,
+                    retryPolicy.backoffMultiplier, retryPolicy.maxBackoff, retryPolicy.totalBudget,
+                ),
+            ).joinToString("\u0000")
+            synchronized(registry) {
+                registry.instance?.let { existing ->
+                    if (registry.fingerprint != fingerprint) {
+                        throw VersolaError.Configuration(
+                            VersolaError.Configuration.Detail.InvalidConfiguration(
+                                "configure() was already called in this process with a different configuration",
+                            ),
+                        )
+                    }
+                    if (registry.httpClient !== httpClient) {
+                        throw VersolaError.Configuration(
+                            VersolaError.Configuration.Detail.InvalidConfiguration(
+                                "configure() was already called in this process with another httpClient; keep the OkHttpClient, or pass the same one",
+                            ),
+                        )
+                    }
+                    return existing
+                }
+                return build(
+                    context, logger, httpClient, tokenBinding, edge, retryPolicy, backChannel, browser, configuration,
+                ).also {
+                    registry.instance = it
+                    registry.fingerprint = fingerprint
+                    registry.httpClient = httpClient
+                }
+            }
+        }
+
+        /** The one instance of this process and what it was configured with; see [configure]. */
+        private class Registry {
+            var instance: Versola? = null
+            var fingerprint: String? = null
+            var httpClient: OkHttpClient? = null
+        }
+
+        private val registry = Registry()
+
+        /** TEST SEAM (internal): forgets the instance, so the next [configure] builds anew. */
+        internal fun forgetAll() {
+            synchronized(registry) { registry.instance = null }
+        }
+
+        private fun build(
+            context: Context,
+            logger: VersolaLogger,
+            httpClient: OkHttpClient,
+            tokenBinding: TokenBinding,
+            edge: HttpUrl?,
+            retryPolicy: RetryPolicy,
+            backChannel: BackChannel,
+            browser: BrowserAuthorizationSession?,
+            configuration: VersolaConfiguration,
+        ): Versola {
+            configuration.redirectUriWarning?.let(logger::warn)
             val applicationContext = context.applicationContext
             // noBackupFilesDir: neither the pending request nor, later, the refresh token may
             // be restored onto a different device out of a cloud backup.
@@ -380,15 +477,25 @@ public class Versola internal constructor(
                         dpopKey?.destroy()
                     },
                     logger = logger,
+                    // The cache of the access token ages, and a `Retry-After` cooldown runs, with the
+                    // device's real time: the default clock (System.nanoTime) stops in deep sleep, and
+                    // an hour-old token would be served as fresh (`AUDIT C4`).
+                    retryClock = { android.os.SystemClock.elapsedRealtime() },
+                    elapsedMillis = { android.os.SystemClock.elapsedRealtime() },
                 ),
                 baseHttpClient = httpClient,
                 edgeBaseUrl = edge,
             )
         }
 
-        private fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
+        private val LOOPBACK_HOSTS = setOf("localhost", "127.0.0.1", "::1", "[::1]")
+
+        // One for the process, so that two `configure()` calls with the default are the same
+        // client; the call deadline bounds a call that connects and then drips (`AUDIT C5`).
+        private val defaultHttpClient: OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(10, TimeUnit.SECONDS)
             .readTimeout(10, TimeUnit.SECONDS)
+            .callTimeout(60, TimeUnit.SECONDS)
             .build()
     }
 }

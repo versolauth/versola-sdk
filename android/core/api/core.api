@@ -27,6 +27,7 @@ public final class versola/sdk/core/EdgeClientUnknown : versola/oauth/core/Verso
 	public static synthetic fun copy$default (Lversola/sdk/core/EdgeClientUnknown;Ljava/lang/String;ILjava/lang/Object;)Lversola/sdk/core/EdgeClientUnknown;
 	public fun equals (Ljava/lang/Object;)Z
 	public final fun getClientId ()Ljava/lang/String;
+	public fun getName ()Ljava/lang/String;
 	public fun hashCode ()I
 	public fun toString ()Ljava/lang/String;
 }

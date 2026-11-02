@@ -135,9 +135,7 @@ public class CustomTabsAuthorizationSession(
             )
         }
     }
-
-    internal companion object {
-        /** A browsable link to a host no app claims; see [resolveBrowser]. */
-        const val BROWSER_PROBE = "https://example.com/"
-    }
 }
+
+/** A browsable link to a host no app claims; see `CustomTabsAuthorizationSession.resolveBrowser`. */
+internal const val BROWSER_PROBE = "https://example.com/"

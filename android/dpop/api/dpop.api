@@ -49,8 +49,8 @@ public final class versola/sdk/dpop/KeystoreDpopKey : versola/sdk/dpop/DpopKey {
 	public static final field Companion Lversola/sdk/dpop/KeystoreDpopKey$Companion;
 	public static final field DEFAULT_ALIAS Ljava/lang/String;
 	public fun <init> ()V
-	public fun <init> (Ljava/lang/String;ZLversola/oauth/core/VersolaLogger;)V
-	public synthetic fun <init> (Ljava/lang/String;ZLversola/oauth/core/VersolaLogger;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;ZLversola/oauth/core/VersolaLogger;Lkotlin/jvm/functions/Function1;)V
+	public synthetic fun <init> (Ljava/lang/String;ZLversola/oauth/core/VersolaLogger;Lkotlin/jvm/functions/Function1;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public fun attestation (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun destroy (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun jkt (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;

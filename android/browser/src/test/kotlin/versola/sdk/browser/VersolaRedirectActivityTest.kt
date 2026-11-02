@@ -66,7 +66,7 @@ class VersolaRedirectActivityTest {
             }
         }
         shadowOf(application.packageManager).addResolveInfoForIntent(
-            Intent(Intent.ACTION_VIEW, Uri.parse(CustomTabsAuthorizationSession.BROWSER_PROBE)).addCategory(Intent.CATEGORY_BROWSABLE),
+            Intent(Intent.ACTION_VIEW, Uri.parse(BROWSER_PROBE)).addCategory(Intent.CATEGORY_BROWSABLE),
             browser,
         )
     }

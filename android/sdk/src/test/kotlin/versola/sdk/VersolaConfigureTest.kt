@@ -40,6 +40,12 @@ class VersolaConfigureTest {
 
     private val application = ApplicationProvider.getApplicationContext<Application>()
 
+    // One instance per process (`AUDIT C2`) outlives a test, so each starts from none.
+    @org.junit.Before
+    fun forgetTheInstance() {
+        Versola.forgetAll()
+    }
+
     private fun configure(
         issuer: String = "https://id.versola.io",
         clientId: String = "mobile-app",
@@ -95,6 +101,7 @@ class VersolaConfigureTest {
         // #1 §4: on and invisible. The integrator's one lever is refusing key binding
         // outright, and taking it is what makes `dpop` null rather than any discovery result.
         assertNotNull(configure().dpop)
+        Versola.forgetAll()
         assertNull(configure(tokenBinding = TokenBinding.Bearer).dpop)
     }
 
@@ -241,6 +248,7 @@ class VersolaConfigureTest {
         // interceptor scope and tokens and proofs would travel in cleartext; RequestScope.origins and
         // OAuthConfiguration.requireOrigin already enforce https-or-loopback.
         for (backChannel in listOf(BackChannel.Auth, BackChannel.Edge)) {
+            Versola.forgetAll()
             val error = runCatching {
                 Versola.configure(
                     application, "https://id.versola.io", "mobile-app", "https://app.example.com/oauth",
@@ -256,6 +264,7 @@ class VersolaConfigureTest {
     @Test
     fun `AUDIT Z3 a loopback edgeBaseUrl may stay cleartext, as the issuer rule allows`() {
         for (edge in listOf("http://localhost:8080", "http://127.0.0.1:8080", "http://[::1]:8080")) {
+            Versola.forgetAll()
             val versola = Versola.configure(
                 application, "https://id.versola.io", "mobile-app", "https://app.example.com/oauth",
                 edgeBaseUrl = edge, backChannel = BackChannel.Edge,

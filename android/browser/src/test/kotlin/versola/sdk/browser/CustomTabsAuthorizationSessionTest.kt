@@ -50,7 +50,7 @@ class CustomTabsAuthorizationSessionTest {
         }
         // What the fallback asks the device for: a browsable https link to a URL no app claims, not
         // the request's own URL (`AUDIT Z8`), so another app's App Link cannot be what answers.
-        val browsable = Intent(Intent.ACTION_VIEW, Uri.parse(CustomTabsAuthorizationSession.BROWSER_PROBE))
+        val browsable = Intent(Intent.ACTION_VIEW, Uri.parse(BROWSER_PROBE))
             .addCategory(Intent.CATEGORY_BROWSABLE)
         packageManager.addResolveInfoForIntent(browsable, resolveInfo)
     }
