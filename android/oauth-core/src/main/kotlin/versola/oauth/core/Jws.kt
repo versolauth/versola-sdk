@@ -292,7 +292,7 @@ public class JwsVerifier(
     /**
      * The keys that could have signed [token]: right type, usable for signing, not pinned to
      * another `alg`, suited to the algorithm's curve or size, and matching `kid` when the
-     * token names one. Without a `kid` more than one candidate is ambiguous and is refused
+     * token names one (or being the only suitable key and naming none). Without a `kid` more than one candidate is ambiguous and is refused
      * outright (a refetch would not make it less so).
      */
     private fun select(set: JsonWebKeySet, token: ParsedJws, algorithm: JwsAlgorithm): List<JsonWebKey> {
@@ -303,7 +303,13 @@ public class JwsVerifier(
                 Jws.suits(key.publicKey, algorithm)
         }
         val kid = token.kid
-        if (kid != null) return suitable.filter { it.keyId == kid }
+        if (kid != null) {
+            // A provider that publishes a one-key set without a `kid` still signs with one in the
+            // header; the only suitable key, naming nothing, is not a guess, as nothing else could
+            // have signed it. Several keys, or a key with a different `kid`, are still no match.
+            return suitable.filter { it.keyId == kid }
+                .ifEmpty { suitable.singleOrNull()?.takeIf { it.keyId == null }?.let(::listOf).orEmpty() }
+        }
         if (suitable.size > 1) {
             throw JwsRejection(IdTokenRejection.Signature, "token has no kid and several keys could have signed it")
         }

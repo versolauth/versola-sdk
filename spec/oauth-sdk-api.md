@@ -224,6 +224,11 @@ is the precise error scenario 17 cannot give without PAR.
 - The refresh skew is `state-machine.md`'s: `min(30 s, expires_in / 10)` on a monotonic clock. A
   response without `expires_in` means *unknown*, not expired: no proactive refresh, the session
   waits for the 401, and one warning is logged.
+  `expires_in` is read leniently: an integer, a quoted integer or a finite float (`3599.0`) is its
+  value in seconds, and anything else is *unknown* too, never a failed exchange: the code was spent
+  by the request that carried it. The response's `Date` is used as the provider's clock for ID-token
+  validation only when it is within a week of the device's clock and carries no `Age` header (a
+  cache's copy is as old as its `Age` says); otherwise the device's clock is used.
 - The generic facade sends no `Idempotency-Key`: it is not defined by a standard a provider is held
   to, and the core sends only what a standard defines (ADR 0001). The pending-rotation slot is still
   persisted, so a process killed mid-rotation restarts with the outgoing token and retries once; a
@@ -332,7 +337,7 @@ Mandatory on every platform, before the token response is persisted (OIDC Core 3
    refused (a public client has no secret to verify with).
 2. `iss` equals the configured issuer (or the discovered one, which must be equal).
 3. `aud` contains `clientId`; with several audiences `azp` must be present and equal `clientId`.
-4. `exp` in the future and `iat` present, within `clockSkewTolerance` after skew correction.
+4. `exp` in the future and `iat` present, within `clockSkewTolerance` after skew correction; `nbf`, when present, not after now plus the tolerance (RFC 7519 4.1.5; refused as `IssuedAt`).
 5. `nonce` equals the value sent, compared in constant time (login only).
 6. `auth_time` present and no older than `max_age` when `max_age` was sent.
 7. `at_hash`, when present, matches the access token (`c_hash` is not applicable to `code`).
@@ -384,7 +389,7 @@ handled in app code after `logout()` has wiped locally; the SDK does not special
 | Sign-in | `suspend fun login(options)` | `func login(_ options:) async throws` | `Future<void> login([options])` |
 | Options | `LoginOptions` data class | `LoginOptions` struct | `LoginOptions` |
 | Sign-out | `suspend fun logout(options): LogoutOutcome` | `func logout(_:) async -> LogoutOutcome` | `Future<LogoutOutcome> logout([options])` |
-| Token | `suspend fun accessToken(): AccessToken` (`isDpopBound`; the scheme is `DPoP` if set, else `Bearer`) | `func accessToken() async throws -> AccessToken` (`tokenType` is `Bearer` or `DPoP`, in that spelling whatever the provider's `token_type` said; a type other than DPoP is `Bearer`, as on Android) | `Future<AccessToken> accessToken()` |
+| Token | `suspend fun accessToken(): AccessToken` (`isDpopBound`; the scheme is `DPoP` if set, else `Bearer`) | `func accessToken() async throws -> AccessToken` (`tokenType` is `Bearer` or `DPoP`, in that spelling whatever the provider's `token_type` said; a `token_type` that is neither `Bearer` nor `DPoP` is a malformed token response, `Configuration(TokenResponseMalformed)`, as on Android) | `Future<AccessToken> accessToken()` |
 | Claims | `val claims: IdTokenClaims?` | `var claims: IdTokenClaims? { get async }` | `Future<IdTokenClaims?> claims()` (a method, not a getter: the claims stay native, so the answer is asynchronous, and a `Future` getter would make `client.claims != null` always true) |
 | UserInfo | `suspend fun userInfo(): UserInfo` | `func userInfo() async throws -> UserInfo` | `Future<UserInfo> userInfo()` |
 | Step-up | `suspend fun stepUp(challenge, options)` | `func stepUp(_ challenge: OAuthError, options:) async throws` takes the caught `.stepUp` case; `func stepUp(acrValues:maxAge:options:) async throws` also exists | `Future<void> stepUp(challenge, [options])` |

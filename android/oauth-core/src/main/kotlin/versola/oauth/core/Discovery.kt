@@ -6,6 +6,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -71,15 +72,58 @@ public val discoveryJson: Json = Json {
 internal fun wellKnownUrl(issuer: String): String =
     issuer.trimEnd('/') + "/.well-known/openid-configuration"
 
+/**
+ * RFC 8414 section 3.1 for an issuer that has a path: the suffix goes between the host and the path
+ * (`https://host/tenant` is served at `https://host/.well-known/oauth-authorization-server/tenant`),
+ * where OpenID Connect Discovery appends it. Null for an issuer without a path, where the two forms
+ * are the same place.
+ */
+internal fun rfc8414WellKnownUrl(issuer: String): String? {
+    val parsed = issuer.toHttpUrlOrNull() ?: return null
+    val path = parsed.encodedPath.trimEnd('/')
+    if (path.isEmpty()) return null
+    return parsed.newBuilder().encodedPath("/.well-known/oauth-authorization-server$path").build().toString()
+}
+
 public class HttpDiscoveryClient(
-    private val httpClient: OkHttpClient,
+    httpClient: OkHttpClient,
 ) : LifetimeAwareDiscoveryClient {
+
+    /**
+     * Redirects are never followed, whatever the injected client's policy: a `Location` would
+     * otherwise choose where the issuer's metadata is read from, and the 300..399 branch below,
+     * as at the key set and the token endpoint, would be dead code (`AUDIT B3`).
+     */
+    private val httpClient: OkHttpClient = httpClient.newBuilder()
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
 
     override suspend fun fetch(issuer: String): ProviderMetadata = fetchWithLifetime(issuer).first
 
     override suspend fun fetchWithLifetime(issuer: String): Pair<ProviderMetadata, Long> {
-        val url = wellKnownUrl(issuer)
-        val fetched = retrying(originOf(url)) { withContext(SdkDispatchers.blocking) {
+        val primary = wellKnownUrl(issuer)
+        val alternative = rfc8414WellKnownUrl(issuer)
+        // An issuer with a path may publish its document at either well-known form; the OpenID one
+        // is asked first and a 404 there, and only a 404, falls through to RFC 8414's.
+        val fetched = fetchDocument(primary, absentIsNull = alternative != null)
+            ?: fetchDocument(checkNotNull(alternative), absentIsNull = false)
+            ?: throw IllegalStateException("unreachable")
+
+        val (body, lifetime) = fetched
+        val metadata = try {
+            discoveryJson.decodeFromString(ProviderMetadata.serializer(), body)
+        } catch (e: Exception) {
+            throw VersolaError.Configuration(
+                VersolaError.Configuration.Detail.DiscoveryMalformed(describeParseFailure(e)),
+            )
+        }
+        metadata.validate(issuer)
+        return metadata to lifetime
+    }
+
+    private suspend fun fetchDocument(url: String, absentIsNull: Boolean): Pair<String, Long>? {
+        return retrying(originOf(url)) { withContext(SdkDispatchers.blocking) {
             val request = Request.Builder().url(url).header("Accept", "application/json").build()
             try {
                 httpClient.newCall(request).execute().use { response ->
@@ -91,6 +135,7 @@ public class HttpDiscoveryClient(
                         ServerFault.isServerFault(response.code) -> throw ServerFault.failure(response.code, response.headers)
                         // A 4xx means this issuer does not serve a discovery document at all,
                         // which no retry fixes — an integrator typo or the wrong environment.
+                        response.code == 404 && absentIsNull -> null
                         response.code in 400..499 -> throw VersolaError.Configuration(
                             VersolaError.Configuration.Detail.InvalidConfiguration(
                                 "no discovery document at $url (HTTP ${response.code})",
@@ -115,18 +160,6 @@ public class HttpDiscoveryClient(
                 )
             }
         } }
-
-        val (body, lifetime) = fetched
-        val metadata = try {
-            discoveryJson.decodeFromString(ProviderMetadata.serializer(), body)
-        } catch (e: Exception) {
-            throw VersolaError.Configuration(
-                VersolaError.Configuration.Detail.DiscoveryMalformed(e.message ?: e::class.java.simpleName),
-                e,
-            )
-        }
-        metadata.validate(issuer)
-        return metadata to lifetime
     }
 }
 
@@ -281,3 +314,14 @@ public class DiscoveryService internal constructor(
 
 /** How long a document served stale because the provider was unreachable is trusted before the next try. */
 private const val RETRY_AFTER_OUTAGE_MILLIS = 60_000L
+
+/**
+ * What a parse failure may say about itself: the exception's class and, for a kotlinx.serialization
+ * failure, the JSON path it stopped at. Never its message, which quotes a snippet of the input: a
+ * token response is credential material and an error travels into logs and crash reports, and a
+ * captive portal's page is not the app's to be handed back either (`AUDIT B13`, `D1`).
+ */
+internal fun describeParseFailure(e: Exception): String {
+    val path = Regex("""at path: (\$[\w.\[\]]*)""").find(e.message.orEmpty())?.groupValues?.get(1)
+    return "the response is not the expected JSON (${e::class.java.simpleName}${path?.let { " at $it" }.orEmpty()})"
+}

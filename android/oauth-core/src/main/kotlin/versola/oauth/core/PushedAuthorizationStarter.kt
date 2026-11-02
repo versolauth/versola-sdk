@@ -170,7 +170,7 @@ public class PushedAuthorizationStarter(
         }
         val requestUri = parsed.requestUri
         val expiresIn = parsed.expiresIn
-        if (requestUri.isNullOrBlank() || expiresIn == null || expiresIn <= 0) {
+        if (requestUri.isNullOrBlank() || expiresIn <= 0) {
             throw VersolaError.Configuration(
                 VersolaError.Configuration.Detail.InvalidConfiguration(
                     "PAR response lacks a request_uri or a positive expires_in",
@@ -183,7 +183,8 @@ public class PushedAuthorizationStarter(
     @Serializable
     private class PushedResponsePayload(
         @SerialName("request_uri") val requestUri: String? = null,
-        @SerialName("expires_in") val expiresIn: Long? = null,
+        @Serializable(with = LenientSeconds::class)
+        @SerialName("expires_in") val expiresIn: Long = 0,
     )
 
     @Serializable

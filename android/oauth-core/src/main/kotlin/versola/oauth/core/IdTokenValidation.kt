@@ -121,6 +121,11 @@ public class JwksIdTokenValidator(
         // arbitrary age cap would reject them (stated in the PR; one line to tighten).
         if (iat == null) throw JwsRejection(IdTokenRejection.IssuedAt, "no iat")
         if (iat.isAfter(now.plus(tolerance))) throw JwsRejection(IdTokenRejection.IssuedAt, "iat is in the future")
+        // RFC 7519 4.1.5: a token must not be accepted before its `nbf`, within the same tolerance.
+        // Reported as `IssuedAt`: it is the same fault, a token that is not yet valid by the clock.
+        payload.time("nbf")?.let { nbf ->
+            if (nbf.isAfter(now.plus(tolerance))) throw JwsRejection(IdTokenRejection.IssuedAt, "nbf is in the future")
+        }
 
         // Step 11, login only. isEqual on the UTF-8 bytes, not ==: the nonce is a secret the
         // request put on the wire, and an early-exit compare leaks how much of it matched.

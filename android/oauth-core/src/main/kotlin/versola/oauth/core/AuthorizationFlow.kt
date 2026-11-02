@@ -636,7 +636,7 @@ public class AuthorizationFlow(
             if (binding.requireHardware) {
                 throw VersolaError.Configuration(
                     VersolaError.Configuration.Detail.HardwareBindingUnavailable(
-                        "the provider does not advertise dpop_signing_alg_values_supported",
+                        "the provider does not advertise ES256 in dpop_signing_alg_values_supported",
                     ),
                 )
             }

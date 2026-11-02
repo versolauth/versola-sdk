@@ -192,7 +192,7 @@ public class HttpTokenClient(
         if (binding is TokenBinding.Dpop && binding.requireHardware && !metadata.supportsDpop) {
             throw VersolaError.Configuration(
                 VersolaError.Configuration.Detail.HardwareBindingUnavailable(
-                    "the provider does not advertise dpop_signing_alg_values_supported",
+                    "the provider does not advertise ES256 in dpop_signing_alg_values_supported",
                 ),
             )
         }
@@ -236,6 +236,8 @@ public class HttpTokenClient(
 public class TokenRequestExecutor(
     private val httpClient: OkHttpClient,
     private val dpop: DpopProofSource?,
+    /** The device's clock, which a token response's `Date` is checked against before it is believed. */
+    private val clock: () -> java.time.Instant = java.time.Instant::now,
 ) {
 
     /**
@@ -308,7 +310,7 @@ public class TokenRequestExecutor(
                     // satisfy (scenario 04).
                     dpop?.observe(htu ?: url, response.headers.dateForClockSkew(), nonce)
                     if (response.isSuccessful) {
-                        Attempt.Issued(issued(payload, response.header("Date")))
+                        Attempt.Issued(issued(payload, response.header("Date"), response.header("Age")))
                     } else {
                         onStatus(response.code)?.let { throw it }
                         rejected(response.code, payload, nonce, response.headers("WWW-Authenticate"), response.headers)
@@ -365,25 +367,26 @@ public class TokenRequestExecutor(
         }
     }
 
-    private fun issued(payload: String, dateHeader: String?): TokenResponse {
+    private fun issued(payload: String, dateHeader: String?, ageHeader: String?): TokenResponse {
         val parsed = try {
             discoveryJson.decodeFromString(TokenResponsePayload.serializer(), payload)
         } catch (e: Exception) {
             throw VersolaError.Configuration(
-                VersolaError.Configuration.Detail.TokenResponseMalformed(
-                    e.message ?: e::class.java.simpleName,
-                ),
-                e,
+                VersolaError.Configuration.Detail.TokenResponseMalformed(describeParseFailure(e)),
             )
         }
-        // RFC 9110 5.6.7 dates; an unreadable one is not an error, only an absent clock.
-        val serverDate = dateHeader?.let {
+        // RFC 9110 5.6.7 dates; an unreadable one is not an error, only an absent clock. The
+        // validator takes this as "now", so it is trusted only as far as a skewed device clock
+        // explains it: a Date a week or more from the device's own is a broken or hostile answer
+        // (a proxy's stale page, a replay), and one carrying an `Age` is a cache's copy, as old as
+        // the Age says (RFC 9111 5.1), not the provider's clock.
+        val serverDate = dateHeader?.takeIf { ageHeader == null }?.let {
             try {
                 java.time.ZonedDateTime.parse(it, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant()
             } catch (e: java.time.format.DateTimeParseException) {
                 null
             }
-        }
+        }?.takeIf { java.time.Duration.between(it, clock()).abs() <= MAX_PLAUSIBLE_DATE_SKEW }
         return TokenResponse.from(parsed, serverDate)
     }
 
@@ -476,6 +479,7 @@ public class TokenRequestExecutor(
 
     private companion object {
         private val FORM_MEDIA_TYPE = "application/x-www-form-urlencoded".toMediaType()
+        private val MAX_PLAUSIBLE_DATE_SKEW = java.time.Duration.ofDays(7)
     }
 }
 

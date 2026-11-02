@@ -151,16 +151,16 @@ class VersolaConfigurationTest {
     @Test
     fun `a cleartext issuer is allowed on loopback only`() {
         assertEquals("http://localhost:9003", configure(issuer = "http://localhost:9003").issuer)
-        assertEquals("http://10.0.2.2:9003", configure(issuer = "http://10.0.2.2:9003").issuer)
+        assertEquals("http://[::1]:9003", configure(issuer = "http://[::1]:9003").issuer)
         assertThrows(VersolaError.Configuration::class.java) { configure(issuer = "http://id.example.com") }
     }
     @Test
     fun `AUDIT Z10 a cleartext issuer on the emulator alias 10-0-2-2 is refused in every build`() {
         // AUDIT: Z10 (architecture review M9). security.md and spec/oauth-sdk-api.md section 3 say every http host
         // except localhost, 127.0.0.1 and [::1] is refused, 10.0.2.2 included, with no switch; isLoopbackHost
-        // still lists it, so a fixture issuer copied into a release build talks OAuth in cleartext to whatever
-        // answers on 10/8. No opt-in API exists, so this asserts default-reject only. The test
-        // `a cleartext issuer is allowed on loopback only` above asserts the opposite for 10.0.2.2 and has to change with the fix.
+        // listed it, so a fixture issuer copied into a release build talked OAuth in cleartext to whatever
+        // answers on 10/8. No opt-in API exists, so this asserts default-reject only (the stale
+        // assertion for 10.0.2.2 in `a cleartext issuer is allowed on loopback only` was replaced by [::1]).
         val error = assertThrows(VersolaError.Configuration::class.java) { configure(issuer = "http://10.0.2.2:8080") }
 
         assertTrue(error.detail is VersolaError.Configuration.Detail.InvalidConfiguration)

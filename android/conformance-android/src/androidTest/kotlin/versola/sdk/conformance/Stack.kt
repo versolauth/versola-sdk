@@ -9,7 +9,7 @@ import androidx.test.platform.app.InstrumentationRegistry
  * is exactly the one auth announces.
  *
  * Overridden per run with instrumentation arguments:
- * `-Pandroid.testInstrumentationRunnerArguments.authUrl=http://10.0.2.2:9003`.
+ * `-Pandroid.testInstrumentationRunnerArguments.authUrl=http://localhost:9003`.
  */
 class Stack private constructor(
     val authUrl: String,

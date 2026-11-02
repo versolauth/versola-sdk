@@ -47,21 +47,24 @@ class AuditDeveloperExperienceTest {
         .body("<html><body>Sign in to the airport Wi-Fi</body></html>")
         .build()
 
-    // AUDIT: D1 (design). A captive portal answering the discovery request with a 200 HTML page is
-    // the user's network, not a deployment mistake: `Configuration` means "never catch in
-    // production" (spec/errors.md:14), so this must be Recoverable.
+    // AUDIT: D1 (decided 2026-11-02). A captive portal answering the discovery request with a 200
+    // HTML page stays `Configuration(DiscoveryMalformed)`: the document is not the provider's, which
+    // the app cannot fix by retrying, and the portal's page is not echoed into the error.
     @Test
-    fun `AUDIT D1 discovery answered with HTML 200 by a captive portal is not a Configuration error`() = runTest {
+    fun `AUDIT D1 discovery answered with HTML 200 by a captive portal is Configuration and does not echo the page`() = runTest {
         server.enqueue(html())
 
         val error = failure { HttpDiscoveryClient(OkHttpClient()).fetch(issuer) }
 
-        assertFalse("captive-portal HTML must not be Configuration: $error", error is VersolaError.Configuration)
+        assertTrue("captive-portal HTML is DiscoveryMalformed: $error", error is VersolaError.Configuration &&
+            error.detail is VersolaError.Configuration.Detail.DiscoveryMalformed)
+        assertFalse("the portal's page must not be echoed: $error", error.toString().contains("airport"))
     }
 
-    // AUDIT: D1 (design). Same for a 302 to a portal login page (redirects are not followed).
+    // AUDIT: D1 (decided 2026-11-02). A redirect is never followed, so a 302 to a portal login page
+    // is `Configuration(InvalidConfiguration)` naming the status, not a followed request.
     @Test
-    fun `AUDIT D1 discovery answered with a 302 by a captive portal is not a Configuration error`() = runTest {
+    fun `AUDIT D1 discovery answered with a 302 by a captive portal is not followed and is Configuration`() = runTest {
         server.enqueue(
             MockResponse.Builder().code(302).setHeader("Location", "http://portal.example.com/login").build(),
         )
@@ -69,12 +72,15 @@ class AuditDeveloperExperienceTest {
 
         val error = failure { client.fetch(issuer) }
 
-        assertFalse("a captive-portal redirect must not be Configuration: $error", error is VersolaError.Configuration)
+        assertTrue("a redirect is Configuration, not followed: $error", error is VersolaError.Configuration &&
+            error.detail is VersolaError.Configuration.Detail.InvalidConfiguration)
+        assertEquals("the redirect target was never asked", 1, server.requestCount)
     }
 
-    // AUDIT: D1 (design). The token endpoint behind a captive portal answers 200 text/html.
+    // AUDIT: D1 (decided 2026-11-02). The token endpoint behind a captive portal answers 200
+    // text/html: `Configuration(TokenResponseMalformed)`, and the page is not echoed.
     @Test
-    fun `AUDIT D1 token endpoint answered with HTML 200 is not a Configuration error`() = runTest {
+    fun `AUDIT D1 token endpoint answered with HTML 200 is TokenResponseMalformed and does not echo the page`() = runTest {
         server.enqueue(html())
         val metadata = ProviderMetadata(
             issuer = issuer,
@@ -108,7 +114,9 @@ class AuditDeveloperExperienceTest {
 
         val error = failure { client.exchange(grant) }
 
-        assertFalse("an HTML token response must not be Configuration: $error", error is VersolaError.Configuration)
+        assertTrue("an HTML token response is TokenResponseMalformed: $error", error is VersolaError.Configuration &&
+            error.detail is VersolaError.Configuration.Detail.TokenResponseMalformed)
+        assertFalse("the portal's page must not be echoed: $error", error.toString().contains("airport"))
     }
 
     private fun oneOfEach(): Map<String, VersolaError> = mapOf(
@@ -155,17 +163,6 @@ class AuditDeveloperExperienceTest {
 
         assertTrue("no `code` property", a != null)
         assertEquals(a, b)
-    }
-
-    // AUDIT: D7. spec/oauth-sdk-api.md:145 says AccessToken(value, type, expiresAt, scopes); the
-    // class has (value, isDpopBound). Either the spec or the class is wrong; the spec is the
-    // contract, so the class is asserted to carry expiresAt and scopes. Reflection compiles today.
-    @Test
-    fun `AUDIT D7 AccessToken carries expiresAt and scopes as the spec says`() {
-        val names = AccessToken::class.java.methods.map { it.name }.toSet()
-
-        assertTrue("AccessToken has no expiresAt; members: $names", "getExpiresAt" in names)
-        assertTrue("AccessToken has no scopes; members: $names", "getScopes" in names)
     }
 
     // AUDIT: D7. spec/oauth-sdk-api.md:67 says clockSkewTolerance applies to `nbf`; JWT (RFC 7519

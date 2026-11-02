@@ -41,7 +41,7 @@ and #39 list, scenario by scenario, what is currently proven against stubs only.
  │  postgres:18 (service container)                                      │
  │  auth :9003/:9007/:9008   central :9001   nginx :9443   edge :9005    │  ← staged exactly as
  │        ▲                       ▲                            ▲         │    versola's ci-cd.yml
- │        │  10.0.2.2 from the emulator's point of view         │         │
+ │        │  localhost on the emulator, through `adb reverse`   │         │
  │  ┌─────┴───────────────────────────────────────────────────────┴──┐    │
  │  │  Android emulator                                              │    │
  │  │  conformance-android (androidTest APK)                         │    │
@@ -401,13 +401,13 @@ In CI, the `scenarios` job of `.github/workflows/conformance.yml` stages the sta
 addresses as instrumentation arguments. It is on demand only, and has not run yet: the checkout of
 the private server repository needs the `VERSOLA_CHECKOUT_TOKEN` secret, which does not exist, and
 the nightly trigger takes over once it does. The same run by hand against a stack on the host (the
-emulator reaches it at `10.0.2.2`, or through `adb reverse`, `develop.md`):
+emulator reaches it through `adb reverse`, `develop.md`; `10.0.2.2` is refused as an issuer):
 
 ```bash
 ./gradlew :conformance-android:connectedDebugAndroidTest \
-  -Pandroid.testInstrumentationRunnerArguments.authUrl=http://10.0.2.2:9003 \
-  -Pandroid.testInstrumentationRunnerArguments.centralUrl=http://10.0.2.2:9001 \
-  -Pandroid.testInstrumentationRunnerArguments.edgeUrl=http://10.0.2.2:9005
+  -Pandroid.testInstrumentationRunnerArguments.authUrl=http://localhost:9003 \
+  -Pandroid.testInstrumentationRunnerArguments.centralUrl=http://localhost:9001 \
+  -Pandroid.testInstrumentationRunnerArguments.edgeUrl=http://localhost:9005
 ```
 
 ## Order of work
