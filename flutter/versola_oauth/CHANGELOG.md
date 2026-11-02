@@ -1,15 +1,39 @@
-## Unreleased
+## 0.3.0
 
-### Changes to the Dart API
+The Android SDK is now one Maven artifact, a 2026-11-01 audit of the SDK is fixed on Android, iOS and Flutter (protocol conformance, session lifecycle, secret handling, error taxonomy), and every error carries a stable code. Some public API changed on the way; the list is below.
 
-- **`OAuthClient` is an interface** (`abstract interface class`), so an app can fake it in its tests. `OAuthClient.create` is unchanged.
+### What's new
+
+- **Android: one artifact.** `io.versola:oauth-android` now contains what `oauth-core`, `dpop-android`, `storage-android`, `browser-android` and `okhttp-android` contained, and is the only Android artifact published. Those five stay on Maven Central at 0.1.0 and 0.2.0 and are not published from this release. An app that depends on `oauth-android` alone needs no change; an app that also declares one of the five at 0.2.0 or earlier must remove that line, or the build fails with a duplicate-class error.
+- **A repeated `login()` joins the one in flight.** A double-tapped button no longer fails: the second call with the same request awaits the first one's result (one browser, one exchange). A call asking for something else is still refused with `Configuration`.
+- **Every error has a stable `code`** (`code` on Kotlin and Swift, `sdkCode` on Dart; the list is in `spec/errors.md`), independent of its payload, for logging and branching.
+- **`currentSessionState()`** on Android (suspend), after the restore a cold start owes; the logger has a `debug` level (default no-op, never carries a secret).
+- **A non-JSON answer from discovery or the token endpoint** (a proxy's error page, a captive portal) is a recoverable network error, not a configuration error. Redirects from these endpoints are still never followed.
+- **A second `OAuthClient.create` with a different `httpClient` or logger** for the same client is refused with `Configuration` instead of silently returning the first client.
+
+### Breaking changes
+
+- **Android:** `OAuthClient.interceptor()` and `Versola.interceptor()` are gone. An application interceptor sits above OkHttp's redirect handling, so on a client that follows redirects the `DPoP` header was sent to the redirect target. Use `authenticatedClient()`, `httpClient()` or `call()`, which turn redirects off. `VersolaInterceptor`, `RequestScope` and the wiring classes are behind the `@VersolaInternalApi` opt-in.
+- **iOS:** `TokenBinding.dpop(required:)` is `dpop(requireHardware:)`, as on Android. `OAuthConfiguration.storageKey`, `fingerprint` and `toMetadata()` are no longer public.
+- **Android, `OnAppUnlock`:** the unlock-gated Keystore key replaces the ungated one, so a session stored before is unreadable and the user signs in once more.
+- **iOS:** a stored grant whose DPoP key is gone ends in `Reauthenticate(CredentialsInvalidated)`; a locked device stays `unlockRequired`.
+
+### Fixes
+
+- **Protocol:** DPoP is used only when `ES256` is advertised; `nbf` is checked; `token_type` must be `Bearer` or `DPoP`; `expires_in` is read leniently; the DPoP clock offset is kept per origin and the server `Date` is believed only near the device clock; discovery falls back to the RFC 8414 address; the key set is cached per `jwks_uri`; a redirect to another URI is a malformed response; a signed UserInfo response's `iss` and `aud` are checked on iOS.
+- **Session and lifecycle:** a rotated refresh token is not lost when the caller is cancelled or the Keychain is locked; a logout during a code exchange is no longer undone by the login finishing; logout ends a waiting login and refuses refreshes while it runs; a new login clears the previous grant's rotation slot; the access-token age survives deep sleep on Android; `Versola.configure()` with the same configuration returns the same instance.
+- **Secrets and the browser leg:** the plain-browser fallback is pinned to a resolved browser package, so an end-session URL with `id_token_hint` reaches no other app; `10.0.2.2` is no longer treated as loopback; query strings stay out of error text.
+
+### Flutter: changes to the Dart API
+
+- **`OAuthClient` is an interface** (`abstract interface class`, extending `OAuthApi`, which is exported too), so an app can fake it in its tests. `OAuthClient.create` is unchanged except that it no longer takes the `host` parameter, which exposed the generated bridge type.
 - **`OAuthConfiguration` and `LoginOptions` are no longer `const`**: they copy the collections they are given and expose them unmodifiable, so a set the app changes later cannot alter a configuration already handed over. Drop `const` at the call site. `login()` and `stepUp()` take an optional `LoginOptions?`.
 - **Value equality** for the configuration, login options, access token, claims, logout outcome, user info and every `OAuthError`.
 - **`create` throws `UnsupportedError` off Android and iOS** instead of a channel-failure `ConfigurationError`.
 - **`OAuthError.sdkCode`**: the stable, payload-independent code of the case (`configuration.state_mismatch`, `recoverable.network`, `step_up`; the list is in `spec/errors.md`), supplied by the native SDK. It is a separate name because `ConfigurationError.code` and `ReauthenticateError.code` already carry the provider's OAuth error code.
 - **A `Duration` the bridge would truncate is refused** with an `ArgumentError` (`clockSkewTolerance` below whole seconds, a retry duration below whole milliseconds).
 
-### Fixes
+### Flutter: fixes
 
 - Two clients that reach one native client no longer silence each other's `sessionStates()`: one native subscription is shared per native client.
 - `sessionStates()` completes when the native stream ends, and a failure on that stream (a channel error, a state index from a newer native side) arrives as an `OAuthError` instead of an unhandled exception.
