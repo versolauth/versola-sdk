@@ -66,7 +66,7 @@ construction, never behind a login screen.
 | `unlockPolicy` | `UnlockPolicy` | `None` | `state-machine.md`'s `Locked` state is reachable only under `OnAppUnlock` |
 | `clockSkewTolerance` | duration | 60 s | tolerance for `exp`, `iat`, `nbf` in ID-token validation; maximum 5 minutes |
 | `logger` | `Logger` | platform default | section 12 |
-| `httpClient` | platform HTTP client | platform default | OkHttp `OkHttpClient` / `URLSession` configuration; redirects are switched off on the SDK's own requests whatever the client does. Also on the SDK's own requests, whatever the client's settings say: no cached answer is ever served (a forced refetch of a key set or discovery document reaches the provider; iOS `URLCache` is bypassed), a response body over 1 MiB is refused (`Configuration`, no retry) while it streams in, and a request's deadline is bounded by the operation's retry budget (`retry-policy.md`) |
+| `httpClient` | platform HTTP client | platform default | OkHttp `OkHttpClient` / `URLSession` configuration; redirects are switched off on the SDK's own requests whatever the client does. The default is one shared client with connect and read timeouts of 10 s and a 60 s deadline on a whole call (a response that connects and then drips would hold a call for ever otherwise); an app's own client sets its own. Also on the SDK's own requests, whatever the client's settings say: no cached answer is ever served (a forced refetch of a key set or discovery document reaches the provider; iOS `URLCache` is bypassed), a response body over 1 MiB is refused (`Configuration`, no retry) while it streams in, and a request's deadline is bounded by the operation's retry budget (`retry-policy.md`) |
 
 Explicit endpoints are the escape hatch for providers that do not publish discovery or publish it
 at a non-standard path. They are not a way to override a discovered value: a configuration with both
@@ -138,7 +138,8 @@ val oauth = OAuthClient.create(context, configuration)
 - **Order.** While the state is `Authorizing` no grant is stored. An app that calls an
   authenticated operation (`accessToken()`, `refresh()`, `userInfo()`, a request through the
   authenticated client or session) before the resume has left `Authorizing` gets the
-  no-grant `Reauthenticate(GrantRejected)` error. Nothing is wiped for it, so the pending
+  no-grant `Reauthenticate(GrantRejected)` error (`userInfo()` with no session at all is
+  `Reauthenticate(SessionExpired)`, since no token endpoint was asked what `GrantRejected` says). Nothing is wiped for it, so the pending
   sign-in and the DPoP key its `dpop_jkt` committed to survive and the sign-in can still finish
   (`state-machine.md`, `Refreshing → Unauthenticated`); the state stays `Authorizing`.
 
@@ -151,7 +152,7 @@ val oauth = OAuthClient.create(context, configuration)
 | `accessToken()` | a token not within its refresh skew is available, refreshing once if needed (single-flight) | `AccessToken(value, type: Bearer or DPoP)`; `expiresAt` and `scopes` are not exposed on any platform yet (section 16, question 6) | `Reauthenticate(GrantRejected, SessionExpired)`, `Recoverable(Network, UnlockRequired)` |
 | `refresh()` | the refresh completed | nothing | as `accessToken()` |
 | `claims` | — (property, memory) | `IdTokenClaims?` of the last validated ID token; null when unauthenticated. After a cold start the stored ID token is read back by the first operation (`accessToken()`, `userInfo()`, a refresh), without re-verifying it: it was validated before it was stored | — |
-| `userInfo()` | the UserInfo response is validated | `UserInfo` (the standard claims typed, the rest as a read-only map); `sub` must equal the ID token's `sub` (OIDC Core 5.3.2) | `Configuration(ProviderUnsupported)` when no endpoint, `Recoverable`, `Reauthenticate` |
+| `userInfo()` | the UserInfo response is validated | `UserInfo` (the standard claims typed, the rest as a read-only map); `sub` must equal the ID token's `sub` (OIDC Core 5.3.2) | `Configuration(ProviderUnsupported)` when no endpoint, `Recoverable`, `Reauthenticate` (`SessionExpired` with no session) |
 | `stepUp(challenge, options)` | as `login()` | re-authorizes with the challenge's `acr_values` and `max_age` and the configured scopes (or the options'); the app re-issues the refused call | as `login()` |
 | `metadata()` | discovery is cached | `ProviderMetadata` | `Configuration(Discovery*)`, `Recoverable(Network or Server)` |
 | `authenticatedClient(origins)` / `interceptor(origins)` / `authenticatedSession(origins)` | — | section 10 | — |

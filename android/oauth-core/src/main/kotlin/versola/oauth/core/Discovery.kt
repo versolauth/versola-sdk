@@ -111,6 +111,9 @@ public class HttpDiscoveryClient(
             ?: throw IllegalStateException("unreachable")
 
         val (body, lifetime) = fetched
+        // Checked after the fetch, outside the retry budget: the same page would be met again, and
+        // iOS surfaces it once (`spec/errors.md`, "A body that is not JSON").
+        if (!isJson(body)) throw notJsonFailure(200, null, "discovery")
         val metadata = try {
             discoveryJson.decodeFromString(ProviderMetadata.serializer(), body)
         } catch (e: Exception) {
@@ -131,7 +134,6 @@ public class HttpDiscoveryClient(
                     when {
                         // A 2xx that is not JSON at all is a proxy's or a captive portal's page, not the
                         // provider's: the user's network, which a later attempt may not meet (`AUDIT D1`).
-                        response.isSuccessful && !isJson(payload) -> throw notJsonFailure(response.code, response.header("Content-Type"), "discovery")
                         response.isSuccessful -> payload to CacheLifetime.of(response.headers, System.currentTimeMillis())
                         // 408, 429 and 5xx are the provider having a bad moment: transport-shaped,
                         // repeated under the operation's budget (`spec/retry-policy.md`).

@@ -171,7 +171,7 @@ class DiscoveryTest {
         val error = thrown as? VersolaError.Recoverable ?: throw AssertionError("expected Recoverable, was $thrown")
 
         val network = error.reason as VersolaError.Recoverable.Cause.Network
-        assertTrue(network.detail, "text/html" in network.detail && "SECRET-PAGE" !in network.detail)
+        assertTrue(network.detail, "SECRET-PAGE" !in network.detail)
     }
 
     @Test
