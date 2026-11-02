@@ -386,7 +386,7 @@ handled in app code after `logout()` has wiped locally; the SDK does not special
 |---|---|---|---|
 | Entry point | `OAuthClient.create(context, config)` | `OAuthClient.create(configuration:presentationAnchor:)` (static, async: one instance per configuration per process, as on Android; an `init` could not return an existing one) | `OAuthClient.create(config)` |
 | Configuration | `OAuthConfiguration(...)` data class | `OAuthConfiguration` struct | `OAuthConfiguration` |
-| State | `Flow<SessionState>` (cold; the first emission is the restored state, which a `StateFlow` could not promise) | `sessionStates() -> AsyncStream<SessionState>` (one stream per observer) | `Stream<SessionState> sessionStates()` (any number of listeners over one native subscription; a late listener first gets the latest state), `Future<SessionState> currentSessionState()` |
+| State | `Flow<SessionState>` and `suspend fun currentSessionState(): SessionState` (the value now, after the restore a cold start owes; for an Activity choosing between a login and a home screen) (cold; the first emission is the restored state, which a `StateFlow` could not promise) | `sessionStates() -> AsyncStream<SessionState>` (one stream per observer) | `Stream<SessionState> sessionStates()` (any number of listeners over one native subscription; a late listener first gets the latest state), `Future<SessionState> currentSessionState()` |
 | Sign-in | `suspend fun login(options)` | `func login(_ options:) async throws` | `Future<void> login([options])` |
 | Options | `LoginOptions` data class | `LoginOptions` struct | `LoginOptions` |
 | Sign-out | `suspend fun logout(options): LogoutOutcome` | `func logout(_:) async -> LogoutOutcome` | `Future<LogoutOutcome> logout([options])` |
@@ -427,8 +427,13 @@ them as a parameter for the same reason.
 
 ## 15. Logging
 
-`Logger` with `info` and `warn`; the default implementation logs warnings only. No line at any
-level carries a token, code, verifier, `state`, `nonce`, proof, header value or claim value.
+`Logger` with `info`, `warn` and `debug`; `debug` has a default that does nothing, so an existing
+implementer compiles, and the default implementation logs warnings only. `debug` is where
+diagnostics go: discovery fetched (the endpoint's host, not its URL), a refresh coalesced onto one
+in flight, a retry scheduled (attempt, delay, the status or the kind of failure), a cached document
+served. No line at any
+level carries a token, code, verifier, `state`, `nonce`, proof, header value, claim value, or a URL
+with its query.
 Warnings are emitted for: a private-use redirect scheme, DPoP requested but not advertised, no
 refresh token issued, `offline_access` advertised but not configured, a response without
 `expires_in`, a software-tier key. Each is emitted once per `create()`.
