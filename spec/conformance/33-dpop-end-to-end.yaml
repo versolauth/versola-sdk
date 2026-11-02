@@ -73,7 +73,7 @@ notes: >
   is that one claim's and not a forger's; the DPoP key tier is Software in a run without a secure
   element, and nothing in a Software run is a statement about StrongBox, the TEE or the Secure
   Enclave. Where the platforms spell the option differently, Android's TokenBinding.Dpop(requireHardware = true)
-  and iOS's TokenBinding.dpop(required: true) are the same assertion (the key must be hardware-backed,
+  and iOS's TokenBinding.dpop(requireHardware: true) are the same assertion (the key must be hardware-backed,
   errors.md "Hardware key unavailable"); a Software key is refused by both before any authorization
   request. Flutter runs this through its bridge, and since it has the authenticated client
   (`OAuthClient.httpClient()`, `spec/oauth-sdk-api.md` section 10) the authenticated-call assertions

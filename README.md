@@ -38,8 +38,9 @@ Documentation: <https://docs.versola.io/sdk/overview>.
 - **One session model.** Seven session states, observed as a `Flow` (Kotlin), `AsyncStream` (Swift)
   or `Stream` (Dart).
 - **No client secret.** A native app cannot keep one, so the configuration has no field for it.
-- **Calls with the token attached.** An OkHttp interceptor on Android and an authenticated
-  `URLSession` wrapper on iOS send the token only to the origins you list.
+- **Calls with the token attached.** An authenticated OkHttp client on Android
+  (`authenticatedClient()`, redirects off) and an authenticated `URLSession` wrapper on iOS send the
+  token only to the origins you list.
 
 ## Quick start
 
