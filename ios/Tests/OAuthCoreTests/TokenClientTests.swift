@@ -19,9 +19,9 @@ final class TokenClientTests: XCTestCase {
         )
     }
 
-    private func client(_ http: HTTPClient, dpop: DpopProofSource? = nil, binding: TokenBinding = .bearer, metadata: ProviderMetadata? = nil, idempotency: Bool = false) throws -> HTTPTokenClient {
+    private func client(_ http: HTTPClient, dpop: DpopProofSource? = nil, binding: TokenBinding = .bearer, metadata: ProviderMetadata? = nil, idempotency: Bool = false, clock: Clock = .system) throws -> HTTPTokenClient {
         let document = metadata ?? self.metadata(dpop: dpop != nil)
-        return try HTTPTokenClient(configuration: configuration, metadata: { document }, httpClient: http, dpop: dpop, tokenBinding: binding, sendIdempotencyKey: idempotency)
+        return try HTTPTokenClient(configuration: configuration, metadata: { document }, httpClient: http, dpop: dpop, tokenBinding: binding, sendIdempotencyKey: idempotency, clock: clock)
     }
 
     private func grant(extensions: [String: String] = [:], resources: [String] = []) -> AuthorizationGrant {
@@ -101,10 +101,68 @@ final class TokenClientTests: XCTestCase {
         let http = RecordingHTTP { _ in
             HTTPResponse(statusCode: 200, headers: ["Date": "Sun, 06 Nov 1994 08:49:37 GMT"], body: Data(#"{"access_token":"at","token_type":"Bearer","expires_in":"60"}"#.utf8))
         }
-        let response = try await client(http).exchange(grant())
+        let device = Date(timeIntervalSince1970: 784_111_777 + 3600)
+        let response = try await client(http, clock: Clock(now: { device })).exchange(grant())
         XCTAssertEqual(response.expiresIn, 60)
         XCTAssertEqual(response.serverDate, Date(timeIntervalSince1970: 784_111_777))
         XCTAssertNil(response.refreshToken)
+    }
+
+    /// `spec/oauth-sdk-api.md`: the `Date` is the provider's clock for ID-token validation only when it is
+    /// within a week of the device's, and not a cache's copy (any `Age`).
+    func testTheServerDateIsBelievedOnlyNearTheDeviceClockAndWithoutAnAge() async throws {
+        let body = Data(#"{"access_token":"at","token_type":"Bearer","expires_in":60}"#.utf8)
+        let date = "Sun, 06 Nov 1994 08:49:37 GMT"
+        let near = Date(timeIntervalSince1970: 784_111_777)
+        let cases: [(String, [String: String], Date, Bool)] = [
+            ("near", ["Date": date], near.addingTimeInterval(6 * 86_400), true),
+            ("a week and a day off", ["Date": date], near.addingTimeInterval(8 * 86_400), false),
+            ("a cached copy", ["Date": date, "Age": "30"], near, false),
+            ("age zero is still an age", ["Date": date, "Age": "0"], near, false),
+        ]
+        for (name, headers, device, believed) in cases {
+            let http = RecordingHTTP { _ in HTTPResponse(statusCode: 200, headers: headers, body: body) }
+            let response = try await client(http, clock: Clock(now: { device })).exchange(grant())
+            XCTAssertEqual(response.serverDate != nil, believed, name)
+        }
+    }
+
+    /// `expires_in` is read leniently: an integer, a quoted integer or a finite float is seconds; anything else is
+    /// unknown (0), never a failed exchange, because the code was spent by the request that carried it.
+    func testExpiresInIsReadLeniently() async throws {
+        let values: [(String, Int)] = [("3599", 3599), (#""3599""#, 3599), ("3599.0", 3599), ("3599.7", 3599), ("true", 0), (#""soon""#, 0), ("null", 0), ("-5", 0), ("[1]", 0)]
+        for (literal, expected) in values {
+            let http = RecordingHTTP.json(200, #"{"access_token":"at","token_type":"Bearer","expires_in":\#(literal)}"#)
+            let response = try await client(http).exchange(grant())
+            XCTAssertEqual(response.expiresIn, expected, literal)
+        }
+    }
+
+    /// RFC 6749 7.1 makes the type case-insensitive; this SDK presents Bearer or DPoP and nothing else, in that spelling.
+    func testTokenTypeIsNormalisedAndAnythingButBearerOrDpopIsMalformed() async throws {
+        for (given, expected) in [("bearer", "Bearer"), ("BEARER", "Bearer"), ("dpop", "DPoP"), ("DPoP", "DPoP")] {
+            let http = RecordingHTTP.json(200, #"{"access_token":"at","token_type":"\#(given)"}"#)
+            let response = try await client(http).exchange(grant())
+            XCTAssertEqual(response.tokenType, expected, given)
+        }
+        for given in ["mac", "N_A", "Basic"] {
+            let http = RecordingHTTP.json(200, #"{"access_token":"at","token_type":"\#(given)"}"#)
+            do {
+                _ = try await client(http).exchange(grant())
+                XCTFail("accepted token_type \(given)")
+            } catch let error as OAuthError {
+                guard case .configuration(.tokenResponseMalformed) = error else { return XCTFail("\(error)") }
+            }
+        }
+    }
+
+    /// AUDIT B1: DPoP is on only when ES256, the one algorithm this SDK signs, is advertised.
+    func testDpopNeedsEs256AdvertisedNotJustAnyAlgorithm() {
+        var metadata = self.metadata(dpop: false)
+        metadata.dpopSigningAlgValuesSupported = ["RS256", "PS256"]
+        XCTAssertFalse(metadata.supportsDpop)
+        metadata.dpopSigningAlgValuesSupported = ["RS256", "ES256"]
+        XCTAssertTrue(metadata.supportsDpop)
     }
 
     func testAnUnreadableDateIsOnlyAnAbsentClockAndAMissingExpiresInIsUnknown() async throws {
@@ -194,7 +252,7 @@ final class TokenClientTests: XCTestCase {
             return "proof-\(minted.count)"
         }
         func observe(nonce: String, origin: String) async { nonces[origin] = nonce }
-        func observe(serverDate: String?, age: String?) async {}
+        func observe(serverDate: String?, age: String?, origin: String) async {}
         func nonce(for origin: String) async -> String? { nonces[origin] }
         func clearNonces() async { nonces.removeAll() }
     }

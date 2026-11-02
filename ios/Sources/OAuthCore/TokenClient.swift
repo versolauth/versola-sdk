@@ -44,6 +44,8 @@ package struct HTTPTokenClient: TokenClient {
     private let dpop: DpopProofSource?
     private let tokenBinding: TokenBinding
     private let sendIdempotencyKey: Bool
+    /// The device's clock, which a response's `Date` is checked against before it is believed.
+    private let clock: Clock
 
     /// - Parameters:
     ///   - dpop: nil for a session that is not key-bound.
@@ -55,8 +57,10 @@ package struct HTTPTokenClient: TokenClient {
         httpClient: HTTPClient,
         dpop: DpopProofSource? = nil,
         tokenBinding: TokenBinding = .bearer,
-        sendIdempotencyKey: Bool = false
+        sendIdempotencyKey: Bool = false,
+        clock: Clock = .system
     ) throws {
+        self.clock = clock
         // The same pairing the flow refuses: with no proof source a key-bound request goes out
         // unbound. Wiring, not deployment, so it fails here rather than at the first exchange.
         if case .dpop = tokenBinding, dpop == nil {
@@ -145,7 +149,7 @@ package struct HTTPTokenClient: TokenClient {
         // Before the request, not after one succeeds: for an authorization code "useless"
         // means spent, and discovery already said whether the deployment can bind the grant.
         if case .dpop(let required) = tokenBinding, required, !metadata.supportsDpop {
-            throw OAuthError.configuration(.hardwareBindingUnavailable(detail: "the provider does not advertise dpop_signing_alg_values_supported"))
+            throw OAuthError.configuration(.hardwareBindingUnavailable(detail: "the provider does not advertise ES256 in dpop_signing_alg_values_supported"))
         }
         guard let url = URL(string: metadata.tokenEndpoint) else {
             throw OAuthError.configuration(.discoveryMalformed(detail: "token_endpoint is not a URL"))
@@ -221,18 +225,18 @@ package struct HTTPTokenClient: TokenClient {
             throw OAuthError.recoverable(.network(detail: "token request failed", attempts: 1, elapsedMillis: 0))
         }
         // Before the answer is read, so an `invalid_dpop_proof` retry mints from the server's clock.
-        if let dpop { await dpop.observe(serverDate: response.header("Date"), age: response.header("Age")) }
+        if let dpop { await dpop.observe(serverDate: response.header("Date"), age: response.header("Age"), origin: DpopOrigin.of(url)) }
         // Under the origin the proof was for: that server issued the nonce and will check it.
         if let nonce = response.header("DPoP-Nonce"), !nonce.isEmpty, let dpop {
             await dpop.observe(nonce: nonce, origin: DpopOrigin.of(proofFor ?? url))
         }
         if (200..<300).contains(response.statusCode) {
-            return .issued(try Self.issued(response.body, dateHeader: response.header("Date")))
+            return .issued(try Self.issued(response.body, dateHeader: response.header("Date"), age: response.header("Age"), deviceNow: clock.now()))
         }
         return try Self.rejected(response)
     }
 
-    private static func issued(_ body: Data, dateHeader: String?) throws -> TokenResponse {
+    private static func issued(_ body: Data, dateHeader: String?, age: String?, deviceNow: Date) throws -> TokenResponse {
         // Not JSON at all is an intermediary's page (a captive portal, a proxy's error page): it
         // is not the provider's answer, so it is the network's (`recoverable`), and says nothing of
         // the body. JSON that is not an object, or lacks a member, is the provider's: `configuration`.
@@ -245,16 +249,35 @@ package struct HTTPTokenClient: TokenClient {
         guard let accessToken = object["access_token"] as? String, !accessToken.isEmpty else {
             throw OAuthError.configuration(.tokenResponseMalformed(detail: "access_token missing"))
         }
-        guard let tokenType = object["token_type"] as? String, !tokenType.isEmpty else {
+        guard let rawTokenType = object["token_type"] as? String, !rawTokenType.isEmpty else {
             throw OAuthError.configuration(.tokenResponseMalformed(detail: "token_type missing"))
         }
-        // `expires_in` is a number; a string of digits is tolerated, anything else is unknown.
+        // RFC 6749 section 7.1: the type is case-insensitive, and this SDK presents `Bearer` or
+        // `DPoP` and nothing else (`mac` or an unknown scheme could not be attached), so a token of
+        // another type is refused now rather than sent under a scheme it was not issued for.
+        let tokenType: String
+        switch rawTokenType.lowercased() {
+        case "bearer": tokenType = "Bearer"
+        case "dpop": tokenType = "DPoP"
+        default: throw OAuthError.configuration(.tokenResponseMalformed(detail: "token_type is neither Bearer nor DPoP"))
+        }
+        // `expires_in`, read leniently: an integer, a quoted integer or a finite float is its value
+        // in seconds, and anything else is unknown (0), never a failed exchange: the code was
+        // spent by the request that carried it.
         let expiresIn: Int
         switch object["expires_in"] {
-        case let number as NSNumber: expiresIn = max(0, number.intValue)
-        case let text as String: expiresIn = max(0, Int(text) ?? 0)
+        case let number as NSNumber where CFGetTypeID(number) != CFBooleanGetTypeID():
+            let value = number.doubleValue
+            expiresIn = value.isFinite && value > 0 ? Int(min(value, Double(Int32.max))) : 0
+        case let text as String:
+            let value = Double(text.trimmingCharacters(in: .whitespaces)) ?? 0
+            expiresIn = value.isFinite && value > 0 ? Int(min(value, Double(Int32.max))) : 0
         default: expiresIn = 0
         }
+        // The `Date` is the provider's clock for ID-token validation only when it can be one: within
+        // a week of the device's, and not a cache's copy (any `Age` says it is as old as that).
+        var serverDate = dateHeader.flatMap(HTTPDate.parse)
+        if age != nil || serverDate.map({ abs($0.timeIntervalSince(deviceNow)) > 7 * 24 * 3600 }) == true { serverDate = nil }
         return TokenResponse(
             accessToken: accessToken,
             tokenType: tokenType,
@@ -262,7 +285,7 @@ package struct HTTPTokenClient: TokenClient {
             refreshToken: (object["refresh_token"] as? String).flatMap { $0.isEmpty ? nil : $0 },
             idToken: (object["id_token"] as? String).flatMap { $0.isEmpty ? nil : $0 },
             scope: object["scope"] as? String,
-            serverDate: dateHeader.flatMap(HTTPDate.parse)
+            serverDate: serverDate
         )
     }
 

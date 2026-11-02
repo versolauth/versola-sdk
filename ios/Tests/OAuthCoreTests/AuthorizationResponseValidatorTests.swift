@@ -134,8 +134,15 @@ final class AuthorizationResponseValidatorTests: XCTestCase {
     func testAnyOtherErrorIsAConfigurationFaultWithItsDescription() {
         assertFails(.configuration(.authorizationRejected(code: "invalid_scope", description: "no such scope")),
                     "error=invalid_scope&error_description=no%20such+scope&state=state-1")
-        assertFails(.configuration(.authorizationRejected(code: "server_error", description: nil)),
-                    "error=server_error&state=state-1")
+        assertFails(.configuration(.authorizationRejected(code: "unmet_authentication_requirements", description: nil)),
+                    "error=unmet_authentication_requirements&state=state-1")
+    }
+
+    /// `spec/errors.md`: RFC 6749 4.1.2.1's "the server could not handle the request now" is the
+    /// provider having a bad moment, `Recoverable(Server)`, never a deployment fault.
+    func testServerErrorAndTemporarilyUnavailableAreRecoverableServerFailures() {
+        assertFails(.recoverable(.server(status: 500, retryAfterMillis: nil, attempts: 1, elapsedMillis: 0)), "error=server_error&state=state-1")
+        assertFails(.recoverable(.server(status: 503, retryAfterMillis: nil, attempts: 1, elapsedMillis: 0)), "error=temporarily_unavailable&state=state-1")
     }
 
     func testAnErrorWinsOverACodeInTheSameRedirect() {
@@ -167,6 +174,22 @@ final class AuthorizationResponseValidatorTests: XCTestCase {
                     base: "https://evil.example.org/callback")
         assertFails(.configuration(.malformedAuthorizationResponse), "code=abc&state=state-1",
                     base: "http://app.example.com/callback")
+    }
+
+    /// `spec/state-machine.md`: the redirect-URI check runs after `iss` and before the provider's own `error`.
+    func testTheRedirectTargetIsCheckedAfterIssAndBeforeTheProvidersError() {
+        assertFails(.configuration(.malformedAuthorizationResponse), "error=access_denied&state=state-1&iss=https%3A%2F%2Fid.example.com",
+                    base: "https://evil.example.org/callback")
+        assertFails(.configuration(.issuerMismatch(expected: AuthzKit.issuer, received: "https://evil.example.org")),
+                    "code=abc&state=state-1&iss=https%3A%2F%2Fevil.example.org", base: "https://evil.example.org/callback")
+    }
+
+    /// The query is read as the platform delivered it: a raw `|`, `{`, `}` or space does not make a genuine redirect unreadable.
+    func testAGenuineRedirectWithRawSpecialCharactersInTheQueryIsStillRead() throws {
+        let raw = URL(string: AuthzKit.redirect + "?code=abc&state=state-1&x=a|b{c}")
+        let url = try XCTUnwrap(raw, "Foundation refused the URL on this platform")
+        let grant = try AuthorizationResponseValidator.validate(redirect: url, pending: AuthzKit.pending(), issuer: AuthzKit.issuer, issParameterSupported: false)
+        XCTAssertEqual(grant.code, "abc")
     }
 
     func testSchemeAndHostCompareCaseInsensitivelyAndTheQueryIsIgnored() throws {

@@ -79,8 +79,8 @@ extension RetryPolicy {
     /// - Parameter cooldown: where a `Retry-After` that ended an operation is remembered, and
     ///   consulted before every request. nil leaves the operation without one (a test, or a
     ///   caller outside a client).
-    package func newBudget(clock: Clock = .system, random: RandomSource = SystemRandomSource(), cooldown: RetryCooldown? = nil, sleep: @escaping @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }) -> RetryBudget {
-        RetryBudget(policy: self, clock: clock, random: random, cooldown: cooldown, sleep: sleep)
+    package func newBudget(clock: Clock = .system, random: RandomSource = SystemRandomSource(), cooldown: RetryCooldown? = nil, logger: OAuthLogger? = nil, sleep: @escaping @Sendable (TimeInterval) async throws -> Void = { try await Task.sleep(for: .seconds($0)) }) -> RetryBudget {
+        RetryBudget(policy: self, clock: clock, random: random, cooldown: cooldown, logger: logger, sleep: sleep)
     }
 }
 
@@ -98,6 +98,7 @@ package actor RetryBudget {
     private let clock: Clock
     private let random: RandomSource
     private let cooldown: RetryCooldown?
+    private let logger: OAuthLogger?
     private let sleep: @Sendable (TimeInterval) async throws -> Void
     private let startedAt: TimeInterval
     /// Time the operation spent where the SDK's retrying does not run (the user in the browser),
@@ -110,7 +111,8 @@ package actor RetryBudget {
     private var callsStarted = 0
     private var lastFailure: OAuthError?
 
-    init(policy: RetryPolicy, clock: Clock, random: RandomSource, cooldown: RetryCooldown? = nil, sleep: @escaping @Sendable (TimeInterval) async throws -> Void) {
+    init(policy: RetryPolicy, clock: Clock, random: RandomSource, cooldown: RetryCooldown? = nil, logger: OAuthLogger? = nil, sleep: @escaping @Sendable (TimeInterval) async throws -> Void) {
+        self.logger = logger
         self.policy = policy
         self.clock = clock
         self.random = random
@@ -163,6 +165,8 @@ package actor RetryBudget {
                     if elapsed() + delay > policy.totalBudget { throw await ended(error, repeatable, origin, callAttempts) }
                 }
                 if !hasAttemptLeft(origin) { throw await ended(error, repeatable, origin, callAttempts) }
+                // The kind of failure and the numbers, never the origin's URL or anything it said.
+                logger?.debug("retry scheduled: attempt \(callAttempts + 1) after \(String(format: "%.2f", delay)) s, \(error.code)")
                 try await sleep(delay)
             }
         }

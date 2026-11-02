@@ -20,6 +20,7 @@ private struct JoseBadKey: DpopSigningKey {
 final class DpopProofFactoryTests: XCTestCase {
     private let now = Date(timeIntervalSince1970: 1_900_000_000.9)
     private let url = URL(string: "https://rs.example.com/resource/a%2Fb?filter=%7B1%7D&token=secret#frag")!
+    private var origin: String { DpopOrigin.of(url) }
 
     private func factory(_ key: DpopSigningKey = SoftwareDpopKey(), random: RandomSource = SystemRandomSource()) -> DpopProofFactory {
         let at = now
@@ -218,7 +219,7 @@ final class DpopProofFactoryTests: XCTestCase {
         let before = try await subject.proof(method: "GET", url: url, nonce: nil, accessToken: nil)
         XCTAssertEqual(iat(of: before), Int(Self.serverSeconds) + 300, "nothing learned yet: the device clock")
 
-        await subject.observe(serverDate: Self.serverDate, age: nil)
+        await subject.observe(serverDate: Self.serverDate, age: nil, origin: origin)
 
         let after = try await subject.proof(method: "GET", url: url, nonce: nil, accessToken: nil)
         XCTAssertEqual(iat(of: after), Int(Self.serverSeconds))
@@ -227,18 +228,18 @@ final class DpopProofFactoryTests: XCTestCase {
     func testADeviceRunningSlowIsCorrectedForwards() async throws {
         // Both directions, because an implementation that subtracts where it should add passes one.
         let subject = skewedFactory(deviceAhead: -300)
-        await subject.observe(serverDate: Self.serverDate, age: nil)
+        await subject.observe(serverDate: Self.serverDate, age: nil, origin: origin)
         let proof = try await subject.proof(method: "GET", url: url, nonce: nil, accessToken: nil)
         XCTAssertEqual(iat(of: proof), Int(Self.serverSeconds))
     }
 
     func testAnAbsentOrUnreadableDateLeavesTheLearnedOffsetAlone() async throws {
         let subject = skewedFactory(deviceAhead: 300)
-        await subject.observe(serverDate: Self.serverDate, age: nil)
+        await subject.observe(serverDate: Self.serverDate, age: nil, origin: origin)
 
-        await subject.observe(serverDate: nil, age: nil)
-        await subject.observe(serverDate: "whenever", age: nil)
-        await subject.observe(serverDate: "", age: nil)
+        await subject.observe(serverDate: nil, age: nil, origin: origin)
+        await subject.observe(serverDate: "whenever", age: nil, origin: origin)
+        await subject.observe(serverDate: "", age: nil, origin: origin)
 
         let proof = try await subject.proof(method: "GET", url: url, nonce: nil, accessToken: nil)
         XCTAssertEqual(iat(of: proof), Int(Self.serverSeconds))
@@ -248,7 +249,7 @@ final class DpopProofFactoryTests: XCTestCase {
         // A cached response or a broken intermediary: 1994 against a 2023 device. Believing it would
         // put iat 29 years in the past, and the proofs the device clock got right would be refused.
         let subject = skewedFactory(deviceAhead: 0)
-        await subject.observe(serverDate: "Sun, 06 Nov 1994 08:49:37 GMT", age: nil)
+        await subject.observe(serverDate: "Sun, 06 Nov 1994 08:49:37 GMT", age: nil, origin: origin)
         let proof = try await subject.proof(method: "GET", url: url, nonce: nil, accessToken: nil)
         XCTAssertEqual(iat(of: proof), Int(Self.serverSeconds))
     }
@@ -258,14 +259,14 @@ final class DpopProofFactoryTests: XCTestCase {
         // proof 20 minutes in the past, well inside the 30-day bound.
         let subject = skewedFactory(deviceAhead: 0)
         let stale = "Tue, 14 Nov 2023 21:53:20 GMT"
-        await subject.observe(serverDate: stale, age: "1200")
-        await subject.observe(serverDate: stale, age: "not a number")
+        await subject.observe(serverDate: stale, age: "1200", origin: origin)
+        await subject.observe(serverDate: stale, age: "not a number", origin: origin)
         let proof = try await subject.proof(method: "GET", url: url, nonce: nil, accessToken: nil)
         XCTAssertEqual(iat(of: proof), Int(Self.serverSeconds))
 
         // `Age: 0` is a cache that revalidated just now: a fresh Date.
         let fast = skewedFactory(deviceAhead: 300)
-        await fast.observe(serverDate: Self.serverDate, age: "0")
+        await fast.observe(serverDate: Self.serverDate, age: "0", origin: origin)
         let corrected = try await fast.proof(method: "GET", url: url, nonce: nil, accessToken: nil)
         XCTAssertEqual(iat(of: corrected), Int(Self.serverSeconds))
     }
@@ -295,12 +296,31 @@ final class DpopProofFactoryTests: XCTestCase {
         XCTAssertEqual(skew.offset, 0)
     }
 
-    func testTheOffsetAppliesToTheNextProofOfEveryOrigin() async throws {
-        // One device clock, one offset: what the token endpoint taught is right for a resource server.
+    /// AUDIT Z5: one offset per origin. A resource server whose own clock is wrong must not move the
+    /// `iat` of the proofs sent to the authorization server, which would then refuse them.
+    func testTheOffsetIsLearnedPerOriginAndAnotherOriginKeepsTheDeviceClock() async throws {
         let subject = skewedFactory(deviceAhead: 300)
-        await subject.observe(serverDate: Self.serverDate, age: nil)
+        await subject.observe(serverDate: Self.serverDate, age: nil, origin: origin)
+
+        let learned = try await subject.proof(method: "GET", url: url, nonce: nil, accessToken: nil)
         let other = try await subject.proof(method: "GET", url: URL(string: "https://other.example.org/x")!, nonce: nil, accessToken: nil)
-        XCTAssertEqual(iat(of: other), Int(Self.serverSeconds))
+
+        XCTAssertEqual(iat(of: learned), Int(Self.serverSeconds))
+        XCTAssertEqual(iat(of: other), Int(Self.serverSeconds) + 300, "an origin nothing was learned from is stamped from the device clock")
+    }
+
+    func testTwoOriginsEachKeepTheirOwnOffsetAndTheLastResponseOfAnOriginWins() async throws {
+        let subject = skewedFactory(deviceAhead: 0)
+        let other = URL(string: "https://as.example.org/token")!
+        await subject.observe(serverDate: "Tue, 14 Nov 2023 22:18:20 GMT", age: nil, origin: DpopOrigin.of(other))   // +300
+        await subject.observe(serverDate: Self.serverDate, age: nil, origin: origin)
+        await subject.observe(serverDate: "Tue, 14 Nov 2023 22:23:20 GMT", age: nil, origin: origin)                 // +600, last wins
+
+        let forOther = try await subject.proof(method: "POST", url: other, nonce: nil, accessToken: nil)
+        let forFirst = try await subject.proof(method: "GET", url: url, nonce: nil, accessToken: nil)
+
+        XCTAssertEqual(iat(of: forOther), Int(Self.serverSeconds) + 300)
+        XCTAssertEqual(iat(of: forFirst), Int(Self.serverSeconds) + 600)
     }
 
     func testOriginIsSchemeHostAndPortWithTheDefaultPortAndCaseNormalisedAway() {

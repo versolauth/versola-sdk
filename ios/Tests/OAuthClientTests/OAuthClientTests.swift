@@ -636,6 +636,46 @@ final class OAuthClientTests: XCTestCase {
         XCTAssertEqual(state, .authenticated)
     }
 
+    /// AUDIT D3: with no session at all no token endpoint was asked what `grantRejected` says.
+    func testUserInfoWithoutASessionIsSessionExpired() async throws {
+        let client = try await client()
+
+        do {
+            _ = try await client.userInfo()
+            XCTFail("returned a UserInfo with no session")
+        } catch let error as OAuthError {
+            XCTAssertEqual(error, .reauthenticate(.sessionExpired))
+        }
+        XCTAssertEqual(tokenRequests(), 0)
+    }
+
+    /// AUDIT C9: `logout()` ends a login whose sheet is up instead of waiting for it, and the login's
+    /// caller is cancelled rather than left to finish a sign-in the user has just left.
+    func testLogoutEndsALoginWhoseSheetIsOpen() async throws {
+        let sheet = CancellableSheet()
+        let client = try await OAuthClient.create(configuration: try configuration(), browser: sheet, credentialStore: InMemoryCredentialStore(), pendingStore: InMemoryPendingAuthorizationStore())
+        let login = Task { try await client.login() }
+        for _ in 0..<200_000 where await sheet.opened == 0 { await Task.yield() }
+
+        _ = await client.logout(LogoutOptions(endSession: false, revoke: false))
+
+        let outcome = await login.result
+        if case .success = outcome { XCTFail("the login finished after the logout") }
+        let state = await client.sessionState
+        XCTAssertEqual(state, .unauthenticated)
+    }
+
+    /// A sheet that stays up until its caller is cancelled, which dismisses it, as `ASWebAuthenticationSession` does.
+    actor CancellableSheet: BrowserAuthorizationSession {
+        private(set) var opened = 0
+        func authorize(_ uri: URL, options: BrowserSessionOptions) async throws -> BrowserOutcome {
+            opened += 1
+            try await Task.sleep(nanoseconds: 3_600_000_000_000)
+            throw CancellationError()
+        }
+        func awaitPendingRedirect() async throws -> BrowserOutcome { throw CancellationError() }
+    }
+
     /// Holds the sheet open until the test lets it answer.
     actor GatedFakeBrowser: BrowserAuthorizationSession {
         private let live: FakeBrowser

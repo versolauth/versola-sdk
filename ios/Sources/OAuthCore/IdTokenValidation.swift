@@ -90,6 +90,7 @@ package struct JwksIdTokenValidator: IdTokenValidator {
         let authorizedParty = try ClaimReader.text(claims, "azp")
         guard let exp = try ClaimReader.time(claims, "exp") else { throw JwsRejection(.malformed, "no exp") }
         let iat = try ClaimReader.time(claims, "iat")
+        let nbf = try ClaimReader.time(claims, "nbf")
         let nonce = try ClaimReader.text(claims, "nonce")
         let authTime = try ClaimReader.time(claims, "auth_time")
         let acr = try ClaimReader.text(claims, "acr")
@@ -117,6 +118,9 @@ package struct JwksIdTokenValidator: IdTokenValidator {
         // cap would reject them.
         guard let iat else { throw JwsRejection(.issuedAt, "no iat") }
         if iat > now.addingTimeInterval(tolerance) { throw JwsRejection(.issuedAt, "iat is in the future") }
+        // RFC 7519 4.1.5: a token must not be accepted before its `nbf`, within the same tolerance.
+        // Refused as `issuedAt`, the nearest case of the taxonomy: a token that is not yet valid.
+        if let nbf, nbf > now.addingTimeInterval(tolerance) { throw JwsRejection(.issuedAt, "nbf is in the future") }
 
         // Step 11, login only (a refresh passes nil and a nonce it carries is ignored). A
         // constant-time compare, not `==`: the nonce is a secret the request put on the wire, and

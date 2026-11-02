@@ -45,6 +45,8 @@ struct JSONFile<Value: Codable & Sendable>: Sendable {
 struct Stored<Value: Codable & Sendable>: Codable, Sendable {
     let value: Value
     let lifetime: TimeInterval?
+    /// The address the document was fetched from, for the caches that need to know (the key set).
+    var uri: String? = nil
 }
 
 /// The discovered metadata on disk. The client points it at
@@ -80,8 +82,12 @@ package actor FileJwksCache: JwksCache {
     package func load() async throws -> JsonWebKeySet? { file.load()?.value }
     package func save(_ set: JsonWebKeySet) async throws { try await save(set, lifetime: nil) }
     package func save(_ set: JsonWebKeySet, lifetime: TimeInterval?) async throws {
-        try file.save(Stored(value: set, lifetime: lifetime))
+        try await save(set, lifetime: lifetime, uri: nil)
     }
+    package func save(_ set: JsonWebKeySet, lifetime: TimeInterval?, uri: String?) async throws {
+        try file.save(Stored(value: set, lifetime: lifetime, uri: uri))
+    }
+    package func uri() async throws -> String? { file.load()?.uri }
     package func savedAt() async throws -> Date? { file.modificationDate() }
     package func lifetime() async throws -> TimeInterval? { file.load()?.lifetime }
 }

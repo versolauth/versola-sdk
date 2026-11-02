@@ -32,7 +32,23 @@ func wellKnownURL(issuer: String) -> String {
     (issuer.hasSuffix("/") ? String(issuer.dropLast()) : issuer) + "/.well-known/openid-configuration"
 }
 
-/// Discovery over HTTP: one GET of `<issuer>/.well-known/openid-configuration`.
+/// RFC 8414 section 3.1 for an issuer that has a path: the suffix goes between the host and the path
+/// (`https://host/tenant` is served at `https://host/.well-known/oauth-authorization-server/tenant`),
+/// where OpenID Connect Discovery appends it. Nil for an issuer without a path, where the two forms
+/// are the same place.
+func rfc8414WellKnownURL(issuer: String) -> String? {
+    guard var components = URLComponents(string: issuer), components.host != nil else { return nil }
+    var path = components.path
+    while path.hasSuffix("/") { path.removeLast() }
+    if path.isEmpty { return nil }
+    components.percentEncodedPath = "/.well-known/oauth-authorization-server" + (components.percentEncodedPath.hasSuffix("/") ? String(components.percentEncodedPath.dropLast()) : components.percentEncodedPath)
+    components.query = nil
+    components.fragment = nil
+    return components.string
+}
+
+/// Discovery over HTTP: one GET of `<issuer>/.well-known/openid-configuration`, and for an issuer with
+/// a path, RFC 8414's form of the address when the OpenID one answers 404 (and only then).
 package struct HTTPDiscoveryClient: DiscoveryClient {
     private let httpClient: HTTPClient
 
@@ -45,9 +61,16 @@ package struct HTTPDiscoveryClient: DiscoveryClient {
     }
 
     package func fetchWithLifetime(issuer: String) async throws -> FetchedMetadata {
-        let location = wellKnownURL(issuer: issuer)
+        let alternative = rfc8414WellKnownURL(issuer: issuer)
+        if let found = try await fetch(location: wellKnownURL(issuer: issuer), absentIsNil: alternative != nil) { return found }
+        // `alternative` is non-nil whenever the first answered "absent".
+        return try await fetch(location: alternative ?? wellKnownURL(issuer: issuer), absentIsNil: false)!
+    }
+
+    /// One document at `location`; nil for a 404 when the caller has another address to try.
+    private func fetch(location: String, absentIsNil: Bool) async throws -> FetchedMetadata? {
         guard let url = URL(string: location), url.scheme != nil else {
-            throw OAuthError.configuration(.invalidConfiguration(detail: "issuer is not a URL: \(issuer)"))
+            throw OAuthError.configuration(.invalidConfiguration(detail: "issuer is not a URL: \(location)"))
         }
         let httpClient = self.httpClient
         // A read-only request, repeated under the operation's budget (`spec/retry-policy.md`).
@@ -84,6 +107,8 @@ package struct HTTPDiscoveryClient: DiscoveryClient {
             }
         // Any other 4xx means this issuer serves no discovery document at all, which no retry
         // fixes: an integrator typo or the wrong environment.
+        case 404 where absentIsNil:
+            return nil
         case 400..<500:
             throw OAuthError.configuration(.invalidConfiguration(
                 detail: "no discovery document at \(location) (HTTP \(response.statusCode))"
@@ -167,6 +192,7 @@ package actor DiscoveryService {
     /// A caller that is cancelled stops waiting; it does not cancel the fetch the others need.
     private var inFlight: Task<ProviderMetadata, Error>?
     private let clock: Clock
+    private let logger: OAuthLogger?
     /// `spec/oauth-sdk-api.md` section 4: a cached document older than this is refetched.
     static let maxAge: TimeInterval = CacheLifetime.defaultLifetime
     /// After a refetch of an expired document fails and the old one is served, how long before
@@ -174,7 +200,8 @@ package actor DiscoveryService {
     /// front of every call.
     static let staleRetryInterval: TimeInterval = 60
 
-    package init(issuer: String, client: DiscoveryClient, cache: ProviderMetadataCache, clock: Clock = .system) {
+    package init(issuer: String, client: DiscoveryClient, cache: ProviderMetadataCache, clock: Clock = .system, logger: OAuthLogger? = nil) {
+        self.logger = logger
         self.issuer = issuer
         self.client = client
         self.cache = cache
@@ -182,7 +209,10 @@ package actor DiscoveryService {
     }
 
     package func metadata() async throws -> ProviderMetadata {
-        if let inMemory, clock.uptime() < inMemoryExpiresAt { return inMemory }
+        if let inMemory, clock.uptime() < inMemoryExpiresAt {
+            logger?.debug("discovery: served the document held in memory")
+            return inMemory
+        }
         if let inFlight { return try await cancellableValue(of: inFlight) }
         // Created and stored in the same actor turn: the body cannot start before `inFlight` is
         // set, and it clears it itself, so a late waiter cannot clear a newer task.
@@ -210,6 +240,7 @@ package actor DiscoveryService {
                 inMemory = cached
                 inMemoryExpiresAt = clock.uptime() + (lifetime - age)
                 inMemoryStaleUntil = inMemoryExpiresAt + CacheLifetime.maximumStale
+                logger?.debug("discovery: served the cached document")
                 return cached
             }
             // An age that cannot be read (no timestamp beside the document) is not evidence of
@@ -227,6 +258,7 @@ package actor DiscoveryService {
             try fetched.metadata.validate(configuredIssuer: issuer)
         } catch {
             if let fallback {
+                logger?.debug("discovery: the fetch failed, served the cached document past its lifetime")
                 inMemory = fallback
                 inMemoryExpiresAt = clock.uptime() + Self.staleRetryInterval
                 return fallback
@@ -234,6 +266,7 @@ package actor DiscoveryService {
             throw error
         }
         let lifetime = fetched.lifetime ?? Self.maxAge
+        logger?.debug("discovery: fetched from \(URL(string: issuer)?.host ?? "the issuer")")
         try? await cache.save(fetched.metadata, lifetime: fetched.lifetime)
         inMemory = fetched.metadata
         inMemoryExpiresAt = clock.uptime() + lifetime

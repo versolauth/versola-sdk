@@ -61,6 +61,9 @@ package actor SessionCoordinator: AccessTokenSource {
     /// as far as the user and the app are concerned, so the grant that survived must not mint tokens
     /// until the removal succeeds (`ensureWiped`).
     private var wipeIncomplete = false
+    /// Set for the length of `logout()`: a refresh started meanwhile would spend the token the logout is
+    /// revoking or wiping, and its answer would be published over `loggingOut`.
+    private var loggingOut = false
 
     /// The claims of the validated ID token of this session, or nil when there is no session.
     package private(set) var claims: IdTokenClaims?
@@ -102,7 +105,7 @@ package actor SessionCoordinator: AccessTokenSource {
     }
 
     private nonisolated func newOperation<T: Sendable>(_ body: @Sendable () async throws -> T) async rethrows -> T {
-        let budget = retryPolicy.newBudget(clock: clock, cooldown: cooldown)
+        let budget = retryPolicy.newBudget(clock: clock, cooldown: cooldown, logger: logger)
         return try await OperationBudget.$current.withValue(budget) { try await body() }
     }
 
@@ -292,6 +295,8 @@ package actor SessionCoordinator: AccessTokenSource {
     }
 
     private func refresh(rejected: Cached?, onlyIfStale: Bool) async throws -> TokenResponse {
+        // Refused, not queued: the session is ending, and `loggingOut` is left as it is.
+        if loggingOut { throw OAuthError.reauthenticate(.grantRejected) }
         if onlyIfStale, let current = cachedAccessToken, current.receivedAt != rejected?.receivedAt, usable(current) {
             return current.response
         }
@@ -299,6 +304,7 @@ package actor SessionCoordinator: AccessTokenSource {
         if let flight {
             // Joining: a cancellation of this caller leaves the flight to the others, and returns
             // at once rather than when the flight does (`cancellableValue`).
+            logger?.debug("refresh: joined the refresh already in flight")
             return try await cancellableValue(of: flight)
         }
         // The flight is registered before anything is awaited: an `await` here is a point
@@ -355,7 +361,7 @@ package actor SessionCoordinator: AccessTokenSource {
             let origin = DpopOrigin.of(URL(string: try await flow.metadata().tokenEndpoint) ?? URL(string: "https://invalid")!)
             // The budget of the operation this refresh serves, or its own when nothing else is
             // running (a flight started from a timer the app owns).
-            let budget = OperationBudget.current ?? retryPolicy.newBudget(clock: clock, cooldown: cooldown)
+            let budget = OperationBudget.current ?? retryPolicy.newBudget(clock: clock, cooldown: cooldown, logger: logger)
             let tokenClient = self.tokenClient
             let store = self.credentialStore
             // Whether the request that failed ever connected, recorded where the platform error is in
@@ -483,6 +489,8 @@ package actor SessionCoordinator: AccessTokenSource {
     /// Revokes (when asked and advertised), ends the provider's session through the browser
     /// (when asked and advertised), and wipes everything credential-shaped unconditionally.
     package func logout(revoke: Bool = true, endSession: Bool = true) async -> LogoutOutcome {
+        loggingOut = true
+        defer { loggingOut = false }
         _ = await flow.states.current
         await flow.setState(.loggingOut)
         var serverSessionEnded = false

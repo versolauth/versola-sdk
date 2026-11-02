@@ -72,13 +72,6 @@ package enum AuthorizationResponseValidator {
             throw OAuthError.configuration(.stateMismatch)
         }
 
-        // The redirect must be to the URI the request named. Not part of the specified order:
-        // it only runs once `state` has shown that the redirect answers this request, and it
-        // keeps a code delivered to another URL from being exchanged.
-        guard redirectMatches(redirect, pending.redirectUri) else {
-            throw OAuthError.configuration(.malformedAuthorizationResponse)
-        }
-
         // 2. iss (RFC 9207). Present means it must match, a trailing slash tolerated. Absent
         //    fails only when the provider advertises support, or the request recorded that
         //    its exchange requires it; a deployment that does not may legitimately omit it.
@@ -89,6 +82,14 @@ package enum AuthorizationResponseValidator {
             }
         } else if issParameterSupported || pending.issRequired {
             throw OAuthError.configuration(.issuerMismatch(expected: issuer, received: nil))
+        }
+
+        // The redirect must be to the URI the request named (scheme, host, port and path): `state`
+        // proves which request a redirect answers, not where it was sent, and a code delivered to
+        // another URL must not be exchanged. After `iss`, before the provider's own `error`
+        // (`spec/state-machine.md`).
+        guard redirectMatches(redirect, pending.redirectUri) else {
+            throw OAuthError.configuration(.malformedAuthorizationResponse)
         }
 
         // 3. An error the authorization endpoint redirected back. After state and iss, so an
@@ -132,6 +133,12 @@ package enum AuthorizationResponseValidator {
             return .reauthenticate(.authorizationDenied)
         case "login_required", "consent_required", "interaction_required", "account_selection_required":
             return .reauthenticate(.interactionRequired(code: code))
+        // RFC 6749 4.1.2.1: the server could not handle the request now. Surfaced once, never retried
+        // by the SDK: the browser leg cannot be replayed without the user.
+        case "server_error":
+            return .recoverable(.server(status: 500, retryAfterMillis: nil, attempts: 1, elapsedMillis: 0))
+        case "temporarily_unavailable":
+            return .recoverable(.server(status: 503, retryAfterMillis: nil, attempts: 1, elapsedMillis: 0))
         default:
             return .configuration(.authorizationRejected(code: code.isEmpty ? "invalid_response" : code, description: description))
         }

@@ -87,7 +87,7 @@ public final class AuthenticatedSession: Sendable {
             // The server's clock, off every answer the network gave: a response the URL cache
             // served carries the `Date` of when it was stored, which is not now.
             if let dpop {
-                await dpop.observe(serverDate: fromCache ? nil : response.value(forHTTPHeaderField: "Date"), age: response.value(forHTTPHeaderField: "Age"))
+                await dpop.observe(serverDate: fromCache ? nil : response.value(forHTTPHeaderField: "Date"), age: response.value(forHTTPHeaderField: "Age"), origin: origin)
             }
             if let dpop, let nonce = response.value(forHTTPHeaderField: "DPoP-Nonce"), !nonce.isEmpty {
                 await dpop.observe(nonce: nonce, origin: origin)

@@ -273,6 +273,9 @@ public final class OAuthClient: Sendable {
     /// may never come (up to ten minutes). The pending sign-in is abandoned by the wipe.
     public func logout(_ options: LogoutOptions = .default) async -> LogoutOutcome {
         await backgroundResume.cancelInFlight()
+        // A login whose browser is up holds the flow's gate, which the end-session step needs: it is
+        // ended first (its sheet dismissed, its callers cancelled), not waited for.
+        await loginFlights.cancelAll()
         let coordinator = self.coordinator
         return await coordinator.operation { await coordinator.logout(revoke: options.revoke, endSession: options.endSession) }
     }
@@ -295,7 +298,10 @@ public final class OAuthClient: Sendable {
         // A locked store is said to be locked: the session is intact, and "sign in again" would
         // tell the app to throw it away.
         guard let subject = try await coordinator.restoreClaimsOrThrow()?.subject else {
-            throw OAuthError.reauthenticate(.grantRejected)
+            // With no session at all no token endpoint was asked what `grantRejected` says: it is
+            // `sessionExpired`. A sign-in still in progress keeps the no-grant answer (nothing is
+            // wiped for it, and the sign-in can still finish).
+            throw OAuthError.reauthenticate(await sessionState == .unauthenticated ? .sessionExpired : .grantRejected)
         }
         let coordinator = self.coordinator
         let userInfoClient = self.userInfoClient
@@ -394,12 +400,13 @@ public final class OAuthClient: Sendable {
         if let endpoints = configuration.endpoints {
             var metadata = endpoints.toMetadata()
             if let endSession = configuration.endSessionEndpoint { metadata.endSessionEndpoint = endSession }
-            discovery = DiscoveryService(issuer: core.issuer, client: StaticDiscoveryClient(metadata: metadata), cache: MemoryMetadataCache())
+            discovery = DiscoveryService(issuer: core.issuer, client: StaticDiscoveryClient(metadata: metadata), cache: MemoryMetadataCache(), logger: logger)
         } else {
             discovery = DiscoveryService(
                 issuer: core.issuer,
                 client: EndSessionOverride(delegate: HTTPDiscoveryClient(httpClient: httpClient), endSessionEndpoint: configuration.endSessionEndpoint),
-                cache: injectedMetadataCache ?? FileProviderMetadataCache(directory: directory)
+                cache: injectedMetadataCache ?? FileProviderMetadataCache(directory: directory),
+                logger: logger
             )
         }
 
@@ -745,6 +752,11 @@ private actor LoginFlights {
     /// its own instead of being handed an outcome that is already over.
     private func finished(_ id: UInt64) {
         if current?.id == id { current = nil }
+    }
+
+    /// Ends the flight whatever its waiters: `logout()` takes precedence over a sign-in.
+    func cancelAll() {
+        current?.task.cancel()
     }
 
     private func left(_ id: UInt64) {

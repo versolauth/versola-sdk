@@ -52,7 +52,7 @@ private actor FakeDpop: DpopProofSource {
         nonces[origin] = nonce
     }
 
-    func observe(serverDate: String?, age: String?) async { observedDates.append(serverDate) }
+    func observe(serverDate: String?, age: String?, origin: String) async { observedDates.append(serverDate) }
 
     func nonce(for origin: String) async -> String? { nonces[origin] }
     func clearNonces() async { nonces = [:] }
