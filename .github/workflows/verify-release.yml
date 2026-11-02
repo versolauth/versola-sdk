@@ -8,7 +8,7 @@ name: verify-release
 # from what is published:
 #
 #   android  an app with mavenCentral() and google() only, depending on
-#            io.versola:oauth-android:<version> (the AAR and the five modules its POM names)
+#            io.versola:oauth-android:<version> (one AAR; its POM names no other io.versola module)
 #   ios      a SwiftPM package depending on the public repository by URL at exactly <version>
 #   flutter  an app with versola_oauth as a git dependency at the tag, built for Android and iOS
 #

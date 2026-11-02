@@ -19,29 +19,55 @@ One version for every platform while the project is 0.x, written `X.Y.Z` and tag
 
 | Platform | Published as | How | Workflow |
 |---|---|---|---|
-| Android | `io.versola:oauth-android` and the five modules it depends on (below) | Maven Central, through the Central Portal | `release.yml` `maven-central` |
+| Android | `io.versola:oauth-android`, one artefact (below) | Maven Central, through the Central Portal | `release.yml` `maven-central` |
 | iOS | the repository itself: product `VersolaOAuth` | Swift Package Manager resolves the tag; nothing is uploaded | `release.yml` `swiftpm` verifies the tag builds |
 | Flutter | `versola_oauth` on pub.dev | `flutter pub publish`, by hand for 0.1.0 and by workflow after | `publish-pubdev.yml` |
 
-The Android SDK is not a single artefact: a Gradle project dependency becomes a Maven dependency
-in the published POM, so every module `OAuthClient` needs is published too, under the same group and
-version. The coordinates are chosen in each module's `build.gradle.kts` and are the contract once
-released.
+## One artefact
 
-| Module | Coordinates | Kind |
-|---|---|---|
-| `:oauth` | `io.versola:oauth-android` | AAR, `OAuthClient` |
-| `:oauth-core` | `io.versola:oauth-core` | JAR, plain JVM protocol engine |
-| `:dpop` | `io.versola:dpop-android` | AAR |
-| `:storage` | `io.versola:storage-android` | AAR |
-| `:browser` | `io.versola:browser-android` | AAR |
-| `:okhttp` | `io.versola:okhttp-android` | AAR |
+The Android SDK is published as **one** artefact, `io.versola:oauth-android` (an AAR). The build keeps
+its modules (`:oauth`, `:oauth-core`, `:dpop`, `:storage`, `:browser`, `:okhttp`) because they enforce
+the layering (the core has no `android.*` import, ADR 0001), keep the protocol tests plain JVM and
+give `apiCheck` a dump per module. A Gradle project dependency would become a Maven dependency in the
+published POM, so `android/gradle/publishing.gradle.kts` does not publish the modules: it builds
+the one AAR (`:oauth:mergedReleaseAar`) from them.
+
+- **`classes.jar`** is the classes of every module in `extra["publishing.mergeModules"]` in `:oauth`'s
+  build file plus `:oauth`'s own. A file present in two modules fails the build; each module's
+  `META-INF/*.kotlin_module` is kept.
+- **The manifest** is `:browser`'s (the redirect activity, the Auth Tab trampoline and the package
+  visibility query), under `:oauth`'s package.
+- **What the merge does not carry** (resources, assets, native libraries, a ProGuard file in a merged
+  module) fails the build instead of being dropped: no module has any today, and the day one does the
+  merge has to learn it.
+- **The POM** is generated from the third-party libraries the modules declare (`api` becomes compile
+  scope, `implementation` runtime scope), so it names no `io.versola:*` and cannot drift from the build
+  files. It has `packaging` `aar` and there is **no Gradle metadata file**: that describes a component,
+  and this AAR is assembled from several. A Gradle or Maven consumer reads the POM.
+- **Sources and javadoc:** the sources jar holds the sources of every merged module; the javadoc jar is
+  the placeholder Central allows.
+
+Anything an app can call is public API of this artefact, whichever module it is declared in; the
+per-module `apiCheck` dumps are its record. The Versola facade (`:sdk`, `:core`) is not published; if it
+ever is, it is a second artefact (for instance `versola-android`) that depends on `oauth-android`,
+because generic code never depends on Versola code (ADR 0001).
+
+0.1.0 and 0.2.0 published six artefacts (`oauth-android`, `oauth-core`, `dpop-android`,
+`storage-android`, `browser-android`, `okhttp-android`). They stay on Central, where releases are
+immutable, and are **no longer published from 0.3.0**.
 
 The group `io.versola` is the one place reverse-DNS survives (`docs/adr/0001-generic-sdk-naming-and-layering.md`):
 Central verifies a group by DNS ownership of `versola.io`. The samples and the conformance drivers
 publish nothing.
 
 ## For the next release's notes
+
+**The release that first publishes one artefact (0.3.0).** Say: "`io.versola:oauth-android` is now the
+only Android artefact and contains what `oauth-core`, `dpop-android`, `storage-android`,
+`browser-android` and `okhttp-android` contained. Those five are not published from this release. An app
+that depends on `oauth-android` alone needs no change. An app that also declares one of the five
+at 0.2.0 or earlier must remove that line: it would bring a second copy of the classes and fail with
+a duplicate-class error."
 
 0.1.0 shipped five SwiftPM library products that were empty placeholders (`VersolaCore`,
 `VersolaDPoP`, `VersolaStorage`, `VersolaBrowser`, `VersolaURLSession`). They are removed from
@@ -65,8 +91,8 @@ the products are gone, `VersolaOAuth` is the only one.
   dependency on the repository root (computed from the manifest's own location) to the tag by URL,
   which is what a published plugin needs; it also removes that computation.
 - `tools/verify-consumer/` and `verify-release.yml`: before the upload, `release.yml` checks the signed
-  bundle (`check-bundle.sh`: every module present with sources and javadoc, checksums and a signature
-  beside every file, every POM naming the tag and only modules that are in the bundle) and builds a
+  bundle (`check-bundle.sh`: oauth-android present and alone under `io/versola`, with sources and javadoc,
+  checksums and a signature beside every file, its POM naming the tag and no io.versola module) and builds a
   throwaway Android app against it (`android-bundle.sh`, below, step 5); after the tag, throwaway apps
   outside the repository install what was published (below, step 6). `android.sh X.Y.Z` builds an app with
   `mavenCentral()` and `google()` only against `io.versola:oauth-android:X.Y.Z`; `ios.sh X.Y.Z` builds a
@@ -94,7 +120,7 @@ the products are gone, `VersolaOAuth` is the only one.
   `android/gradle/verification-metadata.xml` checks every artefact the build resolves against a
   recorded checksum (`develop.md`).
 
-What was verified locally, before 0.1.0 was tagged, on `-PreleaseVersion=0.1.0`: all six modules publish; every POM names
+What was verified locally, before 0.1.0 was tagged, on `-PreleaseVersion=0.1.0`: all six modules publish (the layout before one artefact, see above); every POM names
 only coordinates that are in the bundle; each artefact has sources, javadoc, POM and Gradle module
 metadata with MD5 and SHA-1 checksums; a bundle signed with a throwaway key has a signature for every
 file (40 of them) and one of them verifies with the matching public key. What was not verified
@@ -170,14 +196,15 @@ deployment can be dropped, rather than on Central.
    again. For the first release, consider requiring reviewers on the `maven-central` environment
    (Settings, Environments) so that the upload waits for a click.
 5. **Central.** `maven-central` runs the tests, builds the signed bundle, **checks it**
-   (the zip is unzipped and `check-bundle.sh` wants all six modules with sources and javadoc, checksums and
-   a `.asc` beside every artefact file, and every POM naming the tag and only modules that are in the
-   bundle), then **builds a consumer from it**: `android-bundle.sh` generates the same throwaway Android
+   (the zip is unzipped and `check-bundle.sh` wants oauth-android alone under `io/versola`, with sources and
+   javadoc, checksums and a `.asc` beside every artefact file, its POM naming the tag and no io.versola
+   module, and its AAR declaring the redirect activity), then **builds a consumer from it**: `android-bundle.sh` generates the same throwaway Android
    app as `android.sh` (outside the repository, `compileSdk` 37, one dependency,
    `io.versola:oauth-android:X.Y.Z`) with the unzipped bundle as a local Maven repository for
    `io.versola` and as the only place that group can come from, and Google and Maven Central for the
-   third-party dependencies and the plugins. It resolves `oauth-android` and the five modules it names
-   at the tag twice, by their Gradle metadata and by their POMs alone, and runs `assembleDebug`. A
+   third-party dependencies and the plugins. It resolves `oauth-android` at the tag
+   by its POM, fails if anything else under `io.versola` is on the classpath, and runs `assembleDebug`
+   (its Kotlin file names a type from each merged module, so the compiler has to find them all in the one AAR). A
    failure of either step stops the job before anything is uploaded, so the Publish click below is on a
    checked artefact. What this proves is that a consumer resolves and compiles the SDK from these files
    exactly as it will from Central. It does not prove that the signatures verify (the check above looks
@@ -234,6 +261,5 @@ deployment can be dropped, rather than on Central.
   platform READMEs. A Dokka build would be a new dependency and is a decision of its own.
 - **CocoaPods** stays dormant: there is no podspec, and the Flutter plugin's iOS half is Swift Package
   Manager only.
-- **`SECURITY.md`** names two Android coordinates as the supported packages; with the building-block
-  modules published it should say that every artefact in the table is in scope. That file is the
-  maintainer's to edit.
+- **`SECURITY.md`** names the supported Android coordinates; with one artefact it should name only
+  `io.versola:oauth-android` (the file is edited in this change; the maintainer reviews it).
