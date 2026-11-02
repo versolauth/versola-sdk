@@ -35,7 +35,7 @@ Rules that hold across all four:
 Every error exposes `code`, a stable machine-readable string for logs, analytics and branching
 that must not depend on the class name or `toString()`. It identifies the case, never the payload:
 two errors of one case carry the same `code`. The set is closed and shared by every platform
-(`code` on Kotlin and Dart, `code` on Swift); a new case adds a code, nothing renames one.
+(`code` on Kotlin and Swift, `sdkCode` on Dart, where `code` already carries the provider's OAuth error code); a new case adds a code, nothing renames one.
 
 | Category | Codes |
 |---|---|

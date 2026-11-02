@@ -21,7 +21,7 @@ in `security.md`; what the platform SDKs do is in `android-kotlin.md` and `ios-s
   protocol logic either, and it adds no second copy of the Android or iOS rules.
 - The native SDKs are consumed as this repository's own builds: the Android half depends on
   `io.versola:oauth-android`, which the example app's `settings.gradle.kts` substitutes with the
-  `:oauth` project through a composite build until the artefact is published; the iOS half depends
+  `:oauth` project through a composite build, so the plugin is tested against the working tree and not the published artefact; the iOS half depends
   on the root `Package.swift` by path (SwiftPM only, no podspec: CocoaPods is dormant). Flutter
   builds the plugin through a symlink into the app, so the plugin's `Package.swift` finds the
   repository root from its own symlink-resolved `#filePath`, never from a relative `path:` (which

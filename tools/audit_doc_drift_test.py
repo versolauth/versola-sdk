@@ -177,14 +177,14 @@ class D9ApiSurface(unittest.TestCase):
     # Plausibly wiring: built by the facades, never by an integrator, so rule 9 of
     # spec/oauth-sdk-api.md (wiring is internal or behind @VersolaInternalApi) keeps them out of the dump.
     WIRING = (
-        "DiscoveryService", "PendingAuthorizationCodec", "MtlsEndpointAliases", "HttpTokenClient",
+        "DiscoveryService", "PendingAuthorizationCodec", "HttpTokenClient",
         "HttpDiscoveryClient", "FileProviderMetadataCache", "TokenRequestExecutor", "SessionCoordinator",
         "AuthorizationFlow",
     )
 
     def test_audit_d9_wiring_classes_are_not_in_the_public_api_dump(self):
         """AUDIT: D9. oauth-core.api lists 114 public types, among them wiring that spec rule 9 says is
-        internal or opt-in (DiscoveryService, PendingAuthorizationCodec, MtlsEndpointAliases, ...)."""
+        internal or opt-in (DiscoveryService, PendingAuthorizationCodec, ...). MtlsEndpointAliases is not listed: ProviderMetadata exposes it, so it stays public.."""
         dump = read("android/oauth-core/api/oauth-core.api")
         public = re.findall(r"^public [^\n]*?class versola/oauth/core/(\w+)", dump, re.M)
         leaked = sorted(set(public) & set(self.WIRING))
