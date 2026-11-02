@@ -30,7 +30,7 @@ In scope: the published packages.
 
 | Platform | Package |
 |---|---|
-| Android | `io.versola:oauth-android` and the modules it depends on (`oauth-core`, `dpop-android`, `storage-android`, `browser-android`, `okhttp-android`) |
+| Android | `io.versola:oauth-android` (one artefact; versions up to 0.2.0 also published `oauth-core`, `dpop-android`, `storage-android`, `browser-android` and `okhttp-android`, which are in scope for those versions) |
 | iOS | the Swift products declared in `Package.swift` |
 | Flutter | `versola_oauth` |
 

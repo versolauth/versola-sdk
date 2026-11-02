@@ -80,8 +80,12 @@ apiValidation {
     nonPublicMarkers.add("versola.oauth.core.VersolaInternalApi")
 }
 
-// Published (gradle/publishing.gradle.kts): the coordinates are io.versola:oauth-android.
+// Published (gradle/publishing.gradle.kts): the coordinates are io.versola:oauth-android, the one
+// artefact of the Android SDK. The five modules it is built from are not published on their own:
+// the publication carries their classes and the browser manifest inside this AAR, and its POM names
+// only third-party libraries (docs/releasing.md, "One artefact").
 extra["publishing.artifactId"] = "oauth-android"
+extra["publishing.mergeModules"] = listOf(":oauth-core", ":dpop", ":storage", ":browser", ":okhttp")
 extra["publishing.name"] = "Versola OAuth for Android"
 extra["publishing.description"] = "OAuth 2.0 / OpenID Connect client for Android that works with any conforming provider: authorization code with PKCE, ID-token validation, single-flight refresh, secure storage."
 apply(from = rootProject.file("gradle/publishing.gradle.kts"))

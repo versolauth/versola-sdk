@@ -45,8 +45,9 @@ jobs:
           # to anything that runs it as shell (ci-release.md). The script matches X.Y.Z only.
           RELEASE_TAG: ${{ github.ref_name }}
 
-  # Six artefacts under io.versola (docs/releasing.md has the list and why each exists):
-  # `oauth-android` and the five modules its POM names. The Central Portal takes one signed zip in
+  # One artefact under io.versola, `oauth-android` (docs/releasing.md, "One artefact"): its AAR holds
+  # the classes of every Android module of the build, and its POM names only third-party libraries.
+  # The Central Portal takes one signed zip in
   # Maven layout; this job builds it and uploads it as USER_MANAGED unless the repository variable
   # MAVEN_CENTRAL_PUBLISHING_TYPE says AUTOMATIC (Settings, Secrets and variables, Variables). A
   # USER_MANAGED deployment waits in the Portal for the maintainer's click and can be dropped there;
@@ -94,9 +95,9 @@ jobs:
           ORG_GRADLE_PROJECT_signingKey: ${{ secrets.MAVEN_SIGNING_KEY }}
           ORG_GRADLE_PROJECT_signingPassword: ${{ secrets.MAVEN_SIGNING_PASSWORD }}
 
-      # The exact zip that is about to be uploaded, checked before it is: all six modules are in it at
-      # the tag, every module the POMs name is in it, every artefact file has its checksums and its
-      # signature (presence only; the private key stays in the step above). A failure stops the job
+      # The exact zip that is about to be uploaded, checked before it is: oauth-android is in it at
+      # the tag and nothing else under io.versola, its POM names no io.versola module, its AAR holds
+      # the redirect activity, every artefact file has its checksums and its signature (presence only; the private key stays in the step above). A failure stops the job
       # before anything reaches Central; this is what makes the later Publish click a click on a
       # checked artefact. The script lives at the repository root, hence the working-directory
       # override.
@@ -115,8 +116,8 @@ jobs:
       # repository, before anything is uploaded: Central releases are immutable, and until now the
       # first build of a consumer against a release was verify-release.yml, after the publication.
       # io.versola resolves from the bundle and from nothing else; Google and Maven Central serve
-      # the third-party dependencies and the plugins. The app resolves oauth-android and the five
-      # modules it names at the tag, by their Gradle metadata and by their POMs, and assembles. A
+      # the third-party dependencies and the plugins. The app resolves oauth-android at the tag, by its POM,
+      # with nothing else under io.versola, and assembles. A
       # failure stops the job before the upload. It needs no key (the signatures are Central's to
       # verify) and cannot show that Central accepts or serves the bundle: verify-release.yml does
       # that afterwards. No such check is possible for the Swift package or the Flutter plugin:
