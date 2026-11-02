@@ -1,3 +1,10 @@
+## 0.3.1
+
+- Improve the package description and README for Flutter OAuth/OIDC and AppAuth alternative searches, with direct Flutter setup and migration links.
+- Declare the `meta` dependency used by the generated Dart bridge and add package topics and documentation metadata.
+- Enable tag-triggered pub.dev publishing with GitHub OIDC, after analysis, unit tests and availability of the matching Android artifact on Maven Central.
+- No runtime behavior or public API changes from 0.3.0.
+
 ## 0.3.0
 
 The Android SDK is now one Maven artifact, a 2026-11-01 audit of the SDK is fixed on Android, iOS and Flutter (protocol conformance, session lifecycle, secret handling, error taxonomy), and every error carries a stable code. Some public API changed on the way; the list is below.

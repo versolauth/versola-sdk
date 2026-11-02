@@ -2,7 +2,7 @@ name: versola_oauth
 description: >-
   Flutter OAuth 2.0 / OpenID Connect SDK for Android and iOS. An AppAuth alternative
   with PKCE, secure token storage, automatic refresh and optional DPoP.
-version: 0.3.0
+version: 0.3.1
 repository: https://github.com/versolauth/versola-sdk
 homepage: https://versola.io
 documentation: https://docs.versola.io/sdk/flutter/
@@ -13,7 +13,7 @@ topics:
   - authentication
   - keycloak
   - dpop
-# Publishing from the monorepo is dormant (release.yml); do not add a publish_to that enables it.
+# Publishing is handled by publish-pubdev.yml after the release manifest rewrite.
 
 environment:
   # Pinned tightly (.claude/rules/flutter.md): pubspec.lock is not committed, so these ranges

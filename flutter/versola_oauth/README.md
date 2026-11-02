@@ -49,7 +49,7 @@ Add the plugin from pub.dev to `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  versola_oauth: ^0.3.0
+  versola_oauth: ^0.3.1
 ```
 
 The app needs `compileSdk` 37 and `minSdk` 26 in `android/app/build.gradle.kts` and an iOS
