@@ -30,6 +30,20 @@ Rules that hold across all four:
 - **Retries are budgeted.** Every `Recoverable` path has a ceiling, configurable within fixed
   bounds and never unbounded. See [`retry-policy.md`](retry-policy.md).
 
+## Stable codes
+
+Every error exposes `code`, a stable machine-readable string for logs, analytics and branching
+that must not depend on the class name or `toString()`. It identifies the case, never the payload:
+two errors of one case carry the same `code`. The set is closed and shared by every platform
+(`code` on Kotlin and Dart, `code` on Swift); a new case adds a code, nothing renames one.
+
+| Category | Codes |
+|---|---|
+| `Recoverable` | `recoverable.user_cancelled`, `recoverable.system_cancelled`, `recoverable.pending_request_expired`, `recoverable.network`, `recoverable.server`, `recoverable.unlock_required`, `recoverable.nonce_loop` |
+| `Reauthenticate` | `reauthenticate.authorization_denied`, `reauthenticate.interaction_required`, `reauthenticate.credentials_invalidated`, `reauthenticate.grant_rejected`, `reauthenticate.session_rejected`, `reauthenticate.session_expired` |
+| `StepUp` | `step_up` |
+| `Configuration` | `configuration.state_mismatch`, `configuration.issuer_mismatch`, `configuration.malformed_authorization_response`, `configuration.authorization_rejected`, `configuration.token_request_rejected`, `configuration.token_response_malformed`, `configuration.discovery_field_missing`, `configuration.discovery_issuer_mismatch`, `configuration.discovery_malformed`, `configuration.invalid_configuration`, `configuration.no_browser_available`, `configuration.id_token_rejected`, `configuration.user_info_rejected`, `configuration.provider_unsupported`, `configuration.hardware_binding_unavailable`, and `configuration.<name>` for a case a facade adds (the Versola facade's edge errors name theirs) |
+
 ## Token endpoint — `POST /token`
 
 From `versola.oauth.token.model.ErrorCode` and `TokenEndpointError`.
@@ -206,7 +220,7 @@ validates ID tokens (architecture review F5).
 | UserInfo `sub` differs from the ID token's, or a signed UserInfo response does not verify | `Configuration` | `UserInfoRejected` | OIDC Core 5.3.2. |
 | A capability the configuration requires is not advertised (`TokenBinding.Dpop(required)`, `pushedAuthorization = Required`, `require_pushed_authorization_requests` with `Never`, `userInfo()` without an endpoint, `code_challenge_methods_supported` present without `S256`) | `Configuration` | `ProviderUnsupported(capability)` | Raised at the first operation that needs the capability, never by a silent downgrade. An absent `code_challenge_methods_supported` is unknown, not a refusal. |
 | Access token expired and the provider issued no refresh token | `Reauthenticate` | `SessionExpired` | No token request is made. Scenario 31. |
-| `login()` or `stepUp()` called while an authorization is in flight in this process (browser up, code being exchanged) | `Configuration` | `InvalidConfiguration` | The app observes `sessionState` before asking. A pending request nobody awaits, and a resume that only waits for its redirect, are superseded, not refused (`oauth-sdk-api.md` section 5). |
+| `login()` or `stepUp()` called while an authorization is in flight and asking for something else than it (another scope set, `acr_values`, `max_age`, parameters) | `Configuration` | `InvalidConfiguration` | The same call joins the in-flight one instead (`oauth-sdk-api.md` section 5), so a double tap is not an error. A pending request nobody awaits, and a resume that only waits for its redirect, are superseded, not refused. |
 | A resource server answers 401 with `error="insufficient_user_authentication"` (RFC 9470) | `StepUp(acrValues, maxAge)` | | Same as edge's row; any resource server in `protectedOrigins`. |
 | A resource server answers 401 otherwise | refresh once, replay once, then `Reauthenticate`, reason `SessionRejected` | | As edge's bare 401. |
 

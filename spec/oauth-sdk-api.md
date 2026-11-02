@@ -79,7 +79,13 @@ val oauth = OAuthClient.create(context, configuration)
 ```
 
 - One instance per configuration per process; a second `create()` with the same configuration
-  returns the same instance (two stores over one file is a known failure). A different
+  returns the same instance (two stores over one file is a known failure). The `httpClient` and the
+  `logger` are part of that configuration for this purpose, compared by identity: a second `create()` with
+  another client or logger is refused with `Configuration(InvalidConfiguration)`, because returning the first
+  client would silently drop the app's new timeouts, pinning or proxy. An app that re-runs `create()` (an
+  `Activity.onCreate` on rotation) hoists them. The application interceptors of the app's client stay on
+  the SDK's own requests: an interceptor that logs bodies sees token traffic, and `security.md`'s rule
+  that no secret is logged is the app's to keep there (documented on `httpClient`). A different
   configuration in the same process is a different instance with its own storage, keyed by a hash
   of `issuer` (or the endpoints) and `clientId`, so a later multi-account feature needs no
   migration.
@@ -153,9 +159,15 @@ val oauth = OAuthClient.create(context, configuration)
 
 `login()` while `Authenticated` starts a new authorization and, on success, replaces the stored
 grant; on cancel or failure the existing session stays (`state-machine.md`, settle on
-`Authenticated`). `login()` while an authorization is **in flight** is refused with
-`Configuration(InvalidConfiguration("an authorization is already in progress"))`; the app observes
-the state before asking. In flight means this process is carrying one out: the browser is up, or a validated redirect's
+`Authenticated`). `login()` while an authorization is **in flight** *joins* it when the two calls ask for the same
+thing (same scopes, `acr_values`, `max_age`, parameters and `ephemeral`): the second caller awaits the
+first's result and gets the same `TokenResponse` or the same error, with one browser and one
+exchange, as concurrent refreshes coalesce. No error: a double-tapped button is a user action, not a
+deployment mistake. A second call that asks for something else (another scope set, another `acr_values`)
+is refused with `Configuration(InvalidConfiguration("an authorization is already in progress"))`, since
+neither joining nor replacing the first can be right; the app observes the state before asking. A
+joiner that is cancelled leaves the first call running; the first call being cancelled does not end
+the authorization for a joiner that is still waiting. In flight means this process is carrying one out: the browser is up, or a validated redirect's
 code exchange has not finished (the end-session page is open too). A **resume that only waits for
 its redirect** is not in flight: `login()` and `stepUp()` end the wait and take its place. A
 pending request that nobody awaits is not in flight either, even though the state reads
@@ -419,7 +431,7 @@ refresh token issued, `offline_access` advertised but not configured, a response
 
 1. `IdTokenRejected` as `Configuration` (section 11) versus a fifth category; the spec's
    four-category rule argues for `Configuration`.
-2. `login()` while an authorization is in flight refused (section 5) versus cancelling the outstanding request. A request nobody awaits, or a resume that only waits for its redirect, is superseded.
+2. `login()` while an authorization is in flight joined when the call is the same (section 5), refused when it differs, versus cancelling the outstanding request. A request nobody awaits, or a resume that only waits for its redirect, is superseded.
 3. `stepUp()` takes the configured scopes by default (section 5); the Versola facade requires
    them as a parameter. The two differ in signature, not in what is sent.
 4. The discovery and key-set cache lifetime bounds (5 minutes to 24 hours, 24 hours without `Cache-Control`) and the 30-second refresh skew: fixed, not configurable.
