@@ -1,7 +1,7 @@
 name: versola_oauth
 description: >-
-  Flutter OAuth 2.0 and OpenID Connect SDK for Android and iOS with PKCE, secure token
-  storage, automatic refresh and DPoP. Supports Keycloak and Ory Hydra.
+  Flutter OAuth 2.0 / OpenID Connect SDK for Android and iOS. An AppAuth alternative
+  with PKCE, secure token storage, automatic refresh and optional DPoP.
 version: 0.3.0
 repository: https://github.com/versolauth/versola-sdk
 homepage: https://versola.io

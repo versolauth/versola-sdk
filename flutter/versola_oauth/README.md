@@ -23,6 +23,27 @@ Documentation: <https://docs.versola.io/sdk/flutter/>. Overview, quick starts fo
 frequently asked questions are in the
 [repository README](https://github.com/versolauth/versola-sdk#readme).
 
+## Alternative to flutter_appauth and AppAuth
+
+If you are evaluating AppAuth alternatives for a Flutter mobile app, `versola_oauth` provides
+browser-based OAuth 2.0 and OpenID Connect sign-in through its own Kotlin and Swift SDKs.
+It does not wrap AppAuth. It is an alternative for public clients using the authorization code
+flow with PKCE, including apps backed by Keycloak or Ory Hydra.
+
+The SDK handles ID-token signature validation, native secure token storage, concurrent refresh
+coordination and authenticated API calls. Optional DPoP binds tokens to a device key when the
+provider supports it. Flutter exposes the same session states and typed error categories as the
+native SDKs.
+
+Migration requires code and configuration changes: this is not a drop-in replacement for
+`flutter_appauth`, AppAuth-Android or AppAuth-iOS. Check the platform requirements above and your
+provider's capabilities first. The Flutter plugin supports Android and iOS only, requires Swift
+Package Manager on iOS, and does not support client secrets, the implicit flow or the password
+grant. Its API is pre-1.0.
+
+The [AppAuth migration guide](https://docs.versola.io/sdk/migrating-from-appauth/) maps concepts,
+explains behavior changes and provides before-and-after code for Flutter, Android and iOS.
+
 ## Install
 
 Add the plugin from pub.dev to `pubspec.yaml`:
