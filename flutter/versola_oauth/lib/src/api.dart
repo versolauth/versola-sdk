@@ -19,10 +19,7 @@ abstract interface class OAuthApi {
   Future<void> login([LoginOptions? options]);
 
   /// Answers a [StepUpError] by re-authorizing at the context it names.
-  Future<void> stepUp(
-    StepUpError challenge, [
-    LoginOptions? options,
-  ]);
+  Future<void> stepUp(StepUpError challenge, [LoginOptions? options]);
 
   /// Ends the session on this device and, where the provider supports it, at the provider.
   Future<LogoutOutcome> logout([LogoutOptions options = const LogoutOptions()]);
