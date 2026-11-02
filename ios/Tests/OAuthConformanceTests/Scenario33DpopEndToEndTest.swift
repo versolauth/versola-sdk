@@ -29,7 +29,7 @@ final class Scenario33DpopEndToEndTest: ProviderConformance {
     }
 
     private func dpopConfiguration(
-        binding: TokenBinding = .dpop(required: false), clientId: String = Provider.dpopClientId, origins: Set<String> = [Scenario33DpopEndToEndTest.origin]
+        binding: TokenBinding = .dpop(requireHardware: false), clientId: String = Provider.dpopClientId, origins: Set<String> = [Scenario33DpopEndToEndTest.origin]
     ) throws -> OAuthConfiguration {
         try configuration(clientId: clientId, protectedOrigins: origins, tokenBinding: binding)
     }
@@ -250,7 +250,7 @@ final class Scenario33DpopEndToEndTest: ProviderConformance {
     }
 
     func test33RequireHardwareOnAHostThatProducesASoftwareKeyIsRefusedWithHardwareBindingUnavailableBeforeAnyAuthorizationRequest() async throws {
-        let client = try await client(try dpopConfiguration(binding: .dpop(required: true)))
+        let client = try await client(try dpopConfiguration(binding: .dpop(requireHardware: true)))
 
         let error = await oauthError { try await client.login() }
 

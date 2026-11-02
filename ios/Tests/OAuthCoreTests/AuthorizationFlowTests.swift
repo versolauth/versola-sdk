@@ -515,7 +515,7 @@ final class AuthorizationFlowTests: XCTestCase {
 
     func testRequiredDpopAgainstAProviderWithoutItIsProviderUnsupportedBeforeAnythingIsSaved() async {
         let browser = ScriptedBrowser.answering()
-        let f = fixture(browser: browser, tokenBinding: .dpop(required: true), dpopKey: FixedDpopSource())
+        let f = fixture(browser: browser, tokenBinding: .dpop(requireHardware: true), dpopKey: FixedDpopSource())
         await assertAuthorizeFails(.configuration(.providerUnsupported(capability: "dpop")), f)
         let saves = await f.store.saveCount
         XCTAssertEqual(saves, 0)

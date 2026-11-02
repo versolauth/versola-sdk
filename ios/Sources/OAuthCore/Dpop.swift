@@ -9,6 +9,16 @@ package protocol DpopSigningKey: Sendable {
     /// ES256 over `data`: the raw `R || S`, 64 bytes (RFC 7515 A.3.1), which is what
     /// `signature(for:).rawRepresentation` already is on CryptoKit.
     func sign(_ data: Data) async throws -> Data
+    /// As `publicJwk()`, for the header of a proof about to be signed. A key that is gone while a grant
+    /// bound to it is stored must not be replaced here: a proof from a freshly generated key would be
+    /// refused by the server as a key mismatch long after the cause. `publicJwk()` is what a `login()`
+    /// asks (for `dpop_jkt`), and may bind a new key. A key that cannot tell the difference has the
+    /// default, which is `publicJwk()`.
+    func provingJwk() async throws -> JsonWebKey
+}
+
+extension DpopSigningKey {
+    package func provingJwk() async throws -> JsonWebKey { try await publicJwk() }
 }
 
 /// A DPoP key held in process memory, for tests and for the software fallback when the device
@@ -123,7 +133,7 @@ package actor DpopProofFactory: DpopProofSource {
         guard let parts = DpopURL.parts(url) else {
             throw OAuthError.configuration(.invalidConfiguration(detail: "a DPoP request URL must be absolute with a host"))
         }
-        let jwk = try await canonicalJwk()
+        let jwk = try await canonicalJwk(forProof: true)
         // The header carries the package key only; the canonical form has no private members, no
         // `kid`, no `alg` and no `use`, which RFC 9449 4.2 forbids a private key in and which
         // would only be noise otherwise.
@@ -181,8 +191,8 @@ package actor DpopProofFactory: DpopProofSource {
     /// no whitespace. `JoseJSON.compact` sorts keys, which is that order here (`crv`, `kty`,
     /// `x`, `y`). A key that is not P-256 is refused: ES256 is the only algorithm this factory
     /// signs, and a proof whose `alg` does not match its key is one every server refuses.
-    private func canonicalJwk() async throws -> JoseJSON {
-        let jwk = try await key.publicJwk()
+    private func canonicalJwk(forProof: Bool = false) async throws -> JoseJSON {
+        let jwk = forProof ? try await key.provingJwk() : try await key.publicJwk()
         guard jwk.kty == "EC", jwk.crv == "P-256",
               let x = jwk.x, let y = jwk.y,
               JoseBase64Url.decode(x)?.count == 32, JoseBase64Url.decode(y)?.count == 32

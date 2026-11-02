@@ -116,7 +116,7 @@ public final class OAuthClient: Sendable {
         /// on a host whose Keychain refuses an unsigned process (-34018) hands the key a store of its
         /// own; what the key does with `requireHardware` is still the SDK's, only where it persists
         /// and whether the Secure Enclave counts as present are the driver's.
-        dpopKey makeDpopKey: (@Sendable (_ requireHardware: Bool, _ logger: any OAuthLogger) -> SecureEnclaveDpopKey)? = nil
+        dpopKey makeDpopKey: (@Sendable (_ requireHardware: Bool, _ logger: any OAuthLogger, _ isGrantHeld: @escaping @Sendable () async throws -> Bool) -> SecureEnclaveDpopKey)? = nil
     ) async throws -> OAuthClient {
         let (client, created) = try await registry.resolve(configuration) {
             try build(configuration: configuration, presentationAnchor: nil, browser: browser, credentialStore: credentialStore, pendingStore: pendingStore, metadataCache: metadataCache, jwksCache: jwksCache, makeDpopKey: makeDpopKey)
@@ -388,7 +388,7 @@ public final class OAuthClient: Sendable {
         pendingStore injectedPending: PendingAuthorizationStore?,
         metadataCache injectedMetadataCache: ProviderMetadataCache?,
         jwksCache injectedJwksCache: JwksCache?,
-        makeDpopKey: (@Sendable (_ requireHardware: Bool, _ logger: any OAuthLogger) -> SecureEnclaveDpopKey)?
+        makeDpopKey: (@Sendable (_ requireHardware: Bool, _ logger: any OAuthLogger, _ isGrantHeld: @escaping @Sendable () async throws -> Bool) -> SecureEnclaveDpopKey)?
     ) throws -> OAuthClient {
         let logger = configuration.logger
         if let warning = configuration.redirectUriWarning { logger.warn(warning) }
@@ -415,15 +415,18 @@ public final class OAuthClient: Sendable {
         let storageKey = configuration.storageKey
         let firstLaunch = FirstLaunchGuard(directory: directory, deleteAll: { try KeychainItem.deleteAllInOwnGroup(service: KeychainItem.service(forStorageKey: storageKey)) })
 
+        let credentialStore: CredentialStore = injectedCredentials ?? KeychainCredentialStore(storageKey: configuration.storageKey, unlockPolicy: configuration.unlockPolicy, firstLaunch: firstLaunch, logger: logger)
         let dpopKey: SecureEnclaveDpopKey?
-        if case .dpop(let required) = configuration.tokenBinding {
-            dpopKey = makeDpopKey?(required, logger) ?? SecureEnclaveDpopKey(storageKey: configuration.storageKey, requireHardware: required, logger: logger, firstLaunch: firstLaunch)
+        if case .dpop(let requireHardware) = configuration.tokenBinding {
+            // Told whether a grant is stored, so a key that has gone while one is is `credentialsInvalidated`
+            // at the proof rather than a new key the server would refuse (`SecureEnclaveDpopKey.key(mayGenerate:)`).
+            let isGrantHeld: @Sendable () async throws -> Bool = { try await credentialStore.hasGrant() }
+            dpopKey = makeDpopKey?(requireHardware, logger, isGrantHeld) ?? SecureEnclaveDpopKey(storageKey: configuration.storageKey, requireHardware: requireHardware, logger: logger, firstLaunch: firstLaunch, isGrantHeld: isGrantHeld)
         } else {
             dpopKey = nil
         }
         let proofs: DpopProofFactory? = dpopKey.map { DpopProofFactory(key: $0) }
 
-        let credentialStore: CredentialStore = injectedCredentials ?? KeychainCredentialStore(storageKey: configuration.storageKey, unlockPolicy: configuration.unlockPolicy, firstLaunch: firstLaunch, logger: logger)
         let pendingStore: PendingAuthorizationStore = injectedPending ?? KeychainPendingAuthorizationStore(storageKey: configuration.storageKey, unlockPolicy: configuration.unlockPolicy, firstLaunch: firstLaunch, logger: logger)
         let webBrowser: WebAuthenticationBrowser? = injectedBrowser == nil
             ? WebAuthenticationBrowser(presentationAnchor: presentationAnchor!, appState: { Self.isForeground(window: presentationAnchor!()) }, logger: logger)

@@ -261,8 +261,8 @@ final class OAuthConfigurationTests: XCTestCase {
             try make(retryPolicy: RetryPolicy(totalBudget: 10)),
             try make(clockSkewTolerance: 30),
             try make(unlockPolicy: .onAppUnlock),
-            try make(tokenBinding: .dpop(required: false)),
-            try make(tokenBinding: .dpop(required: true)),
+            try make(tokenBinding: .dpop(requireHardware: false)),
+            try make(tokenBinding: .dpop(requireHardware: true)),
         ]
         var seen: Set<String> = [base]
         for configuration in differing {

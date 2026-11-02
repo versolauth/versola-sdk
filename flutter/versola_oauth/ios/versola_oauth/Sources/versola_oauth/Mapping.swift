@@ -28,8 +28,8 @@ extension ConfigurationMessage {
             tokenBinding: {
                 switch tokenBinding {
                 case .bearer: return .bearer
-                case .dpop: return .dpop(required: false)
-                case .dpopRequireHardware: return .dpop(required: true)
+                case .dpop: return .dpop(requireHardware: false)
+                case .dpopRequireHardware: return .dpop(requireHardware: true)
                 }
             }(),
             pushedAuthorization: {

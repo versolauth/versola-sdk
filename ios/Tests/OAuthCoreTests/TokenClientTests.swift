@@ -275,7 +275,7 @@ final class TokenClientTests: XCTestCase {
     func testRequiredDpopAgainstAProviderWithoutItFailsBeforeTheCodeIsSpent() async throws {
         let http = RecordingHTTP.json(200, Self.issued)
         do {
-            _ = try await client(http, dpop: NonceSource(), binding: .dpop(required: true), metadata: metadata(dpop: false)).exchange(grant())
+            _ = try await client(http, dpop: NonceSource(), binding: .dpop(requireHardware: true), metadata: metadata(dpop: false)).exchange(grant())
             XCTFail("no error")
         } catch let error as OAuthError {
             guard case .configuration(.hardwareBindingUnavailable) = error else { return XCTFail("\(error)") }
@@ -287,7 +287,7 @@ final class TokenClientTests: XCTestCase {
     func testRequiredDpopRefusesABearerTokenIssuedForABoundRequest() async throws {
         let http = RecordingHTTP.json(200, Self.issued)
         do {
-            _ = try await client(http, dpop: NonceSource(), binding: .dpop(required: true), metadata: metadata(dpop: true)).exchange(grant())
+            _ = try await client(http, dpop: NonceSource(), binding: .dpop(requireHardware: true), metadata: metadata(dpop: true)).exchange(grant())
             XCTFail("no error")
         } catch let error as OAuthError {
             guard case .configuration(.hardwareBindingUnavailable) = error else { return XCTFail("\(error)") }

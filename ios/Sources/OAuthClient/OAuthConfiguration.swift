@@ -37,7 +37,7 @@ public struct ProviderEndpoints: Sendable, Equatable {
 
     /// The metadata discovery would have produced. The three capability lists are what a
     /// provider without discovery is assumed to support: code flow with PKCE S256, refresh.
-    public func toMetadata() -> ProviderMetadata {
+    func toMetadata() -> ProviderMetadata {
         ProviderMetadata(
             issuer: issuer, authorizationEndpoint: authorizationEndpoint, tokenEndpoint: tokenEndpoint,
             userinfoEndpoint: userinfoEndpoint, revocationEndpoint: revocationEndpoint,
@@ -104,10 +104,10 @@ public struct OAuthConfiguration: Sendable {
     public let redirectUriWarning: String?
     /// What keeps one client's storage apart from another's in the same app: the issuer and the
     /// client id, hashed. Two configurations with the same key must be the same configuration.
-    public let storageKey: String
+    let storageKey: String
     /// Everything that makes two configurations the same client, excluding the session and the
     /// logger, by value: two configurations built separately with equal values are equal.
-    public let fingerprint: String
+    let fingerprint: String
 
     static let storageKeyLength = 16
 
