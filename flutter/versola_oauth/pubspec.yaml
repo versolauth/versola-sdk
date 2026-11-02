@@ -4,6 +4,15 @@ description: >-
   the native Android and iOS facades. No protocol logic in Dart.
 version: 0.3.0
 repository: https://github.com/versolauth/versola-sdk
+homepage: https://versola.io
+documentation: https://docs.versola.io/sdk/flutter/
+issue_tracker: https://github.com/versolauth/versola-sdk/issues
+topics:
+  - oauth
+  - oidc
+  - authentication
+  - keycloak
+  - dpop
 # Publishing from the monorepo is dormant (release.yml); do not add a publish_to that enables it.
 
 environment:
@@ -15,6 +24,8 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
+  # Imported by Pigeon's generated Dart bridge. Dart-team package, BSD-3-Clause.
+  meta: ^1.19.0
   # The `Client` / `BaseClient` types of OAuthClient.httpClient(), so an app composes the
   # authenticated client with its own interceptors. Dart-team package (dart.dev), BSD-3-Clause;
   # pulls http_parser and web (same publisher). A range across 1.x, not a one-minor pin: the
