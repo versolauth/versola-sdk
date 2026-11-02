@@ -159,7 +159,13 @@ Where this is decided, so that the same answer holds whichever way the redirect 
 - **A matching `state` completes or fails the login**, in the order of `Authorizing →
   Authenticated` above: a wrong or missing `iss` is `Configuration(IssuerMismatch)`, an `error`
   parameter is the provider's answer (`Reauthenticate` or `Configuration(AuthorizationRejected)`),
-  and neither `code` nor `error` is `Configuration(MalformedAuthorizationResponse)`.
+  and neither `code` nor `error` is `Configuration(MalformedAuthorizationResponse)`. A redirect whose
+  scheme, host, port or path is not the request's redirect URI is `MalformedAuthorizationResponse`
+  too, even with the right `state` (after `iss`, before the provider's `error`): `state` proves which
+  request a redirect answers, not where it was sent. The query is read as the platform delivered it,
+  so a raw `|`, `{`, `}` or space in it does not make a genuine redirect unreadable. The provider's
+  `server_error` and `temporarily_unavailable` are `Recoverable(Server(500 or 503))`, not a fault of
+  the deployment (`errors.md`).
 
 The one place a non-matching redirect still ends something is the browser surface itself ending
 with it: iOS's `ASWebAuthenticationSession` completes the moment its page navigates to the callback

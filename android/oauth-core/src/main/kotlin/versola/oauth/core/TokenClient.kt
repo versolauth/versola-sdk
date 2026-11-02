@@ -1,6 +1,7 @@
 package versola.oauth.core
 
 import java.io.IOException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -146,7 +147,12 @@ public class HttpTokenClient(
             .addBytes("refresh_token", refreshToken)
             .add("client_id", configuration.clientId)
         refreshToken.fill(0)
-        return post(form, idempotencyKey.takeIf { sendIdempotencyKey })
+        // The answer of a refresh is the one thing that must not be lost: the provider has rotated
+        // the token it carries by the time it is sent, and a caller cancelled while the request is out
+        // would otherwise discard it with the cancelled `withContext`, leaving the spent token on disk
+        // for the next refresh to replay (`AUDIT C1`). The caller waits for the answer, bounded by the
+        // HTTP client's own timeouts, and persists it; it cannot be cancelled out of the wait.
+        return post(form, idempotencyKey.takeIf { sendIdempotencyKey }, survivesCancellation = true)
     }
 
     /**
@@ -181,7 +187,7 @@ public class HttpTokenClient(
     }
 
     /** Internal rather than private so the zeroization of [form] can be asserted directly. */
-    internal suspend fun post(form: FormBody, idempotencyKey: String?): TokenResponse = try {
+    internal suspend fun post(form: FormBody, idempotencyKey: String?, survivesCancellation: Boolean = false): TokenResponse = try {
         val metadata = discovery.metadata()
         // Before the request, not after one succeeds. A deployment that cannot bind the
         // grant makes this exchange useless whatever it returns, and for an authorization
@@ -210,7 +216,12 @@ public class HttpTokenClient(
             // An app that cannot accept that fallback said so with `requireHardware`, and the
             // check above has already refused the exchange.
             val htu = if (tokenBinding is TokenBinding.Dpop && metadata.supportsDpop) url else null
-            executor.execute(url, body, idempotencyKey, htu).also(tokenBinding::acceptIssued)
+            val issued = if (survivesCancellation) {
+                withContext(NonCancellable) { executor.execute(url, body, idempotencyKey, htu) }
+            } else {
+                executor.execute(url, body, idempotencyKey, htu)
+            }
+            issued.also(tokenBinding::acceptIssued)
         } finally {
             body.fill(0)
         }

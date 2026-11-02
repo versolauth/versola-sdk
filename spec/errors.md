@@ -108,6 +108,7 @@ query parameters, or inside a JARM `response` JWT.
 | `consent_required` | `Reauthenticate` | Only reachable with `prompt=none`. |
 | `interaction_required` | `Reauthenticate` | Only reachable with `prompt=none`. |
 | `access_denied` | `Reauthenticate` | The resource owner could not be resolved, or the user declined. The SDK must not re-open the browser automatically. |
+| `server_error`, `temporarily_unavailable` | `Recoverable` | `Server(500)` and `Server(503)` (RFC 6749 4.1.2.1: the server could not handle the request now). Surfaced once, never retried by the SDK: the browser leg cannot be replayed without the user. |
 | `unmet_authentication_requirements` | `Configuration` | The requested ACR cannot be satisfied by this deployment. Not a step-up: retrying with the same `acr_values` fails identically. |
 
 Errors returned directly rather than by redirect — `BadRequest` (unregistered `redirect_uri`,

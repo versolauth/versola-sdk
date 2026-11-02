@@ -169,6 +169,10 @@ public class SessionCoordinator(
     @Volatile
     private var claimsRestored = false
 
+    /** The stored ID token could not be read back last time; `accessToken()` does not try again on every call. */
+    @Volatile
+    private var claimsRestoreFailed = false
+
     @Volatile
     private var warnedOfflineAccess = false
 
@@ -187,6 +191,9 @@ public class SessionCoordinator(
         val stored = try {
             memorySession?.rawIdToken ?: credentialStore.rawIdToken()
         } catch (e: VersolaError) {
+            // A store that cannot be read now (a locked key) is not read again by every
+            // `accessToken()`: that path stops asking until something changes (`AUDIT C13`).
+            claimsRestoreFailed = true
             return null
         }
         claimsRestored = true
@@ -216,7 +223,7 @@ public class SessionCoordinator(
      * cache publishes no state transition at all.
      */
     override suspend fun accessToken(): AccessToken {
-        if (claims == null && !claimsRestored) restoreClaims()
+        if (claims == null && !claimsRestored && !claimsRestoreFailed) restoreClaims()
         val cached = cachedAccessToken
         if (cached != null && cached.usable()) return AccessToken.of(cached.response)
         if (memorySession != null) expireMemorySession()
@@ -379,7 +386,15 @@ public class SessionCoordinator(
         }
         val refreshToken = response.refreshToken
         if (refreshToken != null) {
-            credentialStore.save(refreshToken, response.idToken)
+            // The epoch moves with the write, under the lock a refresh persists under: a refresh that
+            // was out for the previous session when this login stored its own would otherwise land
+            // its answer over it, or wipe it on an `invalid_grant` that is about the old grant
+            // (`AUDIT C6`). Its caller is told the grant it spent is gone, which it is.
+            refreshFlight.mutex.withLock {
+                epoch.incrementAndGet()
+                stepUpRaisedDuringRefresh = false
+                credentialStore.save(refreshToken, response.idToken)
+            }
             memorySession = null
         } else {
             // A grant already on disk belongs to the session this login replaces; left there
@@ -394,6 +409,7 @@ public class SessionCoordinator(
             logger?.warn("the provider issued no refresh token; the session lasts as long as the access token")
         }
         claimsRestored = true
+        claimsRestoreFailed = false
         claims = validated
         flow.completeLogin()
         cachedAccessToken = Cached(response, elapsedMillis())
@@ -422,8 +438,27 @@ public class SessionCoordinator(
      * the next thing the app does is a `stepUp()` rather than a `login()`.
      */
     override fun stepUpRequired() {
-        flow.enterStepUpRequired()
+        // A refresh in flight publishes `Authenticated` when it ends, over a state raised after it
+        // began (`AUDIT C12`): the demand is remembered for it to settle on instead.
+        if (flow.currentState == SessionState.Refreshing) stepUpRaisedDuringRefresh = true else flow.enterStepUpRequired()
     }
+
+    /** `stepUpRequired()` arrived while a refresh was in flight; consumed by the refresh that settles. */
+    @Volatile
+    private var stepUpRaisedDuringRefresh = false
+
+    /**
+     * Where a refresh that ends with the grant intact leaves the session: `Authenticated`, or
+     * `StepUpRequired` when that is where it started or where a caller put it meanwhile. A refresh
+     * does not raise the authentication context, so it cannot satisfy the demand it ran beside.
+     */
+    private fun settledAfterRefresh(priorState: SessionState): SessionState =
+        if (stepUpRaisedDuringRefresh || priorState == SessionState.StepUpRequired) {
+            stepUpRaisedDuringRefresh = false
+            SessionState.StepUpRequired
+        } else {
+            SessionState.Authenticated
+        }
 
     /**
      * Keyed on [credentialStore]'s own identity rather than owned by this instance:
@@ -447,6 +482,9 @@ public class SessionCoordinator(
          * outcome and must not be delivered as one; see [refresh].
          */
         var pending: CompletableDeferred<Result<TokenResponse>?>? = null
+
+        /** `logout()` calls in progress on this store; a refresh is refused while any is, under [mutex]. */
+        var loggingOut = 0
     }
 
     private companion object {
@@ -506,6 +544,13 @@ public class SessionCoordinator(
                 ?: SessionState.Authenticated
             var winner = false
             val flight = refreshFlight.mutex.withLock {
+                // The grant is being revoked and wiped: a refresh now would rotate the token under
+                // the revocation, and publish `Refreshing` over `LoggingOut` (`AUDIT C9`). Checked
+                // where a flight is handed out, so one that began before the sign-out is awaited by
+                // it and none begins after.
+                if (refreshFlight.loggingOut > 0) {
+                    throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.SessionExpired)
+                }
                 if (onlyIfStale) {
                     val current = cachedAccessToken
                     if (current != null && current !== rejected && current.usable()) {
@@ -658,7 +703,7 @@ public class SessionCoordinator(
                         }
                         if (!validating) {
                             cachedAccessToken = Cached(issued, elapsedMillis())
-                            flow.setState(SessionState.Authenticated)
+                            flow.setState(settledAfterRefresh(priorState))
                         }
                     }
                 }
@@ -689,7 +734,7 @@ public class SessionCoordinator(
                             credentialStore.saveIdToken(rawIdToken)
                             claims = refreshedClaims
                             cachedAccessToken = Cached(issued, elapsedMillis())
-                            flow.setState(SessionState.Authenticated)
+                            flow.setState(settledAfterRefresh(priorState))
                         }
                     }
                 }
@@ -738,7 +783,7 @@ public class SessionCoordinator(
                 if (e.reason is VersolaError.Recoverable.Cause.UnlockRequired) {
                     SessionState.Locked
                 } else {
-                    SessionState.Authenticated
+                    settledAfterRefresh(priorState)
                 },
             )
             throw e
@@ -758,7 +803,7 @@ public class SessionCoordinator(
         } catch (e: Throwable) {
             // A `Configuration` fault or anything unforeseen: a deployment or SDK defect, not
             // a reason to sign the user out. The grant is left exactly as it was.
-            publishIfCurrent(startedIn, SessionState.Authenticated)
+            publishIfCurrent(startedIn, settledAfterRefresh(priorState))
             throw e
         }
         return response
@@ -792,10 +837,17 @@ public class SessionCoordinator(
     public suspend fun logout(revoke: Boolean = true, endSession: Boolean = true): LogoutOutcome = retryScope.operation {
         flow.sessionState.first()
         flow.setState(SessionState.LoggingOut)
+        // A login that is only waiting for its browser would complete into the session this
+        // sign-out is about to end, and holds the lock the sign-out's browser and wipe need.
+        flow.preemptLogin()
         var serverSessionEnded = false
         var revoked = false
+        val inFlight = refreshFlight.mutex.withLock {
+            refreshFlight.loggingOut++
+            refreshFlight.pending
+        }
         try {
-            refreshFlight.mutex.withLock { refreshFlight.pending }?.let { flight ->
+            inFlight?.let { flight ->
                 // The flight's outcome is a `Result` and is not this caller's to report (the wipe
                 // below ends the grant whatever it was), but this caller's cancellation is:
                 // `runCatching` swallowed it, and a cancelled `logout()` went on to revoke and
@@ -828,7 +880,13 @@ public class SessionCoordinator(
                 }
             }
         } finally {
-            withContext(NonCancellable) { wipe() }
+            withContext(NonCancellable) {
+                try {
+                    wipe()
+                } finally {
+                    refreshFlight.mutex.withLock { refreshFlight.loggingOut-- }
+                }
+            }
         }
         LogoutOutcome(sessionEnded = serverSessionEnded, tokenRevoked = revoked)
     }
@@ -918,6 +976,8 @@ public class SessionCoordinator(
             memorySession = null
             claims = null
             claimsRestored = false
+            claimsRestoreFailed = false
+            stepUpRaisedDuringRefresh = false
         }
         try {
             credentialStore.clear()

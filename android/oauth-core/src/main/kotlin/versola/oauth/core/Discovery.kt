@@ -263,12 +263,37 @@ public class DiscoveryService internal constructor(
     private var inMemory: ProviderMetadata? = null
     private var inMemoryExpiresAt = 0L
 
-    public suspend fun metadata(forceRefresh: Boolean = false): ProviderMetadata = mutex.withLock {
+    /** Counts fetches that failed, so a caller that queued behind one can tell it was its answer too. */
+    private var failures = 0L
+    private var lastFailure: VersolaError? = null
+
+    /**
+     * Callers that arrive while a fetch is running queue on the lock, and a cold cache against an
+     * unreachable provider would cost each of them a whole fetch of its own, retry budget included
+     * (`AUDIT C10`). One that queued behind a fetch that then failed takes that failure as its own
+     * answer instead; the next caller after it starts a fetch of its own, so nothing is remembered.
+     */
+    public suspend fun metadata(forceRefresh: Boolean = false): ProviderMetadata {
+        val seen = failures
+        return mutex.withLock {
+            val shared = lastFailure
+            if (failures != seen && shared != null) throw shared
+            try {
+                metadataUnderLock(forceRefresh)
+            } catch (e: VersolaError) {
+                failures++
+                lastFailure = e
+                throw e
+            }
+        }
+    }
+
+    private suspend fun metadataUnderLock(forceRefresh: Boolean): ProviderMetadata {
         // What was held but has aged out: the fallback if the provider cannot be asked.
         var stale: ProviderMetadata? = null
         if (!forceRefresh) {
             inMemory?.let {
-                if (CacheLifetime.isFresh(inMemoryExpiresAt, clock())) return@withLock it
+                if (CacheLifetime.isFresh(inMemoryExpiresAt, clock())) return it
                 stale = it
             }
             cache.load()?.let { cached ->
@@ -291,7 +316,7 @@ public class DiscoveryService internal constructor(
                     if (CacheLifetime.isFresh(expiresAt, clock())) {
                         inMemory = cached
                         inMemoryExpiresAt = expiresAt
-                        return@withLock cached
+                        return cached
                     }
                     stale = stale ?: cached
                 }
@@ -303,12 +328,12 @@ public class DiscoveryService internal constructor(
             val fallback = stale ?: throw e
             inMemory = fallback
             inMemoryExpiresAt = clock() + RETRY_AFTER_OUTAGE_MILLIS
-            return@withLock fallback
+            return fallback
         }
         cache.save(fetched, lifetime)
         inMemory = fetched
         inMemoryExpiresAt = clock() + lifetime
-        fetched
+        return fetched
     }
 }
 

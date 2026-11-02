@@ -91,6 +91,14 @@ public object AuthorizationResponseValidator {
             )
         }
 
+        // 2b. The redirect must be for the redirect URI the request carried (RFC 9700 section 2.1:
+        //    compared by scheme, host, port and path). `state` proves the redirect answers this
+        //    request, not that it arrived where it was sent: a link to another scheme, host or
+        //    path that repeats a leaked `state` is not the response.
+        if (!isRedirectUriOf(redirect, pending.redirectUri)) {
+            throw VersolaError.Configuration(VersolaError.Configuration.Detail.MalformedAuthorizationResponse)
+        }
+
         // 3. An error the authorization endpoint redirected back. Checked after state and iss
         //    so an injected error response cannot short-circuit those.
         parameters["error"]?.let { code ->
@@ -143,6 +151,32 @@ public object AuthorizationResponseValidator {
         null
     }
 
+    /**
+     * Whether [redirect] is for [redirectUri]: scheme and host without case, port with the scheme's
+     * default made explicit, path exactly. A redirect that cannot be read that way is not.
+     */
+    private fun isRedirectUriOf(redirect: String, redirectUri: String): Boolean {
+        val received = try {
+            URI(redirect.substringBefore('?').substringBefore('#'))
+        } catch (e: URISyntaxException) {
+            return false
+        }
+        val expected = try {
+            URI(redirectUri.substringBefore('?').substringBefore('#'))
+        } catch (e: URISyntaxException) {
+            return false
+        }
+        fun URI.port(): Int = if (port >= 0) port else when (scheme?.lowercase()) {
+            "https" -> 443
+            "http" -> 80
+            else -> -1
+        }
+        return received.scheme.equals(expected.scheme, ignoreCase = true) &&
+            received.host.equals(expected.host, ignoreCase = true) &&
+            received.port() == expected.port() &&
+            received.rawPath.orEmpty() == expected.rawPath.orEmpty()
+    }
+
     private val ERROR_CODE = Regex("[A-Za-z0-9_.-]{1,64}")
 
     /**
@@ -158,6 +192,11 @@ public object AuthorizationResponseValidator {
 
         "login_required", "consent_required", "interaction_required" ->
             VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.InteractionRequired(code))
+
+        // RFC 6749 4.1.2.1: the server could not handle the request now. Not the app's fault and
+        // not the user's: transient, like a 500 or a 503 at an endpoint (`spec/errors.md`).
+        "server_error" -> VersolaError.Recoverable(VersolaError.Recoverable.Cause.Server(status = 500))
+        "temporarily_unavailable" -> VersolaError.Recoverable(VersolaError.Recoverable.Cause.Server(status = 503))
 
         else -> VersolaError.Configuration(
             VersolaError.Configuration.Detail.AuthorizationRejected(code, description),
@@ -187,8 +226,17 @@ public object AuthorizationResponseValidator {
         throw VersolaError.Configuration(VersolaError.Configuration.Detail.MalformedAuthorizationResponse)
     }
 
+    /**
+     * The raw query is cut out of the string rather than read through [URI], which refuses a raw
+     * `|`, `{`, `}` or space: `android.net.Uri` hands such a redirect over, and a parser that threw
+     * made `stateOf` call it "not ours" and the login hang until expiry (`AUDIT B5`). The query is
+     * what follows the first `?` up to a `#`; each part is percent-decoded below, as before.
+     */
     private fun parseQueryOrThrowRaw(redirect: String): Map<String, String> {
-        val query = URI(redirect).rawQuery ?: return emptyMap()
+        val start = redirect.indexOf('?')
+        if (start < 0) return emptyMap()
+        val end = redirect.indexOf('#', start).let { if (it < 0) redirect.length else it }
+        val query = redirect.substring(start + 1, end)
         val parameters = mutableMapOf<String, String>()
         for (pair in query.split('&')) {
             if (pair.isEmpty()) continue

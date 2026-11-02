@@ -132,15 +132,17 @@ class AuthorizationResponseValidatorTest {
     fun `a malformed redirect carries no cause and nothing of it in the error text`() {
         // `URISyntaxException.message` is the whole URI and `URLDecoder`'s quotes part of the
         // query: either, attached as a cause, would put a code or a state into a crash report.
-        for (redirect in listOf(
-            "https://app.example.com/oauth?code=SECRETCODE&state=SECRETSTATE a",
-            "https://app.example.com/oauth?code=SECRETCODE&state=SECRETSTATE%zz",
+        // A raw space is no longer unreadable (`AUDIT B5`): the state it ends is simply not the
+        // request's. A bare percent-escape is still malformed.
+        for ((redirect, detail) in listOf(
+            "https://app.example.com/oauth?code=SECRETCODE&state=SECRETSTATE a" to VersolaError.Configuration.Detail.StateMismatch,
+            "https://app.example.com/oauth?code=SECRETCODE&state=SECRETSTATE%zz" to VersolaError.Configuration.Detail.MalformedAuthorizationResponse,
         )) {
             val error = assertThrows(VersolaError.Configuration::class.java) {
                 AuthorizationResponseValidator.validate(redirect, pending(), ISSUER, issParameterSupported = true)
             }
 
-            assertEquals(VersolaError.Configuration.Detail.MalformedAuthorizationResponse, error.detail)
+            assertEquals(detail, error.detail)
             assertEquals(null, error.cause)
             val text = error.toString() + error.message + error.detail
             assertTrue(text, "SECRET" !in text)

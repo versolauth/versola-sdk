@@ -3,7 +3,7 @@ package versola.sdk
 import android.content.Context
 import java.io.File
 import java.util.concurrent.TimeUnit
-import kotlinx.coroutines.Dispatchers
+import versola.oauth.core.SdkDispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.withContext
 import versola.sdk.browser.AuthTabAuthorizationSession
@@ -191,7 +191,7 @@ public class Versola internal constructor(
      * crashing an asynchronous call; here it is unwrapped, and an app matches on
      * [VersolaError] the way it does everywhere else in the SDK.
      */
-    public suspend fun call(request: Request): Response = withContext(Dispatchers.IO) {
+    public suspend fun call(request: Request): Response = withContext(SdkDispatchers.blockedCalls) {
         try {
             httpClient().newCall(request).execute()
         } catch (e: VersolaHttpException) {
