@@ -37,6 +37,9 @@ public class ClockSkew(private val clock: () -> Long = System::currentTimeMillis
         offsetMillis = offset
     }
 
+    /** The device's own clock, uncorrected: what a per-origin offset is measured against. */
+    internal fun deviceNow(): Long = clock()
+
     /** Device time corrected by whatever has been learned. What every `iat` is stamped from. */
     public fun now(): Long = clock() + (offsetMillis ?: 0)
 

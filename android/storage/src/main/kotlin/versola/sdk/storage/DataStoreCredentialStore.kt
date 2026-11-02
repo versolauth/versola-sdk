@@ -50,7 +50,9 @@ public class DataStoreCredentialStore(
     )
 
     override suspend fun save(refreshToken: ByteArray, rawIdToken: String?) {
-        write(refreshToken, rawIdToken, clearPendingRotation = false)
+        // A new login is a new grant: the idempotency key left in the slot belongs to the previous
+        // grant's refresh token, and the next refresh would send it with this one (`AUDIT C7`).
+        write(refreshToken, rawIdToken, clearPendingRotation = true)
     }
 
     /**

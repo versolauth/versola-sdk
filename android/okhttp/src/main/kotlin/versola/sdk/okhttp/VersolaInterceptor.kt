@@ -3,6 +3,8 @@ package versola.sdk.okhttp
 import java.io.IOException
 import java.io.InterruptedIOException
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import versola.oauth.core.AccessToken
 import versola.oauth.core.AccessTokenSource
 import versola.oauth.core.DpopProofSource
@@ -97,7 +99,7 @@ public class VersolaInterceptor(
             // as such — never as a crash the app had no way to catch.
             throw VersolaHttpException(
                 VersolaError.Configuration(
-                    VersolaError.Configuration.Detail.InvalidConfiguration("unexpected failure in the authenticated client: ${e::class.java.name}: ${e.message}"),
+                    VersolaError.Configuration.Detail.InvalidConfiguration("unexpected failure in the authenticated client: ${e::class.java.name}"),
                     e,
                 ),
             )
@@ -187,7 +189,7 @@ public class VersolaInterceptor(
                     token = if (cached.value != token.value) {
                         cached
                     } else {
-                        translating { tokens.renewAccessToken() }
+                        renewedFrom(token)
                     }
                     // A one-shot or duplex body cannot be sent twice, so the refreshed token
                     // lands in the cache and this 401 is returned as it stands. The app's own
@@ -199,6 +201,40 @@ public class VersolaInterceptor(
             }
             response.close()
         }
+    }
+
+    /**
+     * One renewal for every call refused on the same token. Each of them re-reads the cache before
+     * renewing, and when they all read it before any has renewed they all see the rejected token and
+     * would each spend a rotation: under bearer rotation the second is a replay of a refresh token
+     * the first spent (`AUDIT C11`). The answer to the first renewal made for [rejected] is the one
+     * every later caller refused on it takes; a caller refused on a newer token starts its own.
+     * Kept per token source, so two interceptors over one session agree.
+     */
+    private suspend fun renewedFrom(rejected: AccessToken): AccessToken {
+        val renewals = renewalsOf(tokens)
+        return renewals.mutex.withLock {
+            val last = renewals.last
+            if (last != null && last.rejected == rejected.value) {
+                last.renewed
+            } else {
+                translating { tokens.renewAccessToken() }.also { renewals.last = Renewal(rejected.value, it) }
+            }
+        }
+    }
+
+    private class Renewal(val rejected: String, val renewed: AccessToken)
+
+    private class Renewals {
+        val mutex = Mutex()
+        var last: Renewal? = null
+    }
+
+    private companion object {
+        private val renewalsBySource = java.util.WeakHashMap<AccessTokenSource, Renewals>()
+
+        private fun renewalsOf(source: AccessTokenSource): Renewals =
+            synchronized(renewalsBySource) { renewalsBySource.getOrPut(source) { Renewals() } }
     }
 
     /**

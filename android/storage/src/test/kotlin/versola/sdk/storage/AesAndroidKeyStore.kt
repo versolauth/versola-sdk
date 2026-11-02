@@ -1,6 +1,7 @@
 package versola.sdk.storage
 
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyInfo
 import java.io.InputStream
 import java.io.OutputStream
 import java.security.InvalidAlgorithmParameterException
@@ -11,6 +12,7 @@ import java.security.Provider
 import java.security.SecureRandom
 import java.security.cert.Certificate
 import java.security.spec.AlgorithmParameterSpec
+import java.security.spec.KeySpec
 import java.util.Collections
 import java.util.Date
 import java.util.Enumeration
@@ -18,6 +20,7 @@ import java.util.concurrent.ConcurrentHashMap
 import javax.crypto.KeyGenerator
 import javax.crypto.KeyGeneratorSpi
 import javax.crypto.SecretKey
+import javax.crypto.SecretKeyFactorySpi
 
 /**
  * A JVM stand-in for the Android Keystore's AES half, enough for `KeystoreStorageKeys`: a
@@ -40,6 +43,9 @@ internal class AesAndroidKeyStore : Provider("AndroidKeyStore", 1.0, "JVM stand-
         })
         putService(object : Service(this, "KeyGenerator", "AES", Generator::class.java.name, null, null) {
             override fun newInstance(constructorParameter: Any?): Any = Generator()
+        })
+        putService(object : Service(this, "SecretKeyFactory", "AES", Factory::class.java.name, null, null) {
+            override fun newInstance(constructorParameter: Any?): Any = Factory()
         })
     }
 
@@ -67,6 +73,28 @@ internal class AesAndroidKeyStore : Provider("AndroidKeyStore", 1.0, "JVM stand-
         override fun engineLoad(stream: InputStream?, password: CharArray?) = Unit
         override fun engineEntryInstanceOf(alias: String?, entryClass: Class<out KeyStore.Entry>?): Boolean =
             aesKeys.containsKey(alias) && entryClass == KeyStore.SecretKeyEntry::class.java
+    }
+
+    /**
+     * `getKeySpec(key, KeyInfo)`, which is how the production code reads a key's gating back. A
+     * `KeyInfo` has no constructor an app may call, so the one handed out is allocated without
+     * running one and given the single field the code under test reads.
+     */
+    private inner class Factory : SecretKeyFactorySpi() {
+        override fun engineGenerateSecret(keySpec: KeySpec?): SecretKey = throw UnsupportedOperationException()
+        override fun engineTranslateKey(key: SecretKey?): SecretKey = throw UnsupportedOperationException()
+        override fun engineGetKeySpec(key: SecretKey?, keySpec: Class<*>?): KeySpec {
+            require(keySpec == KeyInfo::class.java) { "only KeyInfo is offered" }
+            val alias = aesKeys.entries.first { it.value === key }.key
+            val unsafeClass = Class.forName("sun.misc.Unsafe")
+            val unsafe = unsafeClass.getDeclaredField("theUnsafe").apply { isAccessible = true }.get(null)
+            val info = unsafeClass.getMethod("allocateInstance", Class::class.java).invoke(unsafe, KeyInfo::class.java) as KeyInfo
+            KeyInfo::class.java.getDeclaredField("mUserAuthenticationRequired").apply {
+                isAccessible = true
+                setBoolean(info, specs.getValue(alias).isUserAuthenticationRequired)
+            }
+            return info
+        }
     }
 
     private inner class Generator : KeyGeneratorSpi() {

@@ -167,10 +167,10 @@ class DpopProofFactoryTest {
     }
 
     @Test
-    fun `htu keeps the raw path and the port, and drops userinfo nothing`() = runTest {
+    fun `htu keeps the raw path and a non-default port and normalises the host's case`() = runTest {
         val jwt = parse(factory().proof("GET", "HTTPS://Versola.kz:8443/a%2Fb/c?x=1"))
 
-        assertEquals("https://Versola.kz:8443/a%2Fb/c", jwt.jwtClaimsSet.getStringClaim("htu"))
+        assertEquals("https://versola.kz:8443/a%2Fb/c", jwt.jwtClaimsSet.getStringClaim("htu"))
     }
     // --- audit regressions ---
 

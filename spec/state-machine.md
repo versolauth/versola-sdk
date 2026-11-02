@@ -362,8 +362,9 @@ same access token: the usual cause is clock skew the SDK can now correct from th
 The offset is learned from the `Date` header of **every** response from a server the proofs are
 for, a success as much as a refusal, so the retry's `iat` is already corrected when it is minted
 and a device with a wrong clock usually pays no refusal at all after its first request.
-One offset per client, shared by every origin, **the last response wins** (a server whose own clock
-is wrong moves it until the next one that is right); in memory only (see the persistence summary);
+One offset **per origin**, the last response of that origin winning: a resource server whose own clock
+is wrong must not move the `iat` of the proofs sent to the authorization server, which would then refuse
+them (`AUDIT Z5`); an origin with no offset learned is stamped from the device clock; in memory only (see the persistence summary);
 an absent or unparseable `Date` leaves what was learned in place. Two things are not learned from: a `Date` more
 than 30 days from the device clock (a device that far off could not complete a TLS handshake against
 most certificates, so the value is a stale cache or a broken intermediary), and a response with an
@@ -420,6 +421,12 @@ Gating is a **time-bound** authorization of the key, not an auth-per-use binding
 |---|---|
 | Android | `setUserAuthenticationParameters(300, AUTH_BIOMETRIC_STRONG or AUTH_DEVICE_CREDENTIAL)`, or `setUserAuthenticationValidityDurationSeconds(300)` below API 30 |
 | iOS | the device unlock itself: the items are `WhenUnlockedThisDeviceOnly` (see the iOS deviation below) |
+
+An existing Android storage key that is not gated is not reused once the policy is `OnAppUnlock`
+(`AUDIT Z2`): the next write replaces it with a gated key, which makes what the old one wrapped
+unreadable, so the user signs in again once. Reading never replaces a key. The same holds for the
+rotation slot: a new `login()` clears the previous grant's idempotency key along with replacing its
+refresh token (`AUDIT C7`).
 
 300 seconds is iOS's own ceiling for that window. Android permits a longer one; matching the
 stricter platform keeps this one machine rather than two. Any matching OS authentication inside
