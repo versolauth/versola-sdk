@@ -13,12 +13,28 @@ Future<T> guarded<T>(Future<T> Function() call) async {
   try {
     return await call();
   } on PlatformException catch (e) {
-    throw ConfigurationError(
+    throw asOAuthError(e);
+  }
+}
+
+/// Any failure that reaches the app through this binding is an [OAuthError] (`flutter.md`,
+/// Bridge). A channel failure keeps only its code, as [guarded] does; anything else (a codec
+/// error from a native side newer than this Dart, say) is a `Configuration` naming only the
+/// exception's type, never its message.
+OAuthError asOAuthError(Object error) {
+  if (error is OAuthError) return error;
+  if (error is PlatformException) {
+    return ConfigurationError(
       ConfigurationDetail.invalidConfiguration,
-      'configuration: the native bridge failed (${e.code})',
-      text: 'bridge failure: ${e.code}',
+      'configuration: the native bridge failed (${error.code})',
+      text: 'bridge failure: ${error.code}',
     );
   }
+  return ConfigurationError(
+    ConfigurationDetail.unknown,
+    'configuration: the native bridge answered with something this version cannot read (${error.runtimeType})',
+    text: 'bridge failure: ${error.runtimeType}',
+  );
 }
 
 Future<void> unwrapVoid(Future<VoidResult> result) async {
@@ -30,7 +46,50 @@ Future<void> unwrapVoid(Future<VoidResult> result) async {
   }
 }
 
-ConfigurationMessage toMessage(OAuthConfiguration c) => ConfigurationMessage(
+/// The bridge carries whole seconds and whole milliseconds; a finer [Duration] would be
+/// truncated silently (a 400 microsecond backoff would become 0 ms), so it is refused.
+void _requireWhole(
+  String name,
+  Duration value,
+  int unitMicroseconds,
+  String unit,
+) {
+  if (value.inMicroseconds % unitMicroseconds != 0) {
+    throw ArgumentError.value(
+      value,
+      name,
+      'must be a whole number of $unit; the bridge would truncate it',
+    );
+  }
+}
+
+ConfigurationMessage toMessage(OAuthConfiguration c) {
+  _requireWhole('clockSkewTolerance', c.clockSkewTolerance, 1000000, 'seconds');
+  final retry = c.retryPolicy;
+  if (retry != null) {
+    _requireWhole(
+      'retryPolicy.initialBackoff',
+      retry.initialBackoff,
+      1000,
+      'milliseconds',
+    );
+    _requireWhole(
+      'retryPolicy.maxBackoff',
+      retry.maxBackoff,
+      1000,
+      'milliseconds',
+    );
+    _requireWhole(
+      'retryPolicy.totalBudget',
+      retry.totalBudget,
+      1000,
+      'milliseconds',
+    );
+  }
+  return _toMessage(c);
+}
+
+ConfigurationMessage _toMessage(OAuthConfiguration c) => ConfigurationMessage(
   issuer: c.issuer,
   endpoints: c.endpoints == null
       ? null
@@ -100,7 +159,18 @@ LoginOptionsMessage loginOptionsToMessage(LoginOptions o) =>
       ephemeralBrowser: o.ephemeralBrowser,
     );
 
-SessionState fromMessage(SessionStateMessage m) => SessionState.values[m.index];
+/// A state this Dart does not know (a newer native side) is a typed error, never a `RangeError`
+/// and never a guessed real state.
+SessionState fromMessage(SessionStateMessage m) {
+  if (m.index < 0 || m.index >= SessionState.values.length) {
+    throw ConfigurationError(
+      ConfigurationDetail.unknown,
+      'configuration: the native side reported a session state this version does not know',
+      text: 'sessionState: ${m.index}',
+    );
+  }
+  return SessionState.values[m.index];
+}
 
 LogoutOutcome logoutOutcomeFromMessage(LogoutOutcomeMessage m) =>
     LogoutOutcome(sessionEnded: m.sessionEnded, tokenRevoked: m.tokenRevoked);

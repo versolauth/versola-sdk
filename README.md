@@ -175,7 +175,7 @@ iOS notes for integrators:
 ```dart
 import 'package:versola_oauth/versola_oauth.dart';
 
-final client = await OAuthClient.create(const OAuthConfiguration(
+final client = await OAuthClient.create(OAuthConfiguration(
   issuer: 'https://id.example.com',
   clientId: 'example-app',
   redirectUri: 'https://app.example.com/oauth',

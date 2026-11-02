@@ -1,3 +1,5 @@
+import 'package:flutter/foundation.dart' show listEquals;
+
 /// The error taxonomy of `spec/errors.md`: four categories, and the category is the contract.
 /// Mirrors the native `VersolaError` / `OAuthError` case for case, so an app switches on the
 /// category first and reads the payload second. Nothing here carries a credential.
@@ -39,6 +41,30 @@ final class RecoverableError extends OAuthError {
   /// because a cooldown from an earlier `Retry-After` was still running.
   final Duration? retryAfter;
   final String? origin;
+
+  @override
+  bool operator ==(Object other) =>
+      other is RecoverableError &&
+      message == other.message &&
+      cause == other.cause &&
+      detail == other.detail &&
+      attempts == other.attempts &&
+      elapsed == other.elapsed &&
+      status == other.status &&
+      retryAfter == other.retryAfter &&
+      origin == other.origin;
+
+  @override
+  int get hashCode => Object.hash(
+    message,
+    cause,
+    detail,
+    attempts,
+    elapsed,
+    status,
+    retryAfter,
+    origin,
+  );
 }
 
 enum RecoverableCause {
@@ -72,6 +98,17 @@ final class ReauthenticateError extends OAuthError {
   /// The native name of a reason this version of the binding does not know
   /// ([ReauthenticateReason.unknown]).
   final String? detail;
+
+  @override
+  bool operator ==(Object other) =>
+      other is ReauthenticateError &&
+      message == other.message &&
+      reason == other.reason &&
+      code == other.code &&
+      detail == other.detail;
+
+  @override
+  int get hashCode => Object.hash(message, reason, code, detail);
 }
 
 enum ReauthenticateReason {
@@ -93,6 +130,16 @@ final class StepUpError extends OAuthError {
   const StepUpError(super.message, {required this.acrValues, this.maxAge});
   final List<String> acrValues;
   final int? maxAge;
+
+  @override
+  bool operator ==(Object other) =>
+      other is StepUpError &&
+      message == other.message &&
+      listEquals(acrValues, other.acrValues) &&
+      maxAge == other.maxAge;
+
+  @override
+  int get hashCode => Object.hash(message, Object.hashAll(acrValues), maxAge);
 }
 
 /// A deployment, integration or provider problem no retry fixes.
@@ -118,6 +165,34 @@ final class ConfigurationError extends OAuthError {
   final String? field;
   final String? capability;
   final IdTokenRejection? idTokenRejection;
+
+  @override
+  bool operator ==(Object other) =>
+      other is ConfigurationError &&
+      message == other.message &&
+      detail == other.detail &&
+      code == other.code &&
+      description == other.description &&
+      text == other.text &&
+      expected == other.expected &&
+      received == other.received &&
+      field == other.field &&
+      capability == other.capability &&
+      idTokenRejection == other.idTokenRejection;
+
+  @override
+  int get hashCode => Object.hash(
+    message,
+    detail,
+    code,
+    description,
+    text,
+    expected,
+    received,
+    field,
+    capability,
+    idTokenRejection,
+  );
 }
 
 enum ConfigurationDetail {

@@ -221,7 +221,7 @@ void main() {
   group('toMessage', () {
     test('carries the configuration field for field', () {
       final m = toMessage(
-        const OAuthConfiguration(
+        OAuthConfiguration(
           endpoints: ProviderEndpoints(
             issuer: 'https://id.example.com',
             authorizationEndpoint: 'https://id.example.com/authorize',

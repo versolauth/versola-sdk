@@ -54,7 +54,7 @@ class _SessionPageState extends State<SessionPage> {
   Future<void> _create() async {
     await _run('create', () async {
       final client = await OAuthClient.create(
-        const OAuthConfiguration(
+        OAuthConfiguration(
           issuer: issuer,
           clientId: clientId,
           redirectUri: redirectUri,

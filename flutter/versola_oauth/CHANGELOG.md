@@ -1,3 +1,18 @@
+## Unreleased
+
+### Changes to the Dart API
+
+- **`OAuthClient` is an interface** (`abstract interface class`), so an app can fake it in its tests. `OAuthClient.create` is unchanged.
+- **`OAuthConfiguration` and `LoginOptions` are no longer `const`**: they copy the collections they are given and expose them unmodifiable, so a set the app changes later cannot alter a configuration already handed over. Drop `const` at the call site. `login()` and `stepUp()` take an optional `LoginOptions?`.
+- **Value equality** for the configuration, login options, access token, claims, logout outcome, user info and every `OAuthError`.
+- **`create` throws `UnsupportedError` off Android and iOS** instead of a channel-failure `ConfigurationError`.
+- **A `Duration` the bridge would truncate is refused** with an `ArgumentError` (`clockSkewTolerance` below whole seconds, a retry duration below whole milliseconds).
+
+### Fixes
+
+- Two clients that reach one native client no longer silence each other's `sessionStates()`: one native subscription is shared per native client.
+- `sessionStates()` completes when the native stream ends, and a failure on that stream (a channel error, a state index from a newer native side) arrives as an `OAuthError` instead of an unhandled exception.
+
 ## 0.2.0
 
 Server errors are now handled by the SDK itself, Flutter apps can call their API with a DPoP-bound token, iOS finishes an interrupted sign-in on its own, and the session survives a lot of situations that used to end it. The API stays production ready; the interfaces below changed because they had to.

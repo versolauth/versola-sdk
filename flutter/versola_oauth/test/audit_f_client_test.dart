@@ -3,7 +3,8 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:versola_oauth/src/client.dart' show createOAuthClientWithHost;
+import 'package:versola_oauth/src/native_client.dart'
+    show createOAuthClientWithHost;
 import 'package:versola_oauth/src/mapping.dart' show toMessage;
 import 'package:versola_oauth/src/messages.g.dart';
 import 'package:versola_oauth/versola_oauth.dart';
@@ -65,24 +66,29 @@ void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
   group('AUDIT F1 shared native channel', () {
-    test('AUDIT F1: two clients with one native handle both receive state events', () async {
-      final host = FakeHost();
-      final a = await created(host, handle: 'shared-1');
-      final b = await created(host, handle: 'shared-1');
-      final native = SharedNativeChannel('shared-1');
-      final seenA = <SessionState>[];
-      final seenB = <SessionState>[];
-      final subA = a.sessionStates().listen(seenA.add);
-      await settle();
-      final subB = b.sessionStates().listen(seenB.add);
-      await settle();
-      native.emit(SessionStateMessage.authenticated);
-      await settle();
-      expect(seenA, [SessionState.authenticated], reason: 'first client went silent');
-      expect(seenB, [SessionState.authenticated]);
-      await subA.cancel();
-      await subB.cancel();
-    });
+    test(
+      'AUDIT F1: two clients with one native handle both receive state events',
+      () async {
+        final host = FakeHost();
+        final a = await created(host, handle: 'shared-1');
+        final b = await created(host, handle: 'shared-1');
+        final native = SharedNativeChannel('shared-1');
+        final seenA = <SessionState>[];
+        final seenB = <SessionState>[];
+        final subA = a.sessionStates().listen(seenA.add);
+        await settle();
+        final subB = b.sessionStates().listen(seenB.add);
+        await settle();
+        native.emit(SessionStateMessage.authenticated);
+        await settle();
+        expect(seenA, [
+          SessionState.authenticated,
+        ], reason: 'first client went silent');
+        expect(seenB, [SessionState.authenticated]);
+        await subA.cancel();
+        await subB.cancel();
+      },
+    );
 
     test('AUDIT F1: cancelling one client\'s stream does not stop the other client\'s', () async {
       final host = FakeHost();
@@ -98,7 +104,9 @@ void main() {
       await settle();
       native.emit(SessionStateMessage.loggingOut);
       await settle();
-      expect(seenA, [SessionState.loggingOut], reason: 'cancel on B stopped A natively');
+      expect(seenA, [
+        SessionState.loggingOut,
+      ], reason: 'cancel on B stopped A natively');
       await subA.cancel();
     });
   });
@@ -132,7 +140,11 @@ void main() {
       native.sink!.error(code: 'boom', message: 'native text', details: null);
       await settle();
       expect(errors, hasLength(1));
-      expect(errors.single, isA<OAuthError>(), reason: 'got ${errors.single.runtimeType}');
+      expect(
+        errors.single,
+        isA<OAuthError>(),
+        reason: 'got ${errors.single.runtimeType}',
+      );
       await sub.cancel();
     });
   });
@@ -158,21 +170,23 @@ void main() {
   });
 
   group('AUDIT F5 stream end', () {
-    test('AUDIT F5: sessionStates completes when the native stream ends', () async {
-      final client = await created(FakeHost(), handle: 'done');
-      final native = SharedNativeChannel('done');
-      final done = Completer<void>();
-      final sub = client.sessionStates().listen((_) {}, onDone: done.complete);
-      await settle();
-      native.sink!.endOfStream();
-      await settle();
-      expect(
-        done.isCompleted,
-        isTrue,
-        reason: 'the consumer never saw done',
-      );
-      await sub.cancel();
-    });
+    test(
+      'AUDIT F5: sessionStates completes when the native stream ends',
+      () async {
+        final client = await created(FakeHost(), handle: 'done');
+        final native = SharedNativeChannel('done');
+        final done = Completer<void>();
+        final sub = client.sessionStates().listen(
+          (_) {},
+          onDone: done.complete,
+        );
+        await settle();
+        native.sink!.endOfStream();
+        await settle();
+        expect(done.isCompleted, isTrue, reason: 'the consumer never saw done');
+        await sub.cancel();
+      },
+    );
   });
 
   group('AUDIT F6 value semantics', () {
@@ -189,13 +203,22 @@ void main() {
     }
 
     test('AUDIT F6: AccessToken is equal by value', () {
-      expectValueEqual(() => AccessToken(value: v('a'), tokenType: v('Bearer')), 'AccessToken');
+      expectValueEqual(
+        () => AccessToken(value: v('a'), tokenType: v('Bearer')),
+        'AccessToken',
+      );
     });
     test('AUDIT F6: LogoutOutcome is equal by value', () {
-      expectValueEqual(() => LogoutOutcome(sessionEnded: true, tokenRevoked: false), 'LogoutOutcome');
+      expectValueEqual(
+        () => LogoutOutcome(sessionEnded: true, tokenRevoked: false),
+        'LogoutOutcome',
+      );
     });
     test('AUDIT F6: LoginOptions is equal by value', () {
-      expectValueEqual(() => LoginOptions(loginHint: v('x'), uiLocales: [v('en')]), 'LoginOptions');
+      expectValueEqual(
+        () => LoginOptions(loginHint: v('x'), uiLocales: [v('en')]),
+        'LoginOptions',
+      );
     });
     test('AUDIT F6: OAuthConfiguration is equal by value', () {
       expectValueEqual(
@@ -211,13 +234,23 @@ void main() {
     test('AUDIT F6: IdTokenClaims is equal by value', () {
       final t = DateTime.utc(2030);
       expectValueEqual(
-        () => IdTokenClaims(subject: v('s'), issuer: v('i'), audience: [v('a')], issuedAt: t, expiresAt: t),
+        () => IdTokenClaims(
+          subject: v('s'),
+          issuer: v('i'),
+          audience: [v('a')],
+          issuedAt: t,
+          expiresAt: t,
+        ),
         'IdTokenClaims',
       );
     });
     test('AUDIT F6: OAuthError subtypes are equal by value', () {
       expectValueEqual(
-        () => ConfigurationError(ConfigurationDetail.invalidConfiguration, v('m'), text: v('t')),
+        () => ConfigurationError(
+          ConfigurationDetail.invalidConfiguration,
+          v('m'),
+          text: v('t'),
+        ),
         'ConfigurationError',
       );
     });
@@ -235,7 +268,11 @@ void main() {
       origins.add('https://evil.example.com');
       expect(c.scopes, {'openid'});
       expect(c.protectedOrigins, {'https://api.example.com'});
-      expect(() => c.scopes.add('x'), throwsUnsupportedError, reason: 'exposed set is mutable');
+      expect(
+        () => c.scopes.add('x'),
+        throwsUnsupportedError,
+        reason: 'exposed set is mutable',
+      );
     });
 
     test('AUDIT F6: a list mutated after construction does not change LoginOptions', () {
@@ -266,7 +303,9 @@ void main() {
           OAuthConfiguration(
             clientId: 'c',
             redirectUri: 'https://a.example.com/cb',
-            retryPolicy: const RetryPolicy(initialBackoff: Duration(microseconds: 400)),
+            retryPolicy: const RetryPolicy(
+              initialBackoff: Duration(microseconds: 400),
+            ),
           ),
         ),
         throwsArgumentError,
@@ -277,15 +316,18 @@ void main() {
   group('AUDIT F9 cancel from Dart', () {
     // Design test: `cancelLogin()` is the proposed name. Called dynamically so the file compiles
     // before the API exists (today it fails with NoSuchMethodError).
-    test('AUDIT F9: cancelLogin() on an in-flight login reaches the host', () async {
-      final host = PendingLoginHost();
-      final client = await created(host);
-      final login = client.login();
-      await settle();
-      await (client as dynamic).cancelLogin();
-      expect(host.invocations.any((i) => i.contains('cancelLogin')), isTrue);
-      host.loginResult.complete(VoidOk());
-      await login;
-    });
+    test(
+      'AUDIT F9: cancelLogin() on an in-flight login reaches the host',
+      () async {
+        final host = PendingLoginHost();
+        final client = await created(host);
+        final login = client.login();
+        await settle();
+        await (client as dynamic).cancelLogin();
+        expect(host.invocations.any((i) => i.contains('cancelLogin')), isTrue);
+        host.loginResult.complete(VoidOk());
+        await login;
+      },
+    );
   });
 }
