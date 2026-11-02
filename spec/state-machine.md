@@ -156,6 +156,13 @@ Where this is decided, so that the same answer holds whichever way the redirect 
   does, while it keeps waiting. The buffer is bounded (Android: the dispatcher's channel; iOS: eight
   URLs, the oldest dropped, except the first one the process was handed while nothing waited, which
   is the one that started it and which the others must not be able to push out).
+  On Android the door is open from the process's start until the first redirect is delivered or a
+  browser leg is cleared (`AUDIT C15`): a warm process with nothing awaited neither accepts an intent at
+  the redirect activity nor brings the app forward for it, and one expectation answers once, so a repeat
+  of the delivered redirect is not buffered for the next login. The Custom Tab's cancel heuristic counts
+  only the activity the tab opened over coming back, not another activity of the app resuming (`AUDIT
+  C14`); the plain-browser fallback is pinned to a browser package resolved from a link no app
+  claims, so an end-session URL with `id_token_hint` reaches no other handler (`AUDIT Z8`).
 - **A matching `state` completes or fails the login**, in the order of `Authorizing →
   Authenticated` above: a wrong or missing `iss` is `Configuration(IssuerMismatch)`, an `error`
   parameter is the provider's answer (`Reauthenticate` or `Configuration(AuthorizationRejected)`),

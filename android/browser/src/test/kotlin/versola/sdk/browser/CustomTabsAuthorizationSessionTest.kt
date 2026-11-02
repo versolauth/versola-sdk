@@ -48,7 +48,9 @@ class CustomTabsAuthorizationSessionTest {
                 name = "$packageName.BrowserActivity"
             }
         }
-        val browsable = Intent(Intent.ACTION_VIEW, Uri.parse("https://id.versola.io/authorize"))
+        // What the fallback asks the device for: a browsable https link to a URL no app claims, not
+        // the request's own URL (`AUDIT Z8`), so another app's App Link cannot be what answers.
+        val browsable = Intent(Intent.ACTION_VIEW, Uri.parse(CustomTabsAuthorizationSession.BROWSER_PROBE))
             .addCategory(Intent.CATEGORY_BROWSABLE)
         packageManager.addResolveInfoForIntent(browsable, resolveInfo)
     }
@@ -112,6 +114,8 @@ class CustomTabsAuthorizationSessionTest {
             Uri.parse("https://app.example.com/oauth?code=the-code&state=s"),
         )
 
+        // A process the redirect itself started: nothing has said what to expect (`AUDIT C15`).
+        RedirectDispatcher.reopenForColdStart()
         val controller = ActivityController.of(VersolaRedirectActivity(), intent).create()
 
         assertTrue(controller.get().isFinishing)

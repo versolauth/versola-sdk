@@ -4,6 +4,7 @@ import android.app.Application
 import android.content.ActivityNotFoundException
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.browser.customtabs.CustomTabsClient
 import androidx.browser.customtabs.CustomTabsIntent
@@ -68,6 +69,23 @@ public class CustomTabsAuthorizationSession(
      * `ACTION_VIEW`, then failure. The middle step is the one that matters on a device with
      * no Custom Tabs provider at all — the flow still completes in a plain browser tab.
      */
+    /**
+     * The package of a browser: what the device resolves for a browsable `https` link to a URL of
+     * nobody's, its default when it has one, else the first that does. Asked with a URL of nobody's
+     * rather than the request's own so that an app which claims the request's host (a verified link
+     * of another app) is not what answers: that is the app the pin exists to rule out. Never this
+     * app, whose own links would loop the authorization back into it, and never the system chooser.
+     */
+    private fun resolveBrowser(): String? {
+        val packageManager = application.packageManager
+        val probe = Intent(Intent.ACTION_VIEW, Uri.parse(BROWSER_PROBE)).addCategory(Intent.CATEGORY_BROWSABLE)
+        fun usable(name: String?) = name?.takeIf { it != application.packageName && it != "android" }
+        usable(packageManager.resolveActivity(probe, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName)
+            ?.let { return it }
+        return packageManager.queryIntentActivities(probe, PackageManager.MATCH_DEFAULT_ONLY)
+            .firstNotNullOfOrNull { usable(it.activityInfo?.packageName) }
+    }
+
     private fun launch(uri: String, ephemeral: Boolean) {
         val target = Uri.parse(uri)
         val provider = CustomTabsClient.getPackageName(application, null)
@@ -99,7 +117,15 @@ public class CustomTabsAuthorizationSession(
             )
         }
 
-        val view = Intent(Intent.ACTION_VIEW, target).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        // Pinned to a browser the device resolves for this URL (`AUDIT Z8`). The end-session request
+        // carries `id_token_hint`, and an `ACTION_VIEW` with no package goes to whichever app claims
+        // the https URL (the user's choice, a verified link of another app), not to a browser.
+        val browser = resolveBrowser() ?: throw VersolaError.Configuration(
+            VersolaError.Configuration.Detail.NoBrowserAvailable,
+        )
+        val view = Intent(Intent.ACTION_VIEW, target)
+            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            .setPackage(browser)
         try {
             application.startActivity(view)
         } catch (e: ActivityNotFoundException) {
@@ -108,5 +134,10 @@ public class CustomTabsAuthorizationSession(
                 e,
             )
         }
+    }
+
+    internal companion object {
+        /** A browsable link to a host no app claims; see [resolveBrowser]. */
+        const val BROWSER_PROBE = "https://example.com/"
     }
 }

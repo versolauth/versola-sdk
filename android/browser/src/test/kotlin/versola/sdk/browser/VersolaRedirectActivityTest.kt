@@ -57,6 +57,18 @@ class VersolaRedirectActivityTest {
     fun drainPreviousSessions() {
         RedirectDispatcher.nanoTime = System::nanoTime
         RedirectDispatcher.drain()
+        // The plain-browser fallback is pinned to a browser the device resolves (`AUDIT Z8`), so
+        // the tests that open one need a browser on the device.
+        val browser = android.content.pm.ResolveInfo().apply {
+            activityInfo = android.content.pm.ActivityInfo().apply {
+                packageName = "com.example.browser"
+                name = "com.example.browser.BrowserActivity"
+            }
+        }
+        shadowOf(application.packageManager).addResolveInfoForIntent(
+            Intent(Intent.ACTION_VIEW, Uri.parse(CustomTabsAuthorizationSession.BROWSER_PROBE)).addCategory(Intent.CATEGORY_BROWSABLE),
+            browser,
+        )
     }
 
     /** What the waiter would receive now, or null when nothing has been delivered. */
@@ -79,7 +91,10 @@ class VersolaRedirectActivityTest {
     @Test
     fun `a redirect with no expectation is delivered, as on a cold start`() {
         // The process was started by this very intent: nothing has said what to expect yet,
-        // and the persisted request validates the response afterwards.
+        // and the persisted request validates the response afterwards. Only a process that has
+        // not yet run a leg or delivered a redirect is in this state (`AUDIT C15`), which the
+        // `drain()` of the setup has to be undone for.
+        RedirectDispatcher.reopenForColdStart()
         open("$REDIRECT?code=c&state=s")
 
         assertTrue(RedirectDispatcher.redirectDelivered)
@@ -284,6 +299,7 @@ class VersolaRedirectActivityTest {
     fun `a new login forgets the previous one's awaited state`() {
         RedirectDispatcher.expect(REDIRECT, "old")
         RedirectDispatcher.drain()
+        RedirectDispatcher.reopenForColdStart()
 
         open("$REDIRECT?code=c&state=anything")
 
@@ -306,6 +322,8 @@ class VersolaRedirectActivityTest {
     fun `a new login forgets the previous one's expectation`() = runTest {
         RedirectDispatcher.expect("https://app.example.com/old")
         RedirectDispatcher.drain()
+        // Nothing is expected and the process is cold (`AUDIT C15`): the old expectation is gone.
+        RedirectDispatcher.reopenForColdStart()
 
         open("$REDIRECT?code=c&state=s")
 
@@ -315,6 +333,7 @@ class VersolaRedirectActivityTest {
     @Test
     fun `the app is brought forward without clearing the screens above its launcher`() {
         installLauncher()
+        RedirectDispatcher.reopenForColdStart()
 
         open("$REDIRECT?code=c&state=s")
 
