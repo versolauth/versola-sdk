@@ -6,11 +6,17 @@ import OAuthCore
 /// and the SDK's own requests must not follow a `Location` whatever it is configured to do:
 /// a token endpoint redirecting a form body (or an `Authorization` header) to another origin
 /// is a leak, not a convenience. No state, so `Sendable` without ceremony.
-final class NoRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+final class NoRedirectDelegate: NSObject, URLSessionDataDelegate, Sendable {
     func urlSession(
         _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
         newRequest request: URLRequest
     ) async -> URLRequest? {
+        nil
+    }
+
+    /// Nothing the SDK asks for is stored in the app session's `URLCache`: a token response, a key
+    /// set and a UserInfo answer are not something a cache should keep on disk or serve again.
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, willCacheResponse proposedResponse: CachedURLResponse) async -> CachedURLResponse? {
         nil
     }
 }
@@ -49,7 +55,8 @@ package struct URLSessionHTTPClient: HTTPClient {
         // Cookies are the browser's business: a Set-Cookie from the token endpoint must not
         // land in the app's shared jar, nor a jar cookie ride along on a token request.
         urlRequest.httpShouldHandleCookies = false
-        urlRequest.cachePolicy = .reloadIgnoringLocalCacheData
+        // Neither read nor written: the local copy is skipped here, and the delegate refuses to store the answer.
+        urlRequest.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         let deadline = await attemptTimeout()
         urlRequest.timeoutInterval = deadline
 

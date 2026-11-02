@@ -40,11 +40,16 @@ final class StubURLProtocol: URLProtocol {
     /// Every request that reached the "network", in order.
     static var requests: [URLRequest] { state.withLock { $0.requests } }
 
-    static func session() -> URLSession {
+    /// One session for the whole run: `OAuthClient.create` compares the `URLSession` of a second
+    /// configuration by identity (a differing one is refused), and the tests that build two equal
+    /// configurations mean the same session.
+    private static let sharedSession: URLSession = {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [StubURLProtocol.self]
         return URLSession(configuration: configuration)
-    }
+    }()
+
+    static func session() -> URLSession { sharedSession }
 
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }

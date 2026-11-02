@@ -41,8 +41,17 @@ public final class AuthenticatedSession: Sendable {
     /// Told when a step-up challenge arrives, before it is thrown: the coordinator publishes
     /// `stepUpRequired` so the state machine shows the pause (`spec/state-machine.md`).
     private let onStepUp: (@Sendable () async -> Void)?
+    /// Runs one `data(for:)` as one application-visible operation (`SessionCoordinator.operation`), so
+    /// the refresh a 401 causes is inside the call's retry budget and not a second one beside it.
+    package typealias Call = @Sendable () async throws -> (Data, HTTPURLResponse)
+    private let operation: @Sendable (Call) async throws -> (Data, HTTPURLResponse)
 
-    package init(tokens: any AccessTokenSource, scope: RequestScope, dpop: (any DpopProofSource)?, session: URLSession, onStepUp: (@Sendable () async -> Void)? = nil) {
+    package init(
+        tokens: any AccessTokenSource, scope: RequestScope, dpop: (any DpopProofSource)?, session: URLSession,
+        onStepUp: (@Sendable () async -> Void)? = nil,
+        operation: @escaping @Sendable (Call) async throws -> (Data, HTTPURLResponse) = { try await $0() }
+    ) {
+        self.operation = operation
         self.tokens = tokens
         self.scope = scope
         self.dpop = dpop
@@ -59,6 +68,10 @@ public final class AuthenticatedSession: Sendable {
     /// - Throws `OAuthError.stepUp` on an RFC 9470 challenge, `.reauthenticate(.sessionRejected)`
     ///   when a refreshed token is refused too, and the coordinator's own errors from the token.
     public func data(for request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+        try await operation { try await self.perform(request) }
+    }
+
+    private func perform(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
         guard let url = request.url, scope.includes(url) else {
             let (data, response, _) = try await send(request)
             return (data, response)
@@ -96,6 +109,9 @@ public final class AuthenticatedSession: Sendable {
                     throw OAuthError.recoverable(.nonceLoop(origin: origin))
                 }
                 nonceRetried = true
+                // A streamed body cannot be sent twice (see the refresh branch below): the nonce is
+                // cached, so the app's own retry, with a body it rebuilds, carries it.
+                if request.httpBodyStream != nil { return (data, response) }
 
             case "invalid_dpop_proof":
                 // The one recoverable cause is clock skew, learned off this response's `Date`
@@ -104,6 +120,7 @@ public final class AuthenticatedSession: Sendable {
                 // same key, so no refresh repairs it.
                 if proofRetried { throw OAuthError.reauthenticate(.credentialsInvalidated) }
                 proofRetried = true
+                if request.httpBodyStream != nil { return (data, response) }
 
             case "insufficient_user_authentication":
                 // RFC 9470, and deliberately the one branch that does not refresh: the token is
@@ -180,7 +197,7 @@ public final class AuthenticatedSession: Sendable {
 /// `NoRedirectDelegate`, plus whether the response came out of the URL cache
 /// (`URLSessionTaskMetrics.resourceFetchType`), which `AuthenticatedSession` needs so that a
 /// stored response's `Date` is not taken for the server's clock.
-final class CacheAwareNoRedirectDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+final class CacheAwareNoRedirectDelegate: NSObject, URLSessionDataDelegate, Sendable {
     private let cached = OSAllocatedUnfairLock(initialState: false)
 
     var servedFromCache: Bool { cached.withLock { $0 } }
@@ -189,6 +206,13 @@ final class CacheAwareNoRedirectDelegate: NSObject, URLSessionTaskDelegate, Send
         _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
         newRequest request: URLRequest
     ) async -> URLRequest? {
+        nil
+    }
+
+    /// An authenticated answer is the app's to cache or not through its own session settings; this
+    /// delegate serves requests that carry a token and a proof, and refuses to store them. A cache
+    /// hit is still read (`servedFromCache`), which is why the request's own policy is not changed.
+    func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, willCacheResponse proposedResponse: CachedURLResponse) async -> CachedURLResponse? {
         nil
     }
 

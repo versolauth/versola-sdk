@@ -111,6 +111,17 @@ public struct OAuthConfiguration: Sendable {
 
     static let storageKeyLength = 16
 
+    /// Whether `other` wires the same `URLSession` and the same logger. By identity for a class
+    /// (a session, a logger object); a logger that is a value type has none, so two of one type are
+    /// the same (the default `OSLogLogger()` built twice must not look different).
+    func sharesWiring(with other: OAuthConfiguration) -> Bool {
+        func identity(_ logger: any OAuthLogger) -> AnyHashable {
+            let object = logger as AnyObject
+            return type(of: logger) is AnyClass ? AnyHashable(ObjectIdentifier(object)) : AnyHashable(String(describing: type(of: logger)))
+        }
+        return urlSession === other.urlSession && identity(logger) == identity(other.logger)
+    }
+
     /// Throws `OAuthError.configuration(.invalidConfiguration)` naming the first offending field.
     public init(
         issuer: String? = nil,

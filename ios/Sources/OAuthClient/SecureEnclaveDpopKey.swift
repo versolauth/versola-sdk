@@ -105,6 +105,11 @@ package actor SecureEnclaveDpopKey: DpopSigningKey {
     private let enclaveAvailable: Bool
     private let makeEnclaveKey: @Sendable () throws -> SecureEnclave.P256.Signing.PrivateKey
     private var loaded: Loaded?
+    /// A software key made because a device that has an enclave refused to make one, not yet written
+    /// to the store. A refusal can be passing (a locked or busy enclave), and persisting the stand-in
+    /// would make it the installation's key for good. It is written the first time it signs, which is
+    /// when a grant can come to be bound to it; until then the next launch asks the enclave again.
+    private var fallbackUnpersisted = false
 
     /// - Parameters:
     ///   - requireHardware: throw `hardwareBindingUnavailable` instead of falling back to a
@@ -170,6 +175,10 @@ package actor SecureEnclaveDpopKey: DpopSigningKey {
     /// already is, so Android's DER conversion has no counterpart here.
     package func sign(_ data: Data) async throws -> Data {
         let key = try key()
+        if fallbackUnpersisted, case .software(let software) = key {
+            try store.save(Data([Tag.software.rawValue]) + software.rawRepresentation)
+            fallbackUnpersisted = false
+        }
         do {
             return try key.signature(for: data).rawRepresentation
         } catch {
@@ -204,6 +213,7 @@ package actor SecureEnclaveDpopKey: DpopSigningKey {
     package func destroy() async throws {
         try store.delete()
         loaded = nil
+        fallbackUnpersisted = false
     }
 
     // MARK: Loading and generation
@@ -277,7 +287,12 @@ package actor SecureEnclaveDpopKey: DpopSigningKey {
             throw OAuthError.configuration(.hardwareBindingUnavailable(detail: "no Secure Enclave is available on this device"))
         }
         let software = P256.Signing.PrivateKey()
-        try store.save(Data([Tag.software.rawValue]) + software.rawRepresentation)
+        if enclaveAvailable {
+            // The enclave refused this time: see `fallbackUnpersisted`.
+            fallbackUnpersisted = true
+        } else {
+            try store.save(Data([Tag.software.rawValue]) + software.rawRepresentation)
+        }
         return .software(software)
     }
 }

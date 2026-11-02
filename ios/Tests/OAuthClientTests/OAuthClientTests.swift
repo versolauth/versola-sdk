@@ -577,22 +577,63 @@ final class OAuthClientTests: XCTestCase {
     }
 
     /// The other half: a browser that is really open (not a resume waiting for a redirect) still
-    /// refuses a second `login()`.
-    func testALoginWhoseSheetIsOpenStillRefusesASecondLogin() async throws {
+    /// refuses a second `login()` that asks for something else. An identical one joins (below).
+    func testALoginWhoseSheetIsOpenStillRefusesASecondLoginThatAsksForSomethingElse() async throws {
         let gated = GatedFakeBrowser(browser)
         let client = try await OAuthClient.create(configuration: try configuration(), browser: gated, credentialStore: InMemoryCredentialStore(), pendingStore: InMemoryPendingAuthorizationStore())
         let first = Task { try await client.login() }
         for _ in 0..<200_000 where await gated.opened == 0 { await Task.yield() }
 
         do {
-            try await client.login()
-            XCTFail("a second login was admitted over an open sheet")
+            try await client.login(try LoginOptions(scopes: ["email"]))
+            XCTFail("a second login that asks for another scope was admitted over an open sheet")
         } catch let error as OAuthError {
             guard case .configuration(.invalidConfiguration) = error else { return XCTFail("\(error)") }
         }
 
         await gated.open()
         try await first.value
+    }
+
+    /// AUDIT D1: a double-tapped button is a user action, not a deployment mistake. The second,
+    /// identical `login()` joins the first: one sheet, one code exchange, no error for either.
+    func testASecondIdenticalLoginJoinsTheOneWhoseSheetIsOpen() async throws {
+        let gated = GatedFakeBrowser(browser)
+        let client = try await OAuthClient.create(configuration: try configuration(), browser: gated, credentialStore: InMemoryCredentialStore(), pendingStore: InMemoryPendingAuthorizationStore())
+        let first = Task { try await client.login() }
+        for _ in 0..<200_000 where await gated.opened == 0 { await Task.yield() }
+        let second = Task { try await client.login() }
+        for _ in 0..<1_000 { await Task.yield() }
+
+        await gated.open()
+        try await first.value
+        try await second.value
+
+        let opened = await gated.opened
+        XCTAssertEqual(opened, 1, "the joiner opened a second sheet")
+        XCTAssertEqual(tokenRequests(), 1, "the joiner made a second code exchange")
+        let state = await client.sessionState
+        XCTAssertEqual(state, .authenticated)
+    }
+
+    /// The first caller being cancelled does not end the sign-in a joiner is still waiting for; a
+    /// joiner that is cancelled leaves the first call running.
+    func testACancelledJoinerLeavesTheFirstLoginRunning() async throws {
+        let gated = GatedFakeBrowser(browser)
+        let client = try await OAuthClient.create(configuration: try configuration(), browser: gated, credentialStore: InMemoryCredentialStore(), pendingStore: InMemoryPendingAuthorizationStore())
+        let first = Task { try await client.login() }
+        for _ in 0..<200_000 where await gated.opened == 0 { await Task.yield() }
+        let joiner = Task { try await client.login() }
+        for _ in 0..<1_000 { await Task.yield() }
+
+        joiner.cancel()
+        let outcome = await joiner.result
+        if case .success = outcome { XCTFail("the cancelled joiner returned a result") }
+        await gated.open()
+        try await first.value
+
+        let state = await client.sessionState
+        XCTAssertEqual(state, .authenticated)
     }
 
     /// Holds the sheet open until the test lets it answer.

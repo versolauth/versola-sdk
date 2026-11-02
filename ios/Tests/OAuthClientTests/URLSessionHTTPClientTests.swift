@@ -109,6 +109,9 @@ final class URLSessionHTTPClientTests: XCTestCase {
 
     /// A key set or a discovery document refetched on purpose (a `kid` it lacks, a rotated endpoint)
     /// must come from the provider, not from the `URLCache` of the app's session.
+    /// AUDIT W9: neither read nor written. The policy used to skip only the local read; the response
+    /// (a token, a key set) could still be stored, so the remote half is skipped too and the delegate
+    /// refuses to store it.
     func testRequestsIgnoreTheLocalCache() async throws {
         StubURLProtocol.install { _ in .response(status: 200, body: Data("{}".utf8)) }
         let client = URLSessionHTTPClient(session: StubURLProtocol.session())
@@ -116,7 +119,7 @@ final class URLSessionHTTPClientTests: XCTestCase {
         _ = try await client.send(HTTPRequest(method: .get, url: url))
 
         let sent = try XCTUnwrap(StubURLProtocol.requests.first)
-        XCTAssertEqual(sent.cachePolicy, .reloadIgnoringLocalCacheData)
+        XCTAssertEqual(sent.cachePolicy, .reloadIgnoringLocalAndRemoteCacheData)
     }
 
     // MARK: - Size
