@@ -19,9 +19,8 @@ integration enabled on iOS. Licensed under Apache-2.0.
 The API is pre-1.0. A change to a public symbol is stated in its pull request and raises the minor
 version.
 
-Documentation: <https://docs.versola.io/sdk/flutter/>. Overview, quick starts for all platforms and the
-frequently asked questions are in the
-[repository README](https://github.com/versolauth/versola-sdk#readme).
+See the [Flutter quick start](https://docs.versola.io/sdk/flutter/) for installation,
+platform configuration and sign-in examples.
 
 ## Alternative to flutter_appauth and AppAuth
 
