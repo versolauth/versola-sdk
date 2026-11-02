@@ -116,6 +116,33 @@ try {
 }
 ```
 
+Android notes for integrators:
+
+- **Redirect activity.** Re-declare `VersolaRedirectActivity` in the app's manifest with an intent
+  filter for the redirect URI; the manifest merger unions it with the library's declaration
+  (`tools:node="merge"`, `xmlns:tools="http://schemas.android.com/tools"` on `<manifest>`). Without
+  it nothing in the app answers the redirect and the sign-in waits until the user gives up. For
+  the `https` redirect above:
+
+  ```xml
+  <activity
+      android:name="versola.sdk.browser.VersolaRedirectActivity"
+      android:exported="true"
+      tools:node="merge">
+      <intent-filter android:autoVerify="true">
+          <action android:name="android.intent.action.VIEW" />
+          <category android:name="android.intent.category.DEFAULT" />
+          <category android:name="android.intent.category.BROWSABLE" />
+          <data android:scheme="https" android:host="app.example.com" android:path="/oauth" />
+      </intent-filter>
+  </activity>
+  ```
+
+- **Digital Asset Links.** An `https` redirect is a verified App Link only if
+  `https://app.example.com/.well-known/assetlinks.json` lists the app's package and signing
+  certificate fingerprint; without it Android may offer the link to the browser instead of the app.
+  A custom scheme needs no file but any app can register it, and the SDK logs a warning for it.
+
 ### iOS (Swift)
 
 ```swift
@@ -159,6 +186,10 @@ The Swift package product is `VersolaOAuth`; the module you import is `OAuthClie
 
 iOS notes for integrators:
 
+- **Associated domains.** For an `https` redirect URI add the Associated Domains capability with
+  both `applinks:app.example.com` and `webcredentials:app.example.com` for the redirect's host, and
+  serve `apple-app-site-association` there. `ASWebAuthenticationSession` completes an `https`
+  callback only for a domain with the `webcredentials` service; `applinks` alone fails.
 - **Scenes.** Whether the app is in the background when the browser sheet is cancelled is read from
   the scene of the `presentationAnchor` window (`UIApplication.shared` is unavailable to app
   extensions). A window attached to no scene, as in an app that has not adopted UIScene, counts as

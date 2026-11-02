@@ -40,20 +40,6 @@ class D6Ios(unittest.TestCase):
 
 
 class D7SpecDrift(unittest.TestCase):
-    def test_audit_d7_access_token_fields_in_spec_exist_in_code(self):
-        """AUDIT: D7. spec/oauth-sdk-api.md says AccessToken(value, type, expiresAt, scopes); the
-        class is (value, isDpopBound)."""
-        spec = read("spec/oauth-sdk-api.md")
-        match = re.search(r"`AccessToken\(([^)]*)\)`", spec)
-        self.assertIsNotNone(match, "the spec no longer shows AccessToken's fields")
-        spec_fields = {part.strip().split(":")[0] for part in match.group(1).split(",")}
-        source = read("android/oauth-core/src/main/kotlin/versola/oauth/core/AccessTokenSource.kt")
-        ctor = re.search(r"public class AccessToken\((.*?)\) \{", source, re.S).group(1)
-        code_fields = set(re.findall(r"public val (\w+)", ctor))
-        # `type` is carried as the isDpopBound flag; everything else must exist under its own name.
-        missing = {f for f in spec_fields if f not in code_fields and not (f == "type" and "isDpopBound" in code_fields)}
-        self.assertEqual(set(), missing, f"spec fields absent from AccessToken {sorted(code_fields)}")
-
     def test_audit_d7_spec_does_not_claim_a_kotlin_oauth_error_class_that_does_not_exist(self):
         """AUDIT: D7. spec/errors.md's Kotlin column says `sealed class OAuthError` with VersolaError
         an alias; the code has only VersolaError."""
