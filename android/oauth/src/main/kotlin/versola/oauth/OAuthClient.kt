@@ -89,6 +89,14 @@ public class OAuthClient private constructor(
     public val sessionState: Flow<SessionState> get() = flow.sessionState
 
     /**
+     * The state now, after the restore a cold start owes (a stored grant yields `Authenticated`, a
+     * request still pending `Authorizing`). For code that has to decide at once between a login
+     * screen and a home screen, an `Activity.onCreate` say, and has no use for a stream; a later
+     * change is [sessionState]'s to report.
+     */
+    public suspend fun currentSessionState(): SessionState = flow.sessionState.first()
+
+    /**
      * The claims of the validated ID token of this session, or null when there is no session.
      * Memory only; the raw token and the `nonce` are not exposed.
      */
@@ -505,6 +513,7 @@ public class OAuthClient private constructor(
                 logger = logger,
             )
             val jwks = JwksClient(httpClient, FileJwksCache(File(directory, "jwks.json")))
+            discovery.logger = logger
             val validator = JwksIdTokenValidator(
                 // The issuer the provider signs under: discovery's, which may carry a trailing
                 // slash the configured value does not (Auth0), and which the ID token repeats.

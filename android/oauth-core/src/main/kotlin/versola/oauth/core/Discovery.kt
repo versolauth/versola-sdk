@@ -85,6 +85,7 @@ internal fun rfc8414WellKnownUrl(issuer: String): String? {
     return parsed.newBuilder().encodedPath("/.well-known/oauth-authorization-server$path").build().toString()
 }
 
+@VersolaInternalApi
 public class HttpDiscoveryClient(
     httpClient: OkHttpClient,
 ) : LifetimeAwareDiscoveryClient {
@@ -180,6 +181,7 @@ internal class ExpiringMetadata(val expiresAt: Long, val metadata: ProviderMetad
  * existed holds the bare document: it still loads, with an expiry of zero, so it is used as the
  * fallback if the provider is unreachable and is otherwise fetched again, once.
  */
+@VersolaInternalApi
 public class FileProviderMetadataCache(
     private val file: File,
     private val clock: () -> Long = System::currentTimeMillis,
@@ -252,6 +254,7 @@ public class FileProviderMetadataCache(
  * unable even to finish a `logout()`, whose browser leg needs the document. Only an outage is
  * forgiven: a document that is served but wrong is still a `Configuration` failure.
  */
+@VersolaInternalApi
 public class DiscoveryService internal constructor(
     private val issuer: String,
     private val client: DiscoveryClient,
@@ -263,6 +266,10 @@ public class DiscoveryService internal constructor(
         client: DiscoveryClient,
         cache: ProviderMetadataCache,
     ) : this(issuer, client, cache, System::currentTimeMillis)
+
+    /** Where `debug` lines go; set by the facade that owns this service. */
+    @VersolaInternalApi
+    public var logger: VersolaLogger? = null
 
     private val mutex = Mutex()
     private var inMemory: ProviderMetadata? = null
@@ -335,6 +342,9 @@ public class DiscoveryService internal constructor(
             inMemoryExpiresAt = clock() + RETRY_AFTER_OUTAGE_MILLIS
             return fallback
         }
+        // The issuer's host, not the URL: a document URL is the issuer's own, and a host is all a
+        // reader of a log needs to know where the SDK looked.
+        logger?.debug("discovery fetched from ${issuer.substringAfter("://").substringBefore('/')}, good for ${lifetime / 1000} s")
         cache.save(fetched, lifetime)
         inMemory = fetched
         inMemoryExpiresAt = clock() + lifetime

@@ -90,6 +90,7 @@ public class PendingAuthorizationRequest public constructor(
  * that a store implementation — on any platform, against any key provider — handles opaque
  * bytes only and cannot disagree with another store about the encoding.
  */
+@VersolaInternalApi
 public object PendingAuthorizationCodec {
 
     public fun encode(request: PendingAuthorizationRequest): ByteArray =

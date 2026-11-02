@@ -53,7 +53,7 @@ construction, never behind a login screen.
 | Field | Type | Default | Rules |
 |---|---|---|---|
 | `issuer` | URL | required unless `endpoints` is given | `https`, or `http` on a loopback host only (`127.0.0.1`, `localhost`, `[::1]`: a provider on the developer's machine under `adb reverse`; the emulator's `10.0.2.2` is not one and is refused), host present, no query or fragment (RFC 8414 section 2). The discovery document is fetched at the issuer's well-known path and its `issuer` member must equal the configured value, where a single trailing slash is ignored for that comparison only (Auth0 announces its issuer with one); `DiscoveryIssuerMismatch` otherwise, with no per-provider exception. The ID token's `iss` is then compared to the discovered `issuer` byte for byte. A metadata document whose `issuer` is a template (Entra's `common` endpoint) is therefore unsupported; `providers.md` says what to configure instead |
-| `endpoints` | `ProviderEndpoints` | none | for a provider without discovery: `authorizationEndpoint`, `tokenEndpoint`, `issuer`, optional `jwksUri`, `userinfoEndpoint`, `revocationEndpoint`, `endSessionEndpoint`, `pushedAuthorizationRequestEndpoint`, `idTokenSigningAlgValuesSupported`; all `https` (or `http` on a loopback host, as for `issuer`); mutually exclusive with discovery, and the SDK then treats unlisted capabilities as absent |
+| `endpoints` | `ProviderEndpoints` | none | for a provider without discovery: `authorizationEndpoint`, `tokenEndpoint`, `issuer`, `jwksUri` (required: an ID token that cannot be verified is refused), `userinfoEndpoint`, `revocationEndpoint`, `endSessionEndpoint`, `pushedAuthorizationRequestEndpoint`, `idTokenSigningAlgValuesSupported`; all `https` (or `http` on a loopback host, as for `issuer`); mutually exclusive with discovery, and the SDK then treats unlisted capabilities as absent |
 | `clientId` | string | required | non-blank |
 | `redirectUri` | URI | required | absolute, no fragment; `https` (verified link, preferred), loopback, or a private-use scheme (accepted with a logged warning on every `create()`); cleartext `http` to a non-loopback host refused |
 | `postLogoutRedirectUri` | URI | none | same rules as `redirectUri`; when absent `post_logout_redirect_uri` is not sent, and the end-session page is still opened: the provider's session ends, nothing can come back, `sessionEnded` is `false` and the user dismisses the page (iOS has to give `ASWebAuthenticationSession` a callback, so it matches the login `redirectUri`, which the provider is not told of). Android, under Auth Tab: the tab intercepts this URI, so an `https` host must be a verified App Link of the app like `redirectUri`'s, or the tab closes unverified and `logout()` reports `sessionEnded = false` (a Custom Tab would have shown the page instead) |
@@ -218,7 +218,7 @@ is the precise error scenario 17 cannot give without PAR.
   with the pending-rotation slot of `state-machine.md` persisted first.
 - `offline_access` is not added to any request by the SDK. Providers that need it for a refresh
   token say so in `providers.md`; the integrator puts it in `scopes`. The SDK logs once, at
-  `create()`, when the configured scopes lack it and the discovered `scopes_supported` lists it.
+  the first login, when the configured scopes lack it and the discovered `scopes_supported` lists it.
 - A session without a refresh token (the provider issued none) is `Authenticated` until the access
   token expires, then `accessToken()` is `Reauthenticate(SessionExpired)`. Nothing is retried.
 - `invalid_grant` on refresh wipes the grant and is `Reauthenticate(GrantRejected)`, never retried.
@@ -385,10 +385,10 @@ handled in app code after `logout()` has wiped locally; the SDK does not special
 | Concept | Kotlin (`versola.oauth`) | Swift (`VersolaOAuth`) | Dart (`versola_oauth`) |
 |---|---|---|---|
 | Entry point | `OAuthClient.create(context, config)` | `OAuthClient.create(configuration:presentationAnchor:)` (static, async: one instance per configuration per process, as on Android; an `init` could not return an existing one) | `OAuthClient.create(config)` |
-| Configuration | `OAuthConfiguration(...)` data class | `OAuthConfiguration` struct | `OAuthConfiguration` |
+| Configuration | `OAuthConfiguration(...)` class | `OAuthConfiguration` struct | `OAuthConfiguration` |
 | State | `Flow<SessionState>` and `suspend fun currentSessionState(): SessionState` (the value now, after the restore a cold start owes; for an Activity choosing between a login and a home screen) (cold; the first emission is the restored state, which a `StateFlow` could not promise) | `sessionStates() -> AsyncStream<SessionState>` (one stream per observer) | `Stream<SessionState> sessionStates()` (any number of listeners over one native subscription; a late listener first gets the latest state), `Future<SessionState> currentSessionState()` |
 | Sign-in | `suspend fun login(options)` | `func login(_ options:) async throws` | `Future<void> login([options])` |
-| Options | `LoginOptions` data class | `LoginOptions` struct | `LoginOptions` |
+| Options | `LoginOptions` class | `LoginOptions` struct | `LoginOptions` |
 | Sign-out | `suspend fun logout(options): LogoutOutcome` | `func logout(_:) async -> LogoutOutcome` | `Future<LogoutOutcome> logout([options])` |
 | Token | `suspend fun accessToken(): AccessToken` (`isDpopBound`; the scheme is `DPoP` if set, else `Bearer`) | `func accessToken() async throws -> AccessToken` (`tokenType` is `Bearer` or `DPoP`, in that spelling whatever the provider's `token_type` said; a `token_type` that is neither `Bearer` nor `DPoP` is a malformed token response, `Configuration(TokenResponseMalformed)`, as on Android) | `Future<AccessToken> accessToken()` |
 | Claims | `val claims: IdTokenClaims?` | `var claims: IdTokenClaims? { get async }` | `Future<IdTokenClaims?> claims()` (a method, not a getter: the claims stay native, so the answer is asynchronous, and a `Future` getter would make `client.claims != null` always true) |

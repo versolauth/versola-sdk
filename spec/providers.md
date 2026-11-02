@@ -44,6 +44,13 @@ A provider works with the generic facade when it offers all of the following:
   (`state-machine.md`, scenario 15), so a provider that answers an authorization error without
   `state` is not heard: the login keeps waiting and ends only by the user's dismissal or the
   request's ten minutes, with one log line naming the `error` code.
+  Verified 2026-11-02: Keycloak 26.4 and Hydra v26.2.0 both echo `state` on authorization error
+  redirects (`login_required`, `invalid_scope`, `unsupported_response_type`), and the SDK always sends
+  a `state` of at least 128 bits, so this costs those providers nothing. Hydra's error redirects
+  carried no `iss` in the probe; the validator treats an error redirect with the right `state` and no
+  `iss` as the provider's error when discovery does not advertise
+  `authorization_response_iss_parameter_supported`, and as `IssuerMismatch` when it does (the `iss`
+  check comes before the `error`).
 - An ID token signed with an asymmetric algorithm from the closed set of API 11 (`RS256`,
   `PS256`, `ES256`, `ES384`, `ES512`, `RS384`, `RS512`, `PS384`, `PS512`), with keys at
   `jwks_uri`. `none` and HMAC algorithms are refused.

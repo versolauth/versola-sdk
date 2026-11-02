@@ -64,6 +64,7 @@ public interface TokenClient {
  *
  * Everything else this class raises is final: it has no budget of its own and does not sleep.
  */
+@VersolaInternalApi
 public class HttpTokenClient(
     private val configuration: VersolaConfiguration,
     private val discovery: DiscoveryService,

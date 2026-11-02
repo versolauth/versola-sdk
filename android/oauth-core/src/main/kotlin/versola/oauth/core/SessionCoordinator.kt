@@ -113,7 +113,7 @@ public class SessionCoordinator(
      * coordinator does not own (`metadata()`, `userInfo()`) in it too, so that one call is one
      * budget whichever class serves it.
      */
-    public val retryScope: RetryScope = RetryScope(retryPolicy, retryClock, retryRandom)
+    public val retryScope: RetryScope = RetryScope(retryPolicy, retryClock, retryRandom, logger)
 
     init {
         // Without the probe, restoration knows only what the browser leg left behind, and a
@@ -666,11 +666,13 @@ public class SessionCoordinator(
                 // Taking over is safe precisely because of the rotation slot: an abandoned
                 // winner that had already sent its request left its idempotency key behind,
                 // and the next winner replays with that key rather than deriving a new one.
+                logger?.debug("refresh: joined the one already in flight")
                 val outcome = flight.await() ?: continue
                 return outcome.getOrThrow()
             }
 
             val startedIn = epoch.get()
+            logger?.debug("refresh: started")
 
             val result = try {
                 Result.success(performRefresh(startedIn, priorState))

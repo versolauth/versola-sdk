@@ -107,4 +107,13 @@ public interface BrowserAuthorizationSession {
 public interface VersolaLogger {
     public fun info(message: String)
     public fun warn(message: String)
+
+    /**
+     * Diagnostics for a developer who is looking: discovery fetched (the host, not the URL), a
+     * refresh coalesced onto one in flight, a retry scheduled. Like every level it carries no token,
+     * code, verifier, `state`, `nonce`, proof, header value or claim value, and no URL with its
+     * query. Does nothing by default, so an implementer written before this level exists compiles
+     * and logs what it did.
+     */
+    public fun debug(message: String) {}
 }

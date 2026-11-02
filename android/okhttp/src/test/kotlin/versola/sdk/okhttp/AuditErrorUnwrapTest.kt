@@ -60,34 +60,4 @@ class AuditErrorUnwrapTest {
         assertTrue("the VersolaError is not in the cause chain of $thrown", unwrapped === refused)
     }
 
-    // AUDIT: D13 (design). Because the carrier is an IOException, `catch (e: IOException)` treats a
-    // revoked session as offline. Proposed: a public helper that unwraps the VersolaError from any
-    // Throwable (`Throwable.versolaError(): VersolaError?`) so app code can branch first. The test
-    // looks the helper up by name over the module's public facade classes, so it compiles today.
-    @Test
-    fun `AUDIT D13 a public helper unwraps the VersolaError from a VersolaHttpException`() {
-        val candidates = listOf(
-            "versola.sdk.okhttp.VersolaHttpExceptionKt",
-            "versola.sdk.okhttp.VersolaErrorsKt",
-            "versola.sdk.okhttp.ThrowablesKt",
-            "versola.sdk.okhttp.ThrowableKt",
-            "versola.sdk.okhttp.VersolaInterceptorKt",
-            "versola.sdk.okhttp.VersolaHttpException",
-            "versola.sdk.okhttp.VersolaHttpException\$Companion",
-        )
-        val helper = candidates.firstNotNullOfOrNull { name ->
-            runCatching { Class.forName(name) }.getOrNull()
-                ?.methods?.firstOrNull { it.name == "versolaError" }
-        }
-        assertTrue("no public `versolaError` helper to unwrap a VersolaError from a Throwable", helper != null)
-
-        val refused = VersolaError.StepUp(listOf("c2"), null)
-        val wrapped = VersolaHttpException(refused)
-        val result = if (java.lang.reflect.Modifier.isStatic(helper!!.modifiers)) {
-            helper.invoke(null, wrapped)
-        } else {
-            helper.invoke(helper.declaringClass.getField("INSTANCE").get(null), wrapped)
-        }
-        assertTrue("helper returned $result", result === refused)
-    }
 }

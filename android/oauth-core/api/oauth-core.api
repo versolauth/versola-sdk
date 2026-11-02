@@ -149,12 +149,6 @@ public abstract interface class versola/oauth/core/DiscoveryClient {
 	public abstract fun fetch (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
-public final class versola/oauth/core/DiscoveryService {
-	public fun <init> (Ljava/lang/String;Lversola/oauth/core/DiscoveryClient;Lversola/oauth/core/ProviderMetadataCache;)V
-	public final fun metadata (ZLkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public static synthetic fun metadata$default (Lversola/oauth/core/DiscoveryService;ZLkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
-}
-
 public abstract interface class versola/oauth/core/DpopKeyBinding {
 	public abstract fun jkt (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
@@ -167,30 +161,6 @@ public abstract interface class versola/oauth/core/DpopProofSource {
 
 public final class versola/oauth/core/DpopProofSource$DefaultImpls {
 	public static synthetic fun proof$default (Lversola/oauth/core/DpopProofSource;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
-}
-
-public final class versola/oauth/core/FileProviderMetadataCache : versola/oauth/core/ProviderMetadataCache {
-	public fun <init> (Ljava/io/File;Lkotlin/jvm/functions/Function0;)V
-	public synthetic fun <init> (Ljava/io/File;Lkotlin/jvm/functions/Function0;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public fun clear (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun expiresAtEpochMillis (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun load (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun save (Lversola/oauth/core/ProviderMetadata;JLkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun save (Lversola/oauth/core/ProviderMetadata;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-}
-
-public final class versola/oauth/core/HttpDiscoveryClient : versola/oauth/core/LifetimeAwareDiscoveryClient {
-	public fun <init> (Lokhttp3/OkHttpClient;)V
-	public fun fetch (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun fetchWithLifetime (Ljava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-}
-
-public final class versola/oauth/core/HttpTokenClient : versola/oauth/core/TokenClient {
-	public fun <init> (Lversola/oauth/core/VersolaConfiguration;Lversola/oauth/core/DiscoveryService;Lokhttp3/OkHttpClient;Lversola/oauth/core/DpopProofSource;Lversola/oauth/core/TokenBinding;Z)V
-	public synthetic fun <init> (Lversola/oauth/core/VersolaConfiguration;Lversola/oauth/core/DiscoveryService;Lokhttp3/OkHttpClient;Lversola/oauth/core/DpopProofSource;Lversola/oauth/core/TokenBinding;ZILkotlin/jvm/internal/DefaultConstructorMarker;)V
-	public fun exchange (Lversola/oauth/core/AuthorizationGrant;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun refresh ([BLjava/lang/String;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
-	public fun revoke ([BLkotlin/coroutines/Continuation;)Ljava/lang/Object;
 }
 
 public final class versola/oauth/core/IdTokenClaims {
@@ -273,12 +243,6 @@ public final synthetic class versola/oauth/core/MtlsEndpointAliases$$serializer 
 
 public final class versola/oauth/core/MtlsEndpointAliases$Companion {
 	public final fun serializer ()Lkotlinx/serialization/KSerializer;
-}
-
-public final class versola/oauth/core/PendingAuthorizationCodec {
-	public static final field INSTANCE Lversola/oauth/core/PendingAuthorizationCodec;
-	public final fun decode ([B)Lversola/oauth/core/PendingAuthorizationRequest;
-	public final fun encode (Lversola/oauth/core/PendingAuthorizationRequest;)[B
 }
 
 public final class versola/oauth/core/PendingAuthorizationRequest {
@@ -923,7 +887,12 @@ public abstract interface annotation class versola/oauth/core/VersolaInternalApi
 }
 
 public abstract interface class versola/oauth/core/VersolaLogger {
+	public fun debug (Ljava/lang/String;)V
 	public abstract fun info (Ljava/lang/String;)V
 	public abstract fun warn (Ljava/lang/String;)V
+}
+
+public final class versola/oauth/core/VersolaLogger$DefaultImpls {
+	public static fun debug (Lversola/oauth/core/VersolaLogger;Ljava/lang/String;)V
 }
 

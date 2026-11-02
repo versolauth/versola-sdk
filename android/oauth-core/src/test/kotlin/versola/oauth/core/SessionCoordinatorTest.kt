@@ -435,22 +435,9 @@ class SessionCoordinatorTest {
             )
     }
 
-    // AUDIT B15 (RFC 9470 section 6): a step-up asks for acr_values; an ID token that comes back at a
-    // different authentication context is not the step-up that was asked for. Design choice: a
-    // typed Configuration(IdTokenRejected(...)) failure, nothing persisted, rather than success.
-    @Test
-    fun `AUDIT B15 a step-up whose ID token carries another acr than the requested one is refused and persists nothing`() = runTest {
-        val (coordinator, tokenClient, credentialStore) = generic(validator = AcrReportingValidator(acr = "urn:acr:B"))
-        tokenClient.exchangeResult = { issued(accessToken = "at", refreshToken = "rt", idToken = "h.p.s") }
-
-        val outcome = runCatching { coordinator.login(setOf("openid"), acrValues = listOf("urn:acr:A")) }
-
-        val error = outcome.exceptionOrNull()
-        assertTrue("the step-up succeeded at acr B: $outcome", error is VersolaError.Configuration)
-        assertTrue((error as VersolaError.Configuration).detail is VersolaError.Configuration.Detail.IdTokenRejected)
-        assertNull(credentialStore.refreshToken)
-        assertNull(coordinator.claims)
-    }
+    // AUDIT B15 (decided 2026-11-02, not fixed): `acr` is a voluntary claim (OIDC Core 3.1.2.1), so a
+    // login whose ID token carries another `acr` than the one asked for is not refused; no new
+    // IdTokenRejection case exists for it. The test below pins that the requested one succeeds.
 
     @Test
     fun `AUDIT B15 a step-up whose ID token carries the requested acr succeeds`() = runTest {

@@ -298,7 +298,7 @@ public sealed class VersolaError(
             /** The discovery document was not parseable as the metadata document it claims to be. */
             public data class DiscoveryMalformed(public val detail: String) : Detail
 
-            /** `configure()` was given an issuer, client id or redirect URI it cannot use. */
+            /** `configure()` or `create()` was given an issuer, client id or redirect URI it cannot use. */
             public data class InvalidConfiguration(public val detail: String) : Detail
 
             /** No browser on the device can handle the authorization request. */

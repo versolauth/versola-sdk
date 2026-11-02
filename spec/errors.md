@@ -144,7 +144,7 @@ From `versola.oauth.userinfo.model.UserInfoError`.
 | `InvalidToken` | `Recoverable` → refresh → retry, else `Reauthenticate` | |
 | `InsufficientScope` | `Configuration` | The token was not issued with the scopes this call needs. |
 | `Unauthorized` | `Reauthenticate` | |
-| `InvalidDpopProof` | handled internally, then `Reauthenticate` | Same one-retry rule as the token endpoint; nothing reaches the app until the retry also fails (implemented on iOS; the Android UserInfo client does not retry yet). Also covers the RFC 9449 §7.2 downgrade refusal: a `Bearer`-scheme request carrying a key-bound token. |
+| `InvalidDpopProof` | handled internally, then `Reauthenticate` | Same one-retry rule as the token endpoint; nothing reaches the app until the retry also fails (implemented on iOS and Android). Also covers the RFC 9449 §7.2 downgrade refusal: a `Bearer`-scheme request carrying a key-bound token. |
 | `UseDpopNonce` | handled internally | Retry once against the **userinfo origin's** nonce cache. |
 
 ## Edge — `versola.io`
@@ -219,7 +219,7 @@ Not every error comes from a server.
 | A grant started through one back channel redeemed through the other | `Configuration` | Wiring. Refused before the code is spent. |
 | Discovery document missing a required field | `Configuration` | A missing `dpop_signing_alg_values_supported` is **not** this: it means bearer mode, logged, not failed. |
 | Discovery document names an `authorization_endpoint`, `token_endpoint` or `jwks_uri` that is not `https`, or one that is not an absolute URL with a host; or an optional endpoint (`userinfo_endpoint`, `revocation_endpoint`, `end_session_endpoint`, `pushed_authorization_request_endpoint`) that is not, at the moment it is used | `Configuration`, detail `DiscoveryMalformed` | The three endpoints every session needs are refused where the document is read, and in a cached copy, so a refresh token is never POSTed in the clear because a document said so. The optional ones are refused where they are used (the operation that needs one fails; `logout()` stays best effort and reports it as a failed revocation or `sessionEnded = false`), so one an app never calls does not make the whole provider unusable. `http` is accepted on a loopback host only, as for the issuer (`oauth-sdk-api.md` section 3). An endpoint on another https origin than the issuer is allowed: the rule is the scheme, not the origin. |
-| Pending authorization request older than 10 minutes | `Recoverable`, cause `Expired` | Discarded on restore. |
+| Pending authorization request older than 10 minutes | `Recoverable`, cause `PendingRequestExpired` | Discarded on restore. |
 
 ## Generic facade additions
 
@@ -244,11 +244,11 @@ Semantics are identical; spelling follows each language.
 
 | Concept | Kotlin | Swift | Dart |
 |---|---|---|---|
-| Base | `sealed class OAuthError` (`VersolaError` is a type alias in the Versola facade, ADR 0001) | `enum OAuthError: Error` | `sealed class OAuthError` |
-| Recoverable | `VersolaError.Recoverable(cause)` | `.recoverable(Cause)` | `Recoverable(cause)` |
-| Reauthenticate | `VersolaError.Reauthenticate(reason)` | `.reauthenticate(Reason)` | `Reauthenticate(reason)` |
-| Step-up | `VersolaError.StepUp(acrValues, maxAge)` | `.stepUp(acrValues:maxAge:)`; `stepUp(_:)` takes the caught case | `StepUp(acrValues, maxAge)` |
-| Configuration | `VersolaError.Configuration(detail)` | `.configuration(Detail)` | `Configuration(detail)` |
+| Base | `sealed class VersolaError` (both facades, ADR 0001) | `enum OAuthError: Error` | `sealed class OAuthError` |
+| Recoverable | `VersolaError.Recoverable(cause)` | `.recoverable(Cause)` | `RecoverableError(cause)` |
+| Reauthenticate | `VersolaError.Reauthenticate(reason)` | `.reauthenticate(Reason)` | `ReauthenticateError(reason)` |
+| Step-up | `VersolaError.StepUp(acrValues, maxAge)` | `.stepUp(acrValues:maxAge:)`; `stepUp(_:)` takes the caught case | `StepUpError(acrValues, maxAge)` |
+| Configuration | `VersolaError.Configuration(detail)` | `.configuration(Detail)` | `ConfigurationError(detail)` |
 
 An error crossing the Flutter bridge must keep its category. A `StepUp` arriving in Dart as a
 generic `PlatformException` is a defect in the bridge, not an acceptable lossy conversion.

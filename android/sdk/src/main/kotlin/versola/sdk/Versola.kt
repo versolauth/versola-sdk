@@ -5,6 +5,7 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 import versola.oauth.core.SdkDispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import versola.sdk.browser.AuthTabAuthorizationSession
 import versola.oauth.core.AuthorizationFlow
@@ -78,6 +79,9 @@ public class Versola internal constructor(
 
     /** The state machine of `spec/state-machine.md`, observable. */
     public val sessionState: Flow<SessionState> get() = coordinator.sessionState
+
+    /** The state now, after the restore a cold start owes; see `OAuthClient.currentSessionState`. */
+    public suspend fun currentSessionState(): SessionState = coordinator.sessionState.first()
 
     /** The provider's metadata, fetched once and cached on disk across restarts and logout. */
     public suspend fun metadata(): ProviderMetadata = flow.metadata()
@@ -388,7 +392,7 @@ public class Versola internal constructor(
                 issuer = configuration.issuer,
                 client = HttpDiscoveryClient(httpClient),
                 cache = FileProviderMetadataCache(File(directory, "provider-metadata.json")),
-            )
+            ).also { it.logger = logger }
             // One instance per file per process, which is DataStore's constraint: a second
             // `configure()` in the same process — every `Activity.onCreate`, every rotation —
             // shares the store the first one opened. Opening it reads nothing; the file is

@@ -1546,19 +1546,9 @@ class AuthorizationFlowTest {
         assertFalse(browser.launchedUri!!, browser.launchedUri!!.contains("dpop_jkt"))
     }
 
-    @Test
-    fun `AUDIT B6 an error redirect without state, carrying the right iss, ends the wait with the provider's error`() = runTest {
-        // RFC 6749 4.1.2.1: state is returned "if present in the request", and providers omit it on
-        // errors. The login must not wait out the ten minutes (virtual here) for it.
-        val store = RecordingStore()
-        val browser = ScriptedBrowser(redirectWith("error=access_denied&iss=$ISSUER"))
-
-        val error = failure { flow(store, browser, clock = { 0 }).authorize(setOf("openid")) }
-
-        assertTrue("not a typed provider outcome: $error", error is VersolaError.Reauthenticate)
-        assertEquals(VersolaError.Reauthenticate.Reason.AuthorizationDenied, (error as VersolaError.Reauthenticate).reason)
-        assertEquals("the login waited for the request to expire", 0L, testScheduler.currentTime)
-    }
+    // AUDIT B6 (decided 2026-11-02, not fixed): an error redirect with no `state` stays ignored, as
+    // scenario 15 says, since `state` is never optional. Keycloak 26.4 and Hydra v26.2.0 echo `state`
+    // on error redirects and the SDK always sends one (spec/providers.md).
 
     @Test
     fun `AUDIT B6 a stateless error redirect naming another issuer is still not the response and is ignored`() = runTest {

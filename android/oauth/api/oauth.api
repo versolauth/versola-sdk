@@ -2,6 +2,7 @@ public final class versola/oauth/LogcatLogger : versola/oauth/core/VersolaLogger
 	public fun <init> ()V
 	public fun <init> (Ljava/lang/String;)V
 	public synthetic fun <init> (Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun debug (Ljava/lang/String;)V
 	public fun info (Ljava/lang/String;)V
 	public fun warn (Ljava/lang/String;)V
 }
@@ -47,6 +48,7 @@ public final class versola/oauth/OAuthClient {
 	public static synthetic fun authenticatedClient$default (Lversola/oauth/OAuthClient;Ljava/util/Set;ILjava/lang/Object;)Lokhttp3/OkHttpClient;
 	public final fun call (Lokhttp3/Request;Ljava/util/Set;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun call$default (Lversola/oauth/OAuthClient;Lokhttp3/Request;Ljava/util/Set;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public final fun currentSessionState (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public final fun getClaims ()Lversola/oauth/core/IdTokenClaims;
 	public final fun getConfiguration ()Lversola/oauth/OAuthConfiguration;
 	public final fun getSessionState ()Lkotlinx/coroutines/flow/Flow;

@@ -258,7 +258,7 @@ Proportional rather than a flat constant, because `expires_in` is per-client con
 (`OAuthClientRecord.accessTokenTtl`, 3600 s in the bootstrap default) and nothing stops a
 deployment from issuing 20-second tokens. A flat 30 s against a 20 s token marks every token
 stale at the moment it is issued, and the session then refreshes before every single call —
-which under bearer [redacted] is a rotation per call. The `/ 10` term is what makes that
+which under bearer rotation is a rotation per call. The `/ 10` term is what makes that
 unrepresentable: the skew can never exceed a tenth of the lifetime, so proactive refresh can
 never add more than one token request per ten uses, at any TTL. The 30 s cap is what stops a
 long-lived token from being refreshed six minutes early for no benefit.

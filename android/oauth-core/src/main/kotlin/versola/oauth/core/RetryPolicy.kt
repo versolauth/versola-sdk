@@ -74,7 +74,8 @@ public class RetryPolicy(
         clock: () -> Long = { System.nanoTime() / NANOS_PER_MILLI },
         random: Random = Random.Default,
         cooldown: RetryCooldown = RetryCooldown(clock),
-    ): RetryBudget = RetryBudget(this, clock, random, cooldown)
+        logger: VersolaLogger? = null,
+    ): RetryBudget = RetryBudget(this, clock, random, cooldown, logger)
 
     public companion object {
         private const val MAX_ATTEMPTS_PER_ORIGIN_CEILING = 5
@@ -84,7 +85,7 @@ public class RetryPolicy(
         private val TOTAL_BUDGET_CEILING = 60.seconds
         private const val NANOS_PER_MILLI = 1_000_000L
 
-        /** The defaults of `spec/retry-policy.md`, and what `configure()` uses unasked. */
+        /** The defaults of `spec/retry-policy.md`, and what `configure()` and `create()` use unasked. */
         public val Default: RetryPolicy = RetryPolicy()
 
         /**
@@ -151,6 +152,7 @@ internal class RetryBudget(
     private val clock: () -> Long,
     private val random: Random,
     private val cooldown: RetryCooldown = RetryCooldown(clock),
+    private val logger: VersolaLogger? = null,
 ) {
 
     private val startedAt = clock()
@@ -243,6 +245,14 @@ internal class RetryBudget(
                 if (!hasAttemptLeft(origin) || wait.inWholeMilliseconds > room) {
                     throw ended(origin, e, callFailures)
                 }
+                // The origin (scheme and host) and the kind of failure, nothing of the request.
+                logger?.debug(
+                    "retry scheduled for $origin: attempt ${callFailures + 1} in ${wait.inWholeMilliseconds} ms after " +
+                        when (val reason = cause) {
+                            is VersolaError.Recoverable.Cause.Server -> "HTTP ${reason.status}"
+                            else -> "a transport failure"
+                        },
+                )
                 delay(wait)
             }
         }
@@ -425,6 +435,7 @@ public class RetryScope internal constructor(
     private val policy: RetryPolicy,
     private val clock: () -> Long,
     private val random: Random,
+    private val logger: VersolaLogger? = null,
 ) {
 
     public constructor(policy: RetryPolicy) : this(
@@ -452,7 +463,7 @@ public class RetryScope internal constructor(
     /** Runs [block] as one operation: under the budget already in force, or under a fresh one. */
     public suspend fun <T> operation(block: suspend () -> T): T {
         if (coroutineContext[RetryBudgetElement] != null) return block()
-        return withContext(RetryBudgetElement(policy.newBudget(clock, random, cooldown))) { block() }
+        return withContext(RetryBudgetElement(policy.newBudget(clock, random, cooldown, logger))) { block() }
     }
 
 }

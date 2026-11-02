@@ -38,7 +38,7 @@ dependencies {
     //
     // OkHttp rather than HttpURLConnection: the :okhttp module already pins it, and one HTTP
     // stack across the SDK means one place where timeouts, TLS and proxy behaviour are
-    // decided. Same 5.4.0 pin and the same reason for it as :okhttp.
+    // decided. Same OkHttp version as :okhttp, and the same reason for pinning it.
     //
     // kotlinx-serialization rather than org.json: reflection-free, so it survives R8 without
     // keep rules, and available on a plain JVM. api, not implementation: HttpDiscoveryClient
