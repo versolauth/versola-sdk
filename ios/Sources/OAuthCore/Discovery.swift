@@ -72,7 +72,16 @@ package struct HTTPDiscoveryClient: DiscoveryClient {
         }
         switch response.statusCode {
         case 200..<300:
-            break
+            // A 2xx whose body is not JSON at all is an intermediary's page (a captive portal, a proxy's
+            // or nginx's error page), not the provider's answer: the user's network, which a change of
+            // network fixes, so it is `recoverable`. Not repeated here: the same page is the likely
+            // answer, and the operation's own budget is for what a repeat is known to help. A body
+            // that is JSON but not metadata is the provider's, and stays `configuration`.
+            if (try? JSONSerialization.jsonObject(with: response.body, options: [.fragmentsAllowed])) == nil {
+                throw OAuthError.recoverable(.network(
+                    detail: "discovery answered HTTP \(response.statusCode) with a body that is not JSON (an intermediary's page?)", attempts: 1, elapsedMillis: 0
+                ))
+            }
         // Any other 4xx means this issuer serves no discovery document at all, which no retry
         // fixes: an integrator typo or the wrong environment.
         case 400..<500:
@@ -151,6 +160,9 @@ package actor DiscoveryService {
     private var inMemory: ProviderMetadata?
     /// When `inMemory` stops being fresh, in `Clock.uptime` seconds.
     private var inMemoryExpiresAt: TimeInterval = 0
+    /// When `inMemory` stops being servable even as a fallback: its expiry plus the stale bound,
+    /// fixed when it was obtained and not moved by the short retry interval a stale serve sets.
+    private var inMemoryStaleUntil: TimeInterval = 0
     /// The fetch in flight, so concurrent callers share it rather than each hitting the network.
     /// A caller that is cancelled stops waiting; it does not cancel the fetch the others need.
     private var inFlight: Task<ProviderMetadata, Error>?
@@ -171,19 +183,22 @@ package actor DiscoveryService {
 
     package func metadata() async throws -> ProviderMetadata {
         if let inMemory, clock.uptime() < inMemoryExpiresAt { return inMemory }
-        if let inFlight { return try await inFlight.value }
+        if let inFlight { return try await cancellableValue(of: inFlight) }
         // Created and stored in the same actor turn: the body cannot start before `inFlight` is
         // set, and it clears it itself, so a late waiter cannot clear a newer task.
         let task = Task { try await self.resolve() }
         inFlight = task
-        return try await task.value
+        return try await cancellableValue(of: task)
     }
 
     private func resolve() async throws -> ProviderMetadata {
         defer { inFlight = nil }
         // A cache that cannot be read or written is a cache miss, never a failure: the document
         // is one round trip away, and the alternative is bricking login on a corrupt file.
-        var fallback: ProviderMetadata? = inMemory
+        // Both fallbacks stop at the stale bound the key set's cache has (`CacheLifetime.maximumStale`):
+        // a document past it is a configuration the provider may have retired, and the outage that
+        // would justify serving it is the app's to handle.
+        var fallback: ProviderMetadata? = clock.uptime() < inMemoryStaleUntil ? inMemory : nil
         if let cached = try? await cache.load(), (try? cached.validate(configuredIssuer: issuer)) != nil {
             // A document cached for another issuer belongs to a previous configuration of this
             // app and is treated as absent. A fresh one is served as is; one older than its
@@ -194,9 +209,17 @@ package actor DiscoveryService {
             if let age, age >= 0, age < lifetime {
                 inMemory = cached
                 inMemoryExpiresAt = clock.uptime() + (lifetime - age)
+                inMemoryStaleUntil = inMemoryExpiresAt + CacheLifetime.maximumStale
                 return cached
             }
-            fallback = cached
+            // An age that cannot be read (no timestamp beside the document) is not evidence of
+            // staleness, so the document stays the fallback it has always been in that case.
+            let remaining = age.map { lifetime + CacheLifetime.maximumStale - $0 } ?? CacheLifetime.maximumStale
+            if age.map({ $0 >= 0 }) ?? true, remaining > 0 {
+                fallback = cached
+                inMemoryStaleUntil = clock.uptime() + remaining
+                inMemory = cached
+            }
         }
         let fetched: FetchedMetadata
         do {
@@ -214,6 +237,7 @@ package actor DiscoveryService {
         try? await cache.save(fetched.metadata, lifetime: fetched.lifetime)
         inMemory = fetched.metadata
         inMemoryExpiresAt = clock.uptime() + lifetime
+        inMemoryStaleUntil = inMemoryExpiresAt + CacheLifetime.maximumStale
         return fetched.metadata
     }
 }

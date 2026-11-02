@@ -273,10 +273,12 @@ package actor AuthorizationFlow {
             )
             let pending: PendingAuthorizationRequest
             let uri: URL
+            var browserUriExpiresAt: Date?
             if let starter {
                 let started = try await starter.start(request: request, metadata: metadata, now: clock.now())
                 pending = started.pending
                 uri = started.browserUri
+                browserUriExpiresAt = started.expiresAt
             } else {
                 pending = request.toPending(
                     createdAt: clock.now(), issRequired: metadata.authorizationResponseIssParameterSupported
@@ -297,7 +299,10 @@ package actor AuthorizationFlow {
             // provider issues does not outlive them, the sheet cannot outlive them either (the wait is
             // cancelled, which dismisses it), and a redirect that is ignored while the login waits must
             // not keep it waiting for ever (`spec/state-machine.md`, scenario 15).
-            let remaining = PendingAuthorizationRequest.maxAge - clock.now().timeIntervalSince(pending.createdAt)
+            var remaining = PendingAuthorizationRequest.maxAge - clock.now().timeIntervalSince(pending.createdAt)
+            // A pushed request's `request_uri` is dead after its own `expires_in`, usually far
+            // shorter than the ten minutes: the wait ends with it.
+            if let browserUriExpiresAt { remaining = min(remaining, browserUriExpiresAt.timeIntervalSince(clock.now())) }
             let answered: BrowserOutcome?
             do {
                 // The user's time in the browser is not the SDK's retrying (`OperationBudget.paused`).
@@ -326,6 +331,12 @@ package actor AuthorizationFlow {
             guard let outcome = answered else {
                 // The request ran out while the sheet was up; the wait was cancelled, so the sheet
                 // is gone, and the slot goes with it.
+                await abandonLogin()
+                throw OAuthError.recoverable(.pendingRequestExpired)
+            }
+            // A redirect that arrives after the `request_uri` expired answers nothing the provider
+            // still holds, whatever its `state` says (the clock may have moved while the sheet was up).
+            if let browserUriExpiresAt, clock.now() >= browserUriExpiresAt {
                 await abandonLogin()
                 throw OAuthError.recoverable(.pendingRequestExpired)
             }

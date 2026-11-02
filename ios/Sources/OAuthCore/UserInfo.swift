@@ -42,6 +42,8 @@ package struct HTTPUserInfoClient: UserInfoClient {
     private let httpClient: HTTPClient
     private let dpop: DpopProofSource?
     private let verifier: JwsVerifier
+    private let issuer: String
+    private let clientId: String
 
     /// - Parameters:
     ///   - userinfoEndpoint: from discovery, nil when the provider has none.
@@ -49,12 +51,19 @@ package struct HTTPUserInfoClient: UserInfoClient {
     ///     without a source cannot be presented and is refused as a misconfiguration.
     ///   - verifier: checks a signed (`application/jwt`) response against the provider's JWK
     ///     Set, the same one that verifies ID tokens (`spec/oauth-sdk-api.md` section 11).
+    ///   - issuer, clientId: what a signed response's `iss` and `aud` are held to when it carries
+    ///     them (OpenID Connect Core 5.3.2): a response signed by the provider's key but about
+    ///     another issuer or another client is not the answer to this request.
     package init(
         userinfoEndpoint: @escaping @Sendable () async throws -> String?,
         httpClient: HTTPClient,
         dpop: DpopProofSource?,
-        verifier: JwsVerifier
+        verifier: JwsVerifier,
+        issuer: String,
+        clientId: String
     ) {
+        self.issuer = issuer
+        self.clientId = clientId
         self.userinfoEndpoint = userinfoEndpoint
         self.httpClient = httpClient
         self.dpop = dpop
@@ -191,6 +200,17 @@ package struct HTTPUserInfoClient: UserInfoClient {
                 claims = try await verifier.verify(compact).claims
             } catch let rejection as JwsRejection {
                 throw Self.rejected("the signed response does not verify (\(rejection.reason.rawValue))")
+            }
+            // Core 5.3.2: `iss` and `aud`, when the response has them, are the OP's and the client's.
+            if let iss = claims["iss"] {
+                guard case .string(let received) = iss, received.trimmingCharacters(in: CharacterSet(charactersIn: "/")) == issuer.trimmingCharacters(in: CharacterSet(charactersIn: "/")) else {
+                    throw Self.rejected("the signed response names another issuer")
+                }
+            }
+            if claims["aud"] != nil {
+                guard let audience = try? ClaimReader.audience(claims), audience.contains(clientId) else {
+                    throw Self.rejected("the signed response is not addressed to this client")
+                }
             }
         } else {
             guard case .object(let members)? = JoseJSON.parse(body) else {

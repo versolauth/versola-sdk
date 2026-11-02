@@ -85,7 +85,7 @@ package enum AuthorizationResponseValidator {
         let iss = parameters["iss"]
         if let iss {
             if trimSlash(iss) != trimSlash(issuer) {
-                throw OAuthError.configuration(.issuerMismatch(expected: issuer, received: iss))
+                throw OAuthError.configuration(.issuerMismatch(expected: issuer, received: boundedText(iss, limit: 256)))
             }
         } else if issParameterSupported || pending.issRequired {
             throw OAuthError.configuration(.issuerMismatch(expected: issuer, received: nil))
@@ -119,15 +119,28 @@ package enum AuthorizationResponseValidator {
     /// `spec/errors.md`, authorization endpoint table. The four that mean "the user has to sign
     /// in again" are `reauthenticate`; everything else is a `configuration` fault, so a provider
     /// that invents codes is reported rather than silently succeeding.
-    private static func authorizationError(_ code: String, description: String?) -> OAuthError {
-        switch code {
+    private static func authorizationError(_ received: String, description receivedDescription: String?) -> OAuthError {
+        // What a redirect carries is whoever delivered the URL's, and it ends up in logs and in the
+        // error an app prints: the code is cut to the token alphabet of RFC 6749 section 5.2 and
+        // to a bounded length, the description to printable text of a bounded length.
+        let code = String(received.unicodeScalars.filter {
+            $0.isASCII && (CharacterSet.alphanumerics.contains($0) || "_-.".unicodeScalars.contains($0))
+        }.prefix(64))
+        let description = receivedDescription.map { boundedText($0, limit: 256) }
+        switch code.isEmpty ? "invalid_response" : code {
         case "access_denied":
             return .reauthenticate(.authorizationDenied)
         case "login_required", "consent_required", "interaction_required", "account_selection_required":
             return .reauthenticate(.interactionRequired(code: code))
         default:
-            return .configuration(.authorizationRejected(code: code, description: description))
+            return .configuration(.authorizationRejected(code: code.isEmpty ? "invalid_response" : code, description: description))
         }
+    }
+
+    /// Printable text of at most `limit` characters: control characters (a newline that forges a log
+    /// line, an escape sequence for a terminal) are dropped.
+    private static func boundedText(_ text: String, limit: Int) -> String {
+        String(String.UnicodeScalarView(text.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }.prefix(limit)))
     }
 
     private static func queryPairs(_ url: URL) -> [(String, String)] {

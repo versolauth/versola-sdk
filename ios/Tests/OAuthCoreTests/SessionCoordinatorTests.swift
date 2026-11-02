@@ -534,16 +534,18 @@ final class SessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(refreshToken, "rt-1", "no rotation: the refresh token is left as it was")
     }
 
+    /// A slot is the key derived from the token it was written for (AUDIT W6), so a process death
+    /// between the slot write and the request leaves exactly this slot, and the replay names it.
     func testAnAbandonedSlotIsReplayedWithTheSameKey() async throws {
         let store = MemoryCredentials()
         try await store.save(refreshToken: "rt-1", rawIdToken: nil)
-        try await store.savePendingRotation("key-from-before")
+        try await store.savePendingRotation(SessionCoordinator.idempotencyKey(for: "rt-1"))
         let f = try fixture(answers: [.success(response(refresh: "rt-2"))], store: store)
 
         try await f.coordinator.refresh()
 
         let calls = await f.tokens.calls
-        XCTAssertEqual(calls, [.refresh("rt-1", "key-from-before")])
+        XCTAssertEqual(calls, [.refresh("rt-1", SessionCoordinator.idempotencyKey(for: "rt-1"))])
     }
 
     func testConcurrentCallersShareOneRefresh() async throws {

@@ -119,8 +119,20 @@ final class DiscoveryTests: XCTestCase {
         }
     }
 
-    func testUndecodableJsonIsDiscoveryMalformed() async {
+    /// AUDIT D1: an HTML page under a 200 is the user's network, not a deployment fault.
+    func testAnHtmlPageUnderA200IsARecoverableNetworkFailure() async {
         let http = RecordingHTTP.json(200, "<html>not json</html>")
+        do {
+            _ = try await service(http).metadata()
+            XCTFail("expected a failure")
+        } catch OAuthError.recoverable(.network) {
+        } catch {
+            XCTFail("unexpected \(error)")
+        }
+    }
+
+    func testJsonThatIsNotMetadataIsDiscoveryMalformed() async {
+        let http = RecordingHTTP.json(200, "[1, 2]")
         do {
             _ = try await service(http).metadata()
             XCTFail("expected a failure")
@@ -289,7 +301,8 @@ final class DiscoveryTests: XCTestCase {
 
         let userinfo = HTTPUserInfoClient(
             userinfoEndpoint: { insecure.userinfoEndpoint }, httpClient: http, dpop: nil,
-            verifier: JwsVerifier(jwksUri: { nil }, allowedAlgorithms: { [] }, jwks: JwksClient(httpClient: http))
+            verifier: JwsVerifier(jwksUri: { nil }, allowedAlgorithms: { [] }, jwks: JwksClient(httpClient: http)),
+            issuer: AuthzKit.issuer, clientId: AuthzKit.configuration.clientId
         )
         await malformed("userinfo_endpoint") { _ = try await userinfo.fetch(tokens: FixedTokenSource(), expectedSubject: "alice") }
 

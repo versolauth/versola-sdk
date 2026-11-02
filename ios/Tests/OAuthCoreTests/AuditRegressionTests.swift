@@ -286,6 +286,35 @@ final class AuditProtocolTests: XCTestCase {
         }
     }
 
+    /// AUDIT: D2. Every case exposes a stable, unique code that does not depend on its payload; the set is
+    /// the one in `spec/errors.md` ("Stable codes"), shared by every platform.
+    func testEveryErrorCaseHasAUniqueStableCodeThatIgnoresItsPayload() {
+        let cases: [OAuthError] = [
+            .recoverable(.userCancelled), .recoverable(.systemCancelled), .recoverable(.pendingRequestExpired),
+            .recoverable(.network(detail: "a", attempts: 1, elapsedMillis: 1)),
+            .recoverable(.server(status: 503, retryAfterMillis: nil, attempts: 1, elapsedMillis: 1)),
+            .recoverable(.unlockRequired), .recoverable(.nonceLoop(origin: "https://a.example.com")),
+            .reauthenticate(.authorizationDenied), .reauthenticate(.interactionRequired(code: "login_required")),
+            .reauthenticate(.credentialsInvalidated), .reauthenticate(.grantRejected), .reauthenticate(.sessionRejected),
+            .reauthenticate(.sessionExpired), .stepUp(acrValues: ["a"], maxAge: nil),
+            .configuration(.stateMismatch), .configuration(.issuerMismatch(expected: "a", received: nil)),
+            .configuration(.malformedAuthorizationResponse), .configuration(.authorizationRejected(code: "x", description: nil)),
+            .configuration(.tokenRequestRejected(code: "x", description: nil)), .configuration(.tokenResponseMalformed(detail: "x")),
+            .configuration(.discoveryFieldMissing(field: "x")), .configuration(.discoveryIssuerMismatch(configured: "a", advertised: "b")),
+            .configuration(.discoveryMalformed(detail: "x")), .configuration(.invalidConfiguration(detail: "x")),
+            .configuration(.noBrowserAvailable), .configuration(.idTokenRejected(.nonce)), .configuration(.userInfoRejected(detail: "x")),
+            .configuration(.providerUnsupported(capability: "x")), .configuration(.hardwareBindingUnavailable(detail: "x")),
+        ]
+        let codes = cases.map(\.code)
+        XCTAssertEqual(Set(codes).count, codes.count, "codes must be unique per case: \(codes)")
+        XCTAssertTrue(codes.allSatisfy { !$0.isEmpty })
+        XCTAssertEqual(
+            OAuthError.recoverable(.network(detail: "timeout A", attempts: 1, elapsedMillis: 5)).code,
+            OAuthError.recoverable(.network(detail: "timeout B", attempts: 5, elapsedMillis: 9)).code
+        )
+        XCTAssertEqual(OAuthError.stepUp(acrValues: ["a"], maxAge: nil).code, "step_up")
+    }
+
     private func redirect(_ pairs: [(String, String)]) -> URL {
         URL(string: AuthzKit.redirect + "?" + FormEncoding.encode(pairs))!
     }
@@ -332,9 +361,8 @@ final class AuditProtocolTests: XCTestCase {
 
     /// AUDIT: W19. A signed UserInfo response that verifies and has the right `sub` but names
     /// another issuer and another audience must be refused (OpenID Connect Core 5.3.2: `iss` and
-    /// `aud`, when present, are the OP's and the client's). The client has no configured issuer or
-    /// client id today, so the fix adds them to `HTTPUserInfoClient.init`; this test then needs
-    /// those arguments (issuer https://id.example.com, client id "client-123").
+    /// `aud`, when present, are the OP's and the client's). `HTTPUserInfoClient.init` takes the
+    /// configured issuer and client id (https://id.example.com, "client-123" here).
     func testSignedUserInfoNamingAnotherIssuerAndAudienceIsRefused() async {
         let stub = JoseStubHTTP()
         await stub.enqueue("/jwks.json", body: JoseTestTokens.jwks(JoseTestKeys.rsa.jwk(kid: "rsa")))
@@ -342,7 +370,8 @@ final class AuditProtocolTests: XCTestCase {
         await stub.enqueue("/userinfo", headers: ["Content-Type": "application/jwt"], text: JoseTestTokens.rsa("RS256", payload: payload))
         let client = HTTPUserInfoClient(
             userinfoEndpoint: { "https://id.example.com/userinfo" }, httpClient: stub, dpop: nil,
-            verifier: JwsVerifier(jwksUri: { "https://id.example.com/jwks.json" }, allowedAlgorithms: { [] }, jwks: JwksClient(httpClient: stub))
+            verifier: JwsVerifier(jwksUri: { "https://id.example.com/jwks.json" }, allowedAlgorithms: { [] }, jwks: JwksClient(httpClient: stub)),
+            issuer: "https://id.example.com", clientId: "client-123"
         )
 
         do {

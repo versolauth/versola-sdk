@@ -116,8 +116,19 @@ final class TokenClientTests: XCTestCase {
         XCTAssertEqual(response.expiresIn, 0)
     }
 
+    /// AUDIT D1: a body that is not JSON at all (a portal's or a proxy's page under a 200) is the network's.
+    func testAHtmlTokenResponseIsARecoverableNetworkFailure() async throws {
+        let http = RecordingHTTP.json(200, "<html>Sign in to the Wi-Fi</html>")
+        do {
+            _ = try await client(http).exchange(grant())
+            XCTFail("accepted an HTML page")
+        } catch let error as OAuthError {
+            guard case .recoverable(.network) = error else { return XCTFail("\(error)") }
+        }
+    }
+
     func testAMalformedTokenResponseIsTokenResponseMalformed() async throws {
-        for body in ["not json", "[]", #"{"token_type":"Bearer"}"#, #"{"access_token":"at"}"#] {
+        for body in ["[]", #"{"token_type":"Bearer"}"#, #"{"access_token":"at"}"#] {
             let http = RecordingHTTP.json(200, body)
             do {
                 _ = try await client(http).exchange(grant())

@@ -233,7 +233,13 @@ package struct HTTPTokenClient: TokenClient {
     }
 
     private static func issued(_ body: Data, dateHeader: String?) throws -> TokenResponse {
-        guard let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else {
+        // Not JSON at all is an intermediary's page (a captive portal, a proxy's error page): it
+        // is not the provider's answer, so it is the network's (`recoverable`), and says nothing of
+        // the body. JSON that is not an object, or lacks a member, is the provider's: `configuration`.
+        guard let parsed = try? JSONSerialization.jsonObject(with: body, options: [.fragmentsAllowed]) else {
+            throw OAuthError.recoverable(.network(detail: "the token endpoint answered with a body that is not JSON (an intermediary's page?)", attempts: 1, elapsedMillis: 0))
+        }
+        guard let object = parsed as? [String: Any] else {
             throw OAuthError.configuration(.tokenResponseMalformed(detail: "the token response is not a JSON object"))
         }
         guard let accessToken = object["access_token"] as? String, !accessToken.isEmpty else {
