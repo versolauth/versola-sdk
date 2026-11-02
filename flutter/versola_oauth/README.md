@@ -1,19 +1,25 @@
-# versola_oauth
+# Versola OAuth SDK for Flutter
 
-OAuth 2.0 and OpenID Connect (OIDC) sign-in for Flutter apps on Android and iOS: authorization code
-flow with PKCE in the system browser, ID-token validation, secure token storage and refresh,
-through the native Versola OAuth SDKs. The Dart API holds no protocol logic: it forwards to the
-Android (Kotlin) and iOS (Swift) SDKs, and only the short-lived access token ever reaches Dart.
+`versola_oauth` is an open-source OAuth 2.0 and OpenID Connect (OIDC) authentication SDK for Flutter
+apps on Android and iOS. It handles browser-based sign-in with PKCE, ID-token validation, secure
+token storage, automatic token refresh and sign-out through the native Versola OAuth SDKs.
 
-Works with any OpenID provider that supports the authorization code flow with PKCE for public
-clients, such as Keycloak and Ory Hydra. Requires Flutter 3.47 and Dart 3.13, Android `minSdk` 26
-and iOS 17.4, with Swift Package Manager integration enabled on iOS.
+The SDK is tested against Keycloak and Ory Hydra and works with other OpenID providers that meet
+its [provider contract](https://github.com/versolauth/versola-sdk/blob/main/spec/providers.md). You do not need to run the Versola
+authentication server. DPoP (RFC 9449) is optional, and pushed authorization requests (PAR, RFC 9126)
+are used when the provider advertises support.
 
-The API is production ready. The major version is still 0, and interfaces change only when a
-change is required; a change to a public symbol is stated in its pull request and raises the minor
+Flutter calls the Kotlin SDK on Android and the Swift SDK on iOS through a native bridge; no OAuth
+protocol logic runs in Dart. Refresh tokens stay on the native side in Android Keystore-wrapped
+storage or the iOS Keychain. Only the short-lived access token is available to Dart when requested.
+
+Requires Flutter 3.47 and Dart 3.13, Android `minSdk` 26 and iOS 17.4, with Swift Package Manager
+integration enabled on iOS. Licensed under Apache-2.0.
+
+The API is pre-1.0. A change to a public symbol is stated in its pull request and raises the minor
 version.
 
-Documentation: <https://docs.versola.io>. Overview, quick starts for all platforms and the
+Documentation: <https://docs.versola.io/sdk/flutter/>. Overview, quick starts for all platforms and the
 frequently asked questions are in the
 [repository README](https://github.com/versolauth/versola-sdk#readme).
 
