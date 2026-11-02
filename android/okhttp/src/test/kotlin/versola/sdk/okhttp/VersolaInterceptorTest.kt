@@ -4,6 +4,7 @@ import versola.oauth.core.AccessToken
 import versola.oauth.core.AccessTokenSource
 import versola.oauth.core.DpopProofSource
 import versola.oauth.core.VersolaError
+import kotlinx.coroutines.runBlocking
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import okhttp3.HttpUrl
@@ -14,10 +15,15 @@ import okhttp3.RequestBody.Companion.toRequestBody
 import okio.BufferedSink
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import versola.sdk.dpop.ClockSkew
+import versola.sdk.dpop.DpopKey
+import versola.sdk.dpop.DpopProofFactory
+import versola.sdk.dpop.KeyAttestation
 
 /** Hands out tokens on demand and counts what was asked, so a refresh can be asserted absent. */
 private class FakeTokenSource(
@@ -42,8 +48,13 @@ private class FakeTokenSource(
         issued++
         unexpectedFailure?.let { throw it }
         onAccessToken?.invoke(issued)
-        return current
+        val value = current
+        afterRead?.invoke()
+        return value
     }
+
+    /** Runs after the cached value was read and before it is handed back: a read that has gone stale on arrival. */
+    var afterRead: (() -> Unit)? = null
 
     override suspend fun renewAccessToken(): AccessToken {
         renewals++
@@ -485,4 +496,129 @@ class VersolaInterceptorTest {
         assertEquals(1, tokens.stepUps)
         assertEquals(0, tokens.renewals)
     }
+
+    // AUDIT: C11 - two calls both refused on token-0: each re-reads the cache (still token-0, nobody has
+    // rotated yet) and each then renews unconditionally, so one expiry spends two rotations. Under bearer
+    // rotation the second is a replay of a refresh token the first already spent.
+    @Test
+    fun `AUDIT C11 two calls refused on the same token rotate it once`() {
+        val seen401 = java.util.concurrent.CountDownLatch(2)
+        server.dispatcher = object : mockwebserver3.Dispatcher() {
+            override fun dispatch(request: mockwebserver3.RecordedRequest): MockResponse =
+                if (request.headers["Authorization"] == "DPoP token-0") status(401) else ok()
+        }
+        val perThreadCalls = ThreadLocal.withInitial { 0 }
+        tokens.afterRead = {
+            perThreadCalls.set(perThreadCalls.get() + 1)
+            // The second read of each caller is the post-401 cache check: hold both there until each
+            // has seen the 401, so neither has rotated when the other looks.
+            if (perThreadCalls.get() == 2) {
+                seen401.countDown()
+                seen401.await(10, java.util.concurrent.TimeUnit.SECONDS)
+            }
+        }
+        val http = client()
+        val callers = List(2) {
+            Thread { http.newCall(get()).execute().use { check(it.code == 200) } }.apply { start() }
+        }
+        callers.forEach { it.join(30_000) }
+
+        assertEquals("both refused calls renewed the same rejected token", 1, tokens.renewals)
+    }
+
+    // --- audit regressions ---
+
+    /** A key whose signature nobody verifies here: these tests read claims and headers, not trust. */
+    private object UnverifiedKey : DpopKey {
+        override suspend fun jkt(): String = "unverified-jkt"
+        override suspend fun publicJwk(): String = """{"kty":"EC","crv":"P-256","x":"AA","y":"AA"}"""
+        override suspend fun attestation(): KeyAttestation = KeyAttestation.Software
+        override suspend fun sign(signingInput: ByteArray): ByteArray = ByteArray(64)
+    }
+
+    private fun iatOf(proof: String): Long {
+        val payload = String(java.util.Base64.getUrlDecoder().decode(proof.split('.')[1]), Charsets.UTF_8)
+        return Regex("\"iat\":(\\d+)").find(payload)!!.groupValues[1].toLong()
+    }
+
+    @Test
+    fun `AUDIT Z5 a Date header from a protected resource server does not move the clock used for the token endpoint's proofs`() = runBlocking {
+        // AUDIT: Z5. The interceptor feeds every response's Date into the one shared proof factory, so a
+        // resource server whose clock is two days off changes the iat of every later proof, the ones for
+        // the authorization server included, which then rejects them.
+        val deviceNow = 1_700_000_000_000L
+        val factory = DpopProofFactory(UnverifiedKey, clockSkew = ClockSkew { deviceNow })
+        // Two days after the device clock (Tue, 14 Nov 2023 22:13:20 GMT).
+        server.enqueue(MockResponse.Builder().code(200).setHeader("Date", "Thu, 16 Nov 2023 22:13:20 GMT").body("served").build())
+
+        client(dpop = factory).newCall(get()).execute().close()
+        val proofToTokenEndpoint = factory.proof("POST", "https://id.example.com/token")
+
+        assertEquals("the token endpoint's proof must still be stamped from the device clock", deviceNow / 1000, iatOf(proofToTokenEndpoint))
+    }
+
+    /**
+     * The client as the facades build it: [authenticated], which switches redirects off. A bare
+     * interceptor on a client that follows them cannot be made safe (OkHttp follows a `Location`
+     * below an application interceptor and re-sends the `DPoP` header, which it does not strip as it
+     * does `Authorization`), so that wiring is not public (`AUDIT Z6`).
+     */
+    private fun redirecting(base: HttpUrl = edge): OkHttpClient = authenticated(
+        OkHttpClient.Builder().followRedirects(true).followSslRedirects(true).build(),
+        VersolaInterceptor(tokens, RequestScope.origins(setOf("${base.scheme}://${base.host}:${base.port}")), proofs),
+    )
+
+    @Test
+    fun `AUDIT Z6 a cross-origin redirect is returned to the app and never followed with a proof`() {
+        val other = MockWebServer().apply { start() }
+        try {
+            other.enqueue(ok())
+            server.enqueue(MockResponse.Builder().code(302).setHeader("Location", other.url("/landing").toString()).build())
+
+            val response = redirecting().newCall(get()).execute().use { it.code }
+
+            assertEquals("proof-1", server.takeRequest().headers["DPoP"])
+            assertEquals("the 302 is the app's to see", 302, response)
+            assertEquals("nothing reached the redirect target, neither Authorization nor DPoP", 0, other.requestCount)
+        } finally {
+            other.close()
+        }
+    }
+
+    @Test
+    fun `AUDIT Z6 a same-origin redirect is returned to the app and the first request's proof is not re-sent`() {
+        server.enqueue(MockResponse.Builder().code(302).setHeader("Location", "/resources/r/moved").build())
+        server.enqueue(ok())
+
+        val response = redirecting().newCall(get()).execute().use { it.code }
+
+        assertEquals(302, response)
+        assertEquals("the redirected request was never made, so no stale proof was re-sent", 1, server.requestCount)
+    }
+
+    @Test
+    fun `AUDIT Z7 an unexpected failure while signing does not put the request's query into the error text`() {
+        // AUDIT: Z7. The interceptor wraps an unexpected exception with e.message, and the DPoP URL checks
+        // interpolate the full URL, so `?token=` reached VersolaHttpException (and from there logs and
+        // crash reporters). The source here throws what DpopProofFactory throws, with the URL in the message;
+        // only the wrapper's own text is asserted, since the cause is the source's to keep clean (see the :dpop test).
+        val secret = "SECRET-QUERY-TOKEN-4f2a"
+        val leaking = object : DpopProofSource {
+            override suspend fun proof(method: String, url: String, accessToken: String?): String =
+                throw IllegalArgumentException("a DPoP request URL must be absolute: $url")
+
+            override fun observe(url: String, dateHeader: String?, nonceHeader: String?) {}
+        }
+
+        val thrown = try {
+            client(dpop = leaking).newCall(get("/resources/r/thing?token=$secret")).execute().close()
+            throw AssertionError("expected the call to fail")
+        } catch (e: VersolaHttpException) {
+            e
+        }
+
+        assertTrue("VersolaHttpException text leaks the query: ${thrown.message}", thrown.message?.contains(secret) != true)
+        assertTrue("error text leaks the query: ${thrown.error.message}", thrown.error.message?.contains(secret) != true)
+    }
+
 }

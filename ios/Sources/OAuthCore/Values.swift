@@ -21,9 +21,10 @@ public struct AccessToken: Sendable, Equatable, CustomStringConvertible {
 /// Bearer by default; DPoP when the resource servers verify it (`spec/oauth-sdk-api.md` section 9).
 public enum TokenBinding: Sendable, Equatable {
     case bearer
-    /// `required`: `providerUnsupported("dpop")` when the provider does not advertise it,
-    /// instead of a warning and a bearer session.
-    case dpop(required: Bool = false)
+    /// `requireHardware`: `providerUnsupported("dpop")` when the provider does not advertise DPoP,
+    /// instead of a warning and a bearer session, and a software-tier key is refused
+    /// (`hardwareBindingUnavailable`) instead of a warning.
+    case dpop(requireHardware: Bool = false)
 }
 
 /// RFC 9126 policy (`spec/oauth-sdk-api.md` section 7).

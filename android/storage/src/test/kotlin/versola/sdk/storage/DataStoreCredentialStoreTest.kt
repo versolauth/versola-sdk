@@ -530,4 +530,17 @@ class DataStoreCredentialStoreTest {
 
         assertEquals("rotated-while-reading", store.useRefreshToken { String(it) })
     }
+
+    // AUDIT: C7 - save() writes with clearPendingRotation=false, so a login's new token sits beside the
+    // previous generation's idempotency key, and the next refresh replays that key with the new token.
+    @Test
+    fun `AUDIT C7 saving a new login clears the rotation slot of the previous grant`() = runTest {
+        store.save("rt1".toByteArray(), idToken)
+        // A refresh of rt1 failed with a network error and left its key behind.
+        store.savePendingRotation("key-of-rt1")
+
+        store.save("rt-new-login".toByteArray(), idToken)
+
+        assertNull("the next refresh would send the key of rt1 with rt-new-login", store.pendingRotation())
+    }
 }

@@ -9,6 +9,15 @@ import Foundation
 public protocol OAuthLogger: Sendable {
     func info(_ message: String)
     func warn(_ message: String)
+    /// Diagnostics: discovery fetched (the host, not the URL), a refresh joined onto one in flight, a
+    /// retry scheduled (attempt, delay, the kind of failure), a cached document served. A line never
+    /// carries a token, code, verifier, `state`, `nonce`, proof, header value, claim value or a URL's
+    /// query (`spec/oauth-sdk-api.md` section 15). Defaults to nothing, so an existing implementer compiles.
+    func debug(_ message: String)
+}
+
+extension OAuthLogger {
+    public func debug(_ message: String) {}
 }
 
 /// One HTTP exchange, as the core sees it: the facade hands in a `URLSession`-backed
@@ -160,9 +169,16 @@ package protocol JwksCache: Sendable {
     /// When the set was saved; nil when unknown, which counts as stale.
     func savedAt() async throws -> Date?
     func lifetime() async throws -> TimeInterval?
+    /// The `jwks_uri` the stored set was fetched from. A set is only the answer for the address it
+    /// came from: after discovery moves `jwks_uri` the old keys must not verify against the new
+    /// issuer's tokens. nil when unknown, which counts as another address.
+    func uri() async throws -> String?
+    func save(_ set: JsonWebKeySet, lifetime: TimeInterval?, uri: String?) async throws
 }
 
 extension JwksCache {
+    package func uri() async throws -> String? { nil }
+    package func save(_ set: JsonWebKeySet, lifetime: TimeInterval?, uri: String?) async throws { try await save(set, lifetime: lifetime) }
     package func save(_ set: JsonWebKeySet, lifetime: TimeInterval?) async throws { try await save(set) }
     package func savedAt() async throws -> Date? { nil }
     package func lifetime() async throws -> TimeInterval? { nil }
@@ -180,7 +196,10 @@ package protocol DpopProofSource: Sendable {
     /// the server's clock, from which the next proof's `iat` is corrected. Called before a
     /// retry is minted, so the single `invalid_dpop_proof` retry carries the corrected time.
     /// `age` is the response's `Age` header: a cached answer's `Date` is not the server's now.
-    func observe(serverDate: String?, age: String?) async
+    /// `origin` is `DpopOrigin.of(_:)` of the server that answered: one offset per origin, so a
+    /// resource server whose own clock is wrong cannot move the `iat` of the proofs the
+    /// authorization server checks (`spec/state-machine.md`, the clock offset).
+    func observe(serverDate: String?, age: String?, origin: String) async
     func nonce(for origin: String) async -> String?
     func clearNonces() async
 }

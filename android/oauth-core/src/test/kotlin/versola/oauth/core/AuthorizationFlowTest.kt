@@ -1531,6 +1531,82 @@ class AuthorizationFlowTest {
 
         assertEquals(SessionState.Authenticated, flow.sessionState.first())
     }
+
+    // ---- AUDIT: regression tests for confirmed audit findings; each fails until the bug is fixed ----
+
+    @Test
+    fun `AUDIT B1 a provider advertising only PS256 gets no dpop_jkt under TokenBinding Dpop`() = runTest {
+        // The SDK signs ES256 only; committing the code to a key whose proofs the provider
+        // will not accept is the fallback rule (spec/providers.md) turned inside out.
+        val store = RecordingStore()
+        val browser = FakeBrowser(redirectFor(store), store)
+
+        flow(store, browser, metadata = metadata.copy(dpopSigningAlgValuesSupported = listOf("PS256"))).authorize(setOf("openid"))
+
+        assertFalse(browser.launchedUri!!, browser.launchedUri!!.contains("dpop_jkt"))
+    }
+
+    // AUDIT B6 (decided 2026-11-02, not fixed): an error redirect with no `state` stays ignored, as
+    // scenario 15 says, since `state` is never optional. Keycloak 26.4 and Hydra v26.2.0 echo `state`
+    // on error redirects and the SDK always sends one (spec/providers.md).
+
+    @Test
+    fun `AUDIT B6 a stateless error redirect naming another issuer is still not the response and is ignored`() = runTest {
+        // The counterpart that must stay true after the fix: the iss still has to match.
+        val store = RecordingStore()
+        val browser = ScriptedBrowser(
+            redirectWith("error=access_denied&iss=https://evil.example"),
+            BrowserOutcome.UserCancelled,
+        )
+
+        val error = failure { flow(store, browser, clock = { 0 }).authorize(setOf("openid")) } as VersolaError.Recoverable
+
+        assertEquals(VersolaError.Recoverable.Cause.UserCancelled, error.reason)
+    }
+
+    @Test
+    fun `AUDIT B12 a pending request created after the current time is expired, not good for longer than ten minutes`() {
+        // The wall clock stepped back after the request was persisted.
+        val request = pendingRequest(createdAt = 3_600_000)
+
+        assertTrue(request.isExpired(nowEpochMillis = 0))
+    }
+
+    @Test
+    fun `AUDIT B12 a cold start whose clock stepped back behind the stored request discards it`() = runTest {
+        val store = RecordingStore(pendingRequest(createdAt = 3_600_000))
+        val flow = flow(store, FakeBrowser({ BrowserOutcome.UserCancelled }, store), now = 0)
+
+        assertSame(SessionState.Unauthenticated, flow.sessionState.first())
+        assertNull(store.stored)
+    }
+
+    @Test
+    fun `AUDIT B12 resuming a request from the future ends as expired without waiting for a redirect`() = runTest {
+        val store = RecordingStore(pendingRequest(createdAt = 3_600_000))
+        val browser = FakeBrowser({ BrowserOutcome.UserCancelled }, store)
+
+        val error = failure { flow(store, browser, now = 0).resumePendingAuthorization() } as VersolaError.Recoverable
+
+        assertEquals(VersolaError.Recoverable.Cause.PendingRequestExpired, error.reason)
+        assertFalse("the redirect was awaited", browser.awaitedPendingRedirect)
+    }
+
+    @Test
+    fun `AUDIT B12 a clock stepped back while the browser is up does not stretch the wait past ten minutes`() = runTest {
+        // remaining = MAX - (now - createdAt) exceeds MAX once now < createdAt; it must be clamped.
+        val store = RecordingStore()
+        val flow = flow(store, StuckBrowser(), clock = ticking(creation = 3_600_000, later = 0))
+
+        val error = failure { flow.authorize(setOf("openid")) } as VersolaError.Recoverable
+
+        assertEquals(VersolaError.Recoverable.Cause.PendingRequestExpired, error.reason)
+        assertTrue(
+            "waited ${testScheduler.currentTime} ms",
+            testScheduler.currentTime <= PendingAuthorizationRequest.MAX_AGE_MILLIS,
+        )
+    }
+
 }
 
 /**

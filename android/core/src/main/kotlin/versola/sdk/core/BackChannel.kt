@@ -19,7 +19,7 @@ import versola.oauth.core.originOf
 import versola.oauth.core.wwwAuthenticateError
 import java.io.File
 import java.io.IOException
-import kotlinx.coroutines.Dispatchers
+import versola.oauth.core.SdkDispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -150,7 +150,7 @@ public interface NativeEndpointsStore {
 /** A plain JSON file, by the same reasoning as [FileProviderMetadataCache]. */
 public class FileNativeEndpointsStore(private val file: File) : NativeEndpointsStore {
 
-    override suspend fun load(): NativeEndpoints? = withContext(Dispatchers.IO) {
+    override suspend fun load(): NativeEndpoints? = withContext(SdkDispatchers.blocking) {
         if (!file.exists()) return@withContext null
         try {
             discoveryJson.decodeFromString(NativeEndpoints.serializer(), file.readText())
@@ -161,7 +161,7 @@ public class FileNativeEndpointsStore(private val file: File) : NativeEndpointsS
     }
 
     override suspend fun save(endpoints: NativeEndpoints) {
-        withContext(Dispatchers.IO) {
+        withContext(SdkDispatchers.blocking) {
             file.parentFile?.mkdirs()
             val temporary = File(file.parentFile, file.name + ".tmp")
             temporary.writeText(discoveryJson.encodeToString(NativeEndpoints.serializer(), endpoints))
@@ -228,7 +228,7 @@ public class HttpNativeAuthorizationStarter(
             .header("DPoP", dpop.proof("POST", url))
             .post(body.toRequestBody(FORM_MEDIA_TYPE))
             .build()
-        return withContext(Dispatchers.IO) {
+        return withContext(SdkDispatchers.blocking) {
             try {
                 httpClient.newCall(request).execute().use { response ->
                     val payload = response.body.string()

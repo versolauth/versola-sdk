@@ -55,8 +55,26 @@ internal object RedirectDispatcher {
     @Volatile
     private var logger: VersolaLogger? = null
 
+    /**
+     * Whether an intent at the redirect activity may be taken for a response at all. True from the
+     * process's start, which is how a redirect that starts the process is accepted before anything
+     * has said what to expect (scenario 12); true while a leg awaits ([expect]); false once one
+     * redirect has been delivered ([deliver]) or the session was cleared ([drain]). Without it a
+     * warm process with no login awaited accepted any intent for the URI, brought the app to the
+     * front for each and buffered up to 64 for the next login (`AUDIT C15`): one expectation
+     * answers once.
+     */
+    @Volatile
+    private var open: Boolean = true
+
+    /** The state of a process that has just started, for a test that follows another's [drain]. */
+    internal fun reopenForColdStart() {
+        open = true
+    }
+
     /** The redirect, and the `state`, the browser leg about to open will deliver; see [accepts]. */
     fun expect(redirectUri: String?, state: String? = null, logger: VersolaLogger? = null) {
+        open = true
         expected = redirectUri
         expectedState = state
         this.logger = logger
@@ -105,7 +123,7 @@ internal object RedirectDispatcher {
      * time like everywhere else; the flow compares again, and is what decides.
      */
     fun accepts(uri: String): Boolean {
-        val accepted = expected.let { it == null || sameRedirect(it, uri) } && answers(uri)
+        val accepted = open && expected.let { it == null || sameRedirect(it, uri) } && answers(uri)
         if (!accepted) noteIgnored()
         return accepted
     }
@@ -139,6 +157,7 @@ internal object RedirectDispatcher {
 
     fun deliver(uri: String) {
         redirectDelivered = true
+        open = false
         outcomes.trySend(Result.success(BrowserOutcome.Redirect(uri)))
     }
 
@@ -164,6 +183,7 @@ internal object RedirectDispatcher {
      */
     fun drain() {
         redirectDelivered = false
+        open = false
         expected = null
         expectedState = null
         logger = null

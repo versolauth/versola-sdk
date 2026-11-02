@@ -1,6 +1,7 @@
 package versola.oauth.core
 
 import java.io.File
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import kotlin.random.Random
 import mockwebserver3.MockResponse
@@ -15,6 +16,8 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import mockwebserver3.Dispatcher
+import mockwebserver3.RecordedRequest
 
 private fun document(
     issuer: String,
@@ -150,12 +153,25 @@ class DiscoveryTest {
     }
 
     @Test
-    fun `a body that is not the metadata document is Configuration`() = runTest {
-        server.enqueue(MockResponse.Builder().code(200).body("<html>not json</html>").build())
+    fun `a JSON body that is not the metadata document is Configuration`() = runTest {
+        server.enqueue(MockResponse.Builder().code(200).body("""{"issuer":["not","a","string"]}""").build())
 
         val error = failure { client.fetch(issuer) } as VersolaError.Configuration
 
         assertTrue(error.detail is VersolaError.Configuration.Detail.DiscoveryMalformed)
+    }
+
+    // Decided 2026-11-02 (AUDIT D1): a page that is not JSON at all is a proxy's or a captive portal's,
+    // the user's network, so it is `Recoverable(Network)` and says nothing of the page.
+    @Test
+    fun `a body that is not JSON is a Recoverable network failure that does not echo it`() = runTest {
+        server.enqueue(MockResponse.Builder().code(200).setHeader("Content-Type", "text/html").body("<html>SECRET-PAGE</html>").build())
+
+        val thrown = failure { client.fetch(issuer) }
+        val error = thrown as? VersolaError.Recoverable ?: throw AssertionError("expected Recoverable, was $thrown")
+
+        val network = error.reason as VersolaError.Recoverable.Cause.Network
+        assertTrue(network.detail, "SECRET-PAGE" !in network.detail)
     }
 
     @Test
@@ -546,5 +562,96 @@ class DiscoveryTest {
         failure { RetryScope(RetryPolicy(), { testScheduler.currentTime }, Random(1)).operation { client.fetch(issuer) } }
 
         assertEquals(1, server.requestCount)
+    }
+
+    // ---- AUDIT: regression tests for confirmed audit findings; each fails until the bug is fixed ----
+
+    @Test
+    fun `AUDIT B1 DPoP is on only when ES256 is advertised, the one algorithm the SDK signs with`() {
+        // spec/providers.md: DPoP only when ES256 is advertised, else bearer with one warning. A
+        // provider that lists only PS256 or EdDSA would be sent an ES256 proof it must refuse.
+        fun supports(vararg algorithms: String) =
+            ProviderMetadata(dpopSigningAlgValuesSupported = algorithms.toList()).supportsDpop
+
+        assertFalse("PS256 only", supports("PS256"))
+        assertFalse("EdDSA only", supports("EdDSA"))
+        assertFalse("PS256 and EdDSA", supports("PS256", "EdDSA"))
+        assertTrue("ES256 among others", supports("ES256", "PS256"))
+        assertTrue("ES256 alone", supports("ES256"))
+        assertFalse("nothing advertised", supports())
+    }
+
+    @Test
+    fun `AUDIT B3 a default OkHttp client given to discovery does not follow a redirect to another host`() = runTest {
+        // Every other client switches redirects off; discovery used the injected client as it came,
+        // so the 300..399 branch was dead code and a Location header chose where the issuer's
+        // metadata was read from. The document served elsewhere is valid, so following succeeds.
+        val elsewhere = MockWebServer()
+        elsewhere.start()
+        try {
+            elsewhere.enqueue(MockResponse.Builder().code(200).body(document(issuer)).build())
+            server.enqueue(
+                MockResponse.Builder()
+                    .code(302)
+                    .addHeader("Location", elsewhere.url("/.well-known/openid-configuration").toString())
+                    .build(),
+            )
+
+            val error = failure { HttpDiscoveryClient(OkHttpClient()).fetch(issuer) }
+
+            assertEquals("the redirect target was contacted", 0, elsewhere.requestCount)
+            assertTrue("not Configuration: $error", error is VersolaError.Configuration)
+            assertTrue(
+                (error as VersolaError.Configuration).detail is VersolaError.Configuration.Detail.InvalidConfiguration,
+            )
+        } finally {
+            elsewhere.close()
+        }
+    }
+
+    @Test
+    fun `AUDIT B16 an issuer with a path falls back to the RFC 8414 well-known URI that puts the suffix before the path`() = runTest {
+        // RFC 8414 section 3.1: for https://host/tenant the document is at
+        // https://host/.well-known/oauth-authorization-server/tenant. Only that one exists here.
+        val tenantIssuer = "$issuer/tenant"
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse =
+                if (request.target == "/.well-known/oauth-authorization-server/tenant") {
+                    MockResponse.Builder().code(200).body(document(tenantIssuer)).build()
+                } else {
+                    MockResponse.Builder().code(404).build()
+                }
+        }
+
+        val metadata = client.fetch(tenantIssuer)
+
+        assertEquals(tenantIssuer, metadata.issuer)
+    }
+
+    // AUDIT: C10 - metadata() fetches under its mutex and every queued waiter repeats the whole fetch, so a
+    // cold cache against an unreachable provider costs N fetches (and N retry budgets above it), not one.
+    @Test
+    fun `AUDIT C10 concurrent metadata calls against an unreachable provider share one failed fetch`() = runTest {
+        var attempts = 0
+        val firstFetchStarted = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val unreachable = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val failing = object : DiscoveryClient {
+            override suspend fun fetch(issuer: String): ProviderMetadata {
+                attempts++
+                firstFetchStarted.complete(Unit)
+                unreachable.await()
+                throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.Network("provider unreachable"))
+            }
+        }
+        val service = DiscoveryService(issuer, failing, cache()) { testScheduler.currentTime }
+
+        val callers = List(5) { this.async { runCatching { service.metadata() } } }
+        firstFetchStarted.await()
+        testScheduler.runCurrent()
+        unreachable.complete(Unit)
+        val outcomes = callers.map { it.await() }
+
+        assertTrue(outcomes.all { it.isFailure })
+        assertTrue("5 concurrent callers made $attempts fetches; they should share one", attempts <= 1)
     }
 }

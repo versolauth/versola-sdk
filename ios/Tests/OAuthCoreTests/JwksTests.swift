@@ -29,7 +29,7 @@ final class JwksTests: XCTestCase {
     func testCacheIsReadBeforeTheNetworkAndNothingIsRequested() async throws {
         let stub = JoseStubHTTP()
         let cache = MemoryJwksCache()
-        try await cache.save(JsonWebKeySet(keys: [rsa]))
+        try await cache.save(JsonWebKeySet(keys: [rsa]), lifetime: nil, uri: uri)
 
         let loaded = try await JwksClient(httpClient: stub, cache: cache).keys(uri: uri, forceRefresh: false)
 
@@ -97,7 +97,7 @@ final class JwksTests: XCTestCase {
     func testDocumentThatIsNotAJwkSetIsDiscoveryMalformedAndDoesNotReplaceCachedKeys() async throws {
         let stub = JoseStubHTTP()
         let cache = MemoryJwksCache()
-        try await cache.save(JsonWebKeySet(keys: [rsa]))
+        try await cache.save(JsonWebKeySet(keys: [rsa]), lifetime: nil, uri: uri)
         let client = JwksClient(httpClient: stub, cache: cache)
         for body in ["not json", #"{"keys":"nope"}"#, "[]", #"{"nokeys":[]}"#] {
             await stub.enqueue("/jwks.json", text: body)
@@ -196,7 +196,7 @@ final class JwksTests: XCTestCase {
         let cache = MemoryJwksCache()
         let empty = try await cache.load()
         XCTAssertNil(empty)
-        try await cache.save(JsonWebKeySet(keys: [rsa]))
+        try await cache.save(JsonWebKeySet(keys: [rsa]), lifetime: nil, uri: uri)
         let loaded = try await cache.load()
         XCTAssertEqual(loaded?.keys, [rsa])
     }
@@ -214,6 +214,8 @@ final class JwksTests: XCTestCase {
             self.life = lifetime
         }
         func load() async throws -> JsonWebKeySet? { stored }
+        /// Names the address this suite's `uri` constant: the set it was seeded with came from there.
+        func uri() async throws -> String? { "https://issuer.example.com/jwks.json" }
         func save(_ set: JsonWebKeySet) async throws { stored = set }
         func save(_ set: JsonWebKeySet, lifetime: TimeInterval?) async throws {
             stored = set
@@ -419,4 +421,29 @@ final class JwksTests: XCTestCase {
 /// Runs `body` as the check of a refresh's ID token does: a key set past its lifetime is allowed.
 private func staleAllowed<T: Sendable>(_ body: @Sendable () async throws -> T) async rethrows -> T {
     try await JwksStaleness.$allowed.withValue(true) { try await body() }
+}
+
+/// `spec/oauth-sdk-api.md` section 4: a key set is the answer for the address it was fetched from.
+final class JwksPerUriTests: XCTestCase {
+    private let first = "https://issuer.example.com/jwks-a.json"
+    private let second = "https://issuer.example.com/jwks-b.json"
+
+    func testASetFetchedFromOneAddressIsNotServedForAnotherInMemoryOrFromTheCache() async throws {
+        let stub = JoseStubHTTP()
+        await stub.enqueue("/jwks-a.json", body: JoseTestTokens.jwks(JoseTestKeys.rsa.jwk(kid: "a")))
+        await stub.enqueue("/jwks-a.json", body: JoseTestTokens.jwks(JoseTestKeys.rsa.jwk(kid: "a")))
+        await stub.enqueue("/jwks-b.json", body: JoseTestTokens.jwks(JoseTestKeys.rsa.jwk(kid: "b")))
+        let cache = MemoryJwksCache()
+        let client = JwksClient(httpClient: stub, cache: cache)
+
+        let a = try await client.keys(uri: first, forceRefresh: false)
+        let b = try await client.keys(uri: second, forceRefresh: false)
+        let cold = try await JwksClient(httpClient: stub, cache: cache).keys(uri: first, forceRefresh: false)
+
+        XCTAssertEqual(a.keys.keys.first?.kid, "a")
+        XCTAssertEqual(b.keys.keys.first?.kid, "b", "the set of the old jwks_uri was served for the new one")
+        XCTAssertTrue(b.fetched)
+        XCTAssertEqual(cold.keys.keys.first?.kid, "a", "the cache holds the last address's set, which is not this one's")
+        XCTAssertTrue(cold.fetched)
+    }
 }

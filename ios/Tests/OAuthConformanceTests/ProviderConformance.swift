@@ -93,8 +93,8 @@ class ProviderConformance: XCTestCase {
             configuration: try configuration ?? self.configuration(),
             browser: browser, credentialStore: credentials, pendingStore: InMemoryPendingAuthorizationStore(),
             metadataCache: MemoryMetadataCache(), jwksCache: MemoryJwksCache(),
-            dpopKey: { requireHardware, logger in
-                SecureEnclaveDpopKey(store: store, requireHardware: requireHardware, logger: logger, secureEnclaveAvailable: false)
+            dpopKey: { requireHardware, logger, isGrantHeld in
+                SecureEnclaveDpopKey(store: store, requireHardware: requireHardware, logger: logger, secureEnclaveAvailable: false, isGrantHeld: isGrantHeld)
             }
         )
     }

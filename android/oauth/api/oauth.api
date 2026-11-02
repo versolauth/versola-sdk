@@ -2,6 +2,7 @@ public final class versola/oauth/LogcatLogger : versola/oauth/core/VersolaLogger
 	public fun <init> ()V
 	public fun <init> (Ljava/lang/String;)V
 	public synthetic fun <init> (Ljava/lang/String;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun debug (Ljava/lang/String;)V
 	public fun info (Ljava/lang/String;)V
 	public fun warn (Ljava/lang/String;)V
 }
@@ -41,6 +42,7 @@ public final class versola/oauth/LogoutOptions$Companion {
 
 public abstract interface class versola/oauth/OAuthApi {
 	public abstract fun accessToken (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
+	public abstract fun currentSessionState (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public abstract fun getClaims ()Lversola/oauth/core/IdTokenClaims;
 	public abstract fun getSessionState ()Lkotlinx/coroutines/flow/Flow;
 	public abstract fun keyAttestation (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
@@ -69,11 +71,10 @@ public final class versola/oauth/OAuthClient : versola/oauth/OAuthApi {
 	public static synthetic fun authenticatedClient$default (Lversola/oauth/OAuthClient;Ljava/util/Set;ILjava/lang/Object;)Lokhttp3/OkHttpClient;
 	public final fun call (Lokhttp3/Request;Ljava/util/Set;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public static synthetic fun call$default (Lversola/oauth/OAuthClient;Lokhttp3/Request;Ljava/util/Set;Lkotlin/coroutines/Continuation;ILjava/lang/Object;)Ljava/lang/Object;
+	public fun currentSessionState (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun getClaims ()Lversola/oauth/core/IdTokenClaims;
 	public final fun getConfiguration ()Lversola/oauth/OAuthConfiguration;
 	public fun getSessionState ()Lkotlinx/coroutines/flow/Flow;
-	public final fun interceptor (Ljava/util/Set;)Lokhttp3/Interceptor;
-	public static synthetic fun interceptor$default (Lversola/oauth/OAuthClient;Ljava/util/Set;ILjava/lang/Object;)Lokhttp3/Interceptor;
 	public fun keyAttestation (Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun login (Lversola/oauth/LoginOptions;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;
 	public fun logout (Lversola/oauth/LogoutOptions;Lkotlin/coroutines/Continuation;)Ljava/lang/Object;

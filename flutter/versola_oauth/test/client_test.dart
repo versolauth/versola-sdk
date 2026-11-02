@@ -1,6 +1,6 @@
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:versola_oauth/src/client.dart';
+import 'package:versola_oauth/src/native_client.dart';
 import 'package:versola_oauth/src/messages.g.dart';
 import 'package:versola_oauth/versola_oauth.dart';
 
@@ -64,7 +64,7 @@ class FakeHost extends OAuthHostApi {
   }
 }
 
-const configuration = OAuthConfiguration(
+final configuration = OAuthConfiguration(
   issuer: 'https://id.example.com',
   clientId: 'app',
   redirectUri: 'https://app.example.com/oauth',
@@ -136,7 +136,7 @@ void main() {
       );
     await expectLater(
       createOAuthClientWithHost(
-        const OAuthConfiguration(
+        OAuthConfiguration(
           issuer: 'https://other.example.com',
           clientId: 'app',
           redirectUri: 'nope',
@@ -161,7 +161,7 @@ void main() {
       final host = FakeHost();
       final client = await created(host);
       host.answers.addAll([VoidOk(), VoidFailure(error: reauth())]);
-      await client.login(const LoginOptions(prompt: Prompt.login));
+      await client.login(LoginOptions(prompt: Prompt.login));
       expect(host.calls.last, 'login:login');
       await expectLater(
         client.login(),

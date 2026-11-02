@@ -1,7 +1,17 @@
 package versola.oauth.core
 
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.longOrNull
 
 /**
  * What the token endpoint issued: RFC 6749 §5.1 plus OpenID Connect's `id_token`.
@@ -53,6 +63,15 @@ public class TokenResponse internal constructor(
                     VersolaError.Configuration.Detail.TokenResponseMalformed("token_type is missing"),
                 )
             }
+            // RFC 6749 §7.1 leaves the type open, and this SDK presents a token as `DPoP` or as
+            // `Bearer` only. A `mac` or a placeholder such as `N_A` taken for `Bearer` would be
+            // sent in a scheme its server never agreed to, and one taken for `DPoP` the other way
+            // round: a response of any other type is not one this session can use.
+            if (!payload.tokenType.equals("Bearer", ignoreCase = true) && !payload.tokenType.equals("DPoP", ignoreCase = true)) {
+                throw VersolaError.Configuration(
+                    VersolaError.Configuration.Detail.TokenResponseMalformed("token_type is neither Bearer nor DPoP"),
+                )
+            }
             return TokenResponse(
                 accessToken = payload.accessToken,
                 tokenType = payload.tokenType,
@@ -78,6 +97,7 @@ public class TokenResponse internal constructor(
 internal class TokenResponsePayload(
     @SerialName("access_token") val accessToken: String = "",
     @SerialName("token_type") val tokenType: String? = null,
+    @Serializable(with = LenientSeconds::class)
     @SerialName("expires_in") val expiresIn: Long = 0,
     @SerialName("refresh_token") val refreshToken: String? = null,
     @SerialName("id_token") val idToken: String? = null,
@@ -91,3 +111,24 @@ public class TokenErrorPayload(
     @SerialName("error") public val error: String = "",
     @SerialName("error_description") public val errorDescription: String? = null,
 )
+
+/**
+ * `expires_in` as providers send it: an integer, a quoted integer or a finite float (`3599.0`, which
+ * RFC 6749 §5.1 does not allow and some servers emit). Anything else is an unknown lifetime, 0, as an
+ * absent one is: the authorization code was spent by the request that carried this answer, and
+ * failing the exchange over an advisory field would cost the user the login (`AUDIT B2`).
+ */
+internal object LenientSeconds : KSerializer<Long> {
+    override val descriptor: SerialDescriptor = PrimitiveSerialDescriptor("LenientSeconds", PrimitiveKind.LONG)
+
+    override fun serialize(encoder: Encoder, value: Long) = encoder.encodeLong(value)
+
+    override fun deserialize(decoder: Decoder): Long {
+        val element = (decoder as? JsonDecoder)?.decodeJsonElement() ?: return decoder.decodeLong()
+        val primitive = element as? JsonPrimitive ?: return 0
+        val whole = primitive.longOrNull
+        if (whole != null) return whole
+        val fractional = primitive.doubleOrNull ?: return 0
+        return if (fractional.isFinite() && fractional >= 0 && fractional < Long.MAX_VALUE) fractional.toLong() else 0
+    }
+}

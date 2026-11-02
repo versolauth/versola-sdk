@@ -57,9 +57,9 @@ class Scenario32ProtectedOriginsTest : ProviderConformance() {
     fun `an empty origin set and a non-https origin are refused with InvalidConfiguration`() = runTest {
         val client = client()
 
-        val empty = failsWith<VersolaError.Configuration> { client.interceptor(emptySet()) }
+        val empty = failsWith<VersolaError.Configuration> { client.authenticatedClient(emptySet()) }
         assertTrue(empty.detail is VersolaError.Configuration.Detail.InvalidConfiguration)
-        val plain = failsWith<VersolaError.Configuration> { client.interceptor(setOf("http://api.example.com")) }
+        val plain = failsWith<VersolaError.Configuration> { client.authenticatedClient(setOf("http://api.example.com")) }
         assertTrue(plain.detail is VersolaError.Configuration.Detail.InvalidConfiguration)
     }
 }

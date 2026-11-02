@@ -19,6 +19,12 @@ public interface OAuthApi {
     /** The state machine of `spec/state-machine.md`, observable. */
     public val sessionState: Flow<SessionState>
 
+    /**
+     * The state now, after the restore a cold start owes; for code that must decide at once between
+     * a login screen and a home screen and has no use for a stream.
+     */
+    public suspend fun currentSessionState(): SessionState
+
     /** The claims of the last validated ID token, or null when there is no session. */
     public val claims: IdTokenClaims?
 

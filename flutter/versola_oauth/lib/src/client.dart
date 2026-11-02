@@ -1,12 +1,10 @@
-import 'dart:async';
-
+import 'package:flutter/foundation.dart'
+    show TargetPlatform, defaultTargetPlatform, kIsWeb;
 import 'package:http/http.dart' as http;
 
 import 'api.dart';
 import 'errors.dart';
-import 'http_client.dart';
-import 'mapping.dart';
-import 'messages.g.dart' as bridge;
+import 'native_client.dart';
 import 'types.dart';
 
 /// The generic facade of `spec/oauth-sdk-api.md` as a Flutter binding: every call forwards
@@ -16,176 +14,85 @@ import 'types.dart';
 /// One native client per configuration per process, as the native facades promise: a second
 /// [create] with the same issuer and client id reaches the same native client, and a different
 /// configuration for the same pair is refused natively with a [ConfigurationError]. Every
-/// method throws an [OAuthError] and nothing else.
-final class OAuthClient implements OAuthApi {
-  OAuthClient._(this.configuration, this._handle, this._host);
-
-  final OAuthConfiguration configuration;
-
-  /// What native named this client; every call and the state channel are addressed by it.
-  final String _handle;
-  final bridge.OAuthHostApi _host;
+/// method throws an [OAuthError] and nothing else (a duration finer than the bridge's units
+/// is an [ArgumentError]: no native call could repair it).
+///
+/// An interface, so an app can fake it in its own tests (`implements OAuthClient`); the
+/// implementation is private to the plugin.
+abstract interface class OAuthClient implements OAuthApi {
+  /// The configuration this client was created with.
+  OAuthConfiguration get configuration;
 
   /// Validates the configuration natively and wires (or finds) the native client. No network
   /// I/O and no key generation happen here.
-  static Future<OAuthClient> create(OAuthConfiguration configuration) =>
-      _create(configuration, bridge.OAuthHostApi());
-
-  static Future<OAuthClient> _create(
-    OAuthConfiguration configuration,
-    bridge.OAuthHostApi api,
-  ) async {
-    final result = await guarded(() => api.create(toMessage(configuration)));
-    switch (result) {
-      case bridge.CreateOk(:final handle):
-        return OAuthClient._(configuration, handle, api);
-      case bridge.CreateFailure(:final error):
-        throw errorFromMessage(error);
+  ///
+  /// Throws [UnsupportedError] off Android and iOS: the plugin is a binding over those two
+  /// native SDKs and has nothing to forward to on the web or on a desktop platform.
+  static Future<OAuthClient> create(OAuthConfiguration configuration) async {
+    if (kIsWeb ||
+        (defaultTargetPlatform != TargetPlatform.android &&
+            defaultTargetPlatform != TargetPlatform.iOS)) {
+      throw UnsupportedError(
+        'versola_oauth supports Android and iOS only '
+        '(running on ${kIsWeb ? 'the web' : defaultTargetPlatform.name})',
+      );
     }
-  }
-
-  late final StreamController<SessionState> _shared = _sharedStates();
-  SessionState? _last;
-  StreamSubscription<SessionState>? _native;
-
-  StreamController<SessionState> _sharedStates() {
-    late final StreamController<SessionState> controller;
-    controller = StreamController<SessionState>.broadcast(
-      // The native collection starts with the first listener and ends with the last, so a
-      // subscription and the native work have the same lifetime.
-      onListen: () {
-        _native = bridge
-            .sessionStates(instanceName: _handle)
-            .map(fromMessage)
-            .listen(
-              (state) {
-                _last = state;
-                controller.add(state);
-              },
-              onError: controller.addError,
-              onDone: () => unawaited(controller.close()),
-            );
-      },
-      onCancel: () async {
-        final native = _native;
-        _native = null;
-        _last = null;
-        await native?.cancel();
-      },
-    );
-    return controller;
+    return NativeOAuthClient.create(configuration);
   }
 
   /// The state machine of `spec/state-machine.md`, any number of listeners, each seeing every
   /// state from the one it subscribes at: the first listener gets the restored state first, a
   /// later one gets the latest state (which it may have missed) and then every change. There is
-  /// one native subscription per client, however many listeners; it ends with the last one.
+  /// one native subscription per native client, however many listeners and however many
+  /// [OAuthClient]s reach it; it ends with the last listener.
   @override
-  Stream<SessionState> sessionStates() => Stream<SessionState>.multi((c) {
-    final last = _last;
-    if (last != null) c.add(last);
-    final sub = _shared.stream.listen(c.add, onError: c.addError);
-    c.onCancel = sub.cancel;
-  }, isBroadcast: true);
+  Stream<SessionState> sessionStates();
 
   /// The current state, restored first. A method, not a getter: it asks native every time.
   @override
-  Future<SessionState> currentSessionState() async {
-    switch (await guarded(() => _host.sessionState(_handle))) {
-      case bridge.SessionStateOk(:final state):
-        return fromMessage(state);
-      case bridge.SessionStateFailure(:final error):
-        throw errorFromMessage(error);
-    }
-  }
+  Future<SessionState> currentSessionState();
 
   /// The claims of the validated ID token of this session, or null when there is no session.
   /// A method, not a getter: it asks native every time, so `client.claims != null` cannot
   /// silently be always true.
   @override
-  Future<IdTokenClaims?> claims() async {
-    switch (await guarded(() => _host.claims(_handle))) {
-      case bridge.ClaimsOk(:final claims):
-        return claims == null ? null : claimsFromMessage(claims);
-      case bridge.ClaimsFailure(:final error):
-        throw errorFromMessage(error);
-    }
-  }
+  Future<IdTokenClaims?> claims();
 
   /// Opens the system browser, validates the redirect, exchanges the code, validates the ID
   /// token and persists the grant, natively; `authenticated` is published after the grant is
-  /// durably stored. While `authorizing` it is refused: observe [sessionStates] first. A
+  /// durably stored. A second `login()` while one is in flight joins it when it asks for the same
+  /// thing (same scopes, prompt, `acr_values`, `max_age`, parameters and `ephemeralBrowser`): both
+  /// futures complete with the one result, one browser opens and one code is exchanged, so a
+  /// double-tapped button is not an error. One that asks for something else is refused with a
+  /// [ConfigurationError] (`invalidConfiguration`): observe [sessionStates] before asking. A
   /// redirect that reaches a cold-started process finishes the pending request on its own and
   /// the result arrives on [sessionStates] (`spec/oauth-sdk-api.md` section 4).
   @override
-  Future<void> login([LoginOptions options = const LoginOptions()]) =>
-      unwrapVoid(_host.login(_handle, loginOptionsToMessage(options)));
+  Future<void> login([LoginOptions? options]);
 
   /// Answers a [StepUpError] by re-authorizing at the authentication context the resource
   /// server asked for; the app then re-issues the refused call.
   @override
-  Future<void> stepUp(
-    StepUpError challenge, [
-    LoginOptions options = const LoginOptions(),
-  ]) => unwrapVoid(
-    _host.stepUp(
-      _handle,
-      challenge.acrValues,
-      challenge.maxAge,
-      loginOptionsToMessage(options),
-    ),
-  );
+  Future<void> stepUp(StepUpError challenge, [LoginOptions? options]);
 
   /// Signs out (`spec/oauth-sdk-api.md` section 12): revokes, ends the provider's session
   /// through the browser, wipes locally; the wipe is unconditional.
   @override
-  Future<LogoutOutcome> logout([
-    LogoutOptions options = const LogoutOptions(),
-  ]) async {
-    final result = await guarded(
-      () => _host.logout(
-        _handle,
-        bridge.LogoutOptionsMessage(
-          endSession: options.endSession,
-          revoke: options.revoke,
-        ),
-      ),
-    );
-    switch (result) {
-      case bridge.LogoutOk(:final outcome):
-        return logoutOutcomeFromMessage(outcome);
-      case bridge.LogoutFailure(:final error):
-        throw errorFromMessage(error);
-    }
-  }
+  Future<LogoutOutcome> logout([LogoutOptions options = const LogoutOptions()]);
 
   /// The access token, refreshed natively first if it is at or within its refresh skew. The
   /// one credential that crosses the bridge (issue #46 decision 7); never cached in Dart, so
   /// single-flight refresh stays native.
   @override
-  Future<AccessToken> accessToken() async {
-    switch (await guarded(() => _host.accessToken(_handle))) {
-      case bridge.AccessTokenOk(:final token):
-        return AccessToken(value: token.value, tokenType: token.tokenType);
-      case bridge.AccessTokenFailure(:final error):
-        throw errorFromMessage(error);
-    }
-  }
+  Future<AccessToken> accessToken();
 
   /// Spends the refresh token now, once, whatever the access token's remaining lifetime.
   @override
-  Future<void> refresh() => unwrapVoid(_host.refresh(_handle));
+  Future<void> refresh();
 
   /// `GET` on the UserInfo endpoint with the session's token; `sub` must equal the ID token's.
   @override
-  Future<UserInfo> userInfo() async {
-    switch (await guarded(() => _host.userInfo(_handle))) {
-      case bridge.UserInfoOk(:final userInfo):
-        return UserInfo(subject: userInfo.subject, claims: userInfo.claims);
-      case bridge.UserInfoFailure(:final error):
-        throw errorFromMessage(error);
-    }
-  }
+  Future<UserInfo> userInfo();
 
   /// A `package:http` [http.Client] that executes each request **natively**, with the session
   /// attached: the same authenticated client Android (`OAuthClient.call`) and iOS
@@ -310,27 +217,12 @@ final class OAuthClient implements OAuthApi {
   /// ```
   ///
   /// Each call returns a new client; close it when done.
-  http.Client httpClient({Set<String>? origins}) =>
-      AuthenticatedHttpClient(_host, _handle, origins);
+  http.Client httpClient({Set<String>? origins});
 
   /// Which key tier the DPoP key reached (`secureEnclave`, `strongBox`, `trustedEnvironment`,
   /// `software`), or null under bearer. Asking this generates the key natively, so under
   /// `TokenBinding.dpopRequireHardware` on a device that cannot honour it this throws a
   /// [ConfigurationError] (`hardwareBindingUnavailable`).
   @override
-  Future<String?> keyAttestation() async {
-    switch (await guarded(() => _host.keyAttestation(_handle))) {
-      case bridge.KeyAttestationOk(:final tier):
-        return tier;
-      case bridge.KeyAttestationFailure(:final error):
-        throw errorFromMessage(error);
-    }
-  }
+  Future<String?> keyAttestation();
 }
-
-/// Wiring for the tests: [OAuthClient.create] with the native host replaced. Lives under `src/`,
-/// which the package does not export, so the bridge type stays out of the public API.
-Future<OAuthClient> createOAuthClientWithHost(
-  OAuthConfiguration configuration,
-  bridge.OAuthHostApi host,
-) => OAuthClient._create(configuration, host);

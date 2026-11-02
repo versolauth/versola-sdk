@@ -165,6 +165,7 @@ class ErrorMessage {
     this.field,
     this.capability,
     this.idTokenRejection,
+    this.sdkCode,
   });
   ErrorCategoryMessage category;
   String kind;
@@ -188,6 +189,10 @@ class ErrorMessage {
   String? field;
   String? capability;
   String? idTokenRejection;
+
+  /// The native error's stable `code` (`spec/errors.md`, "Stable codes"), e.g.
+  /// `configuration.state_mismatch`. Not [code], which is the provider's OAuth error code.
+  String? sdkCode;
 }
 
 class AccessTokenMessage {

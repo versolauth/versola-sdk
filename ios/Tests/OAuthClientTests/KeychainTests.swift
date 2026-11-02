@@ -16,6 +16,18 @@ final class KeychainTests: XCTestCase {
 
     // MARK: in-memory stores (the logic the conformance driver and unit tests lean on)
 
+    /// AUDIT C7/W6: saving a login clears the previous grant's rotation slot (the Keychain's own is the opt-in device test).
+    func testInMemoryCredentialStoreClearsTheRotationSlotWhenALoginReplacesTheGrant() async throws {
+        let store = InMemoryCredentialStore()
+        try await store.save(refreshToken: "rt-old", rawIdToken: nil)
+        try await store.savePendingRotation("key-of-rt-old")
+
+        try await store.save(refreshToken: "rt-new", rawIdToken: nil)
+
+        let slot = try await store.pendingRotation()
+        XCTAssertNil(slot)
+    }
+
     func testInMemoryCredentialStoreSavesReadsAndClears() async throws {
         let store = InMemoryCredentialStore()
         let initial = try await store.hasGrant()

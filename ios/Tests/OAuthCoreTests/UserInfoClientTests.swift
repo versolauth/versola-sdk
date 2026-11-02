@@ -34,7 +34,8 @@ final class UserInfoClientTests: XCTestCase {
         let uri = jwksUri
         return HTTPUserInfoClient(
             userinfoEndpoint: { noEndpoint ? nil : resolved }, httpClient: stub, dpop: dpop,
-            verifier: JwsVerifier(jwksUri: { uri }, allowedAlgorithms: { [] }, jwks: JwksClient(httpClient: stub))
+            verifier: JwsVerifier(jwksUri: { uri }, allowedAlgorithms: { [] }, jwks: JwksClient(httpClient: stub)),
+            issuer: "https://issuer.example.com", clientId: "client-123"
         )
     }
 

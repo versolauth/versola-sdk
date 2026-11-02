@@ -30,6 +30,7 @@ import versola.oauth.core.BrowserOutcome
 import versola.oauth.core.IdTokenRejection
 import versola.oauth.core.PushedAuthorization
 import versola.oauth.core.SessionState
+import versola.oauth.core.TokenBinding
 import versola.oauth.core.VersolaError
 import versola.oauth.core.VersolaLogger
 
@@ -95,8 +96,13 @@ class OAuthClientTest {
         browser = FakeBrowser(provider.issuer)
     }
 
+    private val realKeystore: java.security.Provider? = java.security.Security.getProvider("AndroidKeyStore")
+
     @After
     fun stop() {
+        java.security.Security.removeProvider("AndroidKeyStore")
+        realKeystore?.let { java.security.Security.insertProviderAt(it, 1) }
+        OAuthClient.forgetAll()
         OAuthClient.resumeScope = defaultResumeScope
         server.close()
     }
@@ -121,6 +127,7 @@ class OAuthClientTest {
         protectedOrigins: Set<String> = emptySet(),
         scopes: Set<String> = setOf("openid"),
         pushedAuthorization: PushedAuthorization = PushedAuthorization.Never,
+        tokenBinding: TokenBinding = TokenBinding.Bearer,
     ) = OAuthConfiguration(
         issuer = if (endpoints == null) provider.issuer else null,
         endpoints = endpoints,
@@ -130,6 +137,7 @@ class OAuthClientTest {
         scopes = scopes,
         protectedOrigins = protectedOrigins,
         pushedAuthorization = pushedAuthorization,
+        tokenBinding = tokenBinding,
         logger = logger,
     ).also { this.clientId = clientId }
 
@@ -237,7 +245,7 @@ class OAuthClientTest {
     }
 
     @Test
-    fun `login while an authorization is outstanding is refused, not queued`() = runTest {
+    fun `a login for something else while an authorization is outstanding is refused, not queued`() = runTest {
         browser.hold = kotlinx.coroutines.CompletableDeferred()
         val client = client()
         val first = async(start = CoroutineStart.UNDISPATCHED) { client.login() }
@@ -245,7 +253,8 @@ class OAuthClientTest {
         browser.opened.await()
         assertEquals(SessionState.Authorizing, client.sessionState.first())
 
-        val error = runCatching { client.login() }.exceptionOrNull() as VersolaError.Configuration
+        // The same call joins the one in flight (`AUDIT D1`); a call for something else is refused.
+        val error = runCatching { client.login(LoginOptions(scopes = setOf("email"))) }.exceptionOrNull() as VersolaError.Configuration
 
         assertTrue(error.detail is VersolaError.Configuration.Detail.InvalidConfiguration)
         assertEquals(1, browser.launched.size)
@@ -396,10 +405,16 @@ class OAuthClientTest {
     private suspend fun kotlinx.coroutines.test.TestScope.killedMidBrowser(): KilledLogin {
         val configuration = configuration()
         browser.hold = CompletableDeferred()
+        // A caller that is cancelled leaves its request to be finished in the background of the live
+        // process (`AUDIT C8`); a process that is *killed* leaves nothing running, so what the live one
+        // started is cancelled with it.
+        val deadProcess = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob())
+        OAuthClient.resumeScope = deadProcess
         val login = async(start = CoroutineStart.UNDISPATCHED) { runCatching { client(configuration).login() } }
         browser.opened.await()
         val query = browser.launched.single().substringAfter('?').split('&').associate { it.substringBefore('=') to it.substringAfter('=') }
         login.cancelAndJoin()
+        deadProcess.coroutineContext[kotlinx.coroutines.Job]!!.cancelAndJoin()
         OAuthClient.forgetAll()
         return KilledLogin(configuration, query.getValue("state"), query.getValue("nonce"))
     }
@@ -542,4 +557,148 @@ class OAuthClientTest {
         OAuthClient.forgetAll()
         assertEquals(SessionState.Unauthenticated, client(killed.configuration).sessionState.first())
     }
+
+    // AUDIT: C4 - the coordinator's default elapsedMillis is System.nanoTime(), which stops in deep sleep;
+    // OAuthClient wires only retryClock to elapsedRealtime. The cache must age with the device's real time.
+    @Test
+    fun `AUDIT C4 a cached access token ages with elapsedRealtime, so it is refreshed after the device slept past its lifetime`() = runTest {
+        val client = client()
+        client.login()
+        assertEquals(1, requests.count { it.url.encodedPath == "/token" })
+        assertEquals("at", client.accessToken().value)
+        assertEquals("a fresh token is served from memory", 1, requests.count { it.url.encodedPath == "/token" })
+
+        // Two hours of deep sleep: elapsedRealtime moves, a monotonic uptime clock does not.
+        val nanoBefore = System.nanoTime()
+        org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofHours(2))
+        val nanoMovedMillis = (System.nanoTime() - nanoBefore) / 1_000_000
+        assertTrue("precondition: System.nanoTime must not follow the shadowed clock (moved ${nanoMovedMillis}ms)", nanoMovedMillis < 60_000)
+        tokenBody = { tokenResponse(refreshToken = true, nonce = null).replace("\"at\"", "\"at-2\"") }
+        client.accessToken()
+
+        assertEquals("the 1 h token was served after 2 h of device time", 2, requests.count { it.url.encodedPath == "/token" })
+    }
+
+    // AUDIT: C5 - the default client has connect and read timeouts only: no overall deadline on a call.
+    @Test
+    fun `AUDIT C5 the default HTTP client has an overall call timeout`() {
+        val timeout = configuration().httpClient.callTimeoutMillis
+
+        assertTrue("callTimeoutMillis is $timeout; a slow-drip response can hold a call forever", timeout in 1..60_000)
+    }
+
+    // AUDIT: C8 - a login whose caller was cancelled leaves its slot 'for resume', but only a cold-start
+    // restore ever triggers the resume. The redirect that arrives afterwards must not be silently discarded.
+    @Test
+    fun `AUDIT C8 the redirect of a login whose caller was cancelled is consumed, not discarded`() = runTest {
+        OAuthClient.resumeScope = backgroundScope
+        val redirectArrives = CompletableDeferred<BrowserOutcome>()
+        val opened = CompletableDeferred<String>()
+        val live = FakeBrowser(provider.issuer)
+        val awaitingBrowser = object : BrowserAuthorizationSession by live {
+            override suspend fun authorize(uri: String, options: versola.oauth.core.BrowserSessionOptions): BrowserOutcome = authorize(uri)
+            override suspend fun authorize(uri: String): BrowserOutcome {
+                opened.complete(uri)
+                kotlinx.coroutines.awaitCancellation()
+            }
+            // What the redirect activity buffered while no login awaited it.
+            override suspend fun awaitPendingRedirect(): BrowserOutcome = redirectArrives.await()
+        }
+        val configuration = configuration()
+        val client = OAuthClient.create(application, configuration, browser = awaitingBrowser, keyProvider = ReversingKeyProvider)
+        val login = async(start = CoroutineStart.UNDISPATCHED) { runCatching { client.login() } }
+        val query = opened.await().substringAfter('?').split('&').associate { it.substringBefore('=') to it.substringAfter('=') }
+        login.cancelAndJoin()
+        tokenBody = { tokenResponse(refreshToken = true, nonce = query.getValue("nonce")) }
+
+        // The user finished signing in in the tab the cancelled login opened.
+        redirectArrives.complete(
+            BrowserOutcome.Redirect(
+                "$REDIRECT_URI?code=the-code&state=${query.getValue("state")}&iss=${java.net.URLEncoder.encode(provider.issuer, "UTF-8")}",
+            ),
+        )
+        val state = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Default) {
+            kotlinx.coroutines.withTimeoutOrNull(5_000) { client.sessionState.first { it != SessionState.Authorizing } }
+        }
+
+        assertEquals("nothing consumed the redirect: the client is still Authorizing", SessionState.Authenticated, state)
+    }
+
+    // --- audit regressions (Z-series): each asserts the correct behaviour and fails on today's code ---
+
+    private fun installKeystore(): SharedNamespaceAndroidKeyStore = SharedNamespaceAndroidKeyStore().also {
+        java.security.Security.removeProvider("AndroidKeyStore")
+        java.security.Security.insertProviderAt(it, 1)
+    }
+
+    /** A provider that advertises ES256 DPoP proofs: without it the SDK sends no proof at all. */
+    private fun advertiseDpop() {
+        discoveryBody = { provider.discovery().replace("\"code_challenge_methods_supported\"", "\"dpop_signing_alg_values_supported\":[\"ES256\"],\"code_challenge_methods_supported\"") }
+        tokenBody = { dpopTokenBody() }
+    }
+
+    private fun dpopTokenBody() = tokenResponse(refreshToken = true).replace("\"token_type\":\"Bearer\"", "\"token_type\":\"DPoP\"")
+
+    private val refreshedBody = """{"access_token":"at2","token_type":"DPoP","expires_in":3600,"refresh_token":"rt2"}"""
+
+    private fun jwkOf(proof: String): String =
+        String(java.util.Base64.getUrlDecoder().decode(proof.substringBefore('.'))).substringAfter("\"jwk\":").substringBefore('}')
+
+    @Test
+    fun `AUDIT Z1 the storage key and the DPoP key are never generated under one Keystore alias`() = runTest {
+        // AUDIT: Z1 (HIGH). build() gives HardwareKeyProvider and KeystoreDpopKey the same alias
+        // "versola-oauth-<storageKey>"; the AndroidKeyStore alias namespace is shared by every key
+        // type and a generate under an existing alias replaces the entry, so each key destroys the other.
+        val keystore = installKeystore()
+        advertiseDpop()
+        val client = OAuthClient.create(application, configuration(tokenBinding = TokenBinding.Dpop()), browser = browser)
+
+        client.login()
+
+        assertEquals("an alias was reused by the other key type: ${keystore.overwrites}", emptyList<String>(), keystore.overwrites)
+        assertEquals("one AES storage key and one EC DPoP key, under two aliases", 2, keystore.generated.size)
+    }
+
+    @Test
+    fun `AUDIT Z1 a DPoP session survives a process restart with its refresh token readable and its jkt unchanged`() = runTest {
+        val keystore = installKeystore()
+        advertiseDpop()
+        val configuration = configuration(tokenBinding = TokenBinding.Dpop())
+        OAuthClient.create(application, configuration, browser = browser).login()
+        val jwkAtLogin = jwkOf(requests.last { it.url.encodedPath == "/token" }.headers["DPoP"]!!)
+        tokenBody = { refreshedBody }
+
+        // Process restart: new client objects, same files, same Keystore.
+        OAuthClient.forgetAll()
+        val restarted = OAuthClient.create(application, configuration, browser = browser)
+        val outcome = runCatching { restarted.refresh() }
+
+        assertTrue("the stored refresh token must still decrypt after a restart, got ${outcome.exceptionOrNull()} (overwrites: ${keystore.overwrites})", outcome.isSuccess)
+        val refresh = requests.last { it.url.encodedPath == "/token" }
+        assertTrue(refresh.body!!.utf8().contains("refresh_token=rt"))
+        assertEquals("the proof key must be the one the grant was bound to", jwkAtLogin, jwkOf(refresh.headers["DPoP"]!!))
+        assertEquals(SessionState.Authenticated, restarted.sessionState.first())
+    }
+
+    @Test
+    fun `AUDIT Z11 a DPoP key that vanished from the Keystore is a typed re-authentication, not a new key under the same grant`() = runTest {
+        // AUDIT: Z11 (PLAUSIBLE / design). The grant does not carry its jkt, so KeystoreDpopKey
+        // regenerates silently when the entry is gone and key loss shows only as a server rejection.
+        // The storage key is substituted here so the Z1 alias collision cannot be what ends the session.
+        val keystore = installKeystore()
+        advertiseDpop()
+        val configuration = configuration(tokenBinding = TokenBinding.Dpop())
+        client(configuration).login()
+        val tokenRequestsAtLogin = requests.count { it.url.encodedPath == "/token" }
+        keystore.generated.clear()
+        tokenBody = { refreshedBody }
+
+        OAuthClient.forgetAll()
+        val restarted = client(configuration)
+        val error = runCatching { restarted.refresh() }.exceptionOrNull()
+
+        assertTrue("expected a typed Reauthenticate, got $error", error is VersolaError.Reauthenticate)
+        assertEquals("no token request may be signed by a freshly minted key", tokenRequestsAtLogin, requests.count { it.url.encodedPath == "/token" })
+    }
+
 }

@@ -54,10 +54,20 @@ public class PendingAuthorizationRequest public constructor(
 
     /**
      * A pending request older than [MAX_AGE_MILLIS] is discarded on restore, leaving
-     * `Unauthenticated` — authorization codes do not outlive that anyway.
+     * `Unauthenticated` — authorization codes do not outlive that anyway. A request that claims to
+     * have been created after [nowEpochMillis] by more than [FUTURE_TOLERANCE_MILLIS] is expired too:
+     * the wall clock was stepped back since, and "age" computed from it would hold the request, and
+     * the wait on its redirect, for as long as the step was long (`AUDIT B12`). A few seconds of NTP
+     * correction is not that.
      */
-    public fun isExpired(nowEpochMillis: Long): Boolean =
-        nowEpochMillis - createdAtEpochMillis >= MAX_AGE_MILLIS
+    public fun isExpired(nowEpochMillis: Long): Boolean {
+        val age = nowEpochMillis - createdAtEpochMillis
+        return age >= MAX_AGE_MILLIS || age < -FUTURE_TOLERANCE_MILLIS
+    }
+
+    /** What is left of the request's life at [nowEpochMillis]: at most [MAX_AGE_MILLIS], at least zero. */
+    internal fun remainingMillis(nowEpochMillis: Long): Long =
+        (MAX_AGE_MILLIS - (nowEpochMillis - createdAtEpochMillis)).coerceIn(0, MAX_AGE_MILLIS)
 
     /**
      * Neither `state` nor `nonce` nor the verifier: the `state` is what a redirect is matched
@@ -69,6 +79,9 @@ public class PendingAuthorizationRequest public constructor(
     public companion object {
         /** Ten minutes, per `spec/state-machine.md`. */
         public const val MAX_AGE_MILLIS: Long = 10 * 60 * 1000
+
+        /** How far ahead of the current time a request's creation may lie before the clock is taken to have moved back. */
+        internal const val FUTURE_TOLERANCE_MILLIS: Long = 60 * 1000
     }
 }
 
@@ -77,6 +90,7 @@ public class PendingAuthorizationRequest public constructor(
  * that a store implementation — on any platform, against any key provider — handles opaque
  * bytes only and cannot disagree with another store about the encoding.
  */
+@VersolaInternalApi
 public object PendingAuthorizationCodec {
 
     public fun encode(request: PendingAuthorizationRequest): ByteArray =

@@ -17,6 +17,14 @@ public sealed class VersolaError(
 ) : Exception(message, cause) {
 
     /**
+     * A stable machine-readable identifier of the case, for logs, analytics and branching that must
+     * not depend on the class name or [toString] (`spec/errors.md`, "Stable codes"). It names the
+     * case, never its payload, so two errors of one case share it. The set is closed and the same on
+     * every platform; a new case adds a code and nothing renames one.
+     */
+    public abstract val code: String
+
+    /**
      * The SDK already retried within its budget and the operation still failed. Show a
      * transient failure and offer a retry; do not sign the user out.
      *
@@ -27,6 +35,16 @@ public sealed class VersolaError(
         public val reason: Cause,
         cause: Throwable? = null,
     ) : VersolaError("recoverable: $reason", cause) {
+
+        override val code: String = "recoverable." + when (reason) {
+            Cause.UserCancelled -> "user_cancelled"
+            Cause.SystemCancelled -> "system_cancelled"
+            Cause.PendingRequestExpired -> "pending_request_expired"
+            is Cause.Network -> "network"
+            is Cause.Server -> "server"
+            Cause.UnlockRequired -> "unlock_required"
+            is Cause.NonceLoop -> "nonce_loop"
+        }
 
         public sealed interface Cause {
             /** The user dismissed the browser. The pending request is wiped; never retried automatically. */
@@ -108,6 +126,15 @@ public sealed class VersolaError(
         public val reason: Reason,
     ) : VersolaError("reauthenticate: $reason") {
 
+        override val code: String = "reauthenticate." + when (reason) {
+            Reason.AuthorizationDenied -> "authorization_denied"
+            is Reason.InteractionRequired -> "interaction_required"
+            Reason.CredentialsInvalidated -> "credentials_invalidated"
+            Reason.GrantRejected -> "grant_rejected"
+            Reason.SessionRejected -> "session_rejected"
+            Reason.SessionExpired -> "session_expired"
+        }
+
         public sealed interface Reason {
             /** `access_denied`: the user declined, or the resource owner could not be resolved. */
             public data object AuthorizationDenied : Reason
@@ -169,7 +196,9 @@ public sealed class VersolaError(
     public class StepUp(
         public val acrValues: List<String>,
         public val maxAge: Long?,
-    ) : VersolaError("step-up required: acr_values=$acrValues max_age=$maxAge")
+    ) : VersolaError("step-up required: acr_values=$acrValues max_age=$maxAge") {
+    override val code: String get() = "step_up"
+}
 
     /**
      * Developer error. Fail loudly in debug builds; catching it in production hides a
@@ -179,6 +208,25 @@ public sealed class VersolaError(
         public val detail: Detail,
         cause: Throwable? = null,
     ) : VersolaError("configuration: $detail", cause) {
+
+        override val code: String = "configuration." + when (detail) {
+            Detail.StateMismatch -> "state_mismatch"
+            is Detail.IssuerMismatch -> "issuer_mismatch"
+            Detail.MalformedAuthorizationResponse -> "malformed_authorization_response"
+            is Detail.AuthorizationRejected -> "authorization_rejected"
+            is Detail.TokenRequestRejected -> "token_request_rejected"
+            is Detail.TokenResponseMalformed -> "token_response_malformed"
+            is Detail.DiscoveryFieldMissing -> "discovery_field_missing"
+            is Detail.DiscoveryIssuerMismatch -> "discovery_issuer_mismatch"
+            is Detail.DiscoveryMalformed -> "discovery_malformed"
+            is Detail.InvalidConfiguration -> "invalid_configuration"
+            Detail.NoBrowserAvailable -> "no_browser_available"
+            is Detail.IdTokenRejected -> "id_token_rejected"
+            is Detail.UserInfoRejected -> "user_info_rejected"
+            is Detail.ProviderUnsupported -> "provider_unsupported"
+            is Detail.HardwareBindingUnavailable -> "hardware_binding_unavailable"
+            is Detail.Extension -> detail.name
+        }
 
         public sealed interface Detail {
             /**
@@ -250,7 +298,7 @@ public sealed class VersolaError(
             /** The discovery document was not parseable as the metadata document it claims to be. */
             public data class DiscoveryMalformed(public val detail: String) : Detail
 
-            /** `configure()` was given an issuer, client id or redirect URI it cannot use. */
+            /** `configure()` or `create()` was given an issuer, client id or redirect URI it cannot use. */
             public data class InvalidConfiguration(public val detail: String) : Detail
 
             /** No browser on the device can handle the authorization request. */
@@ -285,7 +333,13 @@ public sealed class VersolaError(
              * errors). This module produces none; an exhaustive `when` handles the class as
              * one branch, and the facade documents its subclasses.
              */
-            public abstract class Extension : Detail
+            public abstract class Extension : Detail {
+                /**
+                 * The snake_case name of the case; the error's `code` is `configuration.` plus this
+                 * (`spec/errors.md`, "Stable codes").
+                 */
+                public abstract val name: String
+            }
 
             /**
              * `TokenBinding.Dpop(requireHardware = true)` cannot be honoured here: either the
@@ -315,7 +369,7 @@ public enum class IdTokenRejection {
     /** `exp` is in the past beyond the clock-skew tolerance. */
     Expired,
 
-    /** `iat` is missing or too far from now. */
+    /** `iat` is missing or too far from now, or `nbf` is still in the future beyond the tolerance. */
     IssuedAt,
 
     /** `nonce` is missing or not the one the request carried. */

@@ -6,6 +6,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
@@ -71,26 +72,76 @@ public val discoveryJson: Json = Json {
 internal fun wellKnownUrl(issuer: String): String =
     issuer.trimEnd('/') + "/.well-known/openid-configuration"
 
+/**
+ * RFC 8414 section 3.1 for an issuer that has a path: the suffix goes between the host and the path
+ * (`https://host/tenant` is served at `https://host/.well-known/oauth-authorization-server/tenant`),
+ * where OpenID Connect Discovery appends it. Null for an issuer without a path, where the two forms
+ * are the same place.
+ */
+internal fun rfc8414WellKnownUrl(issuer: String): String? {
+    val parsed = issuer.toHttpUrlOrNull() ?: return null
+    val path = parsed.encodedPath.trimEnd('/')
+    if (path.isEmpty()) return null
+    return parsed.newBuilder().encodedPath("/.well-known/oauth-authorization-server$path").build().toString()
+}
+
+@VersolaInternalApi
 public class HttpDiscoveryClient(
-    private val httpClient: OkHttpClient,
+    httpClient: OkHttpClient,
 ) : LifetimeAwareDiscoveryClient {
+
+    /**
+     * Redirects are never followed, whatever the injected client's policy: a `Location` would
+     * otherwise choose where the issuer's metadata is read from, and the 300..399 branch below,
+     * as at the key set and the token endpoint, would be dead code (`AUDIT B3`).
+     */
+    private val httpClient: OkHttpClient = httpClient.newBuilder()
+        .followRedirects(false)
+        .followSslRedirects(false)
+        .build()
 
     override suspend fun fetch(issuer: String): ProviderMetadata = fetchWithLifetime(issuer).first
 
     override suspend fun fetchWithLifetime(issuer: String): Pair<ProviderMetadata, Long> {
-        val url = wellKnownUrl(issuer)
-        val fetched = retrying(originOf(url)) { withContext(SdkDispatchers.blocking) {
+        val primary = wellKnownUrl(issuer)
+        val alternative = rfc8414WellKnownUrl(issuer)
+        // An issuer with a path may publish its document at either well-known form; the OpenID one
+        // is asked first and a 404 there, and only a 404, falls through to RFC 8414's.
+        val fetched = fetchDocument(primary, absentIsNull = alternative != null)
+            ?: fetchDocument(checkNotNull(alternative), absentIsNull = false)
+            ?: throw IllegalStateException("unreachable")
+
+        val (body, lifetime) = fetched
+        // Checked after the fetch, outside the retry budget: the same page would be met again, and
+        // iOS surfaces it once (`spec/errors.md`, "A body that is not JSON").
+        if (!isJson(body)) throw notJsonFailure(200, null, "discovery")
+        val metadata = try {
+            discoveryJson.decodeFromString(ProviderMetadata.serializer(), body)
+        } catch (e: Exception) {
+            throw VersolaError.Configuration(
+                VersolaError.Configuration.Detail.DiscoveryMalformed(describeParseFailure(e)),
+            )
+        }
+        metadata.validate(issuer)
+        return metadata to lifetime
+    }
+
+    private suspend fun fetchDocument(url: String, absentIsNull: Boolean): Pair<String, Long>? {
+        return retrying(originOf(url)) { withContext(SdkDispatchers.blocking) {
             val request = Request.Builder().url(url).header("Accept", "application/json").build()
             try {
                 httpClient.newCall(request).execute().use { response ->
                     val payload = response.body.string()
                     when {
+                        // A 2xx that is not JSON at all is a proxy's or a captive portal's page, not the
+                        // provider's: the user's network, which a later attempt may not meet (`AUDIT D1`).
                         response.isSuccessful -> payload to CacheLifetime.of(response.headers, System.currentTimeMillis())
                         // 408, 429 and 5xx are the provider having a bad moment: transport-shaped,
                         // repeated under the operation's budget (`spec/retry-policy.md`).
                         ServerFault.isServerFault(response.code) -> throw ServerFault.failure(response.code, response.headers)
                         // A 4xx means this issuer does not serve a discovery document at all,
                         // which no retry fixes — an integrator typo or the wrong environment.
+                        response.code == 404 && absentIsNull -> null
                         response.code in 400..499 -> throw VersolaError.Configuration(
                             VersolaError.Configuration.Detail.InvalidConfiguration(
                                 "no discovery document at $url (HTTP ${response.code})",
@@ -115,18 +166,6 @@ public class HttpDiscoveryClient(
                 )
             }
         } }
-
-        val (body, lifetime) = fetched
-        val metadata = try {
-            discoveryJson.decodeFromString(ProviderMetadata.serializer(), body)
-        } catch (e: Exception) {
-            throw VersolaError.Configuration(
-                VersolaError.Configuration.Detail.DiscoveryMalformed(e.message ?: e::class.java.simpleName),
-                e,
-            )
-        }
-        metadata.validate(issuer)
-        return metadata to lifetime
     }
 }
 
@@ -142,6 +181,7 @@ internal class ExpiringMetadata(val expiresAt: Long, val metadata: ProviderMetad
  * existed holds the bare document: it still loads, with an expiry of zero, so it is used as the
  * fallback if the provider is unreachable and is otherwise fetched again, once.
  */
+@VersolaInternalApi
 public class FileProviderMetadataCache(
     private val file: File,
     private val clock: () -> Long = System::currentTimeMillis,
@@ -214,6 +254,7 @@ public class FileProviderMetadataCache(
  * unable even to finish a `logout()`, whose browser leg needs the document. Only an outage is
  * forgiven: a document that is served but wrong is still a `Configuration` failure.
  */
+@VersolaInternalApi
 public class DiscoveryService internal constructor(
     private val issuer: String,
     private val client: DiscoveryClient,
@@ -226,16 +267,45 @@ public class DiscoveryService internal constructor(
         cache: ProviderMetadataCache,
     ) : this(issuer, client, cache, System::currentTimeMillis)
 
+    /** Where `debug` lines go; set by the facade that owns this service. */
+    @VersolaInternalApi
+    public var logger: VersolaLogger? = null
+
     private val mutex = Mutex()
     private var inMemory: ProviderMetadata? = null
     private var inMemoryExpiresAt = 0L
 
-    public suspend fun metadata(forceRefresh: Boolean = false): ProviderMetadata = mutex.withLock {
+    /** Counts fetches that failed, so a caller that queued behind one can tell it was its answer too. */
+    private var failures = 0L
+    private var lastFailure: VersolaError? = null
+
+    /**
+     * Callers that arrive while a fetch is running queue on the lock, and a cold cache against an
+     * unreachable provider would cost each of them a whole fetch of its own, retry budget included
+     * (`AUDIT C10`). One that queued behind a fetch that then failed takes that failure as its own
+     * answer instead; the next caller after it starts a fetch of its own, so nothing is remembered.
+     */
+    public suspend fun metadata(forceRefresh: Boolean = false): ProviderMetadata {
+        val seen = failures
+        return mutex.withLock {
+            val shared = lastFailure
+            if (failures != seen && shared != null) throw shared
+            try {
+                metadataUnderLock(forceRefresh)
+            } catch (e: VersolaError) {
+                failures++
+                lastFailure = e
+                throw e
+            }
+        }
+    }
+
+    private suspend fun metadataUnderLock(forceRefresh: Boolean): ProviderMetadata {
         // What was held but has aged out: the fallback if the provider cannot be asked.
         var stale: ProviderMetadata? = null
         if (!forceRefresh) {
             inMemory?.let {
-                if (CacheLifetime.isFresh(inMemoryExpiresAt, clock())) return@withLock it
+                if (CacheLifetime.isFresh(inMemoryExpiresAt, clock())) return it
                 stale = it
             }
             cache.load()?.let { cached ->
@@ -258,7 +328,7 @@ public class DiscoveryService internal constructor(
                     if (CacheLifetime.isFresh(expiresAt, clock())) {
                         inMemory = cached
                         inMemoryExpiresAt = expiresAt
-                        return@withLock cached
+                        return cached
                     }
                     stale = stale ?: cached
                 }
@@ -270,14 +340,59 @@ public class DiscoveryService internal constructor(
             val fallback = stale ?: throw e
             inMemory = fallback
             inMemoryExpiresAt = clock() + RETRY_AFTER_OUTAGE_MILLIS
-            return@withLock fallback
+            return fallback
         }
+        // The issuer's host, not the URL: a document URL is the issuer's own, and a host is all a
+        // reader of a log needs to know where the SDK looked.
+        logger?.debug("discovery fetched from ${issuer.substringAfter("://").substringBefore('/')}, good for ${lifetime / 1000} s")
         cache.save(fetched, lifetime)
         inMemory = fetched
         inMemoryExpiresAt = clock() + lifetime
-        fetched
+        return fetched
     }
 }
 
 /** How long a document served stale because the provider was unreachable is trusted before the next try. */
 private const val RETRY_AFTER_OUTAGE_MILLIS = 60_000L
+
+/**
+ * Whether [body] is a JSON object or array. A document of the wrong shape is the provider's mistake,
+ * not a proxy's, so it is not rejected here; but a bare word is no document either, and the parser
+ * would take `<html>` or `OK` for a lenient primitive.
+ */
+internal fun isJson(body: String): Boolean {
+    val first = body.firstOrNull { !it.isWhitespace() }
+    if (first != '{' && first != '[') return false
+    return try {
+        discoveryJson.parseToJsonElement(body)
+        true
+    } catch (e: kotlinx.serialization.SerializationException) {
+        false
+    }
+}
+
+/**
+ * The `Recoverable(Network)` for a success status whose body is not JSON, with the status and the
+ * content type and none of the body: it is a page that travels into logs, and a token endpoint's
+ * answer is credential material. `Network`, because it is what a transport that went wrong in the
+ * middle looks like, and so it is repeated as one under the operation's budget where repeating is
+ * safe (`spec/errors.md`, "Not JSON").
+ */
+internal fun notJsonFailure(status: Int, contentType: String?, what: String): VersolaError.Recoverable =
+    VersolaError.Recoverable(
+        VersolaError.Recoverable.Cause.Network(
+            "$what answered HTTP $status with a body that is not JSON" +
+                (contentType?.let { " (Content-Type ${it.substringBefore(';').trim().take(64)})" } ?: ""),
+        ),
+    )
+
+/**
+ * What a parse failure may say about itself: the exception's class and, for a kotlinx.serialization
+ * failure, the JSON path it stopped at. Never its message, which quotes a snippet of the input: a
+ * token response is credential material and an error travels into logs and crash reports, and a
+ * captive portal's page is not the app's to be handed back either (`AUDIT B13`, `D1`).
+ */
+internal fun describeParseFailure(e: Exception): String {
+    val path = Regex("""at path: (\$[\w.\[\]]*)""").find(e.message.orEmpty())?.groupValues?.get(1)
+    return "the response is not the expected JSON (${e::class.java.simpleName}${path?.let { " at $it" }.orEmpty()})"
+}

@@ -635,7 +635,12 @@ data class ErrorMessage (
   val received: String? = null,
   val field: String? = null,
   val capability: String? = null,
-  val idTokenRejection: String? = null
+  val idTokenRejection: String? = null,
+  /**
+   * The native error's stable `code` (`spec/errors.md`, "Stable codes"), e.g.
+   * `configuration.state_mismatch`. Not [code], which is the provider's OAuth error code.
+   */
+  val sdkCode: String? = null
 )
  {
   companion object {
@@ -658,7 +663,8 @@ data class ErrorMessage (
       val field = pigeonVar_list[15] as String?
       val capability = pigeonVar_list[16] as String?
       val idTokenRejection = pigeonVar_list[17] as String?
-      return ErrorMessage(category, kind, message, code, errorDescription, detail, acrValues, maxAge, attempts, elapsedMillis, status, retryAfterMillis, origin, expected, received, field, capability, idTokenRejection)
+      val sdkCode = pigeonVar_list[18] as String?
+      return ErrorMessage(category, kind, message, code, errorDescription, detail, acrValues, maxAge, attempts, elapsedMillis, status, retryAfterMillis, origin, expected, received, field, capability, idTokenRejection, sdkCode)
     }
   }
   fun toList(): List<Any?> {
@@ -681,6 +687,7 @@ data class ErrorMessage (
       field,
       capability,
       idTokenRejection,
+      sdkCode,
     )
   }
   override fun equals(other: Any?): Boolean {
@@ -691,7 +698,7 @@ data class ErrorMessage (
       return true
     }
     val other = other as ErrorMessage
-    return MessagesPigeonUtils.deepEquals(this.category, other.category) && MessagesPigeonUtils.deepEquals(this.kind, other.kind) && MessagesPigeonUtils.deepEquals(this.message, other.message) && MessagesPigeonUtils.deepEquals(this.code, other.code) && MessagesPigeonUtils.deepEquals(this.errorDescription, other.errorDescription) && MessagesPigeonUtils.deepEquals(this.detail, other.detail) && MessagesPigeonUtils.deepEquals(this.acrValues, other.acrValues) && MessagesPigeonUtils.deepEquals(this.maxAge, other.maxAge) && MessagesPigeonUtils.deepEquals(this.attempts, other.attempts) && MessagesPigeonUtils.deepEquals(this.elapsedMillis, other.elapsedMillis) && MessagesPigeonUtils.deepEquals(this.status, other.status) && MessagesPigeonUtils.deepEquals(this.retryAfterMillis, other.retryAfterMillis) && MessagesPigeonUtils.deepEquals(this.origin, other.origin) && MessagesPigeonUtils.deepEquals(this.expected, other.expected) && MessagesPigeonUtils.deepEquals(this.received, other.received) && MessagesPigeonUtils.deepEquals(this.field, other.field) && MessagesPigeonUtils.deepEquals(this.capability, other.capability) && MessagesPigeonUtils.deepEquals(this.idTokenRejection, other.idTokenRejection)
+    return MessagesPigeonUtils.deepEquals(this.category, other.category) && MessagesPigeonUtils.deepEquals(this.kind, other.kind) && MessagesPigeonUtils.deepEquals(this.message, other.message) && MessagesPigeonUtils.deepEquals(this.code, other.code) && MessagesPigeonUtils.deepEquals(this.errorDescription, other.errorDescription) && MessagesPigeonUtils.deepEquals(this.detail, other.detail) && MessagesPigeonUtils.deepEquals(this.acrValues, other.acrValues) && MessagesPigeonUtils.deepEquals(this.maxAge, other.maxAge) && MessagesPigeonUtils.deepEquals(this.attempts, other.attempts) && MessagesPigeonUtils.deepEquals(this.elapsedMillis, other.elapsedMillis) && MessagesPigeonUtils.deepEquals(this.status, other.status) && MessagesPigeonUtils.deepEquals(this.retryAfterMillis, other.retryAfterMillis) && MessagesPigeonUtils.deepEquals(this.origin, other.origin) && MessagesPigeonUtils.deepEquals(this.expected, other.expected) && MessagesPigeonUtils.deepEquals(this.received, other.received) && MessagesPigeonUtils.deepEquals(this.field, other.field) && MessagesPigeonUtils.deepEquals(this.capability, other.capability) && MessagesPigeonUtils.deepEquals(this.idTokenRejection, other.idTokenRejection) && MessagesPigeonUtils.deepEquals(this.sdkCode, other.sdkCode)
   }
 
   override fun hashCode(): Int {
@@ -714,10 +721,11 @@ data class ErrorMessage (
     result = 31 * result + MessagesPigeonUtils.deepHash(this.field)
     result = 31 * result + MessagesPigeonUtils.deepHash(this.capability)
     result = 31 * result + MessagesPigeonUtils.deepHash(this.idTokenRejection)
+    result = 31 * result + MessagesPigeonUtils.deepHash(this.sdkCode)
     return result
   }
   override fun toString(): String {
-    return "ErrorMessage(category=$category, kind=$kind, message=$message, code=$code, errorDescription=$errorDescription, detail=$detail, acrValues=$acrValues, maxAge=$maxAge, attempts=$attempts, elapsedMillis=$elapsedMillis, status=$status, retryAfterMillis=$retryAfterMillis, origin=$origin, expected=$expected, received=$received, field=$field, capability=$capability, idTokenRejection=$idTokenRejection)"
+    return "ErrorMessage(category=$category, kind=$kind, message=$message, code=$code, errorDescription=$errorDescription, detail=$detail, acrValues=$acrValues, maxAge=$maxAge, attempts=$attempts, elapsedMillis=$elapsedMillis, status=$status, retryAfterMillis=$retryAfterMillis, origin=$origin, expected=$expected, received=$received, field=$field, capability=$capability, idTokenRejection=$idTokenRejection, sdkCode=$sdkCode)"
   }
 }
 

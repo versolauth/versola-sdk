@@ -29,13 +29,13 @@ cd android && ./gradlew :oauth-core:test                 # one module (:core and
 cd android && ./gradlew apiDump                        # after a public API change; commit the .api files
 cd android && ./gradlew :storage:connectedDebugAndroidTest   # device tier; needs a booted emulator
 swift package resolve                                  # iOS: from the repo root (Package.swift lives here)
-xcodebuild test -scheme Versola -destination "platform=iOS Simulator,name=iPhone 16"   # pick a name from: xcrun simctl list devices available
+xcodebuild test -scheme Versola -destination "platform=iOS Simulator,name=iPhone 17"   # pick a name from: xcrun simctl list devices available
 python3 tools/validate-scenarios.py                   # spec: scenarios against spec/conformance/schema.json (pip install -r tools/requirements.txt once)
 npx markdownlint-cli2 "**/*.md"                        # spec.yml's markdown job
 ```
 
-Flutter commands (`flutter analyze`, `flutter test` in the plugin directory) apply once the plugin
-exists; the toolchain pin is described in `develop.md`. JDK 21 is required for Gradle (`JAVA_HOME`);
+Flutter commands (`fvm flutter analyze`, `fvm flutter test` in `flutter/versola_oauth`) apply to the
+plugin; the toolchain pin is described in `develop.md`. JDK 21 is required for Gradle (`JAVA_HOME`);
 the exact emulator and staged-stack recipes are in `develop.md`. Do not paste them from memory.
 
 ## Definition of Done

@@ -9,6 +9,8 @@ import versola.oauth.core.SessionState
 import versola.oauth.core.TokenBinding
 import versola.oauth.core.VersolaError
 import versola.oauth.core.VersolaLogger
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -16,6 +18,7 @@ import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import versola.sdk.storage.HardwareKeyProvider
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
@@ -36,6 +39,12 @@ private class CollectingLogger : VersolaLogger {
 class VersolaConfigureTest {
 
     private val application = ApplicationProvider.getApplicationContext<Application>()
+
+    // One instance per process (`AUDIT C2`) outlives a test, so each starts from none.
+    @org.junit.Before
+    fun forgetTheInstance() {
+        Versola.forgetAll()
+    }
 
     private fun configure(
         issuer: String = "https://id.versola.io",
@@ -92,6 +101,7 @@ class VersolaConfigureTest {
         // #1 §4: on and invisible. The integrator's one lever is refusing key binding
         // outright, and taking it is what makes `dpop` null rather than any discovery result.
         assertNotNull(configure().dpop)
+        Versola.forgetAll()
         assertNull(configure(tokenBinding = TokenBinding.Bearer).dpop)
     }
 
@@ -158,4 +168,110 @@ class VersolaConfigureTest {
         assertSame(SessionState.Unauthenticated, first.sessionState.first())
         assertSame(SessionState.Unauthenticated, second.sessionState.first())
     }
+
+    // AUDIT: C2 - each configure() builds a whole second stack (coordinator, epoch, cached token, flow state)
+    // over the one shared credential store, so a logout() on one instance cannot fence the other's in-flight
+    // refresh. The simplest observable form of the fix: the same configuration yields the same instance,
+    // as OAuthClient.create does. (A behavioural test of A.logout() vs B's refresh needs a real Keystore for
+    // the credential store, which Robolectric does not have.)
+    @Test
+    fun `AUDIT C2 configure twice with the same configuration returns one instance`() {
+        val first = configure()
+        val second = configure()
+
+        assertSame("two stacks over one credential store, each with its own epoch and token cache", first, second)
+    }
+
+    // AUDIT: C5 - the default client sets connect and read timeouts only, so nothing bounds a whole call.
+    @Test
+    fun `AUDIT C5 the default HTTP client has an overall call timeout`() {
+        val timeout = Versola.configure(
+            application, "https://id.versola.io", "mobile-app", "https://app.example.com/oauth",
+            tokenBinding = TokenBinding.Bearer, edgeBaseUrl = "https://versola.io",
+        ).httpClient().callTimeoutMillis
+
+        assertTrue("callTimeoutMillis is $timeout; a slow-drip response can hold a call forever", timeout in 1..60_000)
+    }
+
+    // AUDIT: C4 - Versola.configure passes no retryClock, so the Retry-After cooldown runs on System.nanoTime,
+    // which stops in deep sleep; the cooldown must elapse with elapsedRealtime.
+    @Test
+    fun `AUDIT C4 a Retry-After cooldown elapses with elapsedRealtime, not a clock that stops in deep sleep`() = runTest {
+        Versola.keyProviders = {
+            object : versola.oauth.core.CredentialKeyProvider {
+                override suspend fun wrap(plaintext: ByteArray): ByteArray = plaintext.reversedArray()
+                override suspend fun unwrap(blob: ByteArray): ByteArray = blob.reversedArray()
+            }
+        }
+        val launched = mutableListOf<String>()
+        val browser = object : versola.oauth.core.BrowserAuthorizationSession {
+            override suspend fun authorize(uri: String): versola.oauth.core.BrowserOutcome {
+                launched += uri
+                val state = Regex("[?&]state=([^&]+)").find(uri)!!.groupValues[1]
+                return versola.oauth.core.BrowserOutcome.Redirect(
+                    "https://app.example.com/oauth?code=c&state=$state&iss=https%3A%2F%2Fid.example.com",
+                )
+            }
+            override suspend fun awaitPendingRedirect(): versola.oauth.core.BrowserOutcome = throw UnsupportedOperationException()
+        }
+        val http = okhttp3.OkHttpClient.Builder().addInterceptor { chain ->
+            val request = chain.request()
+            val builder = okhttp3.Response.Builder().request(request).protocol(okhttp3.Protocol.HTTP_1_1).message("stub")
+            if (request.url.encodedPath == "/.well-known/openid-configuration") {
+                builder.code(200).body(
+                    """{"issuer":"https://id.example.com","authorization_endpoint":"https://id.example.com/authorize",
+                        "token_endpoint":"https://id.example.com/token","authorization_response_iss_parameter_supported":true}"""
+                        .toResponseBody("application/json".toMediaType()),
+                )
+            } else {
+                builder.code(429).header("Retry-After", "3600").body("".toResponseBody(null))
+            }
+            builder.build()
+        }.build()
+        val versola = Versola.configure(
+            application, "https://id.example.com", "client-c4", "https://app.example.com/oauth", CollectingLogger(),
+            httpClient = http, tokenBinding = TokenBinding.Bearer, browser = browser,
+        )
+
+        val first = runCatching { versola.login(setOf("openid")) }
+        assertEquals("precondition: the first login opened the browser and was throttled at /token (${first.exceptionOrNull()})", 1, launched.size)
+        org.robolectric.shadows.ShadowSystemClock.advanceBy(java.time.Duration.ofHours(2))
+        runCatching { versola.login(setOf("openid")) }
+        Versola.keyProviders = { HardwareKeyProvider() }
+
+        assertEquals("the 1 h cooldown still held after 2 h of device time", 2, launched.size)
+    }
+
+    @Test
+    fun `AUDIT Z3 a cleartext edgeBaseUrl is refused unless the host is loopback`() {
+        // AUDIT: Z3. edgeBaseUrl only has to parse as an http(s) URL today, so `http://edge.example.com` becomes the
+        // interceptor scope and tokens and proofs would travel in cleartext; RequestScope.origins and
+        // OAuthConfiguration.requireOrigin already enforce https-or-loopback.
+        for (backChannel in listOf(BackChannel.Auth, BackChannel.Edge)) {
+            Versola.forgetAll()
+            val error = runCatching {
+                Versola.configure(
+                    application, "https://id.versola.io", "mobile-app", "https://app.example.com/oauth",
+                    edgeBaseUrl = "http://edge.example.com", backChannel = backChannel,
+                )
+            }.exceptionOrNull()
+
+            assertTrue("$backChannel: expected the typed Configuration error for a cleartext edge, got $error", error is VersolaError.Configuration)
+            assertTrue((error as VersolaError.Configuration).detail is VersolaError.Configuration.Detail.InvalidConfiguration)
+        }
+    }
+
+    @Test
+    fun `AUDIT Z3 a loopback edgeBaseUrl may stay cleartext, as the issuer rule allows`() {
+        for (edge in listOf("http://localhost:8080", "http://127.0.0.1:8080", "http://[::1]:8080")) {
+            Versola.forgetAll()
+            val versola = Versola.configure(
+                application, "https://id.versola.io", "mobile-app", "https://app.example.com/oauth",
+                edgeBaseUrl = edge, backChannel = BackChannel.Edge,
+            )
+
+            assertNotNull(edge, versola.dpop)
+        }
+    }
+
 }

@@ -24,6 +24,37 @@ final class DiscoveryTests: XCTestCase {
         }
     }
 
+    /// RFC 8414 section 3.1: an issuer with a path may publish at the other well-known form; the OpenID one is asked
+    /// first and only a 404 there falls through.
+    func testAnIssuerWithAPathFallsBackToRfc8414On404AndOnlyOn404() async throws {
+        let tenant = """
+        {"issuer":"https://id.example.com/tenant","authorization_endpoint":"https://id.example.com/authorize",
+         "token_endpoint":"https://id.example.com/token","jwks_uri":"https://id.example.com/jwks"}
+        """
+        let http = RecordingHTTP { request in
+            request.url.absoluteString == "https://id.example.com/.well-known/oauth-authorization-server/tenant"
+                ? HTTPResponse(statusCode: 200, body: Data(tenant.utf8))
+                : HTTPResponse(statusCode: 404, body: Data())
+        }
+        let metadata = try await service(http, issuer: "https://id.example.com/tenant").metadata()
+        XCTAssertEqual(metadata.issuer, "https://id.example.com/tenant")
+        let urls = await http.requests.map(\.url.absoluteString)
+        XCTAssertEqual(urls, [
+            "https://id.example.com/tenant/.well-known/openid-configuration",
+            "https://id.example.com/.well-known/oauth-authorization-server/tenant",
+        ])
+
+        let forbidden = RecordingHTTP.json(403, "")
+        _ = try? await service(forbidden, issuer: "https://id.example.com/tenant").metadata()
+        let count = await forbidden.requests.count
+        XCTAssertEqual(count, 1, "a 403 is not absence: no second address is asked")
+
+        let plain = RecordingHTTP.json(404, "")
+        _ = try? await service(plain).metadata()
+        let plainCount = await plain.requests.count
+        XCTAssertEqual(plainCount, 1, "an issuer without a path has one address")
+    }
+
     func testFetchesTheWellKnownDocumentAndCachesIt() async throws {
         let http = RecordingHTTP.json(200, document)
         let cache = MemoryMetadataCache()
@@ -119,8 +150,20 @@ final class DiscoveryTests: XCTestCase {
         }
     }
 
-    func testUndecodableJsonIsDiscoveryMalformed() async {
+    /// AUDIT D1: an HTML page under a 200 is the user's network, not a deployment fault.
+    func testAnHtmlPageUnderA200IsARecoverableNetworkFailure() async {
         let http = RecordingHTTP.json(200, "<html>not json</html>")
+        do {
+            _ = try await service(http).metadata()
+            XCTFail("expected a failure")
+        } catch OAuthError.recoverable(.network) {
+        } catch {
+            XCTFail("unexpected \(error)")
+        }
+    }
+
+    func testJsonThatIsNotMetadataIsDiscoveryMalformed() async {
+        let http = RecordingHTTP.json(200, "[1, 2]")
         do {
             _ = try await service(http).metadata()
             XCTFail("expected a failure")
@@ -289,7 +332,8 @@ final class DiscoveryTests: XCTestCase {
 
         let userinfo = HTTPUserInfoClient(
             userinfoEndpoint: { insecure.userinfoEndpoint }, httpClient: http, dpop: nil,
-            verifier: JwsVerifier(jwksUri: { nil }, allowedAlgorithms: { [] }, jwks: JwksClient(httpClient: http))
+            verifier: JwsVerifier(jwksUri: { nil }, allowedAlgorithms: { [] }, jwks: JwksClient(httpClient: http)),
+            issuer: AuthzKit.issuer, clientId: AuthzKit.configuration.clientId
         )
         await malformed("userinfo_endpoint") { _ = try await userinfo.fetch(tokens: FixedTokenSource(), expectedSubject: "alice") }
 

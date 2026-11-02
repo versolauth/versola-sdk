@@ -8,4 +8,6 @@ import versola.oauth.core.VersolaError
  * edge, or edge has no `native` block — all deployment, none of them the user's. Under
  * [BackChannel.Edge] this is the single most common first-run mistake.
  */
-public data class EdgeClientUnknown(public val clientId: String) : VersolaError.Configuration.Detail.Extension()
+public data class EdgeClientUnknown(public val clientId: String) : VersolaError.Configuration.Detail.Extension() {
+    override val name: String get() = "edge_client_unknown"
+}

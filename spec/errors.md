@@ -30,6 +30,33 @@ Rules that hold across all four:
 - **Retries are budgeted.** Every `Recoverable` path has a ceiling, configurable within fixed
   bounds and never unbounded. See [`retry-policy.md`](retry-policy.md).
 
+## Stable codes
+
+Every error exposes `code`, a stable machine-readable string for logs, analytics and branching
+that must not depend on the class name or `toString()`. It identifies the case, never the payload:
+two errors of one case carry the same `code`. The set is closed and shared by every platform
+(`code` on Kotlin and Swift, `sdkCode` on Dart, where `code` already carries the provider's OAuth error code); a new case adds a code, nothing renames one.
+
+| Category | Codes |
+|---|---|
+| `Recoverable` | `recoverable.user_cancelled`, `recoverable.system_cancelled`, `recoverable.pending_request_expired`, `recoverable.network`, `recoverable.server`, `recoverable.unlock_required`, `recoverable.nonce_loop` |
+| `Reauthenticate` | `reauthenticate.authorization_denied`, `reauthenticate.interaction_required`, `reauthenticate.credentials_invalidated`, `reauthenticate.grant_rejected`, `reauthenticate.session_rejected`, `reauthenticate.session_expired` |
+| `StepUp` | `step_up` |
+| `Configuration` | `configuration.state_mismatch`, `configuration.issuer_mismatch`, `configuration.malformed_authorization_response`, `configuration.authorization_rejected`, `configuration.token_request_rejected`, `configuration.token_response_malformed`, `configuration.discovery_field_missing`, `configuration.discovery_issuer_mismatch`, `configuration.discovery_malformed`, `configuration.invalid_configuration`, `configuration.no_browser_available`, `configuration.id_token_rejected`, `configuration.user_info_rejected`, `configuration.provider_unsupported`, `configuration.hardware_binding_unavailable`, and `configuration.<name>` for a case a facade adds (the Versola facade's edge errors name theirs) |
+
+## A body that is not JSON
+
+Discovery and the token endpoint answer 2xx with a body that is not JSON at all (an HTML page from a
+proxy or a captive portal, an empty body): `Recoverable(Network)`, whose detail names the endpoint,
+the status and the content type, never the body (it travels into logs, and a token response is
+credential material). It is the user's network and a later attempt may not meet it, so it is not a
+deployment fault. Discovery surfaces it once, with no retry (the same page would be met again; iOS does the same); the token endpoint's is
+repeated or not by the retry policy's rules for a transport failure (`retry-policy.md`): a refresh by them, the
+`authorization_code` exchange never. A JSON body of the wrong shape (a missing `access_token`, a field of the wrong type) is the
+provider's own mistake and stays `Configuration(TokenResponseMalformed)` or
+`Configuration(DiscoveryMalformed)`. A 3xx is not followed and is `Configuration(InvalidConfiguration)`
+at every endpoint: a redirect from an endpoint is a deployment fault (`retry-policy.md`).
+
 ## Token endpoint — `POST /token`
 
 From `versola.oauth.token.model.ErrorCode` and `TokenEndpointError`.
@@ -94,6 +121,7 @@ query parameters, or inside a JARM `response` JWT.
 | `consent_required` | `Reauthenticate` | Only reachable with `prompt=none`. |
 | `interaction_required` | `Reauthenticate` | Only reachable with `prompt=none`. |
 | `access_denied` | `Reauthenticate` | The resource owner could not be resolved, or the user declined. The SDK must not re-open the browser automatically. |
+| `server_error`, `temporarily_unavailable` | `Recoverable` | `Server(500)` and `Server(503)` (RFC 6749 4.1.2.1: the server could not handle the request now). Surfaced once, never retried by the SDK: the browser leg cannot be replayed without the user. |
 | `unmet_authentication_requirements` | `Configuration` | The requested ACR cannot be satisfied by this deployment. Not a step-up: retrying with the same `acr_values` fails identically. |
 
 Errors returned directly rather than by redirect — `BadRequest` (unregistered `redirect_uri`,
@@ -116,7 +144,7 @@ From `versola.oauth.userinfo.model.UserInfoError`.
 | `InvalidToken` | `Recoverable` → refresh → retry, else `Reauthenticate` | |
 | `InsufficientScope` | `Configuration` | The token was not issued with the scopes this call needs. |
 | `Unauthorized` | `Reauthenticate` | |
-| `InvalidDpopProof` | handled internally, then `Reauthenticate` | Same one-retry rule as the token endpoint; nothing reaches the app until the retry also fails (implemented on iOS; the Android UserInfo client does not retry yet). Also covers the RFC 9449 §7.2 downgrade refusal: a `Bearer`-scheme request carrying a key-bound token. |
+| `InvalidDpopProof` | handled internally, then `Reauthenticate` | Same one-retry rule as the token endpoint; nothing reaches the app until the retry also fails (implemented on iOS and Android). Also covers the RFC 9449 §7.2 downgrade refusal: a `Bearer`-scheme request carrying a key-bound token. |
 | `UseDpopNonce` | handled internally | Retry once against the **userinfo origin's** nonce cache. |
 
 ## Edge — `versola.io`
@@ -182,7 +210,7 @@ Not every error comes from a server.
 | Network failure, timeout, DNS | `Recoverable`, cause `Network` | Surfaced only after the SDK's retry policy is exhausted, or at once on an operation that is not repeated (`retry-policy.md`, operations). |
 | 408, 429 or 5xx from a request the SDK originates | `Recoverable`, cause `Server(status, retryAfter, attempts, elapsed)` | After the budget is exhausted, or at once when `Retry-After` exceeds what is left of it, or on a 5xx that cannot be transient (501, 505). `retryAfter` is the parsed header on 429 and 503, absent otherwise. The session is left where it was. `retry-policy.md`. |
 | Nonce demanded on a retry that already carried one | `Recoverable`, cause `NonceLoop` | **Terminating.** A server that always demands a nonce must produce an error, never an unbounded retry. |
-| Stored bytes that can never be opened again: the Keystore reports the key permanently invalidated (biometric or lock-screen change), the key entry cannot be recovered, or the ciphertext fails authentication (Android: `KeyPermanentlyInvalidatedException`, `UnrecoverableKeyException`, `AEADBadTagException`) | `Reauthenticate`, reason `CredentialsInvalidated` | Indistinguishable from tampering; treated as sign-out. These are the only verdicts that sign the user out: the rest of this group fails the operation and leaves the grant alone. |
+| Stored bytes that can never be opened again: the Keystore reports the key permanently invalidated (biometric or lock-screen change), the key entry cannot be recovered, or the ciphertext fails authentication (Android: `KeyPermanentlyInvalidatedException`, `UnrecoverableKeyException`, `AEADBadTagException`) | `Reauthenticate`, reason `CredentialsInvalidated` | A DPoP key that is gone from the Keystore while a grant is stored is the same verdict, raised when a proof is asked for: signing with a freshly generated key would only be refused by the server as a key mismatch long after the cause. Indistinguishable from tampering; treated as sign-out. These are the only verdicts that sign the user out: the rest of this group fails the operation and leaves the grant alone. |
 | A storage-key operation fails and the failure is no verdict on the key (Android: a busy or restarting Keystore service, a StrongBox or TEE fault, any exception not listed in the row above) | `Recoverable`, cause `Network` (detail names the failure class) | The grant is intact: nothing is wiped and the DPoP key is kept. The session stays `Authenticated`, and the retry budget may repeat the operation. `UnlockRequired` is deliberately not used, since it moves the session to `Locked` and asks the app for an authentication prompt that cannot help. `Network` is the closest cause that exists today; a dedicated cause is an open decision (it is a public enum case on every platform). A caller cancelled during the operation is a cancellation, never one of these. |
 | Storage key's authentication window has elapsed | `Recoverable`, cause `UnlockRequired` | `UnlockPolicy.OnAppUnlock` only. The app presents the prompt and retries; the grant is intact. On iOS the cause is the device being locked and there is no window or prompt (`state-machine.md`, iOS deviation): the app retries after the device is unlocked. |
 | iOS: the Keychain or the Secure Enclave is out of reach for now (`errSecInteractionNotAllowed`: locked, or not unlocked since boot; `errSecNotAvailable`; `errSecAuthFailed`), on a read, on a DPoP signature or when the key is generated | `Recoverable`, cause `UnlockRequired` | The grant and the DPoP key are intact and are never wiped or replaced for it: a key refused only because the device is locked is not generated as a software key. Any other Keychain status is `Configuration`, detail `InvalidConfiguration`. |
@@ -191,7 +219,7 @@ Not every error comes from a server.
 | A grant started through one back channel redeemed through the other | `Configuration` | Wiring. Refused before the code is spent. |
 | Discovery document missing a required field | `Configuration` | A missing `dpop_signing_alg_values_supported` is **not** this: it means bearer mode, logged, not failed. |
 | Discovery document names an `authorization_endpoint`, `token_endpoint` or `jwks_uri` that is not `https`, or one that is not an absolute URL with a host; or an optional endpoint (`userinfo_endpoint`, `revocation_endpoint`, `end_session_endpoint`, `pushed_authorization_request_endpoint`) that is not, at the moment it is used | `Configuration`, detail `DiscoveryMalformed` | The three endpoints every session needs are refused where the document is read, and in a cached copy, so a refresh token is never POSTed in the clear because a document said so. The optional ones are refused where they are used (the operation that needs one fails; `logout()` stays best effort and reports it as a failed revocation or `sessionEnded = false`), so one an app never calls does not make the whole provider unusable. `http` is accepted on a loopback host only, as for the issuer (`oauth-sdk-api.md` section 3). An endpoint on another https origin than the issuer is allowed: the rule is the scheme, not the origin. |
-| Pending authorization request older than 10 minutes | `Recoverable`, cause `Expired` | Discarded on restore. |
+| Pending authorization request older than 10 minutes | `Recoverable`, cause `PendingRequestExpired` | Discarded on restore. |
 
 ## Generic facade additions
 
@@ -206,7 +234,7 @@ validates ID tokens (architecture review F5).
 | UserInfo `sub` differs from the ID token's, or a signed UserInfo response does not verify | `Configuration` | `UserInfoRejected` | OIDC Core 5.3.2. |
 | A capability the configuration requires is not advertised (`TokenBinding.Dpop(required)`, `pushedAuthorization = Required`, `require_pushed_authorization_requests` with `Never`, `userInfo()` without an endpoint, `code_challenge_methods_supported` present without `S256`) | `Configuration` | `ProviderUnsupported(capability)` | Raised at the first operation that needs the capability, never by a silent downgrade. An absent `code_challenge_methods_supported` is unknown, not a refusal. |
 | Access token expired and the provider issued no refresh token | `Reauthenticate` | `SessionExpired` | No token request is made. Scenario 31. |
-| `login()` or `stepUp()` called while an authorization is in flight in this process (browser up, code being exchanged) | `Configuration` | `InvalidConfiguration` | The app observes `sessionState` before asking. A pending request nobody awaits, and a resume that only waits for its redirect, are superseded, not refused (`oauth-sdk-api.md` section 5). |
+| `login()` or `stepUp()` called while an authorization is in flight and asking for something else than it (another scope set, `acr_values`, `max_age`, parameters) | `Configuration` | `InvalidConfiguration` | The same call joins the in-flight one instead (`oauth-sdk-api.md` section 5), so a double tap is not an error. A pending request nobody awaits, and a resume that only waits for its redirect, are superseded, not refused. |
 | A resource server answers 401 with `error="insufficient_user_authentication"` (RFC 9470) | `StepUp(acrValues, maxAge)` | | Same as edge's row; any resource server in `protectedOrigins`. |
 | A resource server answers 401 otherwise | refresh once, replay once, then `Reauthenticate`, reason `SessionRejected` | | As edge's bare 401. |
 
@@ -216,11 +244,11 @@ Semantics are identical; spelling follows each language.
 
 | Concept | Kotlin | Swift | Dart |
 |---|---|---|---|
-| Base | `sealed class OAuthError` (`VersolaError` is a type alias in the Versola facade, ADR 0001) | `enum OAuthError: Error` | `sealed class OAuthError` |
-| Recoverable | `VersolaError.Recoverable(cause)` | `.recoverable(Cause)` | `Recoverable(cause)` |
-| Reauthenticate | `VersolaError.Reauthenticate(reason)` | `.reauthenticate(Reason)` | `Reauthenticate(reason)` |
-| Step-up | `VersolaError.StepUp(acrValues, maxAge)` | `.stepUp(acrValues:maxAge:)`; `stepUp(_:)` takes the caught case | `StepUp(acrValues, maxAge)` |
-| Configuration | `VersolaError.Configuration(detail)` | `.configuration(Detail)` | `Configuration(detail)` |
+| Base | `sealed class VersolaError` (both facades, ADR 0001) | `enum OAuthError: Error` | `sealed class OAuthError` |
+| Recoverable | `VersolaError.Recoverable(cause)` | `.recoverable(Cause)` | `RecoverableError(cause)` |
+| Reauthenticate | `VersolaError.Reauthenticate(reason)` | `.reauthenticate(Reason)` | `ReauthenticateError(reason)` |
+| Step-up | `VersolaError.StepUp(acrValues, maxAge)` | `.stepUp(acrValues:maxAge:)`; `stepUp(_:)` takes the caught case | `StepUpError(acrValues, maxAge)` |
+| Configuration | `VersolaError.Configuration(detail)` | `.configuration(Detail)` | `ConfigurationError(detail)` |
 
 An error crossing the Flutter bridge must keep its category. A `StepUp` arriving in Dart as a
 generic `PlatformException` is a defect in the bridge, not an acceptable lossy conversion.

@@ -1,10 +1,13 @@
 package versola.oauth
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
@@ -45,6 +48,7 @@ import versola.oauth.core.TokenBinding
 import versola.oauth.core.UserInfo
 import versola.oauth.core.UserInfoClient
 import versola.oauth.core.VersolaError
+import versola.oauth.core.VersolaLogger
 import versola.sdk.browser.AuthTabAuthorizationSession
 import versola.sdk.dpop.DpopProofFactory
 import versola.sdk.dpop.KeyAttestation
@@ -52,6 +56,7 @@ import versola.sdk.dpop.KeystoreDpopKey
 import versola.sdk.okhttp.RequestScope
 import versola.sdk.okhttp.VersolaHttpException
 import versola.sdk.okhttp.VersolaInterceptor
+import versola.sdk.okhttp.authenticated
 import versola.sdk.storage.DataStoreCredentialStore
 import versola.sdk.storage.FilePendingAuthorizationStore
 import versola.sdk.storage.HardwareKeyProvider
@@ -85,6 +90,14 @@ public class OAuthClient private constructor(
     override val sessionState: Flow<SessionState> get() = flow.sessionState
 
     /**
+     * The state now, after the restore a cold start owes (a stored grant yields `Authenticated`, a
+     * request still pending `Authorizing`). For code that has to decide at once between a login
+     * screen and a home screen, an `Activity.onCreate` say, and has no use for a stream; a later
+     * change is [sessionState]'s to report.
+     */
+    override suspend fun currentSessionState(): SessionState = flow.sessionState.first()
+
+    /**
      * The claims of the validated ID token of this session, or null when there is no session.
      * Memory only; the raw token and the `nonce` are not exposed.
      */
@@ -100,18 +113,25 @@ public class OAuthClient private constructor(
      * token handed back here would make the escape hatch the first thing an integrator saw.
      *
      * While `Authenticated`, a successful login replaces the stored grant; a cancelled or failed
-     * one leaves the session as it was. While `Authorizing`, it is refused: the app observes
-     * [sessionState] before asking.
+     * one leaves the session as it was. The same call made again while one is in flight (a
+     * double-tapped button) joins it: one browser, one exchange, and both calls return together or
+     * fail together. A call asking for something else while one is in flight is refused with
+     * `Configuration(InvalidConfiguration)`: the app observes [sessionState] before asking.
      */
     override suspend fun login(options: LoginOptions) {
-        refuseWhileAuthorizing()
-        coordinator.login(
-            scopes = (options.scopes ?: configuration.scopes) + "openid",
-            acrValues = options.acrValues,
-            maxAge = options.maxAge,
-            parameters = options.parameters,
-            ephemeralBrowser = options.ephemeralBrowser,
-        )
+        try {
+            coordinator.login(
+                scopes = (options.scopes ?: configuration.scopes) + "openid",
+                acrValues = options.acrValues,
+                maxAge = options.maxAge,
+                parameters = options.parameters,
+                ephemeralBrowser = options.ephemeralBrowser,
+                refuseWhileAuthorizing = true,
+            )
+        } catch (e: CancellationException) {
+            finishInBackgroundIfAbandoned()
+            throw e
+        }
     }
 
     /**
@@ -120,14 +140,42 @@ public class OAuthClient private constructor(
      * are the configured ones unless [options] says otherwise.
      */
     override suspend fun stepUp(challenge: VersolaError.StepUp, options: LoginOptions) {
-        refuseWhileAuthorizing()
-        coordinator.login(
-            scopes = (options.scopes ?: configuration.scopes) + "openid",
-            acrValues = challenge.acrValues,
-            maxAge = challenge.maxAge,
-            parameters = options.parameters,
-            ephemeralBrowser = options.ephemeralBrowser,
-        )
+        try {
+            coordinator.login(
+                scopes = (options.scopes ?: configuration.scopes) + "openid",
+                acrValues = challenge.acrValues,
+                maxAge = challenge.maxAge,
+                parameters = options.parameters,
+                ephemeralBrowser = options.ephemeralBrowser,
+                refuseWhileAuthorizing = true,
+            )
+        } catch (e: CancellationException) {
+            finishInBackgroundIfAbandoned()
+            throw e
+        }
+    }
+
+    /**
+     * A caller cancelled while its browser was up leaves the request stored for a resume, and the tab
+     * can still deliver its redirect (the screen that asked went away, not the sign-in). Only a
+     * cold-start restore used to start that resume, so in a live process the redirect that came later
+     * was buffered for nobody, or discarded by the next `login()` (`AUDIT C8`). The process finishes it
+     * now, as it does after a restart: the redirect is awaited for what is left of the request's ten
+     * minutes, validated and exchanged, and the session ends `Authenticated`. A request the cancel
+     * did not leave `Authorizing` has nothing to resume.
+     */
+    private suspend fun finishInBackgroundIfAbandoned() {
+        val abandoned = withContext(NonCancellable) { flow.sessionState.first() == SessionState.Authorizing }
+        if (!abandoned) return
+        resumeScope.launch {
+            try {
+                coordinator.resumePendingLogin()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                warnResumeFailed(e)
+            }
+        }
     }
 
     /**
@@ -165,7 +213,9 @@ public class OAuthClient private constructor(
     override suspend fun userInfo(): UserInfo = coordinator.retryScope.operation {
         // After a cold start the claims are read back from the stored ID token first.
         val subject = coordinator.restoreClaims()?.subject
-            ?: throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.GrantRejected)
+            // No session to ask for: not `GrantRejected`, which says the token endpoint answered
+            // `invalid_grant`, and nothing was asked here (`AUDIT D3`).
+            ?: throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.SessionExpired)
         userInfoClient.fetch(coordinator, subject)
     }
 
@@ -215,20 +265,6 @@ public class OAuthClient private constructor(
     }
 
     /**
-     * `spec/oauth-sdk-api.md` section 5: a `login()` while this process is carrying an authorization
-     * out — another `login()` has its browser up, or a code exchange has not finished — is refused
-     * rather than queued behind it or allowed to disturb it. A pending request that nobody awaits (a
-     * cancelled caller left it, or a restore found it) is a leftover, and a resume that is only
-     * waiting for its redirect is pre-empted: the new login supersedes both, so the state alone,
-     * `Authorizing` for the leftover's ten minutes, does not refuse it.
-     */
-    private fun refuseWhileAuthorizing() {
-        if (flow.authorizationInFlight) {
-            throw OAuthConfiguration.invalid("an authorization is already in progress; observe sessionState before asking again")
-        }
-    }
-
-    /**
      * Which Keystore tier the DPoP key reached, or null under [TokenBinding.Bearer]. Suspending
      * because the key is generated on first use; asking this is what generates it.
      */
@@ -239,8 +275,9 @@ public class OAuthClient private constructor(
      * origin is in [origins] and nothing else: `Authorization: Bearer` or `DPoP` with a proof,
      * one refresh and one replay on a 401, one nonce retry, and RFC 9470's step-up challenge
      * surfaced as [VersolaError.StepUp] (`spec/oauth-sdk-api.md` section 10). A request to any
-     * other origin passes through untouched, so installing it on a client shared with the rest
-     * of the app is safe. Errors arrive as [VersolaHttpException], because an interceptor may
+     * other origin passes through untouched. Not offered on its own: on a client that follows
+     * redirects its `DPoP` proof would go to whatever a `Location` names, so it is installed only
+     * on the client [authenticatedClient] builds, with redirects off. Errors arrive as [VersolaHttpException], because an interceptor may
      * raise nothing else without crashing an enqueued call; [call] unwraps them.
      *
      * It blocks the calling thread while it waits for the token, a refresh included, so use `enqueue`
@@ -250,19 +287,15 @@ public class OAuthClient private constructor(
      * dispatcher of the SDK's, so callers that have parked every thread of `Dispatchers.IO` cannot
      * starve it. Each blocked caller still holds its own thread until the answer is in.
      */
-    public fun interceptor(origins: Set<String> = configuration.protectedOrigins): Interceptor =
+    private fun interceptor(origins: Set<String>): Interceptor =
         VersolaInterceptor(coordinator, scopeOf(origins), proofs)
 
     /**
-     * The configured HTTP client plus [interceptor], with redirects switched off: a `Location`
+     * The configured HTTP client plus the interceptor above, with redirects switched off: a `Location`
      * from a protected origin would otherwise repeat the request, token included, at another.
      */
     public fun authenticatedClient(origins: Set<String> = configuration.protectedOrigins): OkHttpClient =
-        configuration.httpClient.newBuilder()
-            .followRedirects(false)
-            .followSslRedirects(false)
-            .addInterceptor(interceptor(origins))
-            .build()
+        authenticated(configuration.httpClient, interceptor(origins))
 
     /**
      * One authenticated call through [authenticatedClient], with the error taxonomy raised as itself.
@@ -340,6 +373,19 @@ public class OAuthClient private constructor(
                             "a client for ${configuration.issuerIdentifier} / ${configuration.clientId} already exists in this process with a different configuration",
                         )
                     }
+                    // Not part of the fingerprint, which is what a client *is*, but what it is built with:
+                    // answering with the first client would silently drop the app's new timeouts, pinning
+                    // or proxy, and send the new logger nothing. Compared by identity (`AUDIT D4`).
+                    if (existing.configuration.httpClient !== configuration.httpClient) {
+                        throw OAuthConfiguration.invalid(
+                            "a client for ${configuration.issuerIdentifier} / ${configuration.clientId} already exists in this process with another httpClient; create it once and keep the OkHttpClient, or pass the same one",
+                        )
+                    }
+                    if (existing.configuration.logger !== configuration.logger) {
+                        throw OAuthConfiguration.invalid(
+                            "a client for ${configuration.issuerIdentifier} / ${configuration.clientId} already exists in this process with another logger; create it once and keep the logger, or pass the same one",
+                        )
+                    }
                     return existing
                 }
                 build(context.applicationContext, configuration, browser, keyProvider).also {
@@ -361,6 +407,32 @@ public class OAuthClient private constructor(
             synchronized(clients) { clients.clear() }
         }
 
+        /**
+         * The redirect URI resolves to an activity of this app, or the sign-in never comes back: the
+         * browser delivers the response to nothing and `login()` waits until the user gives up. The
+         * SDK's own redirect activity carries no intent filter until the app adds one (the manifest
+         * snippet in its KDoc), which is the usual omission, and `create()` is where the integrator
+         * is looking when it is made (`AUDIT D5`). A warning, not an error: an app may route the
+         * redirect to its own activity.
+         */
+        private fun warnIfRedirectUnhandled(context: Context, redirectUri: String, logger: VersolaLogger) {
+            if (redirectUri.startsWith("http://")) return
+            val probe = Intent(Intent.ACTION_VIEW, Uri.parse(redirectUri))
+                .addCategory(Intent.CATEGORY_BROWSABLE)
+                .setPackage(context.packageName)
+            val handled = try {
+                context.packageManager.queryIntentActivities(probe, 0).isNotEmpty()
+            } catch (e: RuntimeException) {
+                return
+            }
+            if (!handled) {
+                logger.warn(
+                    "no activity of this app has an intent filter for the redirect URI $redirectUri; the sign-in cannot return to the app. " +
+                        "Declare versola.sdk.browser.VersolaRedirectActivity with an intent filter for it (see its documentation).",
+                )
+            }
+        }
+
         private fun build(
             context: Context,
             configuration: OAuthConfiguration,
@@ -371,6 +443,7 @@ public class OAuthClient private constructor(
             val httpClient = configuration.httpClient
             val core = configuration.core
             core.redirectUriWarning?.let(logger::warn)
+            warnIfRedirectUnhandled(context, core.redirectUri.value, logger)
 
             // noBackupFilesDir: neither the pending request nor the refresh token may be
             // restored onto another device out of a cloud backup. One directory per issuer and
@@ -379,9 +452,16 @@ public class OAuthClient private constructor(
             // One wrapping key per configuration, like the DPoP key and the files: the key's
             // user-authentication requirement is this configuration's unlock policy, not the
             // first client's in the process.
+            // Two aliases, one per key: the Keystore's alias namespace is shared by every key type, and
+            // generating under an alias that exists replaces the entry, so the AES storage key and the
+            // EC DPoP key under one alias destroyed each other (`AUDIT Z1`).
             val keys = keyProvider ?: HardwareKeyProvider(
-                alias = "versola-oauth-${configuration.storageKey}",
+                alias = "versola-oauth-${configuration.storageKey}.storage",
                 unlockPolicy = configuration.unlockPolicy,
+            )
+            val credentialStore = DataStoreCredentialStore.forFile(
+                file = File(directory, "credentials"),
+                keyProvider = keys,
             )
 
             val discovery = when (val endpoints = configuration.endpoints) {
@@ -403,18 +483,16 @@ public class OAuthClient private constructor(
 
             val dpopKey = when (val binding = configuration.tokenBinding) {
                 is TokenBinding.Dpop -> KeystoreDpopKey(
-                    alias = "versola-oauth-${configuration.storageKey}",
+                    alias = "versola-oauth-${configuration.storageKey}.dpop",
                     requireHardware = binding.requireHardware,
                     logger = logger,
+                    // A proof asked for with the grant stored and the key gone is not signed by a new key.
+                    isGrantHeld = credentialStore::hasGrant,
                 )
                 TokenBinding.Bearer -> null
             }
             val proofs = dpopKey?.let { DpopProofFactory(it) }
 
-            val credentialStore = DataStoreCredentialStore.forFile(
-                file = File(directory, "credentials"),
-                keyProvider = keys,
-            )
             val flow = AuthorizationFlow(
                 configuration = core,
                 discovery = discovery,
@@ -433,6 +511,7 @@ public class OAuthClient private constructor(
                 logger = logger,
             )
             val jwks = JwksClient(httpClient, FileJwksCache(File(directory, "jwks.json")))
+            discovery.logger = logger
             val validator = JwksIdTokenValidator(
                 // The issuer the provider signs under: discovery's, which may carry a trailing
                 // slash the configured value does not (Auth0), and which the ID token repeats.
@@ -462,6 +541,10 @@ public class OAuthClient private constructor(
                 // The cooldown a Retry-After starts must run while the phone sleeps: Retry-After is wall
                 // time and the default clock (System.nanoTime) stops in deep sleep.
                 retryClock = { android.os.SystemClock.elapsedRealtime() },
+                // The cached access token ages with the device's real time too: the default clock
+                // (System.nanoTime) stops in deep sleep and a token an hour old would be served as
+                // fresh (`AUDIT C4`).
+                elapsedMillis = { android.os.SystemClock.elapsedRealtime() },
                 onCredentialsWiped = {
                     proofs?.nonces?.clear()
                     dpopKey?.destroy()

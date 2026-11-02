@@ -134,18 +134,20 @@ public class JsonWebKeySet internal constructor(public val keys: List<JsonWebKey
 public interface JwksCache {
     /**
      * The document, or null when none is kept or the one kept has expired by more than
-     * [staleForMillis] (zero: not at all).
+     * [staleForMillis] (zero: not at all), or, when [source] is given, when the one kept was not
+     * fetched from that `jwks_uri`: keys cached for one URI are not trusted for another, which a
+     * reconfigured issuer or a provider that moved its keys would otherwise get for a day.
      */
-    public suspend fun load(staleForMillis: Long = 0): String?
+    public suspend fun load(staleForMillis: Long = 0, source: String? = null): String?
 
-    /** Keeps [json] for [lifetimeMillis]. */
-    public suspend fun save(json: String, lifetimeMillis: Long)
+    /** Keeps [json] for [lifetimeMillis], remembering the `jwks_uri` it came from ([source]). */
+    public suspend fun save(json: String, lifetimeMillis: Long, source: String? = null)
     public suspend fun clear()
 }
 
 /** What [FileJwksCache] writes: the document and the instant it stops being good, in one file. */
 @kotlinx.serialization.Serializable
-internal class ExpiringDocument(val expiresAt: Long, val document: String)
+internal class ExpiringDocument(val expiresAt: Long, val document: String, val source: String? = null)
 
 /**
  * A plain file, written through a temporary so a crash never leaves half a document.
@@ -161,11 +163,13 @@ public class FileJwksCache(
     private val clock: () -> Long = System::currentTimeMillis,
 ) : JwksCache {
 
-    override suspend fun load(staleForMillis: Long): String? = withContext(SdkDispatchers.blocking) {
+    override suspend fun load(staleForMillis: Long, source: String?): String? = withContext(SdkDispatchers.blocking) {
         try {
             if (!file.exists()) return@withContext null
             val stored = discoveryJson.decodeFromString(ExpiringDocument.serializer(), file.readText())
-            stored.document.takeIf { CacheLifetime.isUsable(stored.expiresAt, clock(), staleForMillis) }
+            stored.document.takeIf {
+                CacheLifetime.isUsable(stored.expiresAt, clock(), staleForMillis) && (source == null || stored.source == source)
+            }
         } catch (e: IOException) {
             // Unreadable is a miss, never a failure: the document is one request away.
             null
@@ -177,12 +181,12 @@ public class FileJwksCache(
         }
     }
 
-    override suspend fun save(json: String, lifetimeMillis: Long) {
+    override suspend fun save(json: String, lifetimeMillis: Long, source: String?) {
         withContext(SdkDispatchers.blocking) {
             file.parentFile?.mkdirs()
             val temporary = File(file.parentFile, file.name + ".tmp")
             temporary.writeText(
-                discoveryJson.encodeToString(ExpiringDocument.serializer(), ExpiringDocument(clock() + lifetimeMillis, json)),
+                discoveryJson.encodeToString(ExpiringDocument.serializer(), ExpiringDocument(clock() + lifetimeMillis, json, source)),
             )
             if (!temporary.renameTo(file)) temporary.delete()
         }
@@ -200,13 +204,17 @@ public class MemoryJwksCache(
 ) : JwksCache {
     private var document: String? = null
     private var expiresAt = 0L
+    private var source: String? = null
 
-    override suspend fun load(staleForMillis: Long): String? =
-        document?.takeIf { CacheLifetime.isUsable(expiresAt, clock(), staleForMillis) }
+    override suspend fun load(staleForMillis: Long, source: String?): String? =
+        document?.takeIf {
+            CacheLifetime.isUsable(expiresAt, clock(), staleForMillis) && (source == null || this.source == source)
+        }
 
-    override suspend fun save(json: String, lifetimeMillis: Long) {
+    override suspend fun save(json: String, lifetimeMillis: Long, source: String?) {
         document = json
         expiresAt = clock() + lifetimeMillis
+        this.source = source
     }
 
     override suspend fun clear() {
@@ -241,6 +249,7 @@ public class JwksClient(
     private val mutex = Mutex()
     private var inMemory: JsonWebKeySet? = null
     private var inMemoryExpiresAt = 0L
+    private var inMemoryUri: String? = null
 
     /** After a failed fetch a reader that may use a stale set is not sent to the provider again before this. */
     private var retryNotBefore = 0L
@@ -270,9 +279,9 @@ public class JwksClient(
      */
     internal suspend fun keys(uri: String, forceRefresh: Boolean, allowStale: Boolean = false): Loaded = mutex.withLock {
         if (!forceRefresh) {
-            inMemory?.takeIf { CacheLifetime.isFresh(inMemoryExpiresAt, clock()) }
+            inMemory?.takeIf { inMemoryUri == uri && CacheLifetime.isFresh(inMemoryExpiresAt, clock()) }
                 ?.let { return@withLock Loaded(it, fetched = false) }
-            cache.load()?.let { stored ->
+            cache.load(source = uri)?.let { stored ->
                 val parsed = try {
                     JsonWebKeySet.parse(stored)
                 } catch (e: IllegalArgumentException) {
@@ -282,6 +291,7 @@ public class JwksClient(
                 }
                 if (parsed != null) {
                     inMemory = parsed
+                    inMemoryUri = uri
                     // The disk copy's own remaining lifetime is not visible here, so memory trusts
                     // it for the shortest a copy can be good for; the cache decides at the next load.
                     inMemoryExpiresAt = clock() + CacheLifetime.MIN_MILLIS
@@ -291,7 +301,7 @@ public class JwksClient(
         }
         // A reader that may use a stale set is not made to wait out a fetch that failed a moment ago.
         if (allowStale && clock() < retryNotBefore) {
-            staleSet()?.let { return@withLock Loaded(it, fetched = false, stale = true, cause = lastFailure) }
+            staleSet(uri)?.let { return@withLock Loaded(it, fetched = false, stale = true, cause = lastFailure) }
         }
         val fetched = try {
             fetch(uri)
@@ -301,7 +311,7 @@ public class JwksClient(
             retryNotBefore = clock() + STALE_RETRY_MILLIS
             lastFailure = e
             if (!allowStale) throw e
-            val stale = staleSet() ?: throw e
+            val stale = staleSet(uri) ?: throw e
             return@withLock Loaded(stale, fetched = false, stale = true, cause = e)
         }
         val parsed = try {
@@ -313,18 +323,19 @@ public class JwksClient(
             )
         }
         // Saved only once it parsed: a bad answer must not replace keys that worked.
-        cache.save(fetched.body, fetched.lifetimeMillis)
+        cache.save(fetched.body, fetched.lifetimeMillis, uri)
         inMemory = parsed
+        inMemoryUri = uri
         inMemoryExpiresAt = clock() + fetched.lifetimeMillis
         retryNotBefore = 0
         Loaded(parsed, fetched = true)
     }
 
     /** The key set held past its lifetime, by memory or disk, if it expired no more than a week ago. */
-    private suspend fun staleSet(): JsonWebKeySet? {
+    private suspend fun staleSet(uri: String): JsonWebKeySet? {
         val now = clock()
-        inMemory?.takeIf { CacheLifetime.isUsable(inMemoryExpiresAt, now, CacheLifetime.STALE_KEYS_MILLIS) }?.let { return it }
-        val stored = cache.load(CacheLifetime.STALE_KEYS_MILLIS) ?: return null
+        inMemory?.takeIf { inMemoryUri == uri && CacheLifetime.isUsable(inMemoryExpiresAt, now, CacheLifetime.STALE_KEYS_MILLIS) }?.let { return it }
+        val stored = cache.load(CacheLifetime.STALE_KEYS_MILLIS, uri) ?: return null
         return try {
             JsonWebKeySet.parse(stored)
         } catch (e: IllegalArgumentException) {

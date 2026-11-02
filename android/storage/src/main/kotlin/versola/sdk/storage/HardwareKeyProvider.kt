@@ -2,14 +2,17 @@ package versola.sdk.storage
 
 import android.os.Build
 import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyInfo
 import android.security.keystore.KeyPermanentlyInvalidatedException
 import android.security.keystore.KeyProperties
 import android.security.keystore.UserNotAuthenticatedException
+import java.security.GeneralSecurityException
 import java.security.KeyStore
 import javax.crypto.AEADBadTagException
 import javax.crypto.Cipher
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
+import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 import kotlinx.coroutines.withContext
 import versola.oauth.core.CredentialKeyProvider
@@ -198,22 +201,45 @@ internal class KeystoreStorageKeys(
 ) : StorageKeys {
 
     override fun encryptor(): Cipher =
-        Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, key()) }
+        Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.ENCRYPT_MODE, key(replaceUngated = true)) }
 
     override fun decryptor(parameters: GCMParameterSpec): Cipher =
-        Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.DECRYPT_MODE, key(), parameters) }
+        Cipher.getInstance(TRANSFORMATION).apply { init(Cipher.DECRYPT_MODE, key(replaceUngated = false), parameters) }
 
     override fun discard() {
         KeyStore.getInstance(KEYSTORE).apply { load(null) }.deleteEntry(alias)
     }
 
-    private fun key(): SecretKey {
+    /**
+     * The key under [alias]. A key generated under [UnlockPolicy.None] is not reused to wrap under
+     * [UnlockPolicy.OnAppUnlock] (`AUDIT Z2`): an app that moved to the stricter policy would keep
+     * its grant under a key anyone running as the app can use with no authentication, and the policy
+     * would protect nothing. The ungated entry is replaced by a gated one when something is wrapped,
+     * which makes what it wrapped unreadable: the user signs in again, once. Reading never replaces
+     * a key, so what the old one still opens stays readable until the next write.
+     *
+     * The key's gating is read back from the Keystore (`KeyInfo`); a key that cannot be asked is
+     * kept, as before, rather than replaced on a guess.
+     */
+    private fun key(replaceUngated: Boolean): SecretKey {
         val keyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
-        (keyStore.getEntry(alias, null) as? KeyStore.SecretKeyEntry)?.let { return it.secretKey }
+        (keyStore.getEntry(alias, null) as? KeyStore.SecretKeyEntry)?.secretKey?.let { existing ->
+            val ungated = unlockPolicy == UnlockPolicy.OnAppUnlock && isUserAuthenticationRequired(existing) == false
+            if (!(replaceUngated && ungated)) return existing
+            keyStore.deleteEntry(alias)
+        }
 
         val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE)
         generator.init(HardwareKeyProvider.keySpec(alias, unlockPolicy))
         return generator.generateKey()
+    }
+
+    /** Whether the Keystore says [key] needs user authentication, or null when it cannot be asked. */
+    private fun isUserAuthenticationRequired(key: SecretKey): Boolean? = try {
+        val factory = SecretKeyFactory.getInstance(key.algorithm, KEYSTORE)
+        (factory.getKeySpec(key, KeyInfo::class.java) as KeyInfo).isUserAuthenticationRequired
+    } catch (e: GeneralSecurityException) {
+        null
     }
 
     private companion object {

@@ -210,6 +210,7 @@ final class LoggedLines: OAuthLogger, Sendable {
     var all: [String] { lines.withLock { $0 } }
     func info(_ message: String) { lines.withLock { $0.append(message) } }
     func warn(_ message: String) { lines.withLock { $0.append(message) } }
+    func debug(_ message: String) { lines.withLock { $0.append("debug: " + message) } }
 }
 
 actor Box<Value: Sendable> {
@@ -223,7 +224,7 @@ struct FixedDpopSource: DpopProofSource {
     func thumbprint() async throws -> String { jkt }
     func proof(method: String, url: URL, nonce: String?, accessToken: String?) async throws -> String { "proof" }
     func observe(nonce: String, origin: String) async {}
-    func observe(serverDate: String?, age: String?) async {}
+    func observe(serverDate: String?, age: String?, origin: String) async {}
     func nonce(for origin: String) async -> String? { nil }
     func clearNonces() async {}
 }

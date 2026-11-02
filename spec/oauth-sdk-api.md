@@ -53,12 +53,12 @@ construction, never behind a login screen.
 | Field | Type | Default | Rules |
 |---|---|---|---|
 | `issuer` | URL | required unless `endpoints` is given | `https`, or `http` on a loopback host only (`127.0.0.1`, `localhost`, `[::1]`: a provider on the developer's machine under `adb reverse`; the emulator's `10.0.2.2` is not one and is refused), host present, no query or fragment (RFC 8414 section 2). The discovery document is fetched at the issuer's well-known path and its `issuer` member must equal the configured value, where a single trailing slash is ignored for that comparison only (Auth0 announces its issuer with one); `DiscoveryIssuerMismatch` otherwise, with no per-provider exception. The ID token's `iss` is then compared to the discovered `issuer` byte for byte. A metadata document whose `issuer` is a template (Entra's `common` endpoint) is therefore unsupported; `providers.md` says what to configure instead |
-| `endpoints` | `ProviderEndpoints` | none | for a provider without discovery: `authorizationEndpoint`, `tokenEndpoint`, `issuer`, optional `jwksUri`, `userinfoEndpoint`, `revocationEndpoint`, `endSessionEndpoint`, `pushedAuthorizationRequestEndpoint`, `idTokenSigningAlgValuesSupported`; all `https` (or `http` on a loopback host, as for `issuer`); mutually exclusive with discovery, and the SDK then treats unlisted capabilities as absent |
+| `endpoints` | `ProviderEndpoints` | none | for a provider without discovery: `authorizationEndpoint`, `tokenEndpoint`, `issuer`, `jwksUri` (required: an ID token that cannot be verified is refused), `userinfoEndpoint`, `revocationEndpoint`, `endSessionEndpoint`, `pushedAuthorizationRequestEndpoint`, `idTokenSigningAlgValuesSupported`; all `https` (or `http` on a loopback host, as for `issuer`); mutually exclusive with discovery, and the SDK then treats unlisted capabilities as absent |
 | `clientId` | string | required | non-blank |
 | `redirectUri` | URI | required | absolute, no fragment; `https` (verified link, preferred), loopback, or a private-use scheme (accepted with a logged warning on every `create()`); cleartext `http` to a non-loopback host refused |
 | `postLogoutRedirectUri` | URI | none | same rules as `redirectUri`; when absent `post_logout_redirect_uri` is not sent, and the end-session page is still opened: the provider's session ends, nothing can come back, `sessionEnded` is `false` and the user dismisses the page (iOS has to give `ASWebAuthenticationSession` a callback, so it matches the login `redirectUri`, which the provider is not told of). Android, under Auth Tab: the tab intercepts this URI, so an `https` host must be a verified App Link of the app like `redirectUri`'s, or the tab closes unverified and `logout()` reports `sessionEnded = false` (a Custom Tab would have shown the page instead) |
 | `scopes` | set of strings | `{"openid"}` | the default scope set for `login()`; `openid` is added if missing (this is an OIDC SDK); nothing else is added silently, including `offline_access` (see section 8) |
-| `tokenBinding` | `Bearer` or `Dpop(required: Boolean = false)` | `Bearer` | section 9 |
+| `tokenBinding` | `Bearer` or `Dpop(requireHardware: Boolean = false)` | `Bearer` | section 9 |
 | `pushedAuthorization` | `Never`, `WhenAdvertised`, `Required` | `WhenAdvertised` | section 7 |
 | `endSessionEndpoint` | URL | none | overrides the discovered `end_session_endpoint`, or supplies one when discovery has none; `https` (or `http` on a loopback host, as for `issuer`); the parameters the SDK sends stay those of RP-Initiated Logout 1.0 (section 12). The only endpoint that may be overridden alongside `issuer`: vendors commonly place sign-out at a non-standard URL, and no other endpoint is safe to redirect by configuration |
 | `protectedOrigins` | set of origins | empty | `scheme://host[:port]`, `https`, or `http` on a loopback host only (`127.0.0.1`, `localhost`, `[::1]`: a resource on the developer's machine under `adb reverse`, the same allowance the issuer has; never a remote host); the only origins the authenticated client sends a token to; may also be given per client (section 10) |
@@ -66,7 +66,7 @@ construction, never behind a login screen.
 | `unlockPolicy` | `UnlockPolicy` | `None` | `state-machine.md`'s `Locked` state is reachable only under `OnAppUnlock` |
 | `clockSkewTolerance` | duration | 60 s | tolerance for `exp`, `iat`, `nbf` in ID-token validation; maximum 5 minutes |
 | `logger` | `Logger` | platform default | section 12 |
-| `httpClient` | platform HTTP client | platform default | OkHttp `OkHttpClient` / `URLSession` configuration; redirects are switched off on the SDK's own requests whatever the client does. Also on the SDK's own requests, whatever the client's settings say: no cached answer is ever served (a forced refetch of a key set or discovery document reaches the provider; iOS `URLCache` is bypassed), a response body over 1 MiB is refused (`Configuration`, no retry) while it streams in, and a request's deadline is bounded by the operation's retry budget (`retry-policy.md`) |
+| `httpClient` | platform HTTP client | platform default | OkHttp `OkHttpClient` / `URLSession` configuration; redirects are switched off on the SDK's own requests whatever the client does. The default is one shared client with connect and read timeouts of 10 s and a 60 s deadline on a whole call (a response that connects and then drips would hold a call for ever otherwise); an app's own client sets its own. Also on the SDK's own requests, whatever the client's settings say: no cached answer is ever served (a forced refetch of a key set or discovery document reaches the provider; iOS `URLCache` is bypassed), a response body over 1 MiB is refused (`Configuration`, no retry) while it streams in, and a request's deadline is bounded by the operation's retry budget (`retry-policy.md`) |
 
 Explicit endpoints are the escape hatch for providers that do not publish discovery or publish it
 at a non-standard path. They are not a way to override a discovered value: a configuration with both
@@ -79,7 +79,13 @@ val oauth = OAuthClient.create(context, configuration)
 ```
 
 - One instance per configuration per process; a second `create()` with the same configuration
-  returns the same instance (two stores over one file is a known failure). A different
+  returns the same instance (two stores over one file is a known failure). The `httpClient` and the
+  `logger` are part of that configuration for this purpose, compared by identity: a second `create()` with
+  another client or logger is refused with `Configuration(InvalidConfiguration)`, because returning the first
+  client would silently drop the app's new timeouts, pinning or proxy. An app that re-runs `create()` (an
+  `Activity.onCreate` on rotation) hoists them. The application interceptors of the app's client stay on
+  the SDK's own requests: an interceptor that logs bodies sees token traffic, and `security.md`'s rule
+  that no secret is logged is the app's to keep there (documented on `httpClient`). A different
   configuration in the same process is a different instance with its own storage, keyed by a hash
   of `issuer` (or the endpoints) and `clientId`, so a later multi-account feature needs no
   migration.
@@ -132,7 +138,8 @@ val oauth = OAuthClient.create(context, configuration)
 - **Order.** While the state is `Authorizing` no grant is stored. An app that calls an
   authenticated operation (`accessToken()`, `refresh()`, `userInfo()`, a request through the
   authenticated client or session) before the resume has left `Authorizing` gets the
-  no-grant `Reauthenticate(GrantRejected)` error. Nothing is wiped for it, so the pending
+  no-grant `Reauthenticate(GrantRejected)` error (`userInfo()` with no session at all is
+  `Reauthenticate(SessionExpired)`, since no token endpoint was asked what `GrantRejected` says). Nothing is wiped for it, so the pending
   sign-in and the DPoP key its `dpop_jkt` committed to survive and the sign-in can still finish
   (`state-machine.md`, `Refreshing → Unauthenticated`); the state stays `Authorizing`.
 
@@ -145,17 +152,23 @@ val oauth = OAuthClient.create(context, configuration)
 | `accessToken()` | a token not within its refresh skew is available, refreshing once if needed (single-flight) | `AccessToken(value, type: Bearer or DPoP)`; `expiresAt` and `scopes` are not exposed on any platform yet (section 16, question 6) | `Reauthenticate(GrantRejected, SessionExpired)`, `Recoverable(Network, UnlockRequired)` |
 | `refresh()` | the refresh completed | nothing | as `accessToken()` |
 | `claims` | — (property, memory) | `IdTokenClaims?` of the last validated ID token; null when unauthenticated. After a cold start the stored ID token is read back by the first operation (`accessToken()`, `userInfo()`, a refresh), without re-verifying it: it was validated before it was stored | — |
-| `userInfo()` | the UserInfo response is validated | `UserInfo` (the standard claims typed, the rest as a read-only map); `sub` must equal the ID token's `sub` (OIDC Core 5.3.2) | `Configuration(ProviderUnsupported)` when no endpoint, `Recoverable`, `Reauthenticate` |
+| `userInfo()` | the UserInfo response is validated | `UserInfo` (the standard claims typed, the rest as a read-only map); `sub` must equal the ID token's `sub` (OIDC Core 5.3.2) | `Configuration(ProviderUnsupported)` when no endpoint, `Recoverable`, `Reauthenticate` (`SessionExpired` with no session) |
 | `stepUp(challenge, options)` | as `login()` | re-authorizes with the challenge's `acr_values` and `max_age` and the configured scopes (or the options'); the app re-issues the refused call | as `login()` |
 | `metadata()` | discovery is cached | `ProviderMetadata` | `Configuration(Discovery*)`, `Recoverable(Network or Server)` |
-| `authenticatedClient(origins)` / `interceptor(origins)` / `authenticatedSession(origins)` | — | section 10 | — |
+| `authenticatedClient(origins)` / `authenticatedSession(origins)` | — | section 10 | — |
 | `keyAttestation()` | the DPoP key exists | `KeyAttestation?` (null under `Bearer`) | — |
 
 `login()` while `Authenticated` starts a new authorization and, on success, replaces the stored
 grant; on cancel or failure the existing session stays (`state-machine.md`, settle on
-`Authenticated`). `login()` while an authorization is **in flight** is refused with
-`Configuration(InvalidConfiguration("an authorization is already in progress"))`; the app observes
-the state before asking. In flight means this process is carrying one out: the browser is up, or a validated redirect's
+`Authenticated`). `login()` while an authorization is **in flight** *joins* it when the two calls ask for the same
+thing (same scopes, `acr_values`, `max_age`, parameters and `ephemeral`): the second caller awaits the
+first's result and gets the same `TokenResponse` or the same error, with one browser and one
+exchange, as concurrent refreshes coalesce. No error: a double-tapped button is a user action, not a
+deployment mistake. A second call that asks for something else (another scope set, another `acr_values`)
+is refused with `Configuration(InvalidConfiguration("an authorization is already in progress"))`, since
+neither joining nor replacing the first can be right; the app observes the state before asking. A
+joiner that is cancelled leaves the first call running; the first call being cancelled does not end
+the authorization for a joiner that is still waiting. In flight means this process is carrying one out: the browser is up, or a validated redirect's
 code exchange has not finished (the end-session page is open too). A **resume that only waits for
 its redirect** is not in flight: `login()` and `stepUp()` end the wait and take its place. A
 pending request that nobody awaits is not in flight either, even though the state reads
@@ -205,13 +218,18 @@ is the precise error scenario 17 cannot give without PAR.
   with the pending-rotation slot of `state-machine.md` persisted first.
 - `offline_access` is not added to any request by the SDK. Providers that need it for a refresh
   token say so in `providers.md`; the integrator puts it in `scopes`. The SDK logs once, at
-  `create()`, when the configured scopes lack it and the discovered `scopes_supported` lists it.
+  the first login, when the configured scopes lack it and the discovered `scopes_supported` lists it.
 - A session without a refresh token (the provider issued none) is `Authenticated` until the access
   token expires, then `accessToken()` is `Reauthenticate(SessionExpired)`. Nothing is retried.
 - `invalid_grant` on refresh wipes the grant and is `Reauthenticate(GrantRejected)`, never retried.
 - The refresh skew is `state-machine.md`'s: `min(30 s, expires_in / 10)` on a monotonic clock. A
   response without `expires_in` means *unknown*, not expired: no proactive refresh, the session
   waits for the 401, and one warning is logged.
+  `expires_in` is read leniently: an integer, a quoted integer or a finite float (`3599.0`) is its
+  value in seconds, and anything else is *unknown* too, never a failed exchange: the code was spent
+  by the request that carried it. The response's `Date` is used as the provider's clock for ID-token
+  validation only when it is within a week of the device's clock and carries no `Age` header (a
+  cache's copy is as old as its `Age` says); otherwise the device's clock is used.
 - The generic facade sends no `Idempotency-Key`: it is not defined by a standard a provider is held
   to, and the core sends only what a standard defines (ADR 0001). The pending-rotation slot is still
   persisted, so a process killed mid-rotation restarts with the outgoing token and retries once; a
@@ -229,8 +247,8 @@ is the precise error scenario 17 cannot give without PAR.
 | `tokenBinding` | `dpop_signing_alg_values_supported` includes `ES256` | absent or without `ES256` |
 |---|---|---|
 | `Bearer` (default) | bearer | bearer |
-| `Dpop(required = false)` | DPoP: hardware P-256 key, proofs on every token and resource request, nonce per origin | bearer, one warning logged |
-| `Dpop(required = true)` | DPoP | `Configuration(ProviderUnsupported("dpop"))` |
+| `Dpop(requireHardware = false)` | DPoP: hardware P-256 key, proofs on every token and resource request, nonce per origin | bearer, one warning logged |
+| `Dpop(requireHardware = true)` | DPoP | `Configuration(ProviderUnsupported("dpop"))` |
 
 Bearer is the default because a resource server that does not verify DPoP rejects a DPoP-bound token
 presented as `Authorization: DPoP`; an integrator opts in when their resource servers do. Under DPoP
@@ -240,7 +258,7 @@ non-exportable, not user-gated, and regenerated on every `login()`; `keyAttestat
 tier read back. The authorization request, pushed or not, carries `dpop_jkt` (RFC 9449 section
 10), the thumbprint of that key; a refresh is proved with the same key. A key whose
 tier is `Software` where hardware was required (`Dpop(requireHardware = true)` on Android,
-`dpop(required: true)` on iOS) is `Configuration(HardwareBindingUnavailable)` before any request to
+`dpop(requireHardware: true)` on iOS) is `Configuration(HardwareBindingUnavailable)` before any request to
 the authorization endpoint (`errors.md`). Scenario 33 holds all of this against a real provider.
 
 On Android the key is generated in StrongBox first. A StrongBox that is absent (the Keystore's
@@ -257,7 +275,7 @@ The platform's HTTP client with the session attached, so most integrators never 
 
 | Platform | Shape |
 |---|---|
-| Android | `interceptor(origins)`: an OkHttp application interceptor; `authenticatedClient(origins)`: the configured client plus the interceptor, redirects off |
+| Android | `authenticatedClient(origins)`: the configured client plus an OkHttp application interceptor, redirects off. The interceptor is not offered on its own: it cannot be made safe on a client that follows redirects, since OkHttp follows a `Location` below an application interceptor and would send the `DPoP` proof to the next hop (another URL, or another host), so the one client it is installed on is the one with redirects switched off |
 | iOS | `authenticatedSession(origins)`: a `URLSession` wrapper (`data(for:)`) that attaches the token and handles the retries |
 | Flutter | `httpClient({origins})`: a `package:http` `Client` (`BaseClient`) whose `send` hands the request to the native authenticated client above and returns its response, so the token, the DPoP key and its proofs and the refresh never reach Dart; an app wraps it with its own interceptors, ours innermost |
 
@@ -320,7 +338,7 @@ Mandatory on every platform, before the token response is persisted (OIDC Core 3
    refused (a public client has no secret to verify with).
 2. `iss` equals the configured issuer (or the discovered one, which must be equal).
 3. `aud` contains `clientId`; with several audiences `azp` must be present and equal `clientId`.
-4. `exp` in the future and `iat` present, within `clockSkewTolerance` after skew correction.
+4. `exp` in the future and `iat` present, within `clockSkewTolerance` after skew correction; `nbf`, when present, not after now plus the tolerance (RFC 7519 4.1.5; refused as `IssuedAt`).
 5. `nonce` equals the value sent, compared in constant time (login only).
 6. `auth_time` present and no older than `max_age` when `max_age` was sent.
 7. `at_hash`, when present, matches the access token (`c_hash` is not applicable to `code`).
@@ -367,16 +385,16 @@ handled in app code after `logout()` has wiped locally; the SDK does not special
 | Concept | Kotlin (`versola.oauth`) | Swift (`VersolaOAuth`) | Dart (`versola_oauth`) |
 |---|---|---|---|
 | Entry point | `OAuthClient.create(context, config)` | `OAuthClient.create(configuration:presentationAnchor:)` (static, async: one instance per configuration per process, as on Android; an `init` could not return an existing one) | `OAuthClient.create(config)` |
-| Configuration | `OAuthConfiguration(...)` data class | `OAuthConfiguration` struct | `OAuthConfiguration` |
-| State | `Flow<SessionState>` (cold; the first emission is the restored state, which a `StateFlow` could not promise) | `sessionStates() -> AsyncStream<SessionState>` (one stream per observer) | `Stream<SessionState> sessionStates()` (any number of listeners over one native subscription; a late listener first gets the latest state), `Future<SessionState> currentSessionState()` |
+| Configuration | `OAuthConfiguration(...)` class | `OAuthConfiguration` struct | `OAuthConfiguration` |
+| State | `Flow<SessionState>` and `suspend fun currentSessionState(): SessionState` (the value now, after the restore a cold start owes; for an Activity choosing between a login and a home screen) (cold; the first emission is the restored state, which a `StateFlow` could not promise) | `sessionStates() -> AsyncStream<SessionState>` (one stream per observer) | `Stream<SessionState> sessionStates()` (any number of listeners over one native subscription; a late listener first gets the latest state), `Future<SessionState> currentSessionState()` |
 | Sign-in | `suspend fun login(options)` | `func login(_ options:) async throws` | `Future<void> login([options])` |
-| Options | `LoginOptions` data class | `LoginOptions` struct | `LoginOptions` |
+| Options | `LoginOptions` class | `LoginOptions` struct | `LoginOptions` |
 | Sign-out | `suspend fun logout(options): LogoutOutcome` | `func logout(_:) async -> LogoutOutcome` | `Future<LogoutOutcome> logout([options])` |
-| Token | `suspend fun accessToken(): AccessToken` (`isDpopBound`; the scheme is `DPoP` if set, else `Bearer`) | `func accessToken() async throws -> AccessToken` (`tokenType` is `Bearer` or `DPoP`, in that spelling whatever the provider's `token_type` said; a type other than DPoP is `Bearer`, as on Android) | `Future<AccessToken> accessToken()` |
+| Token | `suspend fun accessToken(): AccessToken` (`isDpopBound`; the scheme is `DPoP` if set, else `Bearer`) | `func accessToken() async throws -> AccessToken` (`tokenType` is `Bearer` or `DPoP`, in that spelling whatever the provider's `token_type` said; a `token_type` that is neither `Bearer` nor `DPoP` is a malformed token response, `Configuration(TokenResponseMalformed)`, as on Android) | `Future<AccessToken> accessToken()` |
 | Claims | `val claims: IdTokenClaims?` | `var claims: IdTokenClaims? { get async }` | `Future<IdTokenClaims?> claims()` (a method, not a getter: the claims stay native, so the answer is asynchronous, and a `Future` getter would make `client.claims != null` always true) |
 | UserInfo | `suspend fun userInfo(): UserInfo` | `func userInfo() async throws -> UserInfo` | `Future<UserInfo> userInfo()` |
 | Step-up | `suspend fun stepUp(challenge, options)` | `func stepUp(_ challenge: OAuthError, options:) async throws` takes the caught `.stepUp` case; `func stepUp(acrValues:maxAge:options:) async throws` also exists | `Future<void> stepUp(challenge, [options])` |
-| HTTP | `interceptor(origins)`, `authenticatedClient(origins)` | `authenticatedSession(origins)` | `httpClient({origins})`, a `package:http` `Client`; `accessToken()` stays the escape hatch |
+| HTTP | `authenticatedClient(origins)` | `authenticatedSession(origins)` | `httpClient({origins})`, a `package:http` `Client`; `accessToken()` stays the escape hatch |
 | Browser leg | Auth Tab (androidx.browser, activity result) where the Custom Tabs provider supports it, Custom Tabs otherwise, any browser last; `WebView` unrepresentable | `ASWebAuthenticationSession` | native |
 | Redirect | an Auth Tab returns it as its result; otherwise the manifest-declared activity | `ASWebAuthenticationSession` returns it; `handleRedirect(_ url: URL) async -> Bool` feeds a Universal Link received while the app was cold to the pending authorization that `create()` resumes | native |
 | Errors | `sealed class VersolaError : Exception` (the rename to `OAuthError` is deferred, ADR 0001) | `enum OAuthError: Error, Sendable` with the same four cases and payloads | `sealed class OAuthError implements Exception` |
@@ -409,8 +427,13 @@ them as a parameter for the same reason.
 
 ## 15. Logging
 
-`Logger` with `info` and `warn`; the default implementation logs warnings only. No line at any
-level carries a token, code, verifier, `state`, `nonce`, proof, header value or claim value.
+`Logger` with `info`, `warn` and `debug`; `debug` has a default that does nothing, so an existing
+implementer compiles, and the default implementation logs warnings only. `debug` is where
+diagnostics go: discovery fetched (the endpoint's host, not its URL), a refresh coalesced onto one
+in flight, a retry scheduled (attempt, delay, the status or the kind of failure), a cached document
+served. No line at any
+level carries a token, code, verifier, `state`, `nonce`, proof, header value, claim value, or a URL
+with its query.
 Warnings are emitted for: a private-use redirect scheme, DPoP requested but not advertised, no
 refresh token issued, `offline_access` advertised but not configured, a response without
 `expires_in`, a software-tier key. Each is emitted once per `create()`.
@@ -419,7 +442,7 @@ refresh token issued, `offline_access` advertised but not configured, a response
 
 1. `IdTokenRejected` as `Configuration` (section 11) versus a fifth category; the spec's
    four-category rule argues for `Configuration`.
-2. `login()` while an authorization is in flight refused (section 5) versus cancelling the outstanding request. A request nobody awaits, or a resume that only waits for its redirect, is superseded.
+2. `login()` while an authorization is in flight joined when the call is the same (section 5), refused when it differs, versus cancelling the outstanding request. A request nobody awaits, or a resume that only waits for its redirect, is superseded.
 3. `stepUp()` takes the configured scopes by default (section 5); the Versola facade requires
    them as a parameter. The two differ in signature, not in what is sent.
 4. The discovery and key-set cache lifetime bounds (5 minutes to 24 hours, 24 hours without `Cache-Control`) and the 30-second refresh skew: fixed, not configurable.

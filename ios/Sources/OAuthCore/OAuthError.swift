@@ -89,3 +89,58 @@ extension OAuthError: CustomStringConvertible {
         }
     }
 }
+
+extension OAuthError {
+    /// A stable machine-readable string for logs, analytics and branching: it names the case and
+    /// never the payload, and is the same on every platform (`spec/errors.md`, "Stable codes").
+    public var code: String {
+        switch self {
+        case .recoverable(let cause):
+            switch cause {
+            case .userCancelled: return "recoverable.user_cancelled"
+            case .systemCancelled: return "recoverable.system_cancelled"
+            case .pendingRequestExpired: return "recoverable.pending_request_expired"
+            case .network: return "recoverable.network"
+            case .server: return "recoverable.server"
+            case .unlockRequired: return "recoverable.unlock_required"
+            case .nonceLoop: return "recoverable.nonce_loop"
+            }
+        case .reauthenticate(let reason):
+            switch reason {
+            case .authorizationDenied: return "reauthenticate.authorization_denied"
+            case .interactionRequired: return "reauthenticate.interaction_required"
+            case .credentialsInvalidated: return "reauthenticate.credentials_invalidated"
+            case .grantRejected: return "reauthenticate.grant_rejected"
+            case .sessionRejected: return "reauthenticate.session_rejected"
+            case .sessionExpired: return "reauthenticate.session_expired"
+            }
+        case .stepUp:
+            return "step_up"
+        case .configuration(let detail):
+            switch detail {
+            case .stateMismatch: return "configuration.state_mismatch"
+            case .issuerMismatch: return "configuration.issuer_mismatch"
+            case .malformedAuthorizationResponse: return "configuration.malformed_authorization_response"
+            case .authorizationRejected: return "configuration.authorization_rejected"
+            case .tokenRequestRejected: return "configuration.token_request_rejected"
+            case .tokenResponseMalformed: return "configuration.token_response_malformed"
+            case .discoveryFieldMissing: return "configuration.discovery_field_missing"
+            case .discoveryIssuerMismatch: return "configuration.discovery_issuer_mismatch"
+            case .discoveryMalformed: return "configuration.discovery_malformed"
+            case .invalidConfiguration: return "configuration.invalid_configuration"
+            case .noBrowserAvailable: return "configuration.no_browser_available"
+            case .idTokenRejected: return "configuration.id_token_rejected"
+            case .userInfoRejected: return "configuration.user_info_rejected"
+            case .providerUnsupported: return "configuration.provider_unsupported"
+            case .hardwareBindingUnavailable: return "configuration.hardware_binding_unavailable"
+            }
+        }
+    }
+}
+
+/// What `error.localizedDescription` says: without this an app that logs or shows an `Error` gets
+/// "The operation couldn't be completed. (OAuthCore.OAuthError error 0.)". The text is the
+/// `description`, which is safe to log (nothing credential-shaped is carried).
+extension OAuthError: LocalizedError {
+    public var errorDescription: String? { description }
+}

@@ -4,10 +4,15 @@ import Foundation
 package struct StartedAuthorization: Sendable {
     package let pending: PendingAuthorizationRequest
     package let browserUri: URL
+    /// When the `browserUri` stops working, if the starter knows (a pushed request's `request_uri`
+    /// lives for the `expires_in` the provider named, RFC 9126 section 2.2): a redirect answering it
+    /// after that cannot be an answer to a live request.
+    package let expiresAt: Date?
 
-    package init(pending: PendingAuthorizationRequest, browserUri: URL) {
+    package init(pending: PendingAuthorizationRequest, browserUri: URL, expiresAt: Date? = nil) {
         self.pending = pending
         self.browserUri = browserUri
+        self.expiresAt = expiresAt
     }
 }
 

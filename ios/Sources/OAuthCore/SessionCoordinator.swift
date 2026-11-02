@@ -51,6 +51,19 @@ package actor SessionCoordinator: AccessTokenSource {
     /// Bumped by every wipe: a flight that started in an older epoch persists nothing.
     private var epoch: UInt64 = 0
     private var flight: Task<TokenResponse, Error>?
+    /// A rotated refresh token the store refused to take (a Keychain that locked between the
+    /// provider's answer and the save). The provider rotated when it answered, so the stored token is
+    /// spent and this is the only live credential there is: it is kept for the next refresh to save
+    /// first, rather than that refresh replaying the spent one into `invalid_grant` and a wipe.
+    /// In memory only for as long as the store stays unwilling; never logged.
+    private var unsavedRotation: String?
+    /// A local wipe that could not remove the grant (`clear()` threw). The sign-out already happened
+    /// as far as the user and the app are concerned, so the grant that survived must not mint tokens
+    /// until the removal succeeds (`ensureWiped`).
+    private var wipeIncomplete = false
+    /// Set for the length of `logout()`: a refresh started meanwhile would spend the token the logout is
+    /// revoking or wiping, and its answer would be published over `loggingOut`.
+    private var loggingOut = false
 
     /// The claims of the validated ID token of this session, or nil when there is no session.
     package private(set) var claims: IdTokenClaims?
@@ -92,7 +105,7 @@ package actor SessionCoordinator: AccessTokenSource {
     }
 
     private nonisolated func newOperation<T: Sendable>(_ body: @Sendable () async throws -> T) async rethrows -> T {
-        let budget = retryPolicy.newBudget(clock: clock, cooldown: cooldown)
+        let budget = retryPolicy.newBudget(clock: clock, cooldown: cooldown, logger: logger)
         return try await OperationBudget.$current.withValue(budget) { try await body() }
     }
 
@@ -101,14 +114,17 @@ package actor SessionCoordinator: AccessTokenSource {
     /// The claims, read back from the stored ID token after a cold start: it was validated
     /// before it was stored, so a parse is enough (its `exp` says nothing about the session).
     package func restoreClaims() async -> IdTokenClaims? {
+        try? await restoreClaimsOrThrow()
+    }
+
+    /// As `restoreClaims`, but a store that cannot be read right now (a Keychain locked after a
+    /// reboot) is said so instead of reading as "no claims": nothing is marked restored, so the next
+    /// call reads again.
+    package func restoreClaimsOrThrow() async throws -> IdTokenClaims? {
         if let claims { return claims }
         if idTokenValidator == nil || claimsRestored { return nil }
         let stored: String?
-        do {
-            if let inMemory = memorySession?.rawIdToken { stored = inMemory } else { stored = try await credentialStore.rawIdToken() }
-        } catch {
-            return nil
-        }
+        if let inMemory = memorySession?.rawIdToken { stored = inMemory } else { stored = try await credentialStore.rawIdToken() }
         claimsRestored = true
         guard let stored, let parsed = try? IdTokenClaimsParser.parseStored(stored) else { return nil }
         claims = parsed
@@ -199,6 +215,7 @@ package actor SessionCoordinator: AccessTokenSource {
         let flow = self.flow
         let tokenClient = self.tokenClient
         let validator = self.idTokenValidator
+        let startedIn = epoch
         let exchange = Task { [self] () throws -> (TokenResponse, IdTokenClaims?) in
             do {
                 // The budget of the login this belongs to, the user's time in the browser left out of
@@ -222,6 +239,13 @@ package actor SessionCoordinator: AccessTokenSource {
             }
         }
         let (response, validated) = try await exchange.value
+        // A `logout()` or a wipe ended the session while the code was being exchanged: what came
+        // back belongs to a session the user has left, and saving it would undo the sign-out. The
+        // grant the provider issued is revoked (best effort) rather than left live and unreachable.
+        if epoch != startedIn {
+            if let refreshToken = response.refreshToken { try? await tokenClient.revoke(refreshToken: refreshToken) }
+            throw OAuthError.recoverable(.userCancelled)
+        }
         do {
             return try await persistLogin(response, validated: validated)
         } catch {
@@ -234,9 +258,15 @@ package actor SessionCoordinator: AccessTokenSource {
     }
 
     private func persistLogin(_ response: TokenResponse, validated: IdTokenClaims?) async throws -> TokenResponse {
+        // The grant stored here replaces whatever a refresh already in flight is spending: that
+        // flight's answer is for the old grant and must not be saved over this one. Moved before
+        // the first await, since the flight can resume at any of them.
+        epoch += 1
         if let refreshToken = response.refreshToken {
             try await credentialStore.save(refreshToken: refreshToken, rawIdToken: response.idToken)
             memorySession = nil
+            unsavedRotation = nil
+            wipeIncomplete = false
         } else {
             // A grant already on disk belongs to the session this login replaces; left there it
             // would come back on the next cold start as the previous user (the ghost session
@@ -265,12 +295,17 @@ package actor SessionCoordinator: AccessTokenSource {
     }
 
     private func refresh(rejected: Cached?, onlyIfStale: Bool) async throws -> TokenResponse {
+        // Refused, not queued: the session is ending, and `loggingOut` is left as it is.
+        if loggingOut { throw OAuthError.reauthenticate(.grantRejected) }
         if onlyIfStale, let current = cachedAccessToken, current.receivedAt != rejected?.receivedAt, usable(current) {
             return current.response
         }
+        try await ensureWiped()
         if let flight {
-            // Joining: a cancellation of this caller leaves the flight to the others.
-            return try await flight.value
+            // Joining: a cancellation of this caller leaves the flight to the others, and returns
+            // at once rather than when the flight does (`cancellableValue`).
+            logger?.debug("refresh: joined the refresh already in flight")
+            return try await cancellableValue(of: flight)
         }
         // The flight is registered before anything is awaited: an `await` here is a point
         // another caller enters this actor, and finding no flight it would start a second
@@ -295,7 +330,7 @@ package actor SessionCoordinator: AccessTokenSource {
             return try await performRefresh(startedIn: startedIn, priorState: priorState)
         }
         flight = task
-        return try await task.value
+        return try await cancellableValue(of: task)
     }
 
     private func endFlight() {
@@ -307,18 +342,26 @@ package actor SessionCoordinator: AccessTokenSource {
             // Step 1: the rotation slot. A key already in it is a process death between steps
             // 1 and 2 of a previous attempt: the token on disk has not changed since, so
             // replaying with it is correct rather than merely convenient.
-            let idempotencyKey: String
-            if let pending = try await credentialStore.pendingRotation() {
-                idempotencyKey = pending
-            } else {
-                guard let token = try await credentialStore.refreshToken() else { throw NoGrantStored() }
-                idempotencyKey = Self.idempotencyKey(for: token)
+            if let unsaved = unsavedRotation {
+                // The previous refresh was answered and could not be saved: the store is asked again
+                // before anything else, and the slot that named the spent token goes with it.
+                try await credentialStore.saveRefreshed(refreshToken: unsaved, rawIdToken: nil)
+                if epoch == startedIn { unsavedRotation = nil }
+                try await credentialStore.savePendingRotation(nil)
+            }
+            guard let current = try await credentialStore.refreshToken() else { throw NoGrantStored() }
+            // The slot is a key derived from the token it was written for, so it is replayed only
+            // while it still names the stored one. After a login or a step-up replaced the token, or
+            // a rotation saved and killed before the slot was cleared, it names a spent generation
+            // and replaying it would present the new token under the old key.
+            let idempotencyKey = Self.idempotencyKey(for: current)
+            if try await credentialStore.pendingRotation() != idempotencyKey {
                 try await credentialStore.savePendingRotation(idempotencyKey)
             }
             let origin = DpopOrigin.of(URL(string: try await flow.metadata().tokenEndpoint) ?? URL(string: "https://invalid")!)
             // The budget of the operation this refresh serves, or its own when nothing else is
             // running (a flight started from a timer the app owns).
-            let budget = OperationBudget.current ?? retryPolicy.newBudget(clock: clock, cooldown: cooldown)
+            let budget = OperationBudget.current ?? retryPolicy.newBudget(clock: clock, cooldown: cooldown, logger: logger)
             let tokenClient = self.tokenClient
             let store = self.credentialStore
             // Whether the request that failed ever connected, recorded where the platform error is in
@@ -349,7 +392,12 @@ package actor SessionCoordinator: AccessTokenSource {
             // than overwriting it with an absence. The ID token stored beside it is the previous
             // one: it is replaced only by one that passed (below).
             if let rotated = issued.refreshToken {
-                try await credentialStore.saveRefreshed(refreshToken: rotated, rawIdToken: nil)
+                do {
+                    try await credentialStore.saveRefreshed(refreshToken: rotated, rawIdToken: nil)
+                } catch {
+                    unsavedRotation = rotated
+                    throw error
+                }
             }
             // Step 3: the slot named the generation just consumed, so it goes with the rotation,
             // not after the validation: a process killed in between would replay the old key
@@ -441,22 +489,32 @@ package actor SessionCoordinator: AccessTokenSource {
     /// Revokes (when asked and advertised), ends the provider's session through the browser
     /// (when asked and advertised), and wipes everything credential-shaped unconditionally.
     package func logout(revoke: Bool = true, endSession: Bool = true) async -> LogoutOutcome {
+        loggingOut = true
+        defer { loggingOut = false }
         _ = await flow.states.current
         await flow.setState(.loggingOut)
         var serverSessionEnded = false
         var revoked = false
         if let flight { _ = try? await flight.value }
         if revoke { revoked = await revokeQuietly() }
+        // The hint is read before the wipe takes the ID token with it.
+        var hint: String?
         if endSession {
-            var hint: String?
             do {
                 if let inMemory = memorySession?.rawIdToken { hint = inMemory } else { hint = try await credentialStore.rawIdToken() }
             } catch {
                 logger?.warn("logout: id_token_hint unavailable; ending the session without it")
             }
+        }
+        // Wiped before the provider's page opens: a process killed while the sheet is up (the user
+        // swiping the app away, the system reclaiming it) must not leave a refresh token behind
+        // for the next launch to find authenticated. What the sheet can still change is the
+        // provider's session, not this device's.
+        await wipeLocal()
+        if endSession {
             serverSessionEnded = (try? await flow.endSession(idTokenHint: hint)) ?? false
         }
-        await wipe()
+        await flow.completeLogout()
         return LogoutOutcome(sessionEnded: serverSessionEnded, tokenRevoked: revoked)
     }
 
@@ -489,16 +547,43 @@ package actor SessionCoordinator: AccessTokenSource {
     }
 
     private func wipe() async {
+        await wipeLocal()
+        await flow.completeLogout()
+    }
+
+    /// Everything credential-shaped on this device, unconditionally; the published state is the
+    /// caller's to settle.
+    private func wipeLocal() async {
         epoch += 1
         cachedAccessToken = nil
         memorySession = nil
         claims = nil
         claimsRestored = false
-        try? await credentialStore.clear()
+        unsavedRotation = nil
+        do {
+            try await credentialStore.clear()
+            wipeIncomplete = false
+        } catch {
+            // The removal failed and the grant may still be in the store. Not a reason to leave the
+            // sign-out undone for the app, but the survivor must not be spent: see `ensureWiped`.
+            wipeIncomplete = true
+            logger?.warn("logout: the stored credentials could not be removed; they are not used again and removal is retried")
+        }
         do { try await onCredentialsWiped() } catch {
             logger?.warn("logout: teardown of the DPoP key or nonce caches failed")
         }
-        await flow.completeLogout()
+    }
+
+    /// Retries a removal that failed, before any refresh token is spent. While it still fails the
+    /// call is refused as a grant that is gone, which is what the sign-out made it.
+    private func ensureWiped() async throws {
+        guard wipeIncomplete else { return }
+        do {
+            try await credentialStore.clear()
+            wipeIncomplete = false
+        } catch {
+            throw OAuthError.reauthenticate(.grantRejected)
+        }
     }
 
     /// The key of the rotation being spent: derived from the token, so a replay after a

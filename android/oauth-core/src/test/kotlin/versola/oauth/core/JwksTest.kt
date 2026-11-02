@@ -524,4 +524,39 @@ class JwksTest {
         assertTrue(error is VersolaError.Recoverable)
         assertEquals(1, server.requestCount)
     }
+
+    // ---- AUDIT: regression tests for confirmed audit findings; each fails until the bug is fixed ----
+
+    @Test
+    fun `AUDIT B8 a key set cached for one jwks_uri is not served for another`() = runTest {
+        // Discovery can advertise a different jwks_uri (a provider moved its keys, or the issuer
+        // was reconfigured); the old URI's keys must not be trusted for the new one for up to 24 h.
+        val uriA = server.url("/a.json").toString()
+        val uriB = server.url("/b.json").toString()
+        serve(Jose.jwks(Jose.jwk(Jose.rsa, "from-a")))
+        serve(Jose.jwks(Jose.jwk(Jose.rsa, "from-b")))
+        val client = JwksClient(OkHttpClient())
+        client.keys(uriA, forceRefresh = false)
+
+        val loaded = client.keys(uriB, forceRefresh = false)
+
+        assertEquals(listOf("from-b"), loaded.keys.keys.map { it.keyId })
+        assertTrue(loaded.fetched)
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun `AUDIT B8 a disk copy fetched from one jwks_uri is not served to a later process using another`() = runTest {
+        val file = File(folder.newFolder(), "jwks.json")
+        val uriA = server.url("/a.json").toString()
+        val uriB = server.url("/b.json").toString()
+        serve(Jose.jwks(Jose.jwk(Jose.rsa, "from-a")))
+        serve(Jose.jwks(Jose.jwk(Jose.rsa, "from-b")))
+        JwksClient(OkHttpClient(), FileJwksCache(file)).keys(uriA, forceRefresh = false)
+
+        val later = JwksClient(OkHttpClient(), FileJwksCache(file)).keys(uriB, forceRefresh = false)
+
+        assertEquals(listOf("from-b"), later.keys.keys.map { it.keyId })
+        assertEquals(2, server.requestCount)
+    }
 }

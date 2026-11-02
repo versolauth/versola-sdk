@@ -26,12 +26,12 @@ internal data class Origin(val value: String) {
             val hostPort = authority.substringAfterLast('@')
             val (host, port) = if (hostPort.startsWith("[")) {
                 val end = hostPort.indexOf(']')
-                require(end > 0) { "a DPoP request URL has an unterminated IPv6 literal: $url" }
+                require(end > 0) { "a DPoP request URL has an unterminated IPv6 literal" }
                 hostPort.substring(0, end + 1) to hostPort.substring(end + 1).removePrefix(":")
             } else {
                 hostPort.substringBefore(':') to hostPort.substringAfter(':', "")
             }
-            require(host.isNotEmpty()) { "a DPoP request URL must have a host: $url" }
+            require(host.isNotEmpty()) { "a DPoP request URL must have a host" }
             // The default port is normalised away rather than kept, so that a server reached
             // once as `https://host` and once as `https://host:443` does not end up holding
             // two entries and challenging on alternate requests.
@@ -40,9 +40,9 @@ internal data class Origin(val value: String) {
         }
 
         /**
-         * RFC 9449 §4.3 step 9: the request URI with query and fragment removed — scheme,
-         * authority and path exactly as they went on the wire, which is what `Dpop.normalizeHtu`
-         * on the server rebuilds. Decoding first would collapse `/a%2Fb` and `/a/b` into one
+         * RFC 9449 §4.3 step 9: the request URI with query and fragment removed — scheme and
+         * authority normalised as [of] does, the path exactly as it went on the wire, which is what
+         * `Dpop.normalizeHtu` on the server rebuilds. Decoding first would collapse `/a%2Fb` and `/a/b` into one
          * string, which is exactly the confusion `htu` exists to rule out.
          *
          * Split by hand rather than through `java.net.URI`, which refuses characters OkHttp
@@ -50,19 +50,23 @@ internal data class Origin(val value: String) {
          * string is an ordinary REST idiom, and a proof builder must not throw on it.
          */
         fun htuOf(url: String): String {
-            val (scheme, authority, path) = split(url)
-            return "$scheme://$authority$path"
+            val (_, _, path) = split(url)
+            // Scheme and host lower-cased, an explicit default port and any userinfo dropped: the
+            // server compares `htu` after RFC 3986 section 6.2.3 normalisation, so the form the
+            // nonce key already uses is the one a proof must carry (`AUDIT Z4`). The path stays
+            // exactly as it went on the wire.
+            return Origin.of(url).value + path
         }
 
         private fun split(url: String): Triple<String, String, String> {
             val schemeEnd = url.indexOf("://")
-            require(schemeEnd > 0) { "a DPoP request URL must be absolute: $url" }
+            require(schemeEnd > 0) { "a DPoP request URL must be absolute" }
             val scheme = url.substring(0, schemeEnd).lowercase(java.util.Locale.ROOT)
             val rest = url.substring(schemeEnd + 3).substringBefore('#').substringBefore('?')
             val slash = rest.indexOf('/')
             val authority = if (slash < 0) rest else rest.substring(0, slash)
             val path = if (slash < 0) "" else rest.substring(slash)
-            require(authority.isNotEmpty()) { "a DPoP request URL must have a host: $url" }
+            require(authority.isNotEmpty()) { "a DPoP request URL must have a host" }
             return Triple(scheme, authority, path)
         }
 

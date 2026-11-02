@@ -36,12 +36,51 @@ deployment target of 17.4; a lower value fails the build with a message that nam
 The 37 is OkHttp's: its AAR declares it, and the SDK's own AARs ask for less, so the number follows
 the OkHttp release the SDK depends on, not a choice of ours.
 
+## Platform setup
+
+Once per app, before the first `OAuthClient.create`.
+
+**Flutter.** The plugin is a Swift package on iOS (no CocoaPods), so turn Swift Package Manager
+integration on once per machine:
+
+```bash
+flutter config --enable-swift-package-manager
+```
+
+Call `WidgetsFlutterBinding.ensureInitialized()` first in `main()` when you create the client
+before `runApp`: the plugin talks to the native side over platform channels.
+
+**Android.** Merge the SDK's redirect activity into `android/app/src/main/AndroidManifest.xml`
+with the HTTPS redirect URI you registered at the provider (a verified App Link; add the
+`assetlinks.json` for the host). Replace the host and path with your own:
+
+```xml
+<activity
+    android:name="versola.sdk.browser.VersolaRedirectActivity"
+    android:exported="true"
+    tools:node="merge">
+    <intent-filter android:autoVerify="true">
+        <action android:name="android.intent.action.VIEW" />
+        <category android:name="android.intent.category.DEFAULT" />
+        <category android:name="android.intent.category.BROWSABLE" />
+        <data android:scheme="https" android:host="app.example.com" android:path="/oauth" />
+    </intent-filter>
+</activity>
+```
+
+(`xmlns:tools="http://schemas.android.com/tools"` on the `<manifest>` element.)
+
+**iOS.** In Xcode, Signing & Capabilities, add the Associated Domains capability with both
+`applinks:app.example.com` and `webcredentials:app.example.com` for the host of your redirect
+URI, and serve `apple-app-site-association` from that host. `applinks` alone is not enough for
+`ASWebAuthenticationSession`.
+
 ## Usage
 
 ```dart
 import 'package:versola_oauth/versola_oauth.dart';
 
-final client = await OAuthClient.create(const OAuthConfiguration(
+final client = await OAuthClient.create(OAuthConfiguration(
   issuer: 'https://id.example.com',
   clientId: 'example-app',
   redirectUri: 'https://app.example.com/oauth',
@@ -70,7 +109,7 @@ try {
 `client.httpClient()` returns a `package:http` `Client` that runs each request **natively**, through
 the SDK's own authenticated client: the access token, the DPoP key and its proofs, the refresh on a
 401 and the origin allow-list (`protectedOrigins`) stay native, so a DPoP-bound token works from Dart
-and no token reaches your code. Add `http` (`>=1.6.0 <1.7.0`) to your own `pubspec.yaml` to import it.
+and no token reaches your code. Add `http` (`>=1.6.0 <2.0.0`) to your own `pubspec.yaml` to import it.
 A request to an origin outside `protectedOrigins` goes out untouched; a 3xx is returned, not followed;
 a 403, 429 or 5xx comes back as the response; a step-up challenge throws `StepUpError`, which you
 answer with `client.stepUp(e)` and then repeat the request.

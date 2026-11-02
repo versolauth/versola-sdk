@@ -104,16 +104,24 @@ package actor SecureEnclaveDpopKey: DpopSigningKey {
     private let logger: (any OAuthLogger)?
     private let enclaveAvailable: Bool
     private let makeEnclaveKey: @Sendable () throws -> SecureEnclave.P256.Signing.PrivateKey
+    /// Whether a grant is stored that was bound to this key (`CredentialStore.hasGrant()`). Asked only
+    /// when a proof is wanted and the key is gone: see `key(mayGenerate:)`.
+    private let isGrantHeld: @Sendable () async throws -> Bool
     private var loaded: Loaded?
+    /// A software key made because a device that has an enclave refused to make one, not yet written
+    /// to the store. A refusal can be passing (a locked or busy enclave), and persisting the stand-in
+    /// would make it the installation's key for good. It is written the first time it signs, which is
+    /// when a grant can come to be bound to it; until then the next launch asks the enclave again.
+    private var fallbackUnpersisted = false
 
     /// - Parameters:
     ///   - requireHardware: throw `hardwareBindingUnavailable` instead of falling back to a
     ///     software key (`TokenBinding.dpop` with a hardware requirement).
     ///   - logger: receives the one warning a software-tier key deserves.
-    package init(storageKey: String, accessGroup: String? = nil, requireHardware: Bool = false, logger: (any OAuthLogger)? = nil, firstLaunch: FirstLaunchGuard? = nil) {
+    package init(storageKey: String, accessGroup: String? = nil, requireHardware: Bool = false, logger: (any OAuthLogger)? = nil, firstLaunch: FirstLaunchGuard? = nil, isGrantHeld: @escaping @Sendable () async throws -> Bool = { false }) {
         self.init(
             store: KeychainDpopKeyStore(storageKey: storageKey, accessGroup: accessGroup, firstLaunch: firstLaunch, logger: logger), requireHardware: requireHardware,
-            logger: logger, secureEnclaveAvailable: SecureEnclave.isAvailable
+            logger: logger, secureEnclaveAvailable: SecureEnclave.isAvailable, isGrantHeld: isGrantHeld
         )
     }
 
@@ -123,8 +131,10 @@ package actor SecureEnclaveDpopKey: DpopSigningKey {
     package init(
         store: any DpopKeyStore, requireHardware: Bool = false, logger: (any OAuthLogger)? = nil,
         secureEnclaveAvailable: Bool = SecureEnclave.isAvailable,
+        isGrantHeld: @escaping @Sendable () async throws -> Bool = { false },
         makeEnclaveKey: @escaping @Sendable () throws -> SecureEnclave.P256.Signing.PrivateKey = SecureEnclaveDpopKey.newEnclaveKey
     ) {
+        self.isGrantHeld = isGrantHeld
         self.store = store
         self.requireHardware = requireHardware
         self.logger = logger
@@ -153,13 +163,13 @@ package actor SecureEnclaveDpopKey: DpopSigningKey {
     }
 
     /// The tier of the key in use, generating the key first if there is none.
-    package func attestation() async throws -> KeyAttestation { try key().attestation }
+    package func attestation() async throws -> KeyAttestation { try await key(mayGenerate: true).attestation }
 
     /// The package key as a JWK: `kty`, `crv`, `x`, `y` and nothing else (RFC 9449 section 4.1
     /// puts it in the proof's header, where extra members would be noise and `d` a catastrophe).
     package func publicJwk() async throws -> JsonWebKey {
         // x9.63 is 0x04 || X || Y, 32 bytes each.
-        let point = try key().publicKey.x963Representation
+        let point = try await key(mayGenerate: true).publicKey.x963Representation
         return JsonWebKey(
             kty: "EC", crv: "P-256", x: Base64URLEncoder.encode(point.subdata(in: 1..<33)),
             y: Base64URLEncoder.encode(point.subdata(in: 33..<65))
@@ -168,8 +178,20 @@ package actor SecureEnclaveDpopKey: DpopSigningKey {
 
     /// `R || S`, 64 bytes: what JWS ES256 wants, and what CryptoKit's `rawRepresentation`
     /// already is, so Android's DER conversion has no counterpart here.
+    package func provingJwk() async throws -> JsonWebKey {
+        let point = try await key(mayGenerate: false).publicKey.x963Representation
+        return JsonWebKey(
+            kty: "EC", crv: "P-256", x: Base64URLEncoder.encode(point.subdata(in: 1..<33)),
+            y: Base64URLEncoder.encode(point.subdata(in: 33..<65))
+        )
+    }
+
     package func sign(_ data: Data) async throws -> Data {
-        let key = try key()
+        let key = try await key(mayGenerate: false)
+        if fallbackUnpersisted, case .software(let software) = key {
+            try store.save(Data([Tag.software.rawValue]) + software.rawRepresentation)
+            fallbackUnpersisted = false
+        }
         do {
             return try key.signature(for: data).rawRepresentation
         } catch {
@@ -204,13 +226,30 @@ package actor SecureEnclaveDpopKey: DpopSigningKey {
     package func destroy() async throws {
         try store.delete()
         loaded = nil
+        fallbackUnpersisted = false
     }
 
     // MARK: Loading and generation
 
-    private func key() throws -> Loaded {
+    /// - Parameter mayGenerate: false when a proof is about to be signed. A `login()` binds a new key
+    ///   (`dpop_jkt`), so asking for the thumbprint or the attestation may make one; a proof never does
+    ///   for a grant that exists, since that grant is bound to the key that is gone.
+    ///
+    /// The rule for "gone": the store answered cleanly that it has no key (`load()` returned nil, which
+    /// the Keychain does for `errSecItemNotFound` alone) **and** the credential store answered cleanly
+    /// that a grant is stored. Either answer failing (`errSecInteractionNotAllowed`, a locked device,
+    /// an unavailable Keychain or Secure Enclave) throws its own typed error, `unlockRequired` for
+    /// those, and the grant and the key are left alone: only a key positively absent is a sign-out.
+    /// A blob that exists and cannot be read is not "gone" and keeps its own errors (`load()`).
+    private func key(mayGenerate: Bool) async throws -> Loaded {
         if let loaded { return loaded }
-        let key = try load() ?? generate()
+        let existing = try load()
+        if existing == nil, !mayGenerate, try await isGrantHeld() {
+            throw OAuthError.reauthenticate(.credentialsInvalidated)
+        }
+        // The awaits above are points another caller can enter this actor: what it loaded wins.
+        if let loaded { return loaded }
+        let key = try existing ?? generate()
         // Checked on the key that came back, loaded or fresh, so a persisted software key is
         // refused under `requireHardware` as well.
         if requireHardware, case .software = key {
@@ -277,7 +316,12 @@ package actor SecureEnclaveDpopKey: DpopSigningKey {
             throw OAuthError.configuration(.hardwareBindingUnavailable(detail: "no Secure Enclave is available on this device"))
         }
         let software = P256.Signing.PrivateKey()
-        try store.save(Data([Tag.software.rawValue]) + software.rawRepresentation)
+        if enclaveAvailable {
+            // The enclave refused this time: see `fallbackUnpersisted`.
+            fallbackUnpersisted = true
+        } else {
+            try store.save(Data([Tag.software.rawValue]) + software.rawRepresentation)
+        }
         return .software(software)
     }
 }

@@ -48,7 +48,9 @@ class CustomTabsAuthorizationSessionTest {
                 name = "$packageName.BrowserActivity"
             }
         }
-        val browsable = Intent(Intent.ACTION_VIEW, Uri.parse("https://id.versola.io/authorize"))
+        // What the fallback asks the device for: a browsable https link to a URL no app claims, not
+        // the request's own URL (`AUDIT Z8`), so another app's App Link cannot be what answers.
+        val browsable = Intent(Intent.ACTION_VIEW, Uri.parse(BROWSER_PROBE))
             .addCategory(Intent.CATEGORY_BROWSABLE)
         packageManager.addResolveInfoForIntent(browsable, resolveInfo)
     }
@@ -112,6 +114,8 @@ class CustomTabsAuthorizationSessionTest {
             Uri.parse("https://app.example.com/oauth?code=the-code&state=s"),
         )
 
+        // A process the redirect itself started: nothing has said what to expect (`AUDIT C15`).
+        RedirectDispatcher.reopenForColdStart()
         val controller = ActivityController.of(VersolaRedirectActivity(), intent).create()
 
         assertTrue(controller.get().isFinishing)
@@ -148,4 +152,25 @@ class CustomTabsAuthorizationSessionTest {
             (pending.await() as BrowserOutcome.Redirect).uri,
         )
     }
+    @Test
+    fun `AUDIT Z8 the plain-browser fallback is pinned to a resolved browser package, so an end-session URL with id_token_hint reaches no other handler`() = runTest {
+        // AUDIT: Z8. The ACTION_VIEW fallback sets no package, and the end-session request carries
+        // id_token_hint (AuthorizationFlow in :oauth-core), so on a device with no Custom Tabs provider the
+        // ID token goes to whichever app claims the https URL. Asserted: the intent's package equals the
+        // browser the device resolves for a browsable https intent (the alternative, not sending
+        // id_token_hint over an unpinned intent, is not what this asserts).
+        installBrowser("com.example.browser")
+        val session = CustomTabsAuthorizationSession(application)
+        val endSession = "https://id.versola.io/logout?id_token_hint=eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiIxIn0.sig&state=s"
+
+        val pending = async { session.authorize(endSession) }
+        runCurrent()
+        RedirectDispatcher.deliver("https://app.example.com/oauth?code=c&state=s")
+        pending.await()
+
+        val launched = shadowOf(application).nextStartedActivity
+        assertNotNull(launched)
+        assertEquals("the fallback must be pinned to the resolved browser", "com.example.browser", launched.`package`)
+    }
+
 }

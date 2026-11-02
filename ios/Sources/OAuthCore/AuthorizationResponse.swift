@@ -72,23 +72,24 @@ package enum AuthorizationResponseValidator {
             throw OAuthError.configuration(.stateMismatch)
         }
 
-        // The redirect must be to the URI the request named. Not part of the specified order:
-        // it only runs once `state` has shown that the redirect answers this request, and it
-        // keeps a code delivered to another URL from being exchanged.
-        guard redirectMatches(redirect, pending.redirectUri) else {
-            throw OAuthError.configuration(.malformedAuthorizationResponse)
-        }
-
         // 2. iss (RFC 9207). Present means it must match, a trailing slash tolerated. Absent
         //    fails only when the provider advertises support, or the request recorded that
         //    its exchange requires it; a deployment that does not may legitimately omit it.
         let iss = parameters["iss"]
         if let iss {
             if trimSlash(iss) != trimSlash(issuer) {
-                throw OAuthError.configuration(.issuerMismatch(expected: issuer, received: iss))
+                throw OAuthError.configuration(.issuerMismatch(expected: issuer, received: boundedText(iss, limit: 256)))
             }
         } else if issParameterSupported || pending.issRequired {
             throw OAuthError.configuration(.issuerMismatch(expected: issuer, received: nil))
+        }
+
+        // The redirect must be to the URI the request named (scheme, host, port and path): `state`
+        // proves which request a redirect answers, not where it was sent, and a code delivered to
+        // another URL must not be exchanged. After `iss`, before the provider's own `error`
+        // (`spec/state-machine.md`).
+        guard redirectMatches(redirect, pending.redirectUri) else {
+            throw OAuthError.configuration(.malformedAuthorizationResponse)
         }
 
         // 3. An error the authorization endpoint redirected back. After state and iss, so an
@@ -119,15 +120,34 @@ package enum AuthorizationResponseValidator {
     /// `spec/errors.md`, authorization endpoint table. The four that mean "the user has to sign
     /// in again" are `reauthenticate`; everything else is a `configuration` fault, so a provider
     /// that invents codes is reported rather than silently succeeding.
-    private static func authorizationError(_ code: String, description: String?) -> OAuthError {
-        switch code {
+    private static func authorizationError(_ received: String, description receivedDescription: String?) -> OAuthError {
+        // What a redirect carries is whoever delivered the URL's, and it ends up in logs and in the
+        // error an app prints: the code is cut to the token alphabet of RFC 6749 section 5.2 and
+        // to a bounded length, the description to printable text of a bounded length.
+        let code = String(received.unicodeScalars.filter {
+            $0.isASCII && (CharacterSet.alphanumerics.contains($0) || "_-.".unicodeScalars.contains($0))
+        }.prefix(64))
+        let description = receivedDescription.map { boundedText($0, limit: 256) }
+        switch code.isEmpty ? "invalid_response" : code {
         case "access_denied":
             return .reauthenticate(.authorizationDenied)
         case "login_required", "consent_required", "interaction_required", "account_selection_required":
             return .reauthenticate(.interactionRequired(code: code))
+        // RFC 6749 4.1.2.1: the server could not handle the request now. Surfaced once, never retried
+        // by the SDK: the browser leg cannot be replayed without the user.
+        case "server_error":
+            return .recoverable(.server(status: 500, retryAfterMillis: nil, attempts: 1, elapsedMillis: 0))
+        case "temporarily_unavailable":
+            return .recoverable(.server(status: 503, retryAfterMillis: nil, attempts: 1, elapsedMillis: 0))
         default:
-            return .configuration(.authorizationRejected(code: code, description: description))
+            return .configuration(.authorizationRejected(code: code.isEmpty ? "invalid_response" : code, description: description))
         }
+    }
+
+    /// Printable text of at most `limit` characters: control characters (a newline that forges a log
+    /// line, an escape sequence for a terminal) are dropped.
+    private static func boundedText(_ text: String, limit: Int) -> String {
+        String(String.UnicodeScalarView(text.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }.prefix(limit)))
     }
 
     private static func queryPairs(_ url: URL) -> [(String, String)] {

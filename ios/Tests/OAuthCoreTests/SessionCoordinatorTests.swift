@@ -35,15 +35,26 @@ final class SessionCoordinatorTests: XCTestCase {
             refresh = refreshToken
             idToken = rawIdToken
         }
+        /// Fails the next `saveRefreshed` only (a device that locks mid-refresh and unlocks again).
+        var saveRefreshedFailureOnce: OAuthError?
+        func failNextSaveRefreshed(_ error: OAuthError) { saveRefreshedFailureOnce = error }
         func saveRefreshed(refreshToken: String?, rawIdToken: String?) async throws {
             if let saveFailure { throw saveFailure }
+            if let once = saveRefreshedFailureOnce {
+                saveRefreshedFailureOnce = nil
+                throw once
+            }
             if let refreshToken { refresh = refreshToken }
             if let rawIdToken { idToken = rawIdToken }
         }
         func savePendingRotation(_ idempotencyKey: String?) async throws { rotation = idempotencyKey }
         func pendingRotation() async throws -> String? { rotation }
+        /// A `clear()` that throws and removes nothing, as a Keychain delete that fails does.
+        var clearFailure: OAuthError?
+        func failClear(_ error: OAuthError?) { clearFailure = error }
         func clear() async throws {
             clears += 1
+            if let clearFailure { throw clearFailure }
             refresh = nil
             idToken = nil
             rotation = nil
@@ -67,6 +78,9 @@ final class SessionCoordinatorTests: XCTestCase {
         var neverConnected = false
         func setNeverConnected(_ value: Bool) { neverConnected = value }
         func hold(_ gate: Gate) { self.gate = gate }
+        /// Held open while set: the code exchange of a login waits here (the user's token request in flight).
+        var exchangeGate: Gate?
+        func holdExchange(_ gate: Gate) { exchangeGate = gate }
         func setRevokeError(_ error: OAuthError) { revokeError = error }
         private func next() throws -> TokenResponse {
             guard !answers.isEmpty else { throw OAuthError.recoverable(.network(detail: "no scripted answer", attempts: 1, elapsedMillis: 0)) }
@@ -74,6 +88,7 @@ final class SessionCoordinatorTests: XCTestCase {
         }
         func exchange(_ grant: AuthorizationGrant) async throws -> TokenResponse {
             calls.append(.exchange)
+            if let exchangeGate { await exchangeGate.wait() }
             return try next()
         }
         func refresh(refreshToken: String, idempotencyKey: String) async throws -> TokenResponse {
@@ -139,16 +154,16 @@ final class SessionCoordinatorTests: XCTestCase {
         let pendingStore: MemoryPendingStore
     }
 
-    private func idToken(subject: String = "alice", nonce: String = "n") -> String {
+    func idToken(subject: String = "alice", nonce: String = "n") -> String {
         let now = Int(Date().timeIntervalSince1970)
         return JoseTestTokens.rsa("RS256", payload: JoseTestTokens.json(["iss": Self.issuer, "sub": subject, "aud": "mobile", "iat": now, "exp": now + 3600, "nonce": nonce]))
     }
 
-    private func response(refresh: String? = "rt-1", expiresIn: Int = 300, subject: String = "alice") -> TokenResponse {
+    func response(refresh: String? = "rt-1", expiresIn: Int = 300, subject: String = "alice") -> TokenResponse {
         TokenResponse(accessToken: "at-\(refresh ?? "none")-\(UUID().uuidString.prefix(4))", tokenType: "Bearer", expiresIn: expiresIn, refreshToken: refresh, idToken: idToken(subject: subject), scope: "openid")
     }
 
-    private func fixture(answers: [Result<TokenResponse, OAuthError>], policy: RefreshTokenPolicy = .optional, store: MemoryCredentials = MemoryCredentials(), retry: RetryPolicy? = nil, pending: PendingAuthorizationRequest? = nil, browser: ScriptedBrowser = ScriptedBrowser.answering(), clock injectedClock: TickingClock? = nil, validatorOverride: IdTokenValidator? = nil, repeatsAmbiguousRefresh: Bool = true, discoveryClient: DiscoveryClient? = nil, onCredentialsWiped: (@Sendable () async throws -> Void)? = nil) throws -> Fixture {
+    func fixture(answers: [Result<TokenResponse, OAuthError>], policy: RefreshTokenPolicy = .optional, store: MemoryCredentials = MemoryCredentials(), retry: RetryPolicy? = nil, pending: PendingAuthorizationRequest? = nil, browser: ScriptedBrowser = ScriptedBrowser.answering(), clock injectedClock: TickingClock? = nil, validatorOverride: IdTokenValidator? = nil, repeatsAmbiguousRefresh: Bool = true, discoveryClient: DiscoveryClient? = nil, onCredentialsWiped: (@Sendable () async throws -> Void)? = nil) throws -> Fixture {
         let clock = injectedClock ?? TickingClock(Date(timeIntervalSince1970: 1_700_000_000))
         let configuration = CoreConfiguration(issuer: Self.issuer, clientId: "mobile", redirectUri: URL(string: Self.redirect)!, postLogoutRedirectUri: URL(string: "https://app.example.com/signed-out"))
         let discovery = DiscoveryService(issuer: Self.issuer, client: discoveryClient ?? StaticDiscoveryClient(metadata: AuthzKit.metadata()), cache: MemoryMetadataCache())
@@ -519,16 +534,18 @@ final class SessionCoordinatorTests: XCTestCase {
         XCTAssertEqual(refreshToken, "rt-1", "no rotation: the refresh token is left as it was")
     }
 
+    /// A slot is the key derived from the token it was written for (AUDIT W6), so a process death
+    /// between the slot write and the request leaves exactly this slot, and the replay names it.
     func testAnAbandonedSlotIsReplayedWithTheSameKey() async throws {
         let store = MemoryCredentials()
         try await store.save(refreshToken: "rt-1", rawIdToken: nil)
-        try await store.savePendingRotation("key-from-before")
+        try await store.savePendingRotation(SessionCoordinator.idempotencyKey(for: "rt-1"))
         let f = try fixture(answers: [.success(response(refresh: "rt-2"))], store: store)
 
         try await f.coordinator.refresh()
 
         let calls = await f.tokens.calls
-        XCTAssertEqual(calls, [.refresh("rt-1", "key-from-before")])
+        XCTAssertEqual(calls, [.refresh("rt-1", SessionCoordinator.idempotencyKey(for: "rt-1"))])
     }
 
     func testConcurrentCallersShareOneRefresh() async throws {

@@ -211,4 +211,34 @@ class HardwareKeyProviderTest {
 
         private fun newKey(): SecretKey = KeyGenerator.getInstance("AES").apply { init(256) }.generateKey()
     }
+    // --- audit regression ---
+
+    @Test
+    fun `AUDIT Z2 a key generated under UnlockPolicy None is not silently reused once the policy is OnAppUnlock`() = runTest {
+        // AUDIT: Z2. KeystoreStorageKeys.key() returns whatever SecretKeyEntry exists under the alias without
+        // looking at its authentication properties, so an app that upgrades from None to OnAppUnlock keeps wrapping
+        // under the ungated key. Correct: the entry is replaced by a gated key, or the wrap fails with a typed error.
+        val keystore = AesAndroidKeyStore()
+        val previous = java.security.Security.getProvider("AndroidKeyStore")
+        java.security.Security.removeProvider("AndroidKeyStore")
+        java.security.Security.insertProviderAt(keystore, 1)
+        try {
+            val alias = "audit-z2"
+            HardwareKeyProvider(alias, UnlockPolicy.None).wrap("grant".toByteArray())
+            assertFalse(keystore.specs.getValue(alias).isUserAuthenticationRequired)
+
+            val outcome = runCatching { HardwareKeyProvider(alias, UnlockPolicy.OnAppUnlock).wrap("grant".toByteArray()) }
+
+            val gated = keystore.specs[alias]?.isUserAuthenticationRequired == true
+            assertTrue(
+                "wrap under OnAppUnlock must either have thrown or left a user-authentication-gated key; " +
+                    "outcome=${outcome.exceptionOrNull() ?: "success"}, key gated=$gated",
+                outcome.isFailure || gated,
+            )
+        } finally {
+            java.security.Security.removeProvider("AndroidKeyStore")
+            previous?.let { java.security.Security.insertProviderAt(it, 1) }
+        }
+    }
+
 }

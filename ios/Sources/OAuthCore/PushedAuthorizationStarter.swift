@@ -50,13 +50,14 @@ package struct PushedAuthorizationStarter: AuthorizationStarter {
                 pending: pending, browserUri: try request.toUri(authorizationEndpoint: metadata.authorizationEndpoint)
             )
         }
-        let requestUri = try await push(to: endpoint, request: request)
+        let (requestUri, expiresIn) = try await push(to: endpoint, request: request)
         return StartedAuthorization(
             pending: pending,
             browserUri: try FormEncoding.withQuery(
                 metadata.authorizationEndpoint,
                 [("client_id", configuration.clientId), ("request_uri", requestUri)]
-            )
+            ),
+            expiresAt: now.addingTimeInterval(TimeInterval(expiresIn))
         )
     }
 
@@ -65,7 +66,7 @@ package struct PushedAuthorizationStarter: AuthorizationStarter {
     }
 
     /// One POST; returns the `request_uri`, or throws before anything is persisted or opened.
-    private func push(to endpoint: String, request: AuthorizationRequest) async throws -> String {
+    private func push(to endpoint: String, request: AuthorizationRequest) async throws -> (requestUri: String, expiresIn: Int64) {
         try ProviderMetadata.requireSecure("pushed_authorization_request_endpoint", endpoint)
         guard let url = URL(string: endpoint), url.scheme != nil else {
             throw OAuthError.configuration(.invalidConfiguration(
@@ -102,7 +103,7 @@ package struct PushedAuthorizationStarter: AuthorizationStarter {
     /// providers send. RFC 9126 points at RFC 6749 section 5.2, which uses 401 for
     /// `invalid_client`, and some providers answer 403 for a client not allowed to push: each
     /// carries the error code the app is promised in `authorizationRejected`.
-    private func interpret(status: Int, body: Data) throws -> String {
+    private func interpret(status: Int, body: Data) throws -> (requestUri: String, expiresIn: Int64) {
         if status == 200 || status == 201 { return try requestUri(body) }
         if [400, 401, 403].contains(status),
            let error = try? JSONDecoder().decode(ErrorPayload.self, from: body),
@@ -112,7 +113,7 @@ package struct PushedAuthorizationStarter: AuthorizationStarter {
         throw OAuthError.configuration(.invalidConfiguration(detail: "PAR endpoint answered \(status)"))
     }
 
-    private func requestUri(_ body: Data) throws -> String {
+    private func requestUri(_ body: Data) throws -> (requestUri: String, expiresIn: Int64) {
         let parsed: ResponsePayload
         do {
             parsed = try JSONDecoder().decode(ResponsePayload.self, from: body)
@@ -125,7 +126,7 @@ package struct PushedAuthorizationStarter: AuthorizationStarter {
                 detail: "PAR response lacks a request_uri or a positive expires_in"
             ))
         }
-        return requestUri
+        return (requestUri, expiresIn)
     }
 
     private struct ResponsePayload: Decodable {

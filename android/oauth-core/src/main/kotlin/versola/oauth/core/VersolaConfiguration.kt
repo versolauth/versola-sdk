@@ -156,9 +156,12 @@ public class VersolaConfiguration internal constructor(
 }
 
 /**
- * The loopback names RFC 8252 §7.3 allows for a redirect, plus the emulator's alias for its host:
- * the one place cleartext HTTP is let through, for the issuer and for every endpoint its metadata
- * announces, because traffic to them never leaves the machine.
+ * The loopback names RFC 8252 §7.3 allows for a redirect: the one place cleartext HTTP is let
+ * through, for the issuer and for every endpoint its metadata announces, because traffic to them
+ * never leaves the machine. The emulator's `10.0.2.2` alias is not one: it is the host's LAN-side
+ * address as the emulator sees it, a fixture issuer copied into a release build would speak OAuth
+ * in cleartext to whatever answers there, and `adb reverse` makes the host's stack `localhost`
+ * on the device without it (`develop.md`).
  */
 internal fun isLoopbackHost(host: String?): Boolean =
-    host == "localhost" || host == "127.0.0.1" || host == "[::1]" || host == "10.0.2.2"
+    host == "localhost" || host == "127.0.0.1" || host == "[::1]"

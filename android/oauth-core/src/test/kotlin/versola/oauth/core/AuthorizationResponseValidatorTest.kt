@@ -132,15 +132,17 @@ class AuthorizationResponseValidatorTest {
     fun `a malformed redirect carries no cause and nothing of it in the error text`() {
         // `URISyntaxException.message` is the whole URI and `URLDecoder`'s quotes part of the
         // query: either, attached as a cause, would put a code or a state into a crash report.
-        for (redirect in listOf(
-            "https://app.example.com/oauth?code=SECRETCODE&state=SECRETSTATE a",
-            "https://app.example.com/oauth?code=SECRETCODE&state=SECRETSTATE%zz",
+        // A raw space is no longer unreadable (`AUDIT B5`): the state it ends is simply not the
+        // request's. A bare percent-escape is still malformed.
+        for ((redirect, detail) in listOf(
+            "https://app.example.com/oauth?code=SECRETCODE&state=SECRETSTATE a" to VersolaError.Configuration.Detail.StateMismatch,
+            "https://app.example.com/oauth?code=SECRETCODE&state=SECRETSTATE%zz" to VersolaError.Configuration.Detail.MalformedAuthorizationResponse,
         )) {
             val error = assertThrows(VersolaError.Configuration::class.java) {
                 AuthorizationResponseValidator.validate(redirect, pending(), ISSUER, issParameterSupported = true)
             }
 
-            assertEquals(VersolaError.Configuration.Detail.MalformedAuthorizationResponse, error.detail)
+            assertEquals(detail, error.detail)
             assertEquals(null, error.cause)
             val text = error.toString() + error.message + error.detail
             assertTrue(text, "SECRET" !in text)
@@ -298,5 +300,66 @@ class AuthorizationResponseValidatorTest {
         )
 
         assertTrue(grant.toString().contains("redacted"))
+    }
+
+    // ---- AUDIT: regression tests for confirmed audit findings; each fails until the bug is fixed ----
+
+    private fun validated(redirect: String) = AuthorizationResponseValidator.validate(
+        redirect = redirect,
+        pending = pending(),
+        issuer = ISSUER,
+        issParameterSupported = false,
+    )
+
+    @Test
+    fun `AUDIT B5 an error redirect with a raw pipe, brace or space in its query still surfaces the error`() {
+        // RedirectDispatcher (android.net.Uri) hands such a redirect over; java.net.URI refuses
+        // it, which stateOf turned into "not ours" and the login hung until expiry.
+        for (raw in listOf("a|b", "a{b}", "a b")) {
+            val error = assertThrows(VersolaError.Reauthenticate::class.java) {
+                validated("https://app.example.com/oauth?error=access_denied&state=the-state&error_description=$raw")
+            }
+
+            assertEquals(raw, VersolaError.Reauthenticate.Reason.AuthorizationDenied, error.reason)
+        }
+    }
+
+    @Test
+    fun `AUDIT B5 a success redirect with a raw brace in its query still resolves to the code`() {
+        val grant = validated("https://app.example.com/oauth?code=abc&state=the-state&extra={x}")
+
+        assertEquals("abc", grant.code)
+    }
+
+    @Test
+    fun `AUDIT B5 stateOf reads the state of a redirect carrying a raw pipe`() {
+        assertEquals(
+            "the-state",
+            AuthorizationResponseValidator.stateOf("https://app.example.com/oauth?code=abc&state=the-state&error_description=a|b"),
+        )
+    }
+
+    @Test
+    fun `AUDIT B7 server_error and temporarily_unavailable are transient, not a configuration fault`() {
+        // RFC 6749 4.1.2.1 defines both as the server being unable to handle the request now.
+        for (code in listOf("server_error", "temporarily_unavailable")) {
+            val thrown = runCatching {
+                validated("https://app.example.com/oauth?error=$code&state=the-state")
+            }.exceptionOrNull()
+
+            assertTrue("$code was $thrown", thrown is VersolaError.Recoverable)
+        }
+    }
+
+    @Test
+    fun `AUDIT B14 a redirect to another scheme, host or path than the stored redirectUri is rejected even with the right state`() {
+        val accepted = listOf(
+            "http://app.example.com/oauth?code=c&state=the-state",
+            "https://evil.example/oauth?code=c&state=the-state",
+            "https://app.example.com/other?code=c&state=the-state",
+            "https://app.example.com:8443/oauth?code=c&state=the-state",
+        ).filter { redirect -> runCatching { validated(redirect) }.isSuccess }
+
+        assertEquals("these redirects yielded a grant", emptyList<String>(), accepted)
     }
 }

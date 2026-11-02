@@ -1,6 +1,7 @@
 package versola.oauth.core
 
 import java.io.IOException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -63,6 +64,7 @@ public interface TokenClient {
  *
  * Everything else this class raises is final: it has no budget of its own and does not sleep.
  */
+@VersolaInternalApi
 public class HttpTokenClient(
     private val configuration: VersolaConfiguration,
     private val discovery: DiscoveryService,
@@ -146,7 +148,12 @@ public class HttpTokenClient(
             .addBytes("refresh_token", refreshToken)
             .add("client_id", configuration.clientId)
         refreshToken.fill(0)
-        return post(form, idempotencyKey.takeIf { sendIdempotencyKey })
+        // The answer of a refresh is the one thing that must not be lost: the provider has rotated
+        // the token it carries by the time it is sent, and a caller cancelled while the request is out
+        // would otherwise discard it with the cancelled `withContext`, leaving the spent token on disk
+        // for the next refresh to replay (`AUDIT C1`). The caller waits for the answer, bounded by the
+        // HTTP client's own timeouts, and persists it; it cannot be cancelled out of the wait.
+        return post(form, idempotencyKey.takeIf { sendIdempotencyKey }, survivesCancellation = true)
     }
 
     /**
@@ -181,7 +188,7 @@ public class HttpTokenClient(
     }
 
     /** Internal rather than private so the zeroization of [form] can be asserted directly. */
-    internal suspend fun post(form: FormBody, idempotencyKey: String?): TokenResponse = try {
+    internal suspend fun post(form: FormBody, idempotencyKey: String?, survivesCancellation: Boolean = false): TokenResponse = try {
         val metadata = discovery.metadata()
         // Before the request, not after one succeeds. A deployment that cannot bind the
         // grant makes this exchange useless whatever it returns, and for an authorization
@@ -192,7 +199,7 @@ public class HttpTokenClient(
         if (binding is TokenBinding.Dpop && binding.requireHardware && !metadata.supportsDpop) {
             throw VersolaError.Configuration(
                 VersolaError.Configuration.Detail.HardwareBindingUnavailable(
-                    "the provider does not advertise dpop_signing_alg_values_supported",
+                    "the provider does not advertise ES256 in dpop_signing_alg_values_supported",
                 ),
             )
         }
@@ -210,7 +217,12 @@ public class HttpTokenClient(
             // An app that cannot accept that fallback said so with `requireHardware`, and the
             // check above has already refused the exchange.
             val htu = if (tokenBinding is TokenBinding.Dpop && metadata.supportsDpop) url else null
-            executor.execute(url, body, idempotencyKey, htu).also(tokenBinding::acceptIssued)
+            val issued = if (survivesCancellation) {
+                withContext(NonCancellable) { executor.execute(url, body, idempotencyKey, htu) }
+            } else {
+                executor.execute(url, body, idempotencyKey, htu)
+            }
+            issued.also(tokenBinding::acceptIssued)
         } finally {
             body.fill(0)
         }
@@ -236,6 +248,8 @@ public class HttpTokenClient(
 public class TokenRequestExecutor(
     private val httpClient: OkHttpClient,
     private val dpop: DpopProofSource?,
+    /** The device's clock, which a token response's `Date` is checked against before it is believed. */
+    private val clock: () -> java.time.Instant = java.time.Instant::now,
 ) {
 
     /**
@@ -308,7 +322,7 @@ public class TokenRequestExecutor(
                     // satisfy (scenario 04).
                     dpop?.observe(htu ?: url, response.headers.dateForClockSkew(), nonce)
                     if (response.isSuccessful) {
-                        Attempt.Issued(issued(payload, response.header("Date")))
+                        Attempt.Issued(issued(payload, response.code, response.header("Content-Type"), response.header("Date"), response.header("Age")))
                     } else {
                         onStatus(response.code)?.let { throw it }
                         rejected(response.code, payload, nonce, response.headers("WWW-Authenticate"), response.headers)
@@ -365,25 +379,30 @@ public class TokenRequestExecutor(
         }
     }
 
-    private fun issued(payload: String, dateHeader: String?): TokenResponse {
+    private fun issued(payload: String, status: Int, contentType: String?, dateHeader: String?, ageHeader: String?): TokenResponse {
+        // Not JSON at all is a proxy's or a captive portal's page (`AUDIT D1`): `Recoverable`, with
+        // nothing of the body in it. JSON of the wrong shape is the provider's own mistake and stays
+        // `Configuration(TokenResponseMalformed)`, below.
+        if (!isJson(payload)) throw notJsonFailure(status, contentType, "the token endpoint")
         val parsed = try {
             discoveryJson.decodeFromString(TokenResponsePayload.serializer(), payload)
         } catch (e: Exception) {
             throw VersolaError.Configuration(
-                VersolaError.Configuration.Detail.TokenResponseMalformed(
-                    e.message ?: e::class.java.simpleName,
-                ),
-                e,
+                VersolaError.Configuration.Detail.TokenResponseMalformed(describeParseFailure(e)),
             )
         }
-        // RFC 9110 5.6.7 dates; an unreadable one is not an error, only an absent clock.
-        val serverDate = dateHeader?.let {
+        // RFC 9110 5.6.7 dates; an unreadable one is not an error, only an absent clock. The
+        // validator takes this as "now", so it is trusted only as far as a skewed device clock
+        // explains it: a Date a week or more from the device's own is a broken or hostile answer
+        // (a proxy's stale page, a replay), and one carrying an `Age` is a cache's copy, as old as
+        // the Age says (RFC 9111 5.1), not the provider's clock.
+        val serverDate = dateHeader?.takeIf { ageHeader == null }?.let {
             try {
                 java.time.ZonedDateTime.parse(it, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME).toInstant()
             } catch (e: java.time.format.DateTimeParseException) {
                 null
             }
-        }
+        }?.takeIf { java.time.Duration.between(it, clock()).abs() <= MAX_PLAUSIBLE_DATE_SKEW }
         return TokenResponse.from(parsed, serverDate)
     }
 
@@ -476,6 +495,7 @@ public class TokenRequestExecutor(
 
     private companion object {
         private val FORM_MEDIA_TYPE = "application/x-www-form-urlencoded".toMediaType()
+        private val MAX_PLAUSIBLE_DATE_SKEW = java.time.Duration.ofDays(7)
     }
 }
 

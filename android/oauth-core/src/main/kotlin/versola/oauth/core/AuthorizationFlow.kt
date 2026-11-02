@@ -213,6 +213,23 @@ public class AuthorizationFlow(
     }
 
     /**
+     * Ends the browser wait of a `login()` or `stepUp()` that is only waiting for its redirect,
+     * because a `logout()` is about to wipe the session it would otherwise complete into (`AUDIT
+     * C9`). The sign-out's own browser and wipe queue on [AUTHORIZE_LOCK] behind that wait, and
+     * the tab of a login cannot be closed from here, so without this a sign-out lasts as long as
+     * the user takes to finish a login they no longer have. The login ends with
+     * `Recoverable(UserCancelled)`, as if the user had closed the tab. A code exchange already
+     * running is past the wait and is not touched. Only `logout()` calls it: a refresh that ends the
+     * grant does not stop a re-authorization that is about to replace it.
+     */
+    internal fun preemptLogin() {
+        loginSignal?.complete(Unit)
+    }
+
+    @Volatile
+    private var loginSignal: CompletableDeferred<Unit>? = null
+
+    /**
      * Waits for [block], the resume's wait for a redirect, until [signal] says a newer operation
      * wants the lock: then [block] is cancelled and the answer is null. The caller's own
      * cancellation is not this: it propagates.
@@ -228,6 +245,9 @@ public class AuthorizationFlow(
                 }
             }
         }
+
+    /** The state as it stands now, for a transition that must decide on it without suspending. */
+    internal val currentState: SessionState get() = state.value
 
     /** `Authenticated → StepUpRequired`; nothing else moves, the grant is intact. */
     internal fun enterStepUpRequired() {
@@ -382,6 +402,25 @@ public class AuthorizationFlow(
         parameters: AuthorizationParameters,
         ephemeralBrowser: Boolean,
     ): AuthorizationGrant {
+        // Created before discovery and the rest: a sign-out that arrives while this call is still
+        // getting ready ends the wait it is about to start rather than finding nothing to end.
+        val loginSignal = CompletableDeferred<Unit>()
+        this.loginSignal = loginSignal
+        try {
+            return authorizeAwaiting(scopes, acrValues, maxAge, parameters, ephemeralBrowser, loginSignal)
+        } finally {
+            this.loginSignal = null
+        }
+    }
+
+    private suspend fun authorizeAwaiting(
+        scopes: Set<String>,
+        acrValues: List<String>,
+        maxAge: Long?,
+        parameters: AuthorizationParameters,
+        ephemeralBrowser: Boolean,
+        loginSignal: CompletableDeferred<Unit>,
+    ): AuthorizationGrant {
         ensureRestored()
         val metadata = discovery.metadata()
         // `code_challenge_methods_supported` present without S256 is a provider this SDK cannot
@@ -418,10 +457,13 @@ public class AuthorizationFlow(
         // Bounded by what is left of the request's ten minutes, as a resume is: a code the provider
         // issues does not outlive them, and a redirect that is ignored while the login waits must not
         // be able to keep it waiting for ever (spec/state-machine.md, scenario 15).
-        val remaining = PendingAuthorizationRequest.MAX_AGE_MILLIS - (clock() - pending.createdAtEpochMillis)
+        val remaining = pending.remainingMillis(clock())
+        var preempted = loginSignal.isCompleted
         val outcome = try {
-            withTimeoutOrNull(remaining.coerceAtLeast(0)) {
-                belongingTo(pending, outsideRetryBudget { browser.authorize(uri, browserOptions) })
+            if (preempted) null else withTimeoutOrNull(remaining) {
+                awaitUnlessPreempted(loginSignal) {
+                    belongingTo(pending, outsideRetryBudget { browser.authorize(uri, browserOptions) })
+                }.also { if (it == null) preempted = true }
             }
         } catch (e: CancellationException) {
             // The *caller* was cancelled, not the authorization. The browser may already be
@@ -443,6 +485,13 @@ public class AuthorizationFlow(
             pendingStore.clear()
             state.value = settledState()
             throw e
+        }
+        if (preempted) {
+            // A sign-out is taking the session this login would have completed into. The request
+            // is its leftover and its wipe clears it; the caller hears what a closed tab says.
+            pendingStore.clear()
+            state.value = settledState()
+            throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.UserCancelled)
         }
         if (outcome == null) {
             // The request ran out while the browser was up: nothing can answer it any more, and the
@@ -496,7 +545,7 @@ public class AuthorizationFlow(
         // never come — a code spent by a login killed mid-exchange, a tab the user closed
         // before the process died — and an unbounded wait here holds the authorize lock, and
         // with it every later `login()`, for as long as the app lives.
-        val remaining = PendingAuthorizationRequest.MAX_AGE_MILLIS - (clock() - pending.createdAtEpochMillis)
+        val remaining = pending.remainingMillis(clock())
         var preempted = signal.isCompleted
         val outcome = if (preempted) null else withTimeoutOrNull(remaining) {
             awaitUnlessPreempted(signal) { belongingTo(pending, outsideRetryBudget { browser.awaitPendingRedirect() }) }
@@ -636,7 +685,7 @@ public class AuthorizationFlow(
             if (binding.requireHardware) {
                 throw VersolaError.Configuration(
                     VersolaError.Configuration.Detail.HardwareBindingUnavailable(
-                        "the provider does not advertise dpop_signing_alg_values_supported",
+                        "the provider does not advertise ES256 in dpop_signing_alg_values_supported",
                     ),
                 )
             }

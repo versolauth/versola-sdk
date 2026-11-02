@@ -419,6 +419,17 @@ final class IdTokenValidatorTests: XCTestCase {
         XCTAssertEqual(claims.subject, "user-1")
     }
 
+    /// RFC 7519 4.1.5 (`spec/oauth-sdk-api.md` section 11): a token must not be accepted before its `nbf`.
+    func testNbfInTheFutureBeyondTheToleranceIsRefusedAsIssuedAt() async {
+        let reason = await rejection(["nbf": secs(3600)])
+        XCTAssertEqual(reason, .issuedAt)
+    }
+
+    func testNbfInThePastOrInsideTheToleranceValidates() async throws {
+        _ = try await ok(["nbf": secs(-10)])
+        _ = try await ok(["nbf": secs(60)])
+    }
+
     func testZeroToleranceMakesTheClockExact() async {
         let late = await rejection(["iat": secs(1)], tolerance: 0)
         let expired = await rejection(["exp": secs(0)], tolerance: 0)

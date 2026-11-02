@@ -41,6 +41,14 @@ public class KeystoreDpopKey(
     private val alias: String = DEFAULT_ALIAS,
     private val requireHardware: Boolean = false,
     private val logger: VersolaLogger? = null,
+    /**
+     * Whether a grant is stored that was bound to this key. A proof asked for when the key is gone
+     * and this says yes is not signed by a freshly generated key under the same grant, which the
+     * server would refuse as a key mismatch long after the cause: it is `Reauthenticate(
+     * CredentialsInvalidated)` at once, as for a storage key that no longer decrypts (`AUDIT Z11`).
+     * `jkt()` and `attestation()` still generate, since a `login()` is what binds a new key.
+     */
+    private val isGrantHeld: suspend () -> Boolean = { false },
 ) : DpopKey {
 
     private class Material(
@@ -53,11 +61,11 @@ public class KeystoreDpopKey(
     private val mutex = Mutex()
     private var material: Material? = null
 
-    override suspend fun jkt(): String = material().jkt
+    override suspend fun jkt(): String = material(mayGenerate = true).jkt
 
-    override suspend fun publicJwk(): String = material().jwk
+    override suspend fun publicJwk(): String = material(mayGenerate = false).jwk
 
-    override suspend fun attestation(): KeyAttestation = material().attestation
+    override suspend fun attestation(): KeyAttestation = material(mayGenerate = true).attestation
 
     /**
      * Destroys the key and forgets it, so the next proof is signed by a freshly generated one
@@ -78,7 +86,7 @@ public class KeystoreDpopKey(
     }
 
     override suspend fun sign(signingInput: ByteArray): ByteArray {
-        val key = material().privateKey
+        val key = material(mayGenerate = false).privateKey
         return withContext(SdkDispatchers.blocking) {
             val signature = Signature.getInstance("SHA256withECDSA")
             signature.initSign(key)
@@ -87,9 +95,13 @@ public class KeystoreDpopKey(
         }
     }
 
-    private suspend fun material(): Material = mutex.withLock {
+    private suspend fun material(mayGenerate: Boolean): Material = mutex.withLock {
         material?.let { return@withLock it }
-        withContext(SdkDispatchers.blocking) { load() ?: generate() }
+        val loaded = withContext(SdkDispatchers.blocking) { load() }
+        if (loaded == null && !mayGenerate && isGrantHeld()) {
+            throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.CredentialsInvalidated)
+        }
+        (loaded ?: withContext(SdkDispatchers.blocking) { generate() })
             .also {
                 if (requireHardware && !it.attestation.isHardwareBacked) {
                     throw VersolaError.Configuration(

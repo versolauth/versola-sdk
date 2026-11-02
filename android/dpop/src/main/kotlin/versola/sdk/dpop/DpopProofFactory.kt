@@ -17,6 +17,11 @@ import versola.oauth.core.DpopProofSource
 public class DpopProofFactory(
     private val key: DpopKey,
     public val nonces: DpopNonceCache = DpopNonceCache(),
+    /**
+     * The device clock the proofs are stamped from. The offsets learned from `Date` headers are not
+     * kept here but per origin ([skewFor]): a resource server whose clock is two days off must not
+     * move the `iat` of the proofs sent to the authorization server (`AUDIT Z5`).
+     */
     public val clockSkew: ClockSkew = ClockSkew(),
     private val jti: () -> String = { UUID.randomUUID().toString() },
 ) : DpopProofSource {
@@ -37,7 +42,7 @@ public class DpopProofFactory(
         val claims = buildJsonObject {
             put("htm", method.uppercase())
             put("htu", htu(url))
-            put("iat", clockSkew.nowSeconds())
+            put("iat", skewFor(url).nowSeconds())
             put("jti", jti())
             nonces.nonceFor(url)?.let { put("nonce", it) }
             accessToken?.let { put("ath", ath(it)) }
@@ -57,9 +62,15 @@ public class DpopProofFactory(
      * it means paying for one rejection per process.
      */
     override fun observe(url: String, dateHeader: String?, nonceHeader: String?) {
-        clockSkew.learn(dateHeader)
+        if (dateHeader != null) skewFor(url).learn(dateHeader)
         if (!nonceHeader.isNullOrEmpty()) nonces.store(url, nonceHeader)
     }
+
+    private val skews = java.util.concurrent.ConcurrentHashMap<String, ClockSkew>()
+
+    /** The offset of the server at [url]'s origin: each learns its own, from its own `Date`. */
+    private fun skewFor(url: String): ClockSkew =
+        skews.getOrPut(Origin.of(url).value) { ClockSkew(clockSkew::deviceNow) }
 
     /**
      * RFC 9449 §4.3 step 9 compares `htu` against the request URI "ignoring any query and

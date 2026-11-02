@@ -9,6 +9,16 @@ package protocol DpopSigningKey: Sendable {
     /// ES256 over `data`: the raw `R || S`, 64 bytes (RFC 7515 A.3.1), which is what
     /// `signature(for:).rawRepresentation` already is on CryptoKit.
     func sign(_ data: Data) async throws -> Data
+    /// As `publicJwk()`, for the header of a proof about to be signed. A key that is gone while a grant
+    /// bound to it is stored must not be replaced here: a proof from a freshly generated key would be
+    /// refused by the server as a key mismatch long after the cause. `publicJwk()` is what a `login()`
+    /// asks (for `dpop_jkt`), and may bind a new key. A key that cannot tell the difference has the
+    /// default, which is `publicJwk()`.
+    func provingJwk() async throws -> JsonWebKey
+}
+
+extension DpopSigningKey {
+    package func provingJwk() async throws -> JsonWebKey { try await publicJwk() }
 }
 
 /// A DPoP key held in process memory, for tests and for the software fallback when the device
@@ -94,9 +104,10 @@ package actor DpopProofFactory: DpopProofSource {
     /// short-lived server state, and a stale one restored from disk buys a guaranteed extra round
     /// trip rather than saving one.
     private var nonces: [String: String] = [:]
-    /// One offset for the device clock, not one per origin: it is a fact about this device, and
-    /// what the token endpoint taught is right for the first request to a resource server too.
-    private var skew = ClockSkew()
+    /// One offset per origin, the last response of that origin winning: a resource server whose own
+    /// clock is wrong must not move the `iat` of the proofs sent to the authorization server, which
+    /// would then refuse them. An origin nothing was learned from is stamped from the device clock.
+    private var skews: [String: ClockSkew] = [:]
 
     package init(key: DpopSigningKey, clock: Clock = .system, random: RandomSource = SystemRandomSource()) {
         self.key = key
@@ -122,7 +133,7 @@ package actor DpopProofFactory: DpopProofSource {
         guard let parts = DpopURL.parts(url) else {
             throw OAuthError.configuration(.invalidConfiguration(detail: "a DPoP request URL must be absolute with a host"))
         }
-        let jwk = try await canonicalJwk()
+        let jwk = try await canonicalJwk(forProof: true)
         // The header carries the package key only; the canonical form has no private members, no
         // `kid`, no `alg` and no `use`, which RFC 9449 4.2 forbids a private key in and which
         // would only be noise otherwise.
@@ -141,7 +152,7 @@ package actor DpopProofFactory: DpopProofSource {
             "htu": .string("\(parts.scheme)://\(parts.host)\(port)\(parts.rawPath)"),
             // Truncated, not rounded: rounding up puts `iat` in the future, the side of the
             // server's leeway with less room on it. From the clock the `Date` headers corrected.
-            "iat": .integer(Int64(skew.corrected(clock.now()).timeIntervalSince1970.rounded(.down))),
+            "iat": .integer(Int64((skews[DpopOrigin.of(url)]?.corrected(clock.now()) ?? clock.now()).timeIntervalSince1970.rounded(.down))),
             // 128 bits from the CSPRNG: a proof must never be replayable under another jti.
             "jti": .string(JoseBase64Url.encode(Data(random.bytes(16)))),
         ]
@@ -165,8 +176,10 @@ package actor DpopProofFactory: DpopProofSource {
         if !nonce.isEmpty { nonces[origin] = nonce }
     }
 
-    package func observe(serverDate: String?, age: String?) async {
+    package func observe(serverDate: String?, age: String?, origin: String) async {
+        var skew = skews[origin] ?? ClockSkew()
         skew.learn(dateHeader: serverDate, age: age, deviceNow: clock.now())
+        skews[origin] = skew
     }
 
     package func nonce(for origin: String) async -> String? { nonces[origin] }
@@ -178,8 +191,8 @@ package actor DpopProofFactory: DpopProofSource {
     /// no whitespace. `JoseJSON.compact` sorts keys, which is that order here (`crv`, `kty`,
     /// `x`, `y`). A key that is not P-256 is refused: ES256 is the only algorithm this factory
     /// signs, and a proof whose `alg` does not match its key is one every server refuses.
-    private func canonicalJwk() async throws -> JoseJSON {
-        let jwk = try await key.publicJwk()
+    private func canonicalJwk(forProof: Bool = false) async throws -> JoseJSON {
+        let jwk = forProof ? try await key.provingJwk() : try await key.publicJwk()
         guard jwk.kty == "EC", jwk.crv == "P-256",
               let x = jwk.x, let y = jwk.y,
               JoseBase64Url.decode(x)?.count == 32, JoseBase64Url.decode(y)?.count == 32

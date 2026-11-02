@@ -105,9 +105,24 @@ public class OAuthConfiguration(
     public val unlockPolicy: UnlockPolicy = UnlockPolicy.None,
     /** Tolerance for `exp`, `iat` and `auth_time` in ID-token validation; at most five minutes. */
     public val clockSkewTolerance: Duration = 60.seconds,
-    public val logger: VersolaLogger = LogcatLogger(),
-    /** The client the SDK's own requests go through; its timeouts and pool are the app's. */
-    public val httpClient: OkHttpClient = defaultHttpClient(),
+    /**
+     * Where the SDK's diagnostics go. Part of the client's identity for [OAuthClient.create], compared
+     * by identity: a second `create()` for the same client with another logger is refused rather than
+     * answered with the first client, so an app that re-runs `create()` (an `Activity.onCreate` on
+     * rotation) keeps one logger. The default is one shared instance.
+     */
+    public val logger: VersolaLogger = defaultLogger,
+    /**
+     * The client the SDK's own requests go through; its timeouts, pinning, proxy and pool are the
+     * app's. Part of the client's identity for [OAuthClient.create], compared by identity like
+     * [logger]; the default is one shared client with a 60 second deadline on a whole call.
+     *
+     * **Its application interceptors see the SDK's own requests**, token requests and their bodies
+     * included: an interceptor that logs bodies prints refresh tokens. Log with a level that omits
+     * bodies, or exclude the issuer's host, in an application interceptor on this client
+     * (`spec/oauth-sdk-api.md` section 3).
+     */
+    public val httpClient: OkHttpClient = defaultHttpClient,
 ) {
     /** The issuer the ID token's `iss` is held to, whichever way it was configured. */
     public val issuerIdentifier: String = (issuer ?: endpoints?.issuer ?: "").trimEnd('/')
@@ -195,9 +210,15 @@ public class OAuthConfiguration(
             VersolaError.Configuration.Detail.InvalidConfiguration(detail),
         )
 
-        private fun defaultHttpClient(): OkHttpClient = OkHttpClient.Builder()
+        private val defaultLogger: VersolaLogger = LogcatLogger()
+
+        // One for the process, so that two configurations built with the defaults are the same
+        // client for `create()` (identity, above). The overall deadline bounds a call that connects
+        // and then drips: connect and read timeouts alone never fire on it (`AUDIT C5`).
+        private val defaultHttpClient: OkHttpClient = OkHttpClient.Builder()
             .connectTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
             .readTimeout(10, java.util.concurrent.TimeUnit.SECONDS)
+            .callTimeout(60, java.util.concurrent.TimeUnit.SECONDS)
             .build()
     }
 }

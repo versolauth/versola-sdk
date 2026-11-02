@@ -116,6 +116,28 @@ class SdkDispatchersTest {
         )
     }
 
+    // AUDIT: C3 - the Versola facade (:sdk Versola.call) and the edge back channel (:core BackChannel's
+    // FileNativeEndpointsStore and HttpNativeAuthorizationStarter, hit by EdgeNativeTokenClient.resolveEndpoints)
+    // still use raw Dispatchers.IO, so callers parked in the interceptor's runBlocking starve the refresh.
+    @Test
+    fun `AUDIT C3 no main source of core and sdk dispatches to Dispatchers IO`() {
+        val modules = listOf("core", "sdk")
+        val root = File("..").canonicalFile
+        val sources = modules.flatMap { module ->
+            File(root, "$module/src/main").walkTopDown().filter { it.isFile && it.extension == "kt" }.toList()
+        }
+        assertTrue("the scan found no sources: is the working directory the module's own?", sources.size > 5)
+
+        val offenders = sources
+            .filter { DirectIoScan.dispatchesToIo(it.readText()) }
+            .map { it.relativeTo(root).path }
+
+        assertTrue(
+            "blocking SDK work goes through SdkDispatchers.blocking, never Dispatchers.IO:\n${offenders.joinToString("\n")}",
+            offenders.isEmpty(),
+        )
+    }
+
     @Test
     fun `the scan sees a direct use of IO however it is spelled`() {
         listOf(

@@ -156,10 +156,23 @@ Where this is decided, so that the same answer holds whichever way the redirect 
   does, while it keeps waiting. The buffer is bounded (Android: the dispatcher's channel; iOS: eight
   URLs, the oldest dropped, except the first one the process was handed while nothing waited, which
   is the one that started it and which the others must not be able to push out).
+  On Android the door is open from the process's start until the first redirect is delivered or a
+  browser leg is cleared (`AUDIT C15`): a warm process with nothing awaited neither accepts an intent at
+  the redirect activity nor brings the app forward for it, and one expectation answers once, so a repeat
+  of the delivered redirect is not buffered for the next login. The Custom Tab's cancel heuristic counts
+  only the activity the tab opened over coming back, not another activity of the app resuming (`AUDIT
+  C14`); the plain-browser fallback is pinned to a browser package resolved from a link no app
+  claims, so an end-session URL with `id_token_hint` reaches no other handler (`AUDIT Z8`).
 - **A matching `state` completes or fails the login**, in the order of `Authorizing →
   Authenticated` above: a wrong or missing `iss` is `Configuration(IssuerMismatch)`, an `error`
   parameter is the provider's answer (`Reauthenticate` or `Configuration(AuthorizationRejected)`),
-  and neither `code` nor `error` is `Configuration(MalformedAuthorizationResponse)`.
+  and neither `code` nor `error` is `Configuration(MalformedAuthorizationResponse)`. A redirect whose
+  scheme, host, port or path is not the request's redirect URI is `MalformedAuthorizationResponse`
+  too, even with the right `state` (after `iss`, before the provider's `error`): `state` proves which
+  request a redirect answers, not where it was sent. The query is read as the platform delivered it,
+  so a raw `|`, `{`, `}` or space in it does not make a genuine redirect unreadable. The provider's
+  `server_error` and `temporarily_unavailable` are `Recoverable(Server(500 or 503))`, not a fault of
+  the deployment (`errors.md`).
 
 The one place a non-matching redirect still ends something is the browser surface itself ending
 with it: iOS's `ASWebAuthenticationSession` completes the moment its page navigates to the callback
@@ -245,7 +258,7 @@ Proportional rather than a flat constant, because `expires_in` is per-client con
 (`OAuthClientRecord.accessTokenTtl`, 3600 s in the bootstrap default) and nothing stops a
 deployment from issuing 20-second tokens. A flat 30 s against a 20 s token marks every token
 stale at the moment it is issued, and the session then refreshes before every single call —
-which under bearer [redacted] is a rotation per call. The `/ 10` term is what makes that
+which under bearer rotation is a rotation per call. The `/ 10` term is what makes that
 unrepresentable: the skew can never exceed a tenth of the lifetime, so proactive refresh can
 never add more than one token request per ten uses, at any TTL. The 30 s cap is what stops a
 long-lived token from being refreshed six minutes early for no benefit.
@@ -356,8 +369,9 @@ same access token: the usual cause is clock skew the SDK can now correct from th
 The offset is learned from the `Date` header of **every** response from a server the proofs are
 for, a success as much as a refusal, so the retry's `iat` is already corrected when it is minted
 and a device with a wrong clock usually pays no refusal at all after its first request.
-One offset per client, shared by every origin, **the last response wins** (a server whose own clock
-is wrong moves it until the next one that is right); in memory only (see the persistence summary);
+One offset **per origin**, the last response of that origin winning: a resource server whose own clock
+is wrong must not move the `iat` of the proofs sent to the authorization server, which would then refuse
+them (`AUDIT Z5`); an origin with no offset learned is stamped from the device clock; in memory only (see the persistence summary);
 an absent or unparseable `Date` leaves what was learned in place. Two things are not learned from: a `Date` more
 than 30 days from the device clock (a device that far off could not complete a TLS handshake against
 most certificates, so the value is a stale cache or a broken intermediary), and a response with an
@@ -414,6 +428,12 @@ Gating is a **time-bound** authorization of the key, not an auth-per-use binding
 |---|---|
 | Android | `setUserAuthenticationParameters(300, AUTH_BIOMETRIC_STRONG or AUTH_DEVICE_CREDENTIAL)`, or `setUserAuthenticationValidityDurationSeconds(300)` below API 30 |
 | iOS | the device unlock itself: the items are `WhenUnlockedThisDeviceOnly` (see the iOS deviation below) |
+
+An existing Android storage key that is not gated is not reused once the policy is `OnAppUnlock`
+(`AUDIT Z2`): the next write replaces it with a gated key, which makes what the old one wrapped
+unreadable, so the user signs in again once. Reading never replaces a key. The same holds for the
+rotation slot: a new `login()` clears the previous grant's idempotency key along with replacing its
+refresh token (`AUDIT C7`).
 
 300 seconds is iOS's own ceiling for that window. Android permits a longer one; matching the
 stricter platform keeps this one machine rather than two. Any matching OS authentication inside

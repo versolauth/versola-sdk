@@ -53,8 +53,10 @@ public struct ProviderMetadata: Sendable, Equatable, Codable {
         self.idTokenSigningAlgValuesSupported = idTokenSigningAlgValuesSupported
     }
 
-    /// DPoP is on whenever the provider advertises any signing algorithm for it.
-    public var supportsDpop: Bool { !dpopSigningAlgValuesSupported.isEmpty }
+    /// DPoP is on when the provider advertises ES256 for it, the one algorithm this SDK signs with:
+    /// a provider that lists only others would refuse every proof, and "supported" that cannot be
+    /// used is not support (`spec/errors.md`, a capability the configuration requires).
+    public var supportsDpop: Bool { dpopSigningAlgValuesSupported.contains("ES256") }
 
     enum CodingKeys: String, CodingKey {
         case issuer

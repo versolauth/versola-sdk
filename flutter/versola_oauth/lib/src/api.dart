@@ -16,13 +16,10 @@ abstract interface class OAuthApi {
   Future<IdTokenClaims?> claims();
 
   /// Signs the user in through the system browser.
-  Future<void> login([LoginOptions options = const LoginOptions()]);
+  Future<void> login([LoginOptions? options]);
 
   /// Answers a [StepUpError] by re-authorizing at the context it names.
-  Future<void> stepUp(
-    StepUpError challenge, [
-    LoginOptions options = const LoginOptions(),
-  ]);
+  Future<void> stepUp(StepUpError challenge, [LoginOptions? options]);
 
   /// Ends the session on this device and, where the provider supports it, at the provider.
   Future<LogoutOutcome> logout([LogoutOptions options = const LogoutOptions()]);

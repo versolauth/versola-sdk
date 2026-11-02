@@ -22,6 +22,18 @@ import versola.oauth.core.VersolaError.Recoverable.Cause
 /** The flattening is the contract with Dart's `errorFromMessage`: category, then the case name. */
 class MappingTest {
     @Test
+    fun theStableCodeCrossesAndIsNotTheProvidersOAuthCode() {
+        val rejected = VersolaError.Configuration(Detail.TokenRequestRejected("invalid_scope", "no")).toMessage()
+        assertEquals("configuration.token_request_rejected", rejected.sdkCode)
+        assertEquals("invalid_scope", rejected.code)
+        val denied = VersolaError.Reauthenticate(Reason.AuthorizationDenied).toMessage()
+        assertEquals("reauthenticate.authorization_denied", denied.sdkCode)
+        assertNull(denied.code)
+        assertEquals("step_up", VersolaError.StepUp(listOf("c2"), null).toMessage().sdkCode)
+        assertEquals("configuration.invalid_configuration", IllegalStateException("x").toErrorMessage().sdkCode)
+    }
+
+    @Test
     fun everyRecoverableCauseKeepsItsCategoryAndPayload() {
         val network = VersolaError.Recoverable(Cause.Network(detail = "timeout", attempts = 3, elapsedMillis = 1200)).toMessage()
         assertEquals(ErrorCategoryMessage.RECOVERABLE, network.category)

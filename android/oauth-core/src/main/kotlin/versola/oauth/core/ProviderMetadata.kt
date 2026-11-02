@@ -81,12 +81,14 @@ public data class ProviderMetadata(
 ) {
 
     /**
-     * DPoP is on whenever the provider advertises any signing algorithm for it. The SDK does
-     * not let the integrator choose: #1 §4 fixes the behaviour to "on and invisible", with
-     * bearer reached only through this absence or an explicit `TokenBinding.Bearer`.
+     * DPoP is on whenever the provider advertises `ES256` for it, the one algorithm the SDK signs
+     * with: a provider that lists only `PS256` or `EdDSA` would be sent a proof it must refuse
+     * (`spec/providers.md`). The SDK does not let the integrator choose: #1 §4 fixes the behaviour
+     * to "on and invisible", with bearer reached only through this absence or an explicit
+     * `TokenBinding.Bearer`.
      */
     public val supportsDpop: Boolean
-        get() = dpopSigningAlgValuesSupported.isNotEmpty()
+        get() = "ES256" in dpopSigningAlgValuesSupported
 
     internal fun validate(configuredIssuer: String) {
         if (issuer.isBlank()) {
@@ -116,7 +118,7 @@ public data class ProviderMetadata(
         // ([requireSecureEndpoint]): one `http://` in an end-session, revocation, PAR, UserInfo or
         // mTLS-alias URL the app never calls must not make the whole document unusable and break
         // login. Held to the issuer's own rule (https, or cleartext on a loopback host for a staged
-        // stack; not the emulator's `10.0.2.2` alias, which the issuer alone may use) but not to the
+        // stack; not the emulator's `10.0.2.2` alias, which no URL may use) but not to the
         // issuer's origin: Cognito's OAuth endpoints live on the user-pool domain and Entra's
         // UserInfo on Microsoft Graph, so a cross-origin endpoint is legitimate (`providers.md`).
         // Without this a document announcing `http://…/token` has refresh tokens POSTed to it in

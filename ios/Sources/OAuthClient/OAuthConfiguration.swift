@@ -37,7 +37,7 @@ public struct ProviderEndpoints: Sendable, Equatable {
 
     /// The metadata discovery would have produced. The three capability lists are what a
     /// provider without discovery is assumed to support: code flow with PKCE S256, refresh.
-    public func toMetadata() -> ProviderMetadata {
+    func toMetadata() -> ProviderMetadata {
         ProviderMetadata(
             issuer: issuer, authorizationEndpoint: authorizationEndpoint, tokenEndpoint: tokenEndpoint,
             userinfoEndpoint: userinfoEndpoint, revocationEndpoint: revocationEndpoint,
@@ -104,12 +104,23 @@ public struct OAuthConfiguration: Sendable {
     public let redirectUriWarning: String?
     /// What keeps one client's storage apart from another's in the same app: the issuer and the
     /// client id, hashed. Two configurations with the same key must be the same configuration.
-    public let storageKey: String
+    let storageKey: String
     /// Everything that makes two configurations the same client, excluding the session and the
     /// logger, by value: two configurations built separately with equal values are equal.
-    public let fingerprint: String
+    let fingerprint: String
 
     static let storageKeyLength = 16
+
+    /// Whether `other` wires the same `URLSession` and the same logger. By identity for a class
+    /// (a session, a logger object); a logger that is a value type has none, so two of one type are
+    /// the same (the default `OSLogLogger()` built twice must not look different).
+    func sharesWiring(with other: OAuthConfiguration) -> Bool {
+        func identity(_ logger: any OAuthLogger) -> AnyHashable {
+            let object = logger as AnyObject
+            return type(of: logger) is AnyClass ? AnyHashable(ObjectIdentifier(object)) : AnyHashable(String(describing: type(of: logger)))
+        }
+        return urlSession === other.urlSession && identity(logger) == identity(other.logger)
+    }
 
     /// Throws `OAuthError.configuration(.invalidConfiguration)` naming the first offending field.
     public init(

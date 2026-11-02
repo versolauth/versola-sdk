@@ -4,7 +4,7 @@ import okhttp3.Headers
 
 /**
  * How an access token is presented: bound to a key the device holds (RFC 9449), or as a
- * bearer [redacted]
+ * bearer token with no key behind it (RFC 6750).
  *
  * Not an algorithm choice and not a DPoP configuration — #1 §4 fixes the behaviour to "on and
  * invisible". The only two things an integrator can say here are "I am willing to run without
@@ -13,8 +13,8 @@ import okhttp3.Headers
 public sealed class TokenBinding {
 
     /**
-     * The default. DPoP whenever the provider advertises it
-     * ([ProviderMetadata.supportsDpop]); bearer [redacted]]]]]]]]]]]] one line, when it does not.
+     * DPoP whenever the provider advertises it ([ProviderMetadata.supportsDpop]); bearer, with one
+     * warning line, when it does not. The Versola facade's default; the generic facade's is [Bearer].
      *
      * @param requireHardware turns both silent fallbacks into hard failures: a device with no
      *   hardware-backed keystore, and a deployment that does not advertise DPoP at all. An
@@ -23,7 +23,7 @@ public sealed class TokenBinding {
      */
     public data class Dpop(public val requireHardware: Boolean = false) : TokenBinding()
 
-    /** Bearer [redacted] even where the provider supports DPoP. The integrator's own choice. */
+    /** Bearer tokens even where the provider supports DPoP. The integrator's own choice. */
     public data object Bearer : TokenBinding()
 }
 

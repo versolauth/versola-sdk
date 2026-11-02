@@ -43,7 +43,7 @@ final class Scenario33DpopEndToEndBridgeTest: BridgeConformance {
     }
 
     func test33BridgeTheTokenRequestCarriesAValidProofAndTheIssuedTokenIsDpopBoundToTheSdksKey() async throws {
-        let bridge = try await bridge(clientId: Provider.dpopClientId, tokenBinding: .dpop(required: false))
+        let bridge = try await bridge(clientId: Provider.dpopClientId, tokenBinding: .dpop(requireHardware: false))
         let metadata = try await bridge.native.metadata()
 
         try ok(await bridge.dart.login())
@@ -86,7 +86,7 @@ final class Scenario33DpopEndToEndBridgeTest: BridgeConformance {
     }
 
     func test33BridgeARefreshKeepsTheKeyAndTheNewTokenIsBoundToIt() async throws {
-        let bridge = try await bridge(clientId: Provider.dpopClientId, tokenBinding: .dpop(required: false))
+        let bridge = try await bridge(clientId: Provider.dpopClientId, tokenBinding: .dpop(requireHardware: false))
         let metadata = try await bridge.native.metadata()
         try ok(await bridge.dart.login())
         let jkt = DpopResourceServer.thumbprint(try sdkKey().publicKey)
@@ -115,7 +115,7 @@ final class Scenario33DpopEndToEndBridgeTest: BridgeConformance {
 
     func test33BridgeAStolenAccessTokenIsRefusedWithoutTheKeyWithAnotherKeyAndWithAProofThatDoesNotMatch() async throws {
         let rs = try await DpopResourceServer.install(network, origin: Self.origin)
-        let bridge = try await bridge(clientId: Provider.dpopClientId, protectedOrigins: [Self.origin], tokenBinding: .dpop(required: false))
+        let bridge = try await bridge(clientId: Provider.dpopClientId, protectedOrigins: [Self.origin], tokenBinding: .dpop(requireHardware: false))
         try ok(await bridge.dart.login())
         let accessToken = try token(await bridge.dart.accessToken())
         XCTAssertEqual(accessToken.tokenType, "DPoP")
@@ -124,7 +124,7 @@ final class Scenario33DpopEndToEndBridgeTest: BridgeConformance {
     }
 
     func test33BridgeRequireHardwareOnAHostThatProducesASoftwareKeyIsRefusedWithHardwareBindingUnavailableBeforeAnyAuthorizationRequest() async throws {
-        let bridge = try await bridge(clientId: Provider.dpopClientId, tokenBinding: .dpop(required: true))
+        let bridge = try await bridge(clientId: Provider.dpopClientId, tokenBinding: .dpop(requireHardware: true))
         let metadata = try await bridge.native.metadata()
 
         let error = try failure(await bridge.dart.login())
@@ -156,7 +156,7 @@ final class Scenario33DpopEndToEndBridgeTest: BridgeConformance {
     }
 
     func test33BridgeTheProviderBindsTheRefreshTokenToTheKeyAsWellSoWithoutTheKeyItBuysNothing() async throws {
-        let bridge = try await bridge(clientId: Provider.dpopClientId, tokenBinding: .dpop(required: false))
+        let bridge = try await bridge(clientId: Provider.dpopClientId, tokenBinding: .dpop(requireHardware: false))
         let metadata = try await bridge.native.metadata()
         try ok(await bridge.dart.login())
         let refreshToken = try XCTUnwrap(network.matching("POST", path(metadata.tokenEndpoint)).first?.responseJSON?["refresh_token"] as? String)
@@ -184,7 +184,7 @@ final class Scenario33DpopEndToEndBridgeTest: BridgeConformance {
     }
 
     func test33BridgeUserInfoUnderDpopCarriesTheDpopSchemeAndAProofBoundToTheToken() async throws {
-        let bridge = try await bridge(clientId: Provider.dpopClientId, tokenBinding: .dpop(required: false))
+        let bridge = try await bridge(clientId: Provider.dpopClientId, tokenBinding: .dpop(requireHardware: false))
         let metadata = try await bridge.native.metadata()
         try ok(await bridge.dart.login())
         let jkt = DpopResourceServer.thumbprint(try sdkKey().publicKey)
@@ -206,7 +206,7 @@ final class Scenario33DpopEndToEndBridgeTest: BridgeConformance {
     }
 
     func test33BridgeLogoutUnderDpopRevokesTheRefreshTokenAndTheProviderThenRefusesIt() async throws {
-        let bridge = try await bridge(clientId: Provider.dpopClientId, tokenBinding: .dpop(required: false))
+        let bridge = try await bridge(clientId: Provider.dpopClientId, tokenBinding: .dpop(requireHardware: false))
         let metadata = try await bridge.native.metadata()
         try ok(await bridge.dart.login())
         let sdkKey = try sdkKey()
@@ -238,7 +238,7 @@ final class Scenario33DpopEndToEndBridgeTest: BridgeConformance {
     }
 
     func test33BridgeANonceChallengeFromTheProvidersTokenEndpointIsRetriedOnceWithTheNonceAndTheLoginCompletes() async throws {
-        let bridge = try await bridge(clientId: Provider.dpopClientId, tokenBinding: .dpop(required: false))
+        let bridge = try await bridge(clientId: Provider.dpopClientId, tokenBinding: .dpop(requireHardware: false))
         let metadata = try await bridge.native.metadata()
         let tokenPath = path(metadata.tokenEndpoint)
         let challenges = OSAllocatedUnfairLock(initialState: 0)
@@ -262,7 +262,7 @@ final class Scenario33DpopEndToEndBridgeTest: BridgeConformance {
     }
 
     func test33BridgeAProviderThatKeepsChallengingTheTokenRequestGetsOneRetryAndThenNonceLoop() async throws {
-        let bridge = try await bridge(clientId: Provider.dpopClientId, tokenBinding: .dpop(required: false))
+        let bridge = try await bridge(clientId: Provider.dpopClientId, tokenBinding: .dpop(requireHardware: false))
         let metadata = try await bridge.native.metadata()
         let tokenPath = path(metadata.tokenEndpoint)
         let issued = OSAllocatedUnfairLock(initialState: 0)
@@ -280,7 +280,7 @@ final class Scenario33DpopEndToEndBridgeTest: BridgeConformance {
     }
 
     func test33BridgeACodeBoundToTheSdksKeyIsNotRedeemedWithAProofFromAnotherKey() async throws {
-        let bridge = try await bridge(clientId: Provider.dpopClientId, tokenBinding: .dpop(required: false))
+        let bridge = try await bridge(clientId: Provider.dpopClientId, tokenBinding: .dpop(requireHardware: false))
         let metadata = try await bridge.native.metadata()
         let tokenPath = path(metadata.tokenEndpoint)
         let attacker = P256.Signing.PrivateKey()
@@ -305,7 +305,7 @@ final class Scenario33DpopEndToEndBridgeTest: BridgeConformance {
 
     func test33BridgeHttpRequestSendsTheDpopSchemeAndAProofBoundToTheTokenWhichTheResourceServerAccepts() async throws {
         let rs = try await DpopResourceServer.install(network, origin: Self.origin)
-        let bridge = try await bridge(clientId: Provider.dpopClientId, protectedOrigins: [Self.origin], tokenBinding: .dpop(required: false))
+        let bridge = try await bridge(clientId: Provider.dpopClientId, protectedOrigins: [Self.origin], tokenBinding: .dpop(requireHardware: false))
         try ok(await bridge.dart.login())
         let jkt = DpopResourceServer.thumbprint(try sdkKey().publicKey)
         let claims = try await bridge.dart.claims()
@@ -337,7 +337,7 @@ final class Scenario33DpopEndToEndBridgeTest: BridgeConformance {
 
     func test33BridgeAnAuthorizationAndADpopHeaderTheAppSetOnTheDpopProtectedOriginAreReplacedTheResourceSeesExactlyOneOfEach() async throws {
         let rs = try await DpopResourceServer.install(network, origin: Self.origin)
-        let bridge = try await bridge(clientId: Provider.dpopClientId, protectedOrigins: [Self.origin], tokenBinding: .dpop(required: false))
+        let bridge = try await bridge(clientId: Provider.dpopClientId, protectedOrigins: [Self.origin], tokenBinding: .dpop(requireHardware: false))
         try ok(await bridge.dart.login())
 
         let answer = try response(await bridge.dart.httpRequest(
@@ -354,7 +354,7 @@ final class Scenario33DpopEndToEndBridgeTest: BridgeConformance {
 
     func test33BridgeHttpRequestAnswersTheResourcesNonceChallengeOnceWithTheNonceAndRemembersItForTheOrigin() async throws {
         let rs = try await DpopResourceServer.install(network, origin: Self.origin, nonce: "resource-nonce-1")
-        let bridge = try await bridge(clientId: Provider.dpopClientId, protectedOrigins: [Self.origin], tokenBinding: .dpop(required: false))
+        let bridge = try await bridge(clientId: Provider.dpopClientId, protectedOrigins: [Self.origin], tokenBinding: .dpop(requireHardware: false))
         try ok(await bridge.dart.login())
 
         let first = try response(await bridge.dart.httpRequest(rs.url("/api")))
@@ -377,7 +377,7 @@ final class Scenario33DpopEndToEndBridgeTest: BridgeConformance {
 
     func test33BridgeAResourceThatKeepsChallengingGetsOneRetryAndThenNonceLoopThroughHttpRequest() async throws {
         let rs = try await DpopResourceServer.install(network, origin: Self.origin, nonce: "demanded", offered: "offered")
-        let bridge = try await bridge(clientId: Provider.dpopClientId, protectedOrigins: [Self.origin], tokenBinding: .dpop(required: false))
+        let bridge = try await bridge(clientId: Provider.dpopClientId, protectedOrigins: [Self.origin], tokenBinding: .dpop(requireHardware: false))
         try ok(await bridge.dart.login())
 
         let error = try failure(await bridge.dart.httpRequest(rs.url("/api")))

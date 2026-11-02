@@ -271,6 +271,9 @@ package actor KeychainCredentialStore: CredentialStore {
     package func save(refreshToken: String, rawIdToken: String?) async throws {
         try firstLaunch?.ensure()
         try refreshItem.write(Data(refreshToken.utf8))
+        // A login or step-up replaces the grant: the previous grant's idempotency key goes with its
+        // token, or the next refresh would replay a stale key against the new one.
+        try rotationItem.delete()
         if let rawIdToken {
             try idTokenItem.write(Data(rawIdToken.utf8))
         } else {
@@ -383,6 +386,7 @@ package actor InMemoryCredentialStore: CredentialStore {
     package func save(refreshToken: String, rawIdToken: String?) async throws {
         refresh = refreshToken
         idToken = rawIdToken
+        rotation = nil
     }
 
     package func saveRefreshed(refreshToken: String?, rawIdToken: String?) async throws {

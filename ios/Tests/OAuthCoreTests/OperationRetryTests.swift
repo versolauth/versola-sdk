@@ -77,7 +77,7 @@ final class OperationRetryTests: XCTestCase {
     }
 
     func testDiscoveryIsNotRepeatedOnA501OrA4xxOrAMalformedDocument() async {
-        for (status, body) in [(501, ""), (505, ""), (404, ""), (403, ""), (200, "<html>")] {
+        for (status, body) in [(501, ""), (505, ""), (404, ""), (403, ""), (200, "<html>"), (200, "[1]")] {
             let http = http([answer(status, [:], body)])
             _ = await failure { try await self.within(self.operationBudget()) { try await self.discover(http) } }
             let count = await http.requests.count

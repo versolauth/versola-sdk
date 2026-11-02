@@ -22,6 +22,8 @@ public final class OAuthClient: OAuthApi {
     private let httpSession: URLSession
     /// Single flight for the resume `create` starts and an explicit `resumePendingAuthorization()`.
     private let backgroundResume: ResumeFlight
+    /// The `login()` or `stepUp()` this client is carrying out, which a second identical call joins.
+    private let loginFlights = LoginFlights()
 
     /// One client per configuration per process: a second `create` with the same issuer and
     /// client id returns the first instance (two coordinators over one Keychain item would race
@@ -36,6 +38,12 @@ public final class OAuthClient: OAuthApi {
             if let existing = clients[configuration.storageKey] {
                 if existing.configuration.fingerprint != configuration.fingerprint {
                     throw OAuthError.configuration(.invalidConfiguration(detail: "a client for \(configuration.issuerIdentifier) / \(configuration.clientId) already exists in this process with a different configuration"))
+                }
+                // The session and the logger are part of the configuration for this purpose, by
+                // identity: returning the first client would silently drop the app's new timeouts,
+                // pinning or logging. An app that re-runs `create` (a scene reconnecting) holds on to them.
+                if !existing.configuration.sharesWiring(with: configuration) {
+                    throw OAuthError.configuration(.invalidConfiguration(detail: "a client for \(configuration.issuerIdentifier) / \(configuration.clientId) already exists in this process with a different urlSession or logger"))
                 }
                 return (existing, false)
             }
@@ -108,7 +116,7 @@ public final class OAuthClient: OAuthApi {
         /// on a host whose Keychain refuses an unsigned process (-34018) hands the key a store of its
         /// own; what the key does with `requireHardware` is still the SDK's, only where it persists
         /// and whether the Secure Enclave counts as present are the driver's.
-        dpopKey makeDpopKey: (@Sendable (_ requireHardware: Bool, _ logger: any OAuthLogger) -> SecureEnclaveDpopKey)? = nil
+        dpopKey makeDpopKey: (@Sendable (_ requireHardware: Bool, _ logger: any OAuthLogger, _ isGrantHeld: @escaping @Sendable () async throws -> Bool) -> SecureEnclaveDpopKey)? = nil
     ) async throws -> OAuthClient {
         let (client, created) = try await registry.resolve(configuration) {
             try build(configuration: configuration, presentationAnchor: nil, browser: browser, credentialStore: credentialStore, pendingStore: pendingStore, metadataCache: metadataCache, jwksCache: jwksCache, makeDpopKey: makeDpopKey)
@@ -155,7 +163,9 @@ public final class OAuthClient: OAuthApi {
     /// The claims of the validated ID token of this session, or nil when there is no session.
     /// Memory only; the raw token and the `nonce` are not exposed.
     public var claims: IdTokenClaims? {
-        get async { await coordinator.claims }
+        // Read back from the stored ID token when this process has not validated one itself (a
+        // cold start that restored `authenticated`).
+        get async { await coordinator.restoreClaims() }
     }
 
     /// The provider's metadata, discovered once and cached on disk across restarts and logout.
@@ -166,22 +176,17 @@ public final class OAuthClient: OAuthApi {
 
     /// Opens the system browser, validates the redirect, exchanges the code, validates the ID
     /// token and persists the grant, in that order; `authenticated` is published only after the
-    /// grant is durably stored. Refused while an authorization is in flight (the sheet is up, or a code
-    /// is being exchanged); a cold-start resume that only waits for its redirect is ended first and
-    /// the request nobody awaits is superseded.
+    /// grant is durably stored. Called again while the same login is in flight (a double-tapped
+    /// button) it joins it: one browser, one exchange, the same outcome for both callers. A call that
+    /// asks for something else, or one made while the end-session page is open or a code is being
+    /// exchanged for another reason, is refused; a cold-start resume that only waits for its
+    /// redirect is ended first and the request nobody awaits is superseded.
     public func login(_ options: LoginOptions = .default) async throws {
-        try await refuseWhileAuthorizing()
-        let coordinator = self.coordinator
-        let scopes = Array((options.scopes ?? configuration.scopes).union(["openid"])).sorted()
-        _ = try await coordinator.operation {
-            try await coordinator.login(
-                scopes: scopes,
-                acrValues: options.acrValues,
-                maxAge: options.maxAge,
-                parameters: options.parameters,
-                ephemeralBrowser: options.ephemeralBrowser
-            )
-        }
+        try await authorize(
+            scopes: Array((options.scopes ?? configuration.scopes).union(["openid"])).sorted(),
+            acrValues: options.acrValues, maxAge: options.maxAge,
+            parameters: options.parameters, ephemeralBrowser: options.ephemeralBrowser
+        )
     }
 
     /// Answers the `OAuthError.stepUp` the app caught, the same way Kotlin's and Dart's
@@ -196,17 +201,34 @@ public final class OAuthClient: OAuthApi {
     /// Answers `OAuthError.stepUp` by re-authorizing at the authentication context the resource
     /// server asked for; the app then re-issues the refused call.
     public func stepUp(acrValues: [String], maxAge: Int?, options: LoginOptions = .default) async throws {
-        try await refuseWhileAuthorizing()
+        try await authorize(
+            scopes: Array((options.scopes ?? configuration.scopes).union(["openid"])).sorted(),
+            acrValues: acrValues, maxAge: maxAge,
+            parameters: options.parameters, ephemeralBrowser: options.ephemeralBrowser
+        )
+    }
+
+    /// `login()` and `stepUp()` are the same operation with different arguments: asking for the
+    /// same thing twice joins the call already running (`spec/oauth-sdk-api.md` section 5).
+    private func authorize(
+        scopes: [String], acrValues: [String], maxAge: Int?, parameters: AuthorizationParameters, ephemeralBrowser: Bool
+    ) async throws {
+        let request = LoginRequest(scopes: scopes, acrValues: acrValues, maxAge: maxAge, parameters: parameters, ephemeralBrowser: ephemeralBrowser)
+        try await flow.ensureRestored()
+        // A resume that only waits for its redirect (a cold start restored the request and the
+        // user abandoned that sheet) is not an authorization to protect: it is ended, as
+        // `logout()` ends it, and the request nobody awaits is superseded by this one.
+        if await flow.isAwaitingRedirect { await backgroundResume.cancelInFlight() }
         let coordinator = self.coordinator
-        let scopes = Array((options.scopes ?? configuration.scopes).union(["openid"])).sorted()
-        _ = try await coordinator.operation {
-            try await coordinator.login(
-                scopes: scopes,
-                acrValues: acrValues,
-                maxAge: maxAge,
-                parameters: options.parameters,
-                ephemeralBrowser: options.ephemeralBrowser
-            )
+        let flow = self.flow
+        let refusal = OAuthError.configuration(.invalidConfiguration(detail: "an authorization is already in progress; observe sessionStates() before asking again"))
+        try await loginFlights.run(request, refusal: refusal, elsewhere: { await flow.authorizationInFlight }) {
+            _ = try await coordinator.operation {
+                try await coordinator.login(
+                    scopes: scopes, acrValues: acrValues, maxAge: maxAge,
+                    parameters: parameters, ephemeralBrowser: ephemeralBrowser
+                )
+            }
         }
     }
 
@@ -251,6 +273,9 @@ public final class OAuthClient: OAuthApi {
     /// may never come (up to ten minutes). The pending sign-in is abandoned by the wipe.
     public func logout(_ options: LogoutOptions = .default) async -> LogoutOutcome {
         await backgroundResume.cancelInFlight()
+        // A login whose browser is up holds the flow's gate, which the end-session step needs: it is
+        // ended first (its sheet dismissed, its callers cancelled), not waited for.
+        await loginFlights.cancelAll()
         let coordinator = self.coordinator
         return await coordinator.operation { await coordinator.logout(revoke: options.revoke, endSession: options.endSession) }
     }
@@ -270,8 +295,13 @@ public final class OAuthClient: OAuthApi {
 
     /// `GET` on the UserInfo endpoint with the session's token; `sub` must equal the ID token's.
     public func userInfo() async throws -> UserInfo {
-        guard let subject = await coordinator.restoreClaims()?.subject else {
-            throw OAuthError.reauthenticate(.grantRejected)
+        // A locked store is said to be locked: the session is intact, and "sign in again" would
+        // tell the app to throw it away.
+        guard let subject = try await coordinator.restoreClaimsOrThrow()?.subject else {
+            // With no session at all no token endpoint was asked what `grantRejected` says: it is
+            // `sessionExpired`. A sign-in still in progress keeps the no-grant answer (nothing is
+            // wiped for it, and the sign-in can still finish).
+            throw OAuthError.reauthenticate(await sessionState == .unauthenticated ? .sessionExpired : .grantRejected)
         }
         let coordinator = self.coordinator
         let userInfoClient = self.userInfoClient
@@ -289,7 +319,7 @@ public final class OAuthClient: OAuthApi {
             throw OAuthError.configuration(.invalidConfiguration(detail: "the authenticated session needs at least one protected origin; none is configured"))
         }
         let coordinator = self.coordinator
-        return AuthenticatedSession(tokens: coordinator, scope: try RequestScope(origins: scope), dpop: proofs, session: httpSession, onStepUp: { await coordinator.stepUpRequired() })
+        return AuthenticatedSession(tokens: coordinator, scope: try RequestScope(origins: scope), dpop: proofs, session: httpSession, onStepUp: { await coordinator.stepUpRequired() }, operation: { call in try await coordinator.operation(call) })
     }
 
     /// Hands a redirect the app received by other means (a Universal Link while the app was
@@ -348,17 +378,6 @@ public final class OAuthClient: OAuthApi {
         }
     }
 
-    private func refuseWhileAuthorizing() async throws {
-        try await flow.ensureRestored()
-        // A resume that only waits for its redirect (a cold start restored the request and the
-        // user abandoned that sheet) is not an authorization to protect: it is ended, as
-        // `logout()` ends it, and the request nobody awaits is superseded by this one.
-        if await flow.isAwaitingRedirect { await backgroundResume.cancelInFlight() }
-        if await flow.authorizationInFlight {
-            throw OAuthError.configuration(.invalidConfiguration(detail: "an authorization is already in progress; observe sessionStates() before asking again"))
-        }
-    }
-
     // MARK: - Wiring
 
     private static func build(
@@ -369,7 +388,7 @@ public final class OAuthClient: OAuthApi {
         pendingStore injectedPending: PendingAuthorizationStore?,
         metadataCache injectedMetadataCache: ProviderMetadataCache?,
         jwksCache injectedJwksCache: JwksCache?,
-        makeDpopKey: (@Sendable (_ requireHardware: Bool, _ logger: any OAuthLogger) -> SecureEnclaveDpopKey)?
+        makeDpopKey: (@Sendable (_ requireHardware: Bool, _ logger: any OAuthLogger, _ isGrantHeld: @escaping @Sendable () async throws -> Bool) -> SecureEnclaveDpopKey)?
     ) throws -> OAuthClient {
         let logger = configuration.logger
         if let warning = configuration.redirectUriWarning { logger.warn(warning) }
@@ -381,12 +400,13 @@ public final class OAuthClient: OAuthApi {
         if let endpoints = configuration.endpoints {
             var metadata = endpoints.toMetadata()
             if let endSession = configuration.endSessionEndpoint { metadata.endSessionEndpoint = endSession }
-            discovery = DiscoveryService(issuer: core.issuer, client: StaticDiscoveryClient(metadata: metadata), cache: MemoryMetadataCache())
+            discovery = DiscoveryService(issuer: core.issuer, client: StaticDiscoveryClient(metadata: metadata), cache: MemoryMetadataCache(), logger: logger)
         } else {
             discovery = DiscoveryService(
                 issuer: core.issuer,
                 client: EndSessionOverride(delegate: HTTPDiscoveryClient(httpClient: httpClient), endSessionEndpoint: configuration.endSessionEndpoint),
-                cache: injectedMetadataCache ?? FileProviderMetadataCache(directory: directory)
+                cache: injectedMetadataCache ?? FileProviderMetadataCache(directory: directory),
+                logger: logger
             )
         }
 
@@ -395,15 +415,18 @@ public final class OAuthClient: OAuthApi {
         let storageKey = configuration.storageKey
         let firstLaunch = FirstLaunchGuard(directory: directory, deleteAll: { try KeychainItem.deleteAllInOwnGroup(service: KeychainItem.service(forStorageKey: storageKey)) })
 
+        let credentialStore: CredentialStore = injectedCredentials ?? KeychainCredentialStore(storageKey: configuration.storageKey, unlockPolicy: configuration.unlockPolicy, firstLaunch: firstLaunch, logger: logger)
         let dpopKey: SecureEnclaveDpopKey?
-        if case .dpop(let required) = configuration.tokenBinding {
-            dpopKey = makeDpopKey?(required, logger) ?? SecureEnclaveDpopKey(storageKey: configuration.storageKey, requireHardware: required, logger: logger, firstLaunch: firstLaunch)
+        if case .dpop(let requireHardware) = configuration.tokenBinding {
+            // Told whether a grant is stored, so a key that has gone while one is is `credentialsInvalidated`
+            // at the proof rather than a new key the server would refuse (`SecureEnclaveDpopKey.key(mayGenerate:)`).
+            let isGrantHeld: @Sendable () async throws -> Bool = { try await credentialStore.hasGrant() }
+            dpopKey = makeDpopKey?(requireHardware, logger, isGrantHeld) ?? SecureEnclaveDpopKey(storageKey: configuration.storageKey, requireHardware: requireHardware, logger: logger, firstLaunch: firstLaunch, isGrantHeld: isGrantHeld)
         } else {
             dpopKey = nil
         }
         let proofs: DpopProofFactory? = dpopKey.map { DpopProofFactory(key: $0) }
 
-        let credentialStore: CredentialStore = injectedCredentials ?? KeychainCredentialStore(storageKey: configuration.storageKey, unlockPolicy: configuration.unlockPolicy, firstLaunch: firstLaunch, logger: logger)
         let pendingStore: PendingAuthorizationStore = injectedPending ?? KeychainPendingAuthorizationStore(storageKey: configuration.storageKey, unlockPolicy: configuration.unlockPolicy, firstLaunch: firstLaunch, logger: logger)
         let webBrowser: WebAuthenticationBrowser? = injectedBrowser == nil
             ? WebAuthenticationBrowser(presentationAnchor: presentationAnchor!, appState: { Self.isForeground(window: presentationAnchor!()) }, logger: logger)
@@ -473,7 +496,9 @@ public final class OAuthClient: OAuthApi {
                 jwksUri: { try await discovery.metadata().jwksUri },
                 allowedAlgorithms: { try await discovery.metadata().idTokenSigningAlgValuesSupported },
                 jwks: jwks
-            )
+            ),
+            issuer: core.issuer,
+            clientId: core.clientId
         )
         return OAuthClient(configuration: configuration, flow: flow, coordinator: coordinator, userInfoClient: userInfo, proofs: proofs, dpopKey: dpopKey, browser: webBrowser, httpSession: configuration.urlSession, backgroundResume: resumeFlight)
     }
@@ -643,5 +668,104 @@ private struct EndSessionOverride: DiscoveryClient {
         var fetched = try await delegate.fetchWithLifetime(issuer: issuer)
         if let endSessionEndpoint { fetched.metadata.endSessionEndpoint = endSessionEndpoint }
         return fetched
+    }
+}
+
+
+/// What a `login()` or `stepUp()` asks for; two calls that ask for the same thing are one.
+private struct LoginRequest: Equatable, Sendable {
+    let scopes: [String]
+    let acrValues: [String]
+    let maxAge: Int?
+    let parameters: AuthorizationParameters
+    let ephemeralBrowser: Bool
+}
+
+/// The authorization one client is carrying out through `login()` / `stepUp()`, shared by the
+/// callers that asked for it: concurrent refreshes coalesce the same way. A joiner that is
+/// cancelled leaves; the work is cancelled only when nobody is waiting for it any more, so the first
+/// caller being cancelled does not end the sign-in a joiner is still waiting for.
+private actor LoginFlights {
+    private struct Flight {
+        let id: UInt64
+        let request: LoginRequest
+        let task: Task<Void, Error>
+        var waiters: Int
+    }
+
+    private var current: Flight?
+    private var nextId: UInt64 = 0
+
+    /// Runs `work` as the flight of `request`, or joins the one running when it is the same request.
+    /// `elsewhere` says whether this process is carrying out an authorization that is not a flight of
+    /// this actor (the end-session page, a resume's exchange); that, and a flight of another
+    /// request, are refused with `refusal`.
+    func run(
+        _ request: LoginRequest, refusal: OAuthError, elsewhere: @Sendable () async -> Bool,
+        work: @escaping @Sendable () async throws -> Void
+    ) async throws {
+        let id: UInt64
+        let task: Task<Void, Error>
+        if var flight = current {
+            guard flight.request == request else { throw refusal }
+            flight.waiters += 1
+            current = flight
+            id = flight.id
+            task = flight.task
+        } else {
+            // Asked before the flight is registered and not again after: nothing here suspends
+            // between the answer and `current = …` except this call itself, and a second caller
+            // entering meanwhile finds `current` empty too, so it is checked once more below.
+            if await elsewhere() { throw refusal }
+            if let flight = current {
+                // Another caller registered while `elsewhere` was being asked.
+                guard flight.request == request else { throw refusal }
+                var joined = flight
+                joined.waiters += 1
+                current = joined
+                id = joined.id
+                task = joined.task
+                return try await wait(id: id, task: task)
+            }
+            nextId += 1
+            id = nextId
+            task = Task {
+                do {
+                    try await work()
+                    await self.finished(id)
+                } catch {
+                    await self.finished(id)
+                    throw error
+                }
+            }
+            current = Flight(id: id, request: request, task: task, waiters: 1)
+        }
+        try await wait(id: id, task: task)
+    }
+
+    private func wait(id: UInt64, task: Task<Void, Error>) async throws {
+        try await withTaskCancellationHandler {
+            try await cancellableValue(of: task)
+        } onCancel: {
+            Task { await self.left(id) }
+        }
+    }
+
+    /// Cleared before the flight's result is delivered, so a call that arrives after the end starts
+    /// its own instead of being handed an outcome that is already over.
+    private func finished(_ id: UInt64) {
+        if current?.id == id { current = nil }
+    }
+
+    /// Ends the flight whatever its waiters: `logout()` takes precedence over a sign-in.
+    func cancelAll() {
+        current?.task.cancel()
+    }
+
+    private func left(_ id: UInt64) {
+        guard var flight = current, flight.id == id else { return }
+        flight.waiters -= 1
+        current = flight
+        if flight.waiters <= 0 { flight.task.cancel() }
     }
 }

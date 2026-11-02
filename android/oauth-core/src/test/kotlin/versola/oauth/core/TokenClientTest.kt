@@ -63,13 +63,14 @@ class TokenClientTest {
         binding: TokenBinding = TokenBinding.Dpop(),
         dpop: DpopProofSource? = proofSource,
         discoveryFailure: Throwable? = null,
+        dpopAlgorithms: List<String>? = null,
     ): HttpTokenClient {
         val metadata = ProviderMetadata(
             issuer = issuer,
             authorizationEndpoint = "$issuer/authorize",
             tokenEndpoint = "$issuer/token",
             revocationEndpoint = revocationUrl ?: if (revocationAdvertised) "$issuer/revoke" else null,
-            dpopSigningAlgValuesSupported = if (dpopAdvertised) listOf("ES256") else emptyList(),
+            dpopSigningAlgValuesSupported = dpopAlgorithms ?: if (dpopAdvertised) listOf("ES256") else emptyList(),
         )
         return HttpTokenClient(
             configuration = VersolaConfiguration.create(
@@ -654,5 +655,130 @@ class TokenClientTest {
         val cause = error.reason as VersolaError.Recoverable.Cause.Server
         assertEquals(429, cause.status)
         assertEquals(86_400_000L, cause.retryAfterMillis)
+    }
+
+    // ---- AUDIT: regression tests for confirmed audit findings; each fails until the bug is fixed ----
+
+    private fun rawToken(body: String, vararg headers: Pair<String, String>) = MockResponse.Builder()
+        .code(200)
+        .setHeader("Content-Type", "application/json")
+        .apply { headers.forEach { (name, value) -> setHeader(name, value) } }
+        .body(body)
+        .build()
+
+    @Test
+    fun `AUDIT B1 a provider advertising only PS256 gets no DPoP proof, the SDK falling back to bearer`() = runTest {
+        server.enqueue(issued(tokenType = "Bearer"))
+
+        client(dpopAlgorithms = listOf("PS256")).exchange(grant())
+
+        assertNull("an ES256 proof was sent to a provider that does not advertise ES256", server.takeRequest().headers["DPoP"])
+        assertEquals(0, proofSource.proofs)
+    }
+
+    @Test
+    fun `AUDIT B2 expires_in as a numeric string is accepted`() = runTest {
+        // Green today: kotlinx.serialization coerces a quoted integer. Kept as a guard for the fix.
+        server.enqueue(rawToken("""{"access_token":"at","token_type":"Bearer","expires_in":"3599"}"""))
+
+        val response = client().exchange(grant())
+
+        assertEquals(3599L, response.expiresInSeconds)
+    }
+
+    @Test
+    fun `AUDIT B2 expires_in as a finite float is accepted`() = runTest {
+        server.enqueue(rawToken("""{"access_token":"at","token_type":"Bearer","expires_in":3599.0}"""))
+
+        val response = client().exchange(grant())
+
+        assertEquals(3599L, response.expiresInSeconds)
+    }
+
+    @Test
+    fun `AUDIT B2 an unparseable expires_in is an unknown lifetime, not a failed exchange`() = runTest {
+        // The code was spent by this request: failing the exchange over an advisory field costs
+        // the user the login. Unknown is 0, as for an absent expires_in.
+        server.enqueue(rawToken("""{"access_token":"at","token_type":"Bearer","expires_in":"soon"}"""))
+
+        val response = client().exchange(grant())
+
+        assertEquals(0L, response.expiresInSeconds)
+    }
+
+    @Test
+    fun `AUDIT B4 a Date years away from the device clock is not taken as the provider's clock`() = runTest {
+        for (date in listOf("Mon, 01 Jan 2001 00:00:00 GMT", "Fri, 01 Jan 2100 00:00:00 GMT")) {
+            server.enqueue(rawToken("""{"access_token":"at","token_type":"Bearer","expires_in":3600}""", "Date" to date))
+
+            val response = client().exchange(grant())
+
+            assertNull("Date $date reached the ID-token validator as the provider's clock", response.serverDate)
+        }
+    }
+
+    @Test
+    fun `AUDIT B4 a Date that a cache aged is not taken as the provider's clock`() = runTest {
+        val now = java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME
+            .format(java.time.ZonedDateTime.now(java.time.ZoneOffset.UTC))
+        server.enqueue(rawToken("""{"access_token":"at","token_type":"Bearer","expires_in":3600}""", "Date" to now))
+        assertTrue("a plausible Date is kept", client().exchange(grant()).serverDate != null)
+
+        // RFC 9111 5.1: with an Age the Date is the origin's, as old as the Age says.
+        server.enqueue(rawToken("""{"access_token":"at","token_type":"Bearer","expires_in":3600}""", "Date" to now, "Age" to "3600"))
+
+        assertNull(client().exchange(grant()).serverDate)
+    }
+
+    @Test
+    fun `AUDIT B10 a token_type that is neither Bearer nor DPoP is malformed, never presented as Bearer`() = runTest {
+        for (type in listOf("N_A", "mac", "garbage")) {
+            server.enqueue(issued(tokenType = type))
+
+            val outcome = runCatching { client().exchange(grant()) }
+
+            val error = outcome.exceptionOrNull()
+            assertTrue("token_type=$type was accepted", error is VersolaError.Configuration)
+            assertTrue(
+                "token_type=$type: ${(error as VersolaError.Configuration).detail}",
+                error.detail is VersolaError.Configuration.Detail.TokenResponseMalformed,
+            )
+        }
+    }
+
+    @Test
+    fun `AUDIT B10 token_type is compared case-insensitively`() = runTest {
+        server.enqueue(issued(tokenType = "bearer"))
+        val bearer = client(binding = TokenBinding.Bearer, dpop = null).exchange(grant())
+        server.enqueue(issued(tokenType = "dpop"))
+        val dpop = client().exchange(grant())
+
+        assertFalse(bearer.isDpopBound)
+        assertTrue(dpop.isDpopBound)
+    }
+
+    @Test
+    fun `AUDIT B13 a malformed token response leaks none of its body into the error`() = runTest {
+        // kotlinx.serialization quotes a snippet of the input in its message; a 2xx body is
+        // credential material, and VersolaError travels into crash reports and logs.
+        server.enqueue(
+            rawToken(
+                """{"access_token":"SECRET-ACCESS-123","refresh_token":"SECRET-REFRESH-456","token_type":"Bearer","expires_in":3600,"scope":{"wrong":"type"}}""",
+            ),
+        )
+
+        val error = failure { client().exchange(grant()) }
+
+        assertTrue("not Configuration: $error", error is VersolaError.Configuration)
+        val texts = mutableListOf(error.toString(), error.message.orEmpty(), (error as VersolaError.Configuration).detail.toString())
+        var cause: Throwable? = error.cause
+        while (cause != null) {
+            texts += cause.toString()
+            texts += cause.message.orEmpty()
+            cause = cause.cause
+        }
+        for (text in texts) {
+            assertFalse("a secret leaked: $text", "SECRET-ACCESS-123" in text || "SECRET-REFRESH-456" in text)
+        }
     }
 }

@@ -32,7 +32,23 @@ func wellKnownURL(issuer: String) -> String {
     (issuer.hasSuffix("/") ? String(issuer.dropLast()) : issuer) + "/.well-known/openid-configuration"
 }
 
-/// Discovery over HTTP: one GET of `<issuer>/.well-known/openid-configuration`.
+/// RFC 8414 section 3.1 for an issuer that has a path: the suffix goes between the host and the path
+/// (`https://host/tenant` is served at `https://host/.well-known/oauth-authorization-server/tenant`),
+/// where OpenID Connect Discovery appends it. Nil for an issuer without a path, where the two forms
+/// are the same place.
+func rfc8414WellKnownURL(issuer: String) -> String? {
+    guard var components = URLComponents(string: issuer), components.host != nil else { return nil }
+    var path = components.path
+    while path.hasSuffix("/") { path.removeLast() }
+    if path.isEmpty { return nil }
+    components.percentEncodedPath = "/.well-known/oauth-authorization-server" + (components.percentEncodedPath.hasSuffix("/") ? String(components.percentEncodedPath.dropLast()) : components.percentEncodedPath)
+    components.query = nil
+    components.fragment = nil
+    return components.string
+}
+
+/// Discovery over HTTP: one GET of `<issuer>/.well-known/openid-configuration`, and for an issuer with
+/// a path, RFC 8414's form of the address when the OpenID one answers 404 (and only then).
 package struct HTTPDiscoveryClient: DiscoveryClient {
     private let httpClient: HTTPClient
 
@@ -45,9 +61,16 @@ package struct HTTPDiscoveryClient: DiscoveryClient {
     }
 
     package func fetchWithLifetime(issuer: String) async throws -> FetchedMetadata {
-        let location = wellKnownURL(issuer: issuer)
+        let alternative = rfc8414WellKnownURL(issuer: issuer)
+        if let found = try await fetch(location: wellKnownURL(issuer: issuer), absentIsNil: alternative != nil) { return found }
+        // `alternative` is non-nil whenever the first answered "absent".
+        return try await fetch(location: alternative ?? wellKnownURL(issuer: issuer), absentIsNil: false)!
+    }
+
+    /// One document at `location`; nil for a 404 when the caller has another address to try.
+    private func fetch(location: String, absentIsNil: Bool) async throws -> FetchedMetadata? {
         guard let url = URL(string: location), url.scheme != nil else {
-            throw OAuthError.configuration(.invalidConfiguration(detail: "issuer is not a URL: \(issuer)"))
+            throw OAuthError.configuration(.invalidConfiguration(detail: "issuer is not a URL: \(location)"))
         }
         let httpClient = self.httpClient
         // A read-only request, repeated under the operation's budget (`spec/retry-policy.md`).
@@ -72,9 +95,20 @@ package struct HTTPDiscoveryClient: DiscoveryClient {
         }
         switch response.statusCode {
         case 200..<300:
-            break
+            // A 2xx whose body is not JSON at all is an intermediary's page (a captive portal, a proxy's
+            // or nginx's error page), not the provider's answer: the user's network, which a change of
+            // network fixes, so it is `recoverable`. Not repeated here: the same page is the likely
+            // answer, and the operation's own budget is for what a repeat is known to help. A body
+            // that is JSON but not metadata is the provider's, and stays `configuration`.
+            if (try? JSONSerialization.jsonObject(with: response.body, options: [.fragmentsAllowed])) == nil {
+                throw OAuthError.recoverable(.network(
+                    detail: "discovery answered HTTP \(response.statusCode) with a body that is not JSON (an intermediary's page?)", attempts: 1, elapsedMillis: 0
+                ))
+            }
         // Any other 4xx means this issuer serves no discovery document at all, which no retry
         // fixes: an integrator typo or the wrong environment.
+        case 404 where absentIsNil:
+            return nil
         case 400..<500:
             throw OAuthError.configuration(.invalidConfiguration(
                 detail: "no discovery document at \(location) (HTTP \(response.statusCode))"
@@ -151,10 +185,14 @@ package actor DiscoveryService {
     private var inMemory: ProviderMetadata?
     /// When `inMemory` stops being fresh, in `Clock.uptime` seconds.
     private var inMemoryExpiresAt: TimeInterval = 0
+    /// When `inMemory` stops being servable even as a fallback: its expiry plus the stale bound,
+    /// fixed when it was obtained and not moved by the short retry interval a stale serve sets.
+    private var inMemoryStaleUntil: TimeInterval = 0
     /// The fetch in flight, so concurrent callers share it rather than each hitting the network.
     /// A caller that is cancelled stops waiting; it does not cancel the fetch the others need.
     private var inFlight: Task<ProviderMetadata, Error>?
     private let clock: Clock
+    private let logger: OAuthLogger?
     /// `spec/oauth-sdk-api.md` section 4: a cached document older than this is refetched.
     static let maxAge: TimeInterval = CacheLifetime.defaultLifetime
     /// After a refetch of an expired document fails and the old one is served, how long before
@@ -162,7 +200,8 @@ package actor DiscoveryService {
     /// front of every call.
     static let staleRetryInterval: TimeInterval = 60
 
-    package init(issuer: String, client: DiscoveryClient, cache: ProviderMetadataCache, clock: Clock = .system) {
+    package init(issuer: String, client: DiscoveryClient, cache: ProviderMetadataCache, clock: Clock = .system, logger: OAuthLogger? = nil) {
+        self.logger = logger
         self.issuer = issuer
         self.client = client
         self.cache = cache
@@ -170,20 +209,26 @@ package actor DiscoveryService {
     }
 
     package func metadata() async throws -> ProviderMetadata {
-        if let inMemory, clock.uptime() < inMemoryExpiresAt { return inMemory }
-        if let inFlight { return try await inFlight.value }
+        if let inMemory, clock.uptime() < inMemoryExpiresAt {
+            logger?.debug("discovery: served the document held in memory")
+            return inMemory
+        }
+        if let inFlight { return try await cancellableValue(of: inFlight) }
         // Created and stored in the same actor turn: the body cannot start before `inFlight` is
         // set, and it clears it itself, so a late waiter cannot clear a newer task.
         let task = Task { try await self.resolve() }
         inFlight = task
-        return try await task.value
+        return try await cancellableValue(of: task)
     }
 
     private func resolve() async throws -> ProviderMetadata {
         defer { inFlight = nil }
         // A cache that cannot be read or written is a cache miss, never a failure: the document
         // is one round trip away, and the alternative is bricking login on a corrupt file.
-        var fallback: ProviderMetadata? = inMemory
+        // Both fallbacks stop at the stale bound the key set's cache has (`CacheLifetime.maximumStale`):
+        // a document past it is a configuration the provider may have retired, and the outage that
+        // would justify serving it is the app's to handle.
+        var fallback: ProviderMetadata? = clock.uptime() < inMemoryStaleUntil ? inMemory : nil
         if let cached = try? await cache.load(), (try? cached.validate(configuredIssuer: issuer)) != nil {
             // A document cached for another issuer belongs to a previous configuration of this
             // app and is treated as absent. A fresh one is served as is; one older than its
@@ -194,9 +239,18 @@ package actor DiscoveryService {
             if let age, age >= 0, age < lifetime {
                 inMemory = cached
                 inMemoryExpiresAt = clock.uptime() + (lifetime - age)
+                inMemoryStaleUntil = inMemoryExpiresAt + CacheLifetime.maximumStale
+                logger?.debug("discovery: served the cached document")
                 return cached
             }
-            fallback = cached
+            // An age that cannot be read (no timestamp beside the document) is not evidence of
+            // staleness, so the document stays the fallback it has always been in that case.
+            let remaining = age.map { lifetime + CacheLifetime.maximumStale - $0 } ?? CacheLifetime.maximumStale
+            if age.map({ $0 >= 0 }) ?? true, remaining > 0 {
+                fallback = cached
+                inMemoryStaleUntil = clock.uptime() + remaining
+                inMemory = cached
+            }
         }
         let fetched: FetchedMetadata
         do {
@@ -204,6 +258,7 @@ package actor DiscoveryService {
             try fetched.metadata.validate(configuredIssuer: issuer)
         } catch {
             if let fallback {
+                logger?.debug("discovery: the fetch failed, served the cached document past its lifetime")
                 inMemory = fallback
                 inMemoryExpiresAt = clock.uptime() + Self.staleRetryInterval
                 return fallback
@@ -211,9 +266,11 @@ package actor DiscoveryService {
             throw error
         }
         let lifetime = fetched.lifetime ?? Self.maxAge
+        logger?.debug("discovery: fetched from \(URL(string: issuer)?.host ?? "the issuer")")
         try? await cache.save(fetched.metadata, lifetime: fetched.lifetime)
         inMemory = fetched.metadata
         inMemoryExpiresAt = clock.uptime() + lifetime
+        inMemoryStaleUntil = inMemoryExpiresAt + CacheLifetime.maximumStale
         return fetched.metadata
     }
 }
