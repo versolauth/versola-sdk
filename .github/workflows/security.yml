@@ -106,6 +106,30 @@ jobs:
         with:
           category: /language:${{ matrix.language }}
 
+  # The workflows themselves: CodeQL's actions language flags a missing `permissions:` block
+  # (actions/missing-workflow-permissions). It needs no build, and it runs on pull requests too,
+  # so a new workflow without least-privilege permissions is caught before it merges. Without
+  # this job the alerts from the last actions analysis stay open forever on main.
+  codeql-workflows:
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          languages: actions
+          build-mode: none
+      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          category: /language:actions
+
   # The Gradle dependency graph for GitHub's dependency graph, Dependabot alerts and dependency
   # review: Trivy (below) cannot see the Android build's graph and dependency review only knows
   # what has been submitted. Submits on main, weekly and on demand, never on a pull request: the
