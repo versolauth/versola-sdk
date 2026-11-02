@@ -156,6 +156,21 @@ Errors are four categories (`RecoverableError`, `ReauthenticateError`, `StepUpEr
 `ConfigurationError`). Declare the redirect URI in the app's Android manifest and iOS associated
 domains, as the provider and the platform guides describe.
 
+- **Logging and branching on an error:** every `OAuthError` has `sdkCode`, a stable string for the case
+  (`recoverable.network`, `configuration.state_mismatch`, `step_up`; the list is in `spec/errors.md`).
+  It never contains a payload. `ConfigurationError.code` and `ReauthenticateError.code` are different:
+  they are the provider's own OAuth error code (`invalid_scope`).
+- **A double-tapped sign-in button is not an error:** a second `login()` that asks for the same thing
+  while one is in flight joins it, so both futures complete with the one result and one browser opens.
+  One that asks for something else (other scopes, other `acr_values`) throws `ConfigurationError`.
+  `currentSessionState()` gives the state now, after the restore, for choosing between a sign-in screen
+  and a home screen.
+- **Testing your code:** `OAuthClient` is an interface; fake it with `implements OAuthClient` (or the
+  smaller `OAuthApi` for the calls your code makes). `OAuthConfiguration` and `LoginOptions` are not
+  `const` (they copy the collections you pass), and a duration the bridge cannot carry exactly (a
+  `clockSkewTolerance` below a second, a retry duration below a millisecond) is an `ArgumentError`.
+  `OAuthClient.create` throws `UnsupportedError` off Android and iOS.
+
 ## Developing
 
 Run from this directory with the toolchain pinned in `flutter/.fvmrc`:

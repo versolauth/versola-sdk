@@ -2,7 +2,7 @@ import 'errors.dart';
 import 'types.dart';
 
 /// The operations of `OAuthClient` that an app's own code calls, as an interface, so that the code
-/// is tested against `FakeOAuthApi` (`package:versola_oauth/testing.dart`) and not a live client
+/// is tested against a fake of your own (`implements OAuthApi`) and not a live client
 /// (`spec/oauth-sdk-api.md` section 17). The HTTP helper, `httpClient()`, stays on the client: it
 /// returns a `package:http` client that a fake cannot honour.
 abstract interface class OAuthApi {
