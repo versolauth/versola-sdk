@@ -2,16 +2,18 @@
 
 How a release of the Versola SDKs is built, checked and published, and which parts are the
 maintainer's. 0.1.0 is published: `release.yml` ran once, for that tag, and its Android artefacts are
-on Maven Central under a GitHub release of the same name. pub.dev is not published to (the first
-publish is by hand, step 7), and `verify-release.yml` has not yet run against a published version.
+on Maven Central under a GitHub release of the same name. The Flutter package `versola_oauth` 0.3.0 was published manually to pub.dev under the verified
+publisher `versola.io`; later versions use `publish-pubdev.yml` after the pub.dev trust settings
+below are configured. Release 0.3.0 passed `release.yml` and `verify-release.yml`.
 The publishing side was written from the vendors' documentation (the sources are named where they
 matter), and the steps below are ordered so that each can be looked at, and undone, before the next.
 
 Releases, tags and publishing are the maintainer's act (`AGENTS.md`, `.claude/rules/ci-release.md`).
 **A release is a tag**: pushing `X.Y.Z` (for example `0.1.0`, no leading `v`) runs `release.yml`,
 which checks the version, builds, signs and uploads the Android artefacts, builds the Swift package at
-the tag and creates the GitHub release. Only the pub.dev job (`publish-pubdev.yml`) is still gated off
-with `if: false`, and the CocoaPods and npm jobs, which have nothing to publish.
+the tag and creates the GitHub release. The separate pub.dev job (`publish-pubdev.yml`) runs on the same tag, checks that the commit is
+on `main`, analyzes and tests Flutter, and waits for the matching Android POM on Maven Central
+before publishing. CocoaPods and npm remain gated off with `if: false`.
 
 ## What is published
 
@@ -21,7 +23,7 @@ One version for every platform while the project is 0.x, written `X.Y.Z` and tag
 |---|---|---|---|
 | Android | `io.versola:oauth-android`, one artefact (below) | Maven Central, through the Central Portal | `release.yml` `maven-central` |
 | iOS | the repository itself: product `VersolaOAuth` | Swift Package Manager resolves the tag; nothing is uploaded | `release.yml` `swiftpm` verifies the tag builds |
-| Flutter | `versola_oauth` on pub.dev | `flutter pub publish`, by hand for 0.1.0 and by workflow after | `publish-pubdev.yml` |
+| Flutter | `versola_oauth` on pub.dev | `flutter pub publish`, by hand for 0.3.0 and by workflow after | `publish-pubdev.yml` |
 
 ## One artefact
 
@@ -103,8 +105,11 @@ the products are gone, `VersolaOAuth` is the only one.
   above, then (iOS) a clean-checkout build of the tag, which has to pass before the upload starts,
   (Android) `test lint apiCheck`, the signed bundle and the upload to the Central Portal, and last the
   GitHub release with generated notes and the dispatch of `verify-release.yml`. The
-  Central job runs in the GitHub environment `maven-central`. `publish-pubdev.yml` is the dormant
-  pub.dev counterpart.
+  Central job runs in the GitHub environment `maven-central`. `publish-pubdev.yml` is the pub.dev counterpart. It uses the repository
+  checksum-verified Flutter setup action and the official, SHA-pinned `dart-lang/setup-dart` action
+  for OIDC authentication. No permanent publishing token is stored in GitHub. The pub.dev admin
+  settings must allow repository `versolauth/versola-sdk`, tag pattern `{{version}}` and required
+  environment `pub.dev`. The first tag-triggered upload is the end-to-end verification of OIDC.
 - **Release notes** are written by hand and kept in `docs/release-notes/X.Y.Z.md` (what is new, fixes,
   upgrading, requirements), because the generated notes are only a list of pull requests. The workflow
   creates the release with the generated ones; the maintainer replaces them after it:
@@ -153,10 +158,11 @@ deployment can be dropped, rather than on Central.
 4. **Repository secrets** (names are what the workflow reads; values are never in the repository):
    `MAVEN_SIGNING_KEY` (the armoured private key), `MAVEN_SIGNING_PASSWORD`, `SONATYPE_USERNAME` and
    `SONATYPE_PASSWORD` (the Portal token's two halves).
-5. **pub.dev.** Publish `versola_oauth` once by hand (below). Only then does the package's admin page
-   offer "Automated publishing": enable it for `versolauth/versola-sdk` with the tag pattern
-   `{{version}}`, and consider requiring the GitHub environment `pub.dev` with required reviewers
-   (pub.dev's documentation warns that anyone who can push a tag can publish otherwise).
+5. **pub.dev.** The first manual upload, `versola_oauth` 0.3.0, is complete. In the package's
+   Admin tab enable publishing from GitHub Actions for `versolauth/versola-sdk`, tag pattern
+   `{{version}}`, and require the GitHub Actions environment `pub.dev`. Create that environment
+   in GitHub before the tag. Required reviewers can be added if a release should wait for approval.
+   Keep the repository and environment names exact: they are checked against the OIDC identity.
 6. **A public repository.** The published Flutter plugin resolves the Swift package by URL, and a
    Swift Package Manager consumer resolves the tag by URL; neither works against a private repository.
    Making it public is a decision with its own checklist (scanners, history), not part of this one.
@@ -239,7 +245,12 @@ deployment can be dropped, rather than on Central.
    Also read each AAR's `META-INF/com/android/build/gradle/aar-metadata.properties` (`unzip -p`): its
    `minCompileSdk` must be the module's own `aarMetadata` value (`develop.md`), not 37, which is what AGP
    writes when a module sets none and what it would then demand of every app.
-7. **pub.dev, first release by hand.** From a clean checkout of the tag:
+7. **pub.dev.** For 0.3.1 onward `publish-pubdev.yml` runs automatically on the tag.
+   It waits up to three hours for the Android dependency on Maven Central (including any Portal
+   approval), then obtains a fresh OIDC token and publishes. If that wait expires, publish the
+   Central deployment and rerun the failed job; do not retag.
+
+   The first upload, 0.3.0, was done manually from a checkout of the tag:
 
    ```bash
    tools/flutter-prepare-publish.sh X.Y.Z
@@ -249,9 +260,9 @@ deployment can be dropped, rather than on Central.
    ```
 
    Do not commit the `Package.swift` change; `git checkout flutter/versola_oauth/ios` undoes it. Then
-   enable automated publishing (setup step 5). The `publish-pubdev.yml` job takes over for later
-   tags; whether `flutter pub publish` authenticates through pub.dev's OIDC without the Dart setup
-   action is unverified (the documentation covers `dart pub` only), so try it on a tag in a fork first.
+   configure automated publishing as described in setup step 5. The workflow uses the official
+   Dart setup action to configure the pub token shared by Dart and Flutter. Check the first
+   tag-triggered run and the package Activity log to verify the OIDC upload end to end.
 8. **After:** raise `VERSION_NAME` to the next `-SNAPSHOT`, and add the next changelog heading to the
    plugin's changelog when its first change lands.
 
@@ -260,7 +271,8 @@ deployment can be dropped, rather than on Central.
 - **Whether the Portal accepts the bundle exactly as Gradle writes it.** The first `USER_MANAGED`
   upload answers it. If the extra checksum files next to the signatures are refused, the fix is in
   `centralBundle` (drop them from the zip), not in the workflow.
-- **The pub.dev workflow's authentication** for a Flutter package (above).
+- **The first OIDC upload.** Local analysis, tests and actionlint do not prove pub.dev accepts
+  the GitHub identity. Verify the first tag-triggered upload and its Activity log entry.
 - **A real javadoc.** The Android javadoc jars are what AGP produces for Kotlin sources and are not
   an API reference; the reference is the KDoc in the sources jar, `spec/oauth-sdk-api.md` and the
   platform READMEs. A Dokka build would be a new dependency and is a decision of its own.
