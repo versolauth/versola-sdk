@@ -1,34 +1,55 @@
-# versola_oauth
+# Versola OAuth SDK for Flutter
 
-OAuth 2.0 and OpenID Connect (OIDC) sign-in for Flutter apps on Android and iOS: authorization code
-flow with PKCE in the system browser, ID-token validation, secure token storage and refresh,
-through the native Versola OAuth SDKs. The Dart API holds no protocol logic: it forwards to the
-Android (Kotlin) and iOS (Swift) SDKs, and only the short-lived access token ever reaches Dart.
+`versola_oauth` is an open-source OAuth 2.0 and OpenID Connect (OIDC) authentication SDK for Flutter
+apps on Android and iOS. It handles browser-based sign-in with PKCE, ID-token validation, secure
+token storage, automatic token refresh and sign-out through the native Versola OAuth SDKs.
 
-Works with any OpenID provider that supports the authorization code flow with PKCE for public
-clients, such as Keycloak and Ory Hydra. Requires Flutter 3.47 and Dart 3.13, Android `minSdk` 26
-and iOS 17.4, with Swift Package Manager integration enabled on iOS.
+The SDK is tested against Keycloak and Ory Hydra and works with other OpenID providers that meet
+its [provider contract](https://github.com/versolauth/versola-sdk/blob/main/spec/providers.md). You do not need to run the Versola
+authentication server. DPoP (RFC 9449) is optional, and pushed authorization requests (PAR, RFC 9126)
+are used when the provider advertises support.
 
-The API is production ready. The major version is still 0, and interfaces change only when a
-change is required; a change to a public symbol is stated in its pull request and raises the minor
+Flutter calls the Kotlin SDK on Android and the Swift SDK on iOS through a native bridge; no OAuth
+protocol logic runs in Dart. Refresh tokens stay on the native side in Android Keystore-wrapped
+storage or the iOS Keychain. Only the short-lived access token is available to Dart when requested.
+
+Requires Flutter 3.47 and Dart 3.13, Android `minSdk` 26 and iOS 17.4, with Swift Package Manager
+integration enabled on iOS. Licensed under Apache-2.0.
+
+The API is pre-1.0. A change to a public symbol is stated in its pull request and raises the minor
 version.
 
-Documentation: <https://docs.versola.io>. Overview, quick starts for all platforms and the
-frequently asked questions are in the
-[repository README](https://github.com/versolauth/versola-sdk#readme).
+See the [Flutter quick start](https://docs.versola.io/sdk/flutter/) for installation,
+platform configuration and sign-in examples.
+
+## Alternative to flutter_appauth and AppAuth
+
+If you are evaluating AppAuth alternatives for a Flutter mobile app, `versola_oauth` provides
+browser-based OAuth 2.0 and OpenID Connect sign-in through its own Kotlin and Swift SDKs.
+It does not wrap AppAuth. It is an alternative for public clients using the authorization code
+flow with PKCE, including apps backed by Keycloak or Ory Hydra.
+
+The SDK handles ID-token signature validation, native secure token storage, concurrent refresh
+coordination and authenticated API calls. Optional DPoP binds tokens to a device key when the
+provider supports it. Flutter exposes the same session states and typed error categories as the
+native SDKs.
+
+Migration requires code and configuration changes: this is not a drop-in replacement for
+`flutter_appauth`, AppAuth-Android or AppAuth-iOS. Check the platform requirements above and your
+provider's capabilities first. The Flutter plugin supports Android and iOS only, requires Swift
+Package Manager on iOS, and does not support client secrets, the implicit flow or the password
+grant. Its API is pre-1.0.
+
+The [AppAuth migration guide](https://docs.versola.io/sdk/migrating-from-appauth/) maps concepts,
+explains behavior changes and provides before-and-after code for Flutter, Android and iOS.
 
 ## Install
 
-Add the plugin to `pubspec.yaml` as a git dependency on the repository, with the current version from the
-[Releases](https://github.com/versolauth/versola-sdk/releases) page as `ref`:
+Add the plugin from pub.dev to `pubspec.yaml`:
 
 ```yaml
 dependencies:
-  versola_oauth:
-    git:
-      url: https://github.com/versolauth/versola-sdk.git
-      path: flutter/versola_oauth
-      ref: <version>
+  versola_oauth: ^0.3.0
 ```
 
 The app needs `compileSdk` 37 and `minSdk` 26 in `android/app/build.gradle.kts` and an iOS
