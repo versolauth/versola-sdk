@@ -3,7 +3,7 @@
 // app resolves it from this checkout instead, with a composite build (example/android/settings.gradle.kts),
 // so the plugin is built against the SDK source it ships with.
 group = "versola.oauth.flutter"
-version = "0.3.0"
+version = "0.3.1"
 
 plugins {
     id("com.android.library")
@@ -44,7 +44,7 @@ dependencies {
     // The generic facade; its state, errors and claims are what the bridge converts. The
     // version is the one published to Maven Central; where a composite build is used (the example
     // app) it substitutes the repository's :oauth project for these coordinates.
-    implementation("io.versola:oauth-android:0.3.0")
+    implementation("io.versola:oauth-android:0.3.1")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 
     testImplementation("junit:junit:4.13.2")
