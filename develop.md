@@ -141,9 +141,11 @@ xcodebuild test  -scheme Versola -destination "platform=iOS Simulator,name=iPhon
 `swift build` and `swift test` on the Mac host work too (the manifest lists macOS 14.4, so the
 AuthenticationServices, Keychain and CryptoKit APIs compile there), and are the fast loop; the
 Keychain round-trip test runs only with `OAUTH_KEYCHAIN_TESTS=1`. `xcodebuild` with a simulator
-destination is what CI runs and is the run to report. The simulator name is whatever your Xcode ships. CI's name drifts on
-Xcode upgrades (it moved from "iPhone 16" to "iPhone 17"); list yours with
-`xcrun simctl list devices available` and use the same name if it exists.
+destination is what CI runs and is the run to report. The names above are local examples; list
+installed devices with `xcrun simctl list devices available` and use an available name or UDID.
+CI prepares an available iPhone on the newest installed iOS runtime (downloading a runtime or
+creating a device when needed), waits for it to boot, and passes its UDID to `xcodebuild test`.
+This avoids a hard-coded model name or an `OS:latest` destination drifting with runner updates.
 
 The package must stay usable from an app extension (a notification service extension that
 refreshes a token, a widget): no `UIApplication.shared`, nothing else marked unavailable there.
@@ -156,9 +158,13 @@ swift build --sdk "$(xcrun --sdk iphonesimulator --show-sdk-path)" --triple arm6
 
 Which runner proves what. `xcodebuild test` (what CI runs) is the reference run, and the only
 one that can host an app, so it is the one for the real Keychain and the browser leg. On Xcode 16.3
-it cannot load the workspace while an iOS 27 device is paired (`xcodebuild -list` aborts with
-`__SwiftDeferredNSArray intersectsSet:`); unplugging the device, or a newer Xcode, restores it. `swift test`
-on the host proves the rules against stubs and runs the whole conformance driver. The SwiftPM
+`xcodebuild -list` aborts in `IDEFoundation`'s
+`DVTCoreDevice.deviceSupportsBuildable:buildParameters:error:` while enumerating device architectures:
+it sends the set selector `intersectsSet:` to a `Swift.__SwiftDeferredNSArray`. This reproduces
+with an empty Swift package, before compiling SDK code. The observed host has an iOS 27.0.1 phone
+paired to Xcode 16.3; that version mismatch is a suspected trigger, not a verified diagnosis from
+a disconnected-device comparison. Test with the phone disconnected or a newer Xcode to isolate
+that trigger. `swift test` on the host proves the rules against stubs and runs the whole conformance driver. The SwiftPM
 simulator run below proves the same unit tests on iOS code paths (UIKit, the Keychain API surface) without
 `xcodebuild`, but with no app host: it cannot prove the real Keychain, the Secure Enclave or an
 extension's behaviour.

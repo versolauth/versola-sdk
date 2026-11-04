@@ -535,7 +535,7 @@ package actor AuthorizationFlow {
                 let grant = try AuthorizationResponseValidator.validate(
                     redirect: url,
                     pending: pending,
-                    issuer: configuration.issuer,
+                    issuer: metadata.issuer,
                     issParameterSupported: metadata.authorizationResponseIssParameterSupported
                 )
                 // Deliberately still `authorizing` with the request still stored: the machine
