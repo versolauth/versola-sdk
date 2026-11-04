@@ -40,16 +40,27 @@ jobs:
       - name: List the schemes
         run: xcodebuild -list
 
-      # `generic/platform=iOS` (the device) fails here with "Supported platforms for the
-      # buildables in the current scheme is empty": a device destination doesn't resolve cleanly
-      # against the auto-generated Package scheme without an explicit per-target platform. The
-      # generic *simulator* destination needs no signing and no device name, so the build step
-      # uses it and cannot go stale when the runner's Xcode drops a simulator. `test` has to
-      # execute somewhere, so it names a concrete device: the runner image's default simulator,
-      # which drifts on Xcode upgrades (it replaced "iPhone 16" - no longer present - with
-      # "iPhone 17"); expect to bump that one again when it next disappears.
+      # Hosted images change their simulator names and may not have an iOS runtime ready.
+      # Select a concrete device by UDID, installing a runtime or creating a device if needed,
+      # so the test destination does not depend on a particular iPhone model or OS:latest.
+      - name: Prepare the iOS simulator
+        run: |
+          if ! xcrun simctl list runtimes --json | jq -e '.runtimes[] | select(.isAvailable and (.identifier | startswith("com.apple.CoreSimulator.SimRuntime.iOS-")))' > /dev/null; then
+            xcodebuild -downloadPlatform iOS
+          fi
+          runtime=$(xcrun simctl list runtimes --json | jq -er '[.runtimes[] | select(.isAvailable and (.identifier | startswith("com.apple.CoreSimulator.SimRuntime.iOS-")))] | sort_by(.version | split(".") | map(tonumber)) | last | .identifier // empty')
+          simulator_id=$(xcrun simctl list devices available --json | jq -r --arg runtime "$runtime" '[.devices[$runtime][]? | select(.isAvailable and (.name | startswith("iPhone")))] | first | .udid // empty')
+          if [[ -z "$simulator_id" ]]; then
+            device_type=$(xcrun simctl list runtimes --json | jq -er --arg runtime "$runtime" '.runtimes[] | select(.identifier == $runtime) | [.supportedDeviceTypes[] | select(.productFamily == "iPhone")] | first | .identifier // empty')
+            simulator_id=$(xcrun simctl create "SDK CI iPhone" "$device_type" "$runtime")
+          fi
+          xcrun simctl bootstatus "$simulator_id" -b
+          echo "IOS_SIMULATOR_ID=$simulator_id" >> "$GITHUB_ENV"
+          echo "Using iOS simulator $simulator_id ($runtime)"
+
+      # Building for a generic simulator needs no signing; tests use the prepared concrete UDID.
       - name: Build
         run: xcodebuild build -scheme Versola -destination "generic/platform=iOS Simulator"
 
       - name: Unit tests
-        run: xcodebuild test -scheme Versola -destination "platform=iOS Simulator,name=iPhone 17"
+        run: xcodebuild test -scheme Versola -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_ID"
