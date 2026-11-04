@@ -105,8 +105,23 @@ final class AuthorizationResponseValidatorTests: XCTestCase {
         assertFails(.configuration(.issuerMismatch(expected: issuer, received: evil)), query, issSupported: true)
     }
 
-    func testAnIssWithATrailingSlashIsAccepted() throws {
-        XCTAssertNoThrow(try validate("code=abc&state=state-1&iss=https%3A%2F%2Fid.example.com%2F", issSupported: true))
+    func testAnIssWithAnAddedTrailingSlashIsRefused() {
+        for supported in [false, true] {
+            assertFails(.configuration(.issuerMismatch(expected: issuer, received: issuer + "/")),
+                        "code=abc&state=state-1&iss=https%3A%2F%2Fid.example.com%2F", issSupported: supported)
+        }
+    }
+
+    func testAnIssuerWithATrailingSlashRequiresThatExactSlash() throws {
+        let expected = issuer + "/"
+        XCTAssertNoThrow(try AuthorizationResponseValidator.validate(
+            redirect: url("code=abc&state=state-1&iss=https%3A%2F%2Fid.example.com%2F"),
+            pending: AuthzKit.pending(), issuer: expected, issParameterSupported: true))
+        XCTAssertThrowsError(try AuthorizationResponseValidator.validate(
+            redirect: url("code=abc&state=state-1&iss=https%3A%2F%2Fid.example.com"),
+            pending: AuthzKit.pending(), issuer: expected, issParameterSupported: true)) {
+            XCTAssertEqual($0 as? OAuthError, .configuration(.issuerMismatch(expected: expected, received: self.issuer)))
+        }
     }
 
     func testAnIssThatMerelyStartsWithTheIssuerIsRefused() {
@@ -161,6 +176,36 @@ final class AuthorizationResponseValidatorTests: XCTestCase {
     }
 
     // MARK: redirect target
+
+    func testRedirectPortsMatchOnlyWhenTheirEffectiveValuesAgree() throws {
+        let cases: [(String, String, Bool)] = [
+            ("https://app.example.com/callback", "https://app.example.com:443/callback", true),
+            ("https://app.example.com:443/callback", "https://app.example.com/callback", true),
+            ("HTTPS://app.example.com/callback", "HTTPS://app.example.com:443/callback", true),
+            ("http://localhost/callback", "http://localhost:80/callback", true),
+            ("http://localhost:80/callback", "http://localhost/callback", true),
+            ("https://app.example.com:8443/callback", "https://app.example.com:8443/callback", true),
+            ("https://app.example.com/callback", "https://app.example.com:8443/callback", false),
+            ("https://app.example.com:8443/callback", "https://app.example.com/callback", false),
+            ("https://app.example.com:8443/callback", "https://app.example.com:9443/callback", false),
+            ("http://localhost/callback", "http://localhost:8080/callback", false),
+            ("com.example.app://callback/path", "com.example.app://callback:443/path", false),
+            ("com.example.app://callback:1234/path", "com.example.app://callback:1234/path", true),
+        ]
+        for (expected, received, matches) in cases {
+            let pending = PendingAuthorizationRequest(
+                state: "state-1", nonce: "n", codeVerifier: String(repeating: "v", count: 43),
+                scopes: [], redirectUri: expected, createdAt: AuthzKit.now)
+            if matches {
+                XCTAssertNoThrow(try validate("code=abc&state=state-1", base: received, pending: pending), received)
+            } else {
+                assertFails(.configuration(.malformedAuthorizationResponse), "code=abc&state=state-1",
+                            base: received, pending: pending)
+                assertFails(.configuration(.malformedAuthorizationResponse), "error=access_denied&state=state-1",
+                            base: received, pending: pending)
+            }
+        }
+    }
 
     func testARedirectToAnotherPathIsRefused() {
         assertFails(.configuration(.malformedAuthorizationResponse), "code=abc&state=state-1",

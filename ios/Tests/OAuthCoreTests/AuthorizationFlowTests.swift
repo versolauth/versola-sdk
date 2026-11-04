@@ -249,6 +249,21 @@ final class AuthorizationFlowTests: XCTestCase {
         XCTAssertNil(stored)
     }
 
+    func testTheResponseIssuerMustExactlyMatchDiscoveryRatherThanTheNormalizedConfiguration() async throws {
+        var metadata = AuthzKit.metadata(issSupported: true)
+        metadata.issuer += "/"
+        let browser = ScriptedBrowser { uri, _ in
+            .redirect(AuthzKit.redirect(answering: uri, iss: AuthzKit.issuer + "/"))
+        }
+        let f = fixture(browser: browser, metadata: metadata)
+        let grant = try await f.flow.authorize(scopes: ["openid"])
+        XCTAssertEqual(grant.iss, metadata.issuer)
+
+        let mismatched = fixture(browser: ScriptedBrowser.answering(), metadata: metadata)
+        await assertAuthorizeFails(.configuration(.issuerMismatch(
+            expected: metadata.issuer, received: AuthzKit.issuer)), mismatched)
+    }
+
     func testAMissingIssFailsWhenTheMetadataAdvertisedSupportAtRequestTime() async {
         let browser = ScriptedBrowser { uri, _ in .redirect(AuthzKit.redirect(answering: uri, iss: nil)) }
         let f = fixture(browser: browser, metadata: AuthzKit.metadata(issSupported: true))

@@ -72,12 +72,13 @@ package enum AuthorizationResponseValidator {
             throw OAuthError.configuration(.stateMismatch)
         }
 
-        // 2. iss (RFC 9207). Present means it must match, a trailing slash tolerated. Absent
+        // 2. iss (RFC 9207 section 2.4). Present means an exact string match to the discovered
+        //    issuer: a trailing slash or case difference identifies a different issuer. Absent
         //    fails only when the provider advertises support, or the request recorded that
         //    its exchange requires it; a deployment that does not may legitimately omit it.
         let iss = parameters["iss"]
         if let iss {
-            if trimSlash(iss) != trimSlash(issuer) {
+            if iss != issuer {
                 throw OAuthError.configuration(.issuerMismatch(expected: issuer, received: boundedText(iss, limit: 256)))
             }
         } else if issParameterSupported || pending.issRequired {
@@ -173,15 +174,23 @@ package enum AuthorizationResponseValidator {
         return spaced.removingPercentEncoding ?? spaced
     }
 
-    /// Scheme and host are case-insensitive, the path is not; a query on either side is ignored.
+    /// Scheme and host are case-insensitive, ports include their HTTP(S) defaults, and the path
+    /// is case-sensitive; a query on either side is ignored.
     private static func redirectMatches(_ redirect: URL, _ expected: String) -> Bool {
         guard let left = URLComponents(url: redirect, resolvingAgainstBaseURL: false),
               let right = URLComponents(string: expected) else { return false }
         func path(_ components: URLComponents) -> String { components.path.isEmpty ? "/" : components.path }
+        func port(_ components: URLComponents) -> Int? {
+            if let port = components.port { return port }
+            switch components.scheme?.lowercased() {
+            case "https": return 443
+            case "http": return 80
+            default: return nil
+            }
+        }
         return left.scheme?.lowercased() == right.scheme?.lowercased()
             && left.host?.lowercased() == right.host?.lowercased()
+            && port(left) == port(right)
             && path(left) == path(right)
     }
-
-    private static func trimSlash(_ s: String) -> String { s.hasSuffix("/") ? String(s.dropLast()) : s }
 }
