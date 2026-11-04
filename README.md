@@ -59,16 +59,12 @@ write it where `<version>` stands.
   SDK's own AARs ask for less).
 - **iOS:** Swift Package Manager, `.package(url: "https://github.com/versolauth/versola-sdk", from: "<version>")`,
   product `VersolaOAuth`.
-- **Flutter:** a git dependency in `pubspec.yaml` (below), with Swift Package Manager integration
-  enabled for iOS.
+- **Flutter:** [`versola_oauth` on pub.dev](https://pub.dev/packages/versola_oauth), with Swift
+  Package Manager integration enabled for iOS. It is released with the same version number as the
+  Android and iOS SDKs.
 
-```yaml
-dependencies:
-  versola_oauth:
-    git:
-      url: https://github.com/versolauth/versola-sdk.git
-      path: flutter/versola_oauth
-      ref: <version>
+```bash
+flutter pub add versola_oauth
 ```
 
 A Flutter app needs `compileSdk` 37 and `minSdk` 26 in `android/app/build.gradle.kts` and an iOS
@@ -312,8 +308,8 @@ open an issue with the call you wanted to write.
 ### How do I add it to my project?
 
 On Android, add `io.versola:oauth-android` from Maven Central. On iOS, add the Swift package
-`https://github.com/versolauth/versola-sdk` and use the `VersolaOAuth` product. On Flutter, add
-`versola_oauth` as a git dependency from the same repository. The [Install](#install) section has
+`https://github.com/versolauth/versola-sdk` and use the `VersolaOAuth` product. On Flutter, run
+`flutter pub add versola_oauth` (the package is on pub.dev). The [Install](#install) section has
 the coordinates.
 
 ### What licence is it under?
