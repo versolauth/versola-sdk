@@ -15,8 +15,9 @@ dependencyResolutionManagement {
 }
 
 // AGP and its lint tooling carry vulnerable transitive build-time libraries. Keep the
-// overrides in build tooling configurations; they do not become SDK dependencies.
+// overrides in build tooling and unit-test configurations; they do not become SDK dependencies.
 gradle.beforeProject {
+    val patchedGuava = "com.google.guava:guava:33.7.2-jre"
     val patchedBuildDependencies = arrayOf(
             "org.apache.httpcomponents:httpclient:4.5.14",
             "org.apache.commons:commons-lang3:3.18.0",
@@ -26,7 +27,7 @@ gradle.beforeProject {
             "org.bouncycastle:bcpkix-jdk18on:1.85",
             "org.bouncycastle:bcutil-jdk18on:1.85",
             "org.bouncycastle:bcpg-jdk18on:1.85",
-            "com.google.guava:guava:33.7.2-jre",
+            patchedGuava,
     )
     buildscript.configurations.configureEach {
         resolutionStrategy.force(*patchedBuildDependencies)
@@ -34,6 +35,13 @@ gradle.beforeProject {
     configurations.configureEach {
         if (name == "androidLintTool" || name == "kotlinBouncyCastleConfiguration") {
             resolutionStrategy.force(*patchedBuildDependencies)
+        }
+        // Robolectric also brings Guava into unit tests, outside the buildscript and lint
+        // classpaths above. Patch both Android variants and plain JVM tests without forcing
+        // a test-only library into the SDK's published compile or runtime dependencies.
+        if (name.endsWith("UnitTestCompileClasspath") || name.endsWith("UnitTestRuntimeClasspath") ||
+            name == "testCompileClasspath" || name == "testRuntimeClasspath") {
+            resolutionStrategy.force(patchedGuava)
         }
     }
 }
