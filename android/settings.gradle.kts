@@ -17,16 +17,16 @@ dependencyResolutionManagement {
 // AGP and its lint tooling carry vulnerable transitive build-time libraries. Keep the
 // overrides in build tooling and unit-test configurations; they do not become SDK dependencies.
 gradle.beforeProject {
-    val patchedGuava = "com.google.guava:guava:33.7.2-jre"
+    val patchedGuava = "com.google.guava:guava:33.8.0-jre"
     val patchedBuildDependencies = arrayOf(
             "org.apache.httpcomponents:httpclient:4.5.14",
-            "org.apache.commons:commons-lang3:3.18.0",
+            "org.apache.commons:commons-lang3:3.21.0",
             "org.jdom:jdom2:2.0.6.1",
-            "org.bitbucket.b_c:jose4j:0.9.6",
-            "org.bouncycastle:bcprov-jdk18on:1.85",
-            "org.bouncycastle:bcpkix-jdk18on:1.85",
-            "org.bouncycastle:bcutil-jdk18on:1.85",
-            "org.bouncycastle:bcpg-jdk18on:1.85",
+            "org.bitbucket.b_c:jose4j:0.9.7",
+            "org.bouncycastle:bcprov-jdk18on:1.86",
+            "org.bouncycastle:bcpkix-jdk18on:1.86",
+            "org.bouncycastle:bcutil-jdk18on:1.86",
+            "org.bouncycastle:bcpg-jdk18on:1.86",
             patchedGuava,
     )
     buildscript.configurations.configureEach {
