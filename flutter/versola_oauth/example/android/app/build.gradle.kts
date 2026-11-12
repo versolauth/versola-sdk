@@ -95,7 +95,7 @@ tasks.withType<KotlinCompile>().configureEach {
 dependencies {
     // The generic facade itself, for the driver's wiring (the opt-in create); the composite
     // build in settings.gradle.kts substitutes the repository's :oauth for these coordinates.
-    testImplementation("io.versola:oauth-android:0.1.0")
+    testImplementation("io.versola:oauth-android:0.3.0")
     // The six pins below are a second copy of android/conformance-oauth/build.gradle.kts, whose
     // support classes are compiled into this module too: keep them equal, in the same change.
     // Dependabot watches /android only, so a bump there does not reach this file by itself.
