@@ -24,6 +24,15 @@ package struct NativeStartField: Sendable, Equatable {
 /// facade -- and the seam is here so that the facade that does can take it as it is.
 package protocol NativeStartAttestation: Sendable {
     func fields(clientId: String, jkt: String, jti: String) async throws -> [NativeStartField]
+
+    /// Edge did not take the evidence last handed out, and what it said means the next request must
+    /// not build on it: an App Attest key that edge never saw attested (the request that carried the
+    /// attestation object did not reach it). The implementation forgets what it keeps about that key.
+    func evidenceNotAccepted() async
+}
+
+extension NativeStartAttestation {
+    package func evidenceNotAccepted() async {}
 }
 
 /// The parts of the attestation contract that are bytes and names, fixed by the spec and shared with

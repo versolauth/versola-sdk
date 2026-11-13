@@ -118,12 +118,18 @@ Rules for the app, whichever platform:
   object`, which is what tells the app to attest it.
 
 **Platform status.** The Android `Versola` facade sends the Android evidence under `BackChannel.Edge`.
-There is no iOS counterpart of the `Versola` facade yet (`ios/Sources` holds only the generic
-facade), so no iOS request carries evidence today. The iOS half exists as a building block in
-`OAuthClient` (`AppAttestEvidence`, over `DCAppAttestService`) that nothing calls yet: it keeps the
-key id and whether it was attested in the Keychain (`state-machine.md`, persistence summary), attests
-a key on its first request and asserts on every later one, over the hash above. The facade that
-sends it takes it as it is.
+There is no iOS counterpart of the `Versola` facade yet, so no iOS request carries evidence today.
+The iOS half exists as internal building blocks that nothing public calls: `AppAttestEvidence`
+(`OAuthClient`, over `DCAppAttestService`) keeps the key id and whether it was attested in the Keychain
+(`state-machine.md`, persistence summary), attests a key on its first request and asserts on every later
+one, over the hash above; and the `VersolaEdge` target (a SwiftPM target with `package` access and no
+product) carries the edge channel itself, `/native/start|complete|token|revoke`, as an
+`AuthorizationStarter` and a `TokenClient`. The starter mints the DPoP proof first and asks for the
+evidence second, because an assertion is for that proof's `jti`. Edge checks the proof and its nonce
+before it looks at the evidence, so a `use_dpop_nonce` answer does not consume it, but an attestation
+object that rode on such a request was not seen: the starter forgets that key and the retry attests a
+new one, and the same is done on the refusal `this key has not been attested`. Any other refusal keeps
+the key. The facade that assembles these takes them as they are.
 
 On iOS, as on Android, what the device cannot give is no evidence and no error: a device or build
 without App Attest (a simulator, an app without the App Attest capability, an app extension), Apple's

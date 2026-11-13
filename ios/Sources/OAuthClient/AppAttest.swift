@@ -253,6 +253,12 @@ package actor AppAttestEvidence: NativeStartAttestation {
         return NativeAttestation.fields(keyId: key.keyId, attestationObject: object)
     }
 
+    package func evidenceNotAccepted() async {
+        // A store that cannot be cleared leaves the next request to be refused the same way, which is
+        // what it would have been; there is nothing more for the caller to do about it.
+        try? await discardKey()
+    }
+
     /// Forgets the key, so the next request makes and attests a new one: what the facade does when edge
     /// answers that the key has not been attested, or refuses an attestation.
     package func discardKey() async throws {
