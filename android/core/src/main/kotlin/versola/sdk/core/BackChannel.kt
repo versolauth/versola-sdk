@@ -12,6 +12,7 @@ import versola.oauth.core.TokenRequestExecutor
 import versola.oauth.core.TokenResponse
 import versola.oauth.core.VersolaConfiguration
 import versola.oauth.core.VersolaError
+import versola.oauth.core.VersolaInternalApi
 import versola.oauth.core.acceptIssued
 import versola.oauth.core.dateForClockSkew
 import versola.oauth.core.discoveryJson
@@ -195,13 +196,35 @@ public class HttpNativeAuthorizationStarter(
 
     private val url: String = nativeEndpointUrl(edgeBaseUrl, "start", configuration.clientId)
 
+    /**
+     * As the primary constructor, and with the evidence an edge may ask the app for
+     * ([NativeStartAttestation]). Internal, and a constructor of its own, so the public one an app
+     * compiled against is untouched.
+     */
+    @VersolaInternalApi
+    public constructor(
+        configuration: VersolaConfiguration,
+        edgeBaseUrl: String,
+        httpClient: OkHttpClient,
+        dpop: DpopProofSource,
+        attestation: NativeStartAttestation?,
+    ) : this(configuration, edgeBaseUrl, httpClient, dpop) {
+        this.attestation = attestation
+    }
+
+    private var attestation: NativeStartAttestation? = null
+
     override suspend fun start(request: NativeStartRequest): NativeStart {
+        // Read before the first proof is minted, from the same key: the key is generated on first use,
+        // and the evidence has to be about the key that signs the proof that follows.
+        val evidence = attestation?.fields().orEmpty()
         val body = FormBody()
             .add("redirect_uri", request.redirectUri)
             .apply { if (request.scopes.isNotEmpty()) add("scope", request.scopes.joinToString(" ")) }
             .add("nonce", request.nonce)
             .apply { if (request.acrValues.isNotEmpty()) add("acr_values", request.acrValues.joinToString(" ")) }
             .apply { request.maxAge?.let { add("max_age", it.toString()) } }
+            .apply { evidence.forEach { (name, value) -> add(name, value) } }
             .toByteArray()
 
         var nonceRetried = false

@@ -261,6 +261,14 @@ tier is `Software` where hardware was required (`Dpop(requireHardware = true)` o
 `dpop(requireHardware: true)` on iOS) is `Configuration(HardwareBindingUnavailable)` before any request to
 the authorization endpoint (`errors.md`). Scenario 33 holds all of this against a real provider.
 
+Under `BackChannel.Edge` on Android the key is also generated with an Android Key Attestation
+challenge (`SHA-256("versola-attest-v1\n" + clientId)`), and its certificate chain goes to edge on
+`/native/start` as evidence that the DPoP key lives in genuine hardware (`server-dependencies.md`,
+"App attestation on `/native/start`"). The chain says what `keyAttestation()` reports and more, and
+is sent whatever the tier; whether a `Software` key is acceptable stays the client's policy at edge.
+A key generated before the SDK asked for attestation is replaced by an attested one only at the start
+of a login and only while no grant is held, never while signing, so a login in flight keeps its key.
+
 On Android the key is generated in StrongBox first. A StrongBox that is absent (the Keystore's
 `StrongBoxUnavailableException`) falls through to the TEE at once; any other provider fault of the
 attempt may be transient (a busy secure element), so it is retried once before the fall-through.

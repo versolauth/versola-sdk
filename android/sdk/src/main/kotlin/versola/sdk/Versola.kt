@@ -19,6 +19,8 @@ import versola.sdk.core.FileNativeEndpointsStore
 import versola.oauth.core.FileProviderMetadataCache
 import versola.oauth.core.HttpDiscoveryClient
 import versola.sdk.core.HttpNativeAuthorizationStarter
+import versola.sdk.core.NativeAttestation
+import versola.sdk.core.NativeStartAttestation
 import versola.oauth.core.HttpTokenClient
 import versola.oauth.core.TokenClient
 import versola.oauth.core.ProviderMetadata
@@ -373,19 +375,6 @@ public class Versola internal constructor(
             // Constructed, not generated: nothing touches the Keystore until the first call
             // that needs a thumbprint or a proof, so configure() stays a cheap main-thread
             // call even on a device where a StrongBox keygen takes a noticeable moment.
-            val dpopKey = when (tokenBinding) {
-                is TokenBinding.Dpop -> KeystoreDpopKey(
-                    requireHardware = tokenBinding.requireHardware,
-                    logger = logger,
-                )
-                TokenBinding.Bearer -> null
-            }
-
-            val discovery = DiscoveryService(
-                issuer = configuration.issuer,
-                client = HttpDiscoveryClient(httpClient),
-                cache = FileProviderMetadataCache(File(directory, "provider-metadata.json")),
-            ).also { it.logger = logger }
             // One instance per file per process, which is DataStore's constraint: a second
             // `configure()` in the same process — every `Activity.onCreate`, every rotation —
             // shares the store the first one opened. Opening it reads nothing; the file is
@@ -395,6 +384,35 @@ public class Versola internal constructor(
                 file = File(directory, "credentials"),
                 keyProvider = keyProviders(),
             )
+
+            // Under edge the key is also generated with the attestation challenge of this client, so
+            // that the chain the Keystore makes for it can go to edge on `/native/start` (#423). That
+            // path is also told whether a grant is held, which is what decides whether a key from
+            // before this existed may be replaced by an attested one: with a grant held it must not
+            // be, the grant being bound to its thumbprint.
+            val dpopKey = when (tokenBinding) {
+                is TokenBinding.Dpop -> if (backChannel == BackChannel.Edge) {
+                    KeystoreDpopKey(
+                        alias = KeystoreDpopKey.DEFAULT_ALIAS,
+                        requireHardware = tokenBinding.requireHardware,
+                        logger = logger,
+                        isGrantHeld = credentialStore::hasGrant,
+                        attestationChallenge = NativeAttestation.androidChallenge(configuration.clientId),
+                    )
+                } else {
+                    KeystoreDpopKey(
+                        requireHardware = tokenBinding.requireHardware,
+                        logger = logger,
+                    )
+                }
+                TokenBinding.Bearer -> null
+            }
+
+            val discovery = DiscoveryService(
+                issuer = configuration.issuer,
+                client = HttpDiscoveryClient(httpClient),
+                cache = FileProviderMetadataCache(File(directory, "provider-metadata.json")),
+            ).also { it.logger = logger }
             val proofFactory = dpopKey?.let { DpopProofFactory(it) }
             // One factory across auth and edge, deliberately. Its `DpopNonceCache` is keyed by
             // origin, so the two servers already hold independent nonces within it — which is
@@ -420,7 +438,13 @@ public class Versola internal constructor(
                             ),
                         )
                     }
-                    HttpNativeAuthorizationStarter(configuration, edge.toString(), httpClient, proofFactory)
+                    HttpNativeAuthorizationStarter(
+                        configuration,
+                        edge.toString(),
+                        httpClient,
+                        proofFactory,
+                        NativeStartAttestation { NativeAttestation.androidFields(checkNotNull(dpopKey).attestationChain()) },
+                    )
                 }
             }
             val flow = AuthorizationFlow(

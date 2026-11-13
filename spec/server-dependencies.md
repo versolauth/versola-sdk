@@ -74,6 +74,53 @@ The sealed blob replaces the PKCE verifier on the device: the SDK persists `stat
 blob before the browser opens and never sees the verifier. Edge keeps no state; auth remains
 the only token store.
 
+### App attestation on `/native/start` ([versola#423](https://github.com/versolauth/versola/issues/423))
+
+`POST {edge}/native/start/{clientId}` authenticates as the client for any caller, so a script can
+run its own login through edge. A client can therefore be set, per client in Central, to `off`,
+`report` or `enforce` that the app proves it is the genuine build on a genuine device. A client with
+no policy is not asked: nothing below is sent to it, and nothing changes for it.
+
+The app sends the evidence as extra form fields of `/native/start`; edge reads them and never
+passes them on to auth. Under `enforce` a request without a verifiable attestation of an accepted
+build is refused with `400 invalid_client_attestation` before anything is pushed to `/par`; under
+`report` edge verifies, counts and answers as if it had not. The attestation is tied to the DPoP
+key the request is signed with, which is the key every token of the flow is bound to.
+
+| Platform | Evidence | What binds it |
+|---|---|---|
+| Android | `attestation_platform=android` and `attestation_chain`, once per certificate (leaf first, each base64 DER), from Android Key Attestation of **the DPoP key itself** | The leaf's public key is the proof's key, so the chain is useless without the DPoP key. The key is generated with the attestation challenge `SHA-256("versola-attest-v1\n" + clientId)`, which names the client the chain was made for. |
+| iOS | `attestation_platform=ios`, `attestation_key_id` (the App Attest key id, base64) and **either** `attestation_object` (the first request of a key) **or** `attestation_assertion` (every later one) | App Attest signs only what it is handed, so the DPoP key cannot be the attested key. The app hands App Attest `clientDataHash = SHA-256("versola-attest-v1\n" + clientId + "\n" + jkt + "\n" + jti)`, `jkt` and `jti` being the thumbprint of the DPoP key and the `jti` of the proof sent on the same request. An assertion is good for exactly one proof, and its counter must move forward. |
+
+Test vectors, for an implementation to check its own hashing against: with `clientId` `mobile-app`
+the Android challenge is `da1a942191246aaada23ebad9694ba705d6babcd5bfec362779077b377440e15`, and
+with `jkt` `JKT` and `jti` `JTI` the iOS client data hash is
+`59241b9875b6c77d3d24ca23f08be296ecd13f10e52a5ffa3e7be2e6f07b6860` (both hex).
+
+Rules for the app, whichever platform:
+
+- Attestation is **evidence about a key, never a permission**. The SDK sends what it has and lets
+  edge decide; it does not skip a request, retry with other evidence or loosen anything on its own
+  when edge refuses. A device that cannot produce evidence (no hardware attestation, App Attest
+  unsupported) sends none, and the client's policy decides whether that is acceptable.
+- An Android key is attested **when it is generated**, so a key that was generated before the SDK
+  asked for attestation has no chain. Such a key is replaced by an attested one **only at the start of
+  a login (`/native/start`) and only while no grant is held**. Never while signing a later request: a
+  login is in flight between `/native/start` and `/native/complete`, possibly across the death of the
+  process, and its blob is bound to the key's thumbprint. With a grant held the key is kept (a grant is
+  bound to the thumbprint too) and no evidence is sent, and the next login after a logout gets an
+  attested key. A device that cannot attest a key generates it without, and is not asked again in the
+  same process.
+- An iOS attestation object is made for one request's proof and App Attest attests a key once, so it
+  is never re-sent: after a refusal the app attests a new key; after a request that failed once edge
+  had accepted it, the key is known and the app asserts with it next. An assertion for a key edge has
+  not been shown is refused with the description `this key has not been attested: send the attestation
+  object`, which is what tells the app to attest it.
+
+**Platform status.** The Android `Versola` facade sends the Android evidence under `BackChannel.Edge`.
+There is no iOS counterpart of the `Versola` facade yet (`ios/Sources` holds only the generic
+facade), so the iOS rows above are the contract it will implement, not behaviour any SDK has today.
+
 ## Settled — proof-key policy
 
 [versola#302](https://github.com/versolauth/versola/issues/302) closed on 2026-09-26. `Dpop.verify`
