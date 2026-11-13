@@ -119,7 +119,20 @@ Rules for the app, whichever platform:
 
 **Platform status.** The Android `Versola` facade sends the Android evidence under `BackChannel.Edge`.
 There is no iOS counterpart of the `Versola` facade yet (`ios/Sources` holds only the generic
-facade), so the iOS rows above are the contract it will implement, not behaviour any SDK has today.
+facade), so no iOS request carries evidence today. The iOS half exists as a building block in
+`OAuthClient` (`AppAttestEvidence`, over `DCAppAttestService`) that nothing calls yet: it keeps the
+key id and whether it was attested in the Keychain (`state-machine.md`, persistence summary), attests
+a key on its first request and asserts on every later one, over the hash above. The facade that
+sends it takes it as it is.
+
+On iOS, as on Android, what the device cannot give is no evidence and no error: a device or build
+without App Attest (a simulator, an app without the App Attest capability, an app extension), Apple's
+service out of reach, or a failure App Attest does not explain sends nothing for that request. A key
+App Attest does not know (one made by another install, or attested before a save was lost) is dropped,
+and a new one is made and attested in the same call, once; if that fails too, nothing is sent. The one
+exception to "no error" is the SDK's own store: the key id lives in the Keychain the refresh token lives
+in, and a Keychain that cannot be read or written fails the request as it fails every other operation
+(`Recoverable(UnlockRequired)` while the device is locked), whatever edge's policy for the client is.
 
 ## Settled — proof-key policy
 
