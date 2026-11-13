@@ -117,7 +117,8 @@ Rules for the app, whichever platform:
   not been shown is refused with the description `this key has not been attested: send the attestation
   object`, which is what tells the app to attest it.
 
-**Platform status.** The Android `Versola` facade sends the Android evidence under `BackChannel.Edge`.
+**Platform status.** The Android `Versola` facade sends the Android evidence under `BackChannel.Edge`
+(scenario 38, which has no driver yet).
 There is no iOS counterpart of the `Versola` facade yet (`ios/Sources` holds only the generic
 facade), so the iOS rows above are the contract it will implement, not behaviour any SDK has today.
 
