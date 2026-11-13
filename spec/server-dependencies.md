@@ -117,7 +117,8 @@ Rules for the app, whichever platform:
   not been shown is refused with the description `this key has not been attested: send the attestation
   object`, which is what tells the app to attest it.
 
-**Platform status.** The Android `Versola` facade sends the Android evidence under `BackChannel.Edge`.
+**Platform status.** The Android `Versola` facade sends the Android evidence under `BackChannel.Edge`
+(scenario 38, which has no driver yet).
 There is no iOS counterpart of the `Versola` facade yet, so no iOS request carries evidence today.
 The iOS half exists as internal building blocks that nothing public calls: `AppAttestEvidence`
 (`OAuthClient`, over `DCAppAttestService`) keeps the key id and whether it was attested in the Keychain

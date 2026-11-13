@@ -11,6 +11,13 @@ from `versolauth/versola` at `d6203f93`, from an emulator. The rest of the catal
 fault-injection proxy and the transcript comparison with the reference client are the order
 of work at the bottom. iOS has no driver for the Versola facade yet.
 
+Scenario 38 (Android Key Attestation of the DPoP key on `/native/start`, versola#423) has no driver
+yet. It is proven against stubs only: `NativeAuthorizationStarterTest` for the form fields,
+`NativeAttestationTest` for the bytes both sides hash, and `KeystoreDpopKeyInstrumentedTest` for the
+chain the Keystore makes. Its driver needs the staged stack with an attestation policy set for two
+clients through central's admin API, and a real (or emulated) Keystore chain accepted by edge's
+verifier, which is also what no test has shown yet.
+
 The generic facade has its own drivers, `android/conformance-oauth` (Robolectric unit tests,
 real network) and `ios/Tests/OAuthConformanceTests` (XCTest, on the Mac host or an iOS
 simulator), which run scenarios 24 to 33 green against Keycloak 26.4 and Ory Hydra 26.2 staged
