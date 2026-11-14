@@ -90,12 +90,19 @@ key the request is signed with, which is the key every token of the flow is boun
 | Platform | Evidence | What binds it |
 |---|---|---|
 | Android | `attestation_platform=android` and `attestation_chain`, once per certificate (leaf first, each base64 DER), from Android Key Attestation of **the DPoP key itself** | The leaf's public key is the proof's key, so the chain is useless without the DPoP key. The key is generated with the attestation challenge `SHA-256("versola-attest-v1\n" + clientId)`, which names the client the chain was made for. |
+| Android, when the build's policy requires Play Integrity | `attestation_integrity_token`, beside the chain: the Play Integrity token the app got for the nonce `base64url(SHA-256("versola-attest-v1\n" + clientId + "\n" + jkt + "\n" + jti))`, no padding | The nonce is the iOS client data hash in URL-safe base64, so the verdict is good for one request by one DPoP key. Edge has Google decode it and requires the package, the nonce, a recent timestamp, `PLAY_RECOGNIZED`, one of the policy's certificate digests and `MEETS_DEVICE_INTEGRITY`. `attestation_platform` is sent once, not once per kind of evidence. |
 | iOS | `attestation_platform=ios`, `attestation_key_id` (the App Attest key id, base64) and **either** `attestation_object` (the first request of a key) **or** `attestation_assertion` (every later one) | App Attest signs only what it is handed, so the DPoP key cannot be the attested key. The app hands App Attest `clientDataHash = SHA-256("versola-attest-v1\n" + clientId + "\n" + jkt + "\n" + jti)`, `jkt` and `jti` being the thumbprint of the DPoP key and the `jti` of the proof sent on the same request. An assertion is good for exactly one proof, and its counter must move forward. |
+
+The Play Integrity token is asked for **after** the proof is minted, since its nonce needs the proof's `jti`, and again for
+every proof: a retry after a `use_dpop_nonce` challenge carries a new proof and so a new token. It is made only when the
+app was configured with a Google Cloud project number; a device or Play Store that cannot give one sends none, which the
+client's policy then judges, as with every other evidence.
 
 Test vectors, for an implementation to check its own hashing against: with `clientId` `mobile-app`
 the Android challenge is `da1a942191246aaada23ebad9694ba705d6babcd5bfec362779077b377440e15`, and
 with `jkt` `JKT` and `jti` `JTI` the iOS client data hash is
-`59241b9875b6c77d3d24ca23f08be296ecd13f10e52a5ffa3e7be2e6f07b6860` (both hex).
+`59241b9875b6c77d3d24ca23f08be296ecd13f10e52a5ffa3e7be2e6f07b6860` (both hex), which as the Play Integrity nonce is
+`WSQbmHW2x309JMoj8IviluzRPxDlKl_6Pnvi5vB7aGA`.
 
 Rules for the app, whichever platform:
 

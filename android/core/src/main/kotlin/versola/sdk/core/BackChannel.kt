@@ -21,6 +21,7 @@ import versola.oauth.core.wwwAuthenticateError
 import java.io.File
 import java.io.IOException
 import versola.oauth.core.SdkDispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -214,22 +215,40 @@ public class HttpNativeAuthorizationStarter(
 
     private var attestation: NativeStartAttestation? = null
 
+    /**
+     * As the constructor above, and with the evidence that is about the request itself (a Play Integrity token): internal, and a
+     * constructor of its own, so the ones an app compiled against are untouched.
+     */
+    @VersolaInternalApi
+    public constructor(
+        configuration: VersolaConfiguration,
+        edgeBaseUrl: String,
+        httpClient: OkHttpClient,
+        dpop: DpopProofSource,
+        attestation: NativeStartAttestation?,
+        proofEvidence: NativeStartProofEvidence?,
+    ) : this(configuration, edgeBaseUrl, httpClient, dpop, attestation) {
+        this.proofEvidence = proofEvidence
+    }
+
+    private var proofEvidence: NativeStartProofEvidence? = null
+
     override suspend fun start(request: NativeStartRequest): NativeStart {
         // Read before the first proof is minted, from the same key: the key is generated on first use,
         // and the evidence has to be about the key that signs the proof that follows.
         val evidence = attestation?.fields().orEmpty()
-        val body = FormBody()
-            .add("redirect_uri", request.redirectUri)
-            .apply { if (request.scopes.isNotEmpty()) add("scope", request.scopes.joinToString(" ")) }
-            .add("nonce", request.nonce)
-            .apply { if (request.acrValues.isNotEmpty()) add("acr_values", request.acrValues.joinToString(" ")) }
-            .apply { request.maxAge?.let { add("max_age", it.toString()) } }
-            .apply { evidence.forEach { (name, value) -> add(name, value) } }
-            .toByteArray()
+        val fields = buildList {
+            add("redirect_uri" to request.redirectUri)
+            if (request.scopes.isNotEmpty()) add("scope" to request.scopes.joinToString(" "))
+            add("nonce" to request.nonce)
+            if (request.acrValues.isNotEmpty()) add("acr_values" to request.acrValues.joinToString(" "))
+            request.maxAge?.let { add("max_age" to it.toString()) }
+            addAll(evidence)
+        }
 
         var nonceRetried = false
         while (true) {
-            val response = attempt(body)
+            val response = attempt(fields)
             when (response) {
                 is Outcome.Started -> return response.start
                 is Outcome.UseDpopNonce -> {
@@ -244,12 +263,30 @@ public class HttpNativeAuthorizationStarter(
         }
     }
 
-    private suspend fun attempt(body: ByteArray): Outcome {
+    private suspend fun attempt(fields: List<Pair<String, String>>): Outcome {
+        // The proof first: evidence about this request is made for this proof's `jti`, and a retry has a new one. A request that
+        // carried evidence is never sent twice, since its `jti` is single-use at edge.
+        val proof = dpop.proof("POST", url)
+        val perRequest = proofEvidence?.let { source ->
+            try {
+                NativeAttestation.jtiOf(proof)?.let { source.fields(it) }.orEmpty()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                // What the device cannot give is no evidence and no error: edge's policy decides.
+                emptyList()
+            }
+        }.orEmpty()
+        val form = FormBody()
+        val all = fields + perRequest
+        all.forEach { (name, value) -> form.add(name, value) }
+        // One `attestation_platform` however many kinds of evidence there are: the form joins a repeated field with commas.
+        if (perRequest.isNotEmpty() && all.none { it.first == "attestation_platform" }) form.add("attestation_platform", "android")
         val request = Request.Builder()
             .url(url)
             .header("Accept", "application/json")
-            .header("DPoP", dpop.proof("POST", url))
-            .post(body.toRequestBody(FORM_MEDIA_TYPE))
+            .header("DPoP", proof)
+            .post(form.toByteArray().toRequestBody(FORM_MEDIA_TYPE))
             .build()
         return withContext(SdkDispatchers.blocking) {
             try {
