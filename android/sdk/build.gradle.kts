@@ -53,6 +53,9 @@ dependencies {
     api(project(":storage"))
     api(project(":okhttp"))
 
+    // Play Integrity's own client: the token an edge may ask for on `/native/start` is only made by it (#423).
+    implementation("com.google.android.play:integrity:1.4.0")
+
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.11.0")
     testImplementation("org.robolectric:robolectric:4.17")

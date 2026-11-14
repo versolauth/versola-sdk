@@ -256,6 +256,12 @@ public class Versola internal constructor(
              * here either (#1 §4).
              */
             browser: BrowserAuthorizationSession? = null,
+            /**
+             * The Google Cloud project number the app's Play Integrity API is linked to. With it, the app asks Play
+             * Integrity for a verdict on every `/native/start` and sends it to edge, which looks at it only for a build
+             * whose attestation policy requires one (versola#423). Needs [BackChannel.Edge]. Absent, no token is made.
+             */
+            playIntegrityCloudProjectNumber: Long? = null,
         ): Versola {
             // Validated first, so a refused configuration is refused the same way every time.
             val configuration = VersolaConfiguration.create(issuer, clientId, redirectUri, postLogoutRedirectUri)
@@ -278,6 +284,14 @@ public class Versola internal constructor(
                     )
                 }
                 url
+            }
+
+            if (playIntegrityCloudProjectNumber != null && backChannel != BackChannel.Edge) {
+                throw VersolaError.Configuration(
+                    VersolaError.Configuration.Detail.InvalidConfiguration(
+                        "playIntegrityCloudProjectNumber needs BackChannel.Edge: only edge asks for a Play Integrity verdict",
+                    ),
+                )
             }
 
             // The combinations the flow refuses one at a time are refused here with one message naming
@@ -308,6 +322,7 @@ public class Versola internal constructor(
             // are ignored: the first is kept.
             val fingerprint = listOf(
                 issuer, clientId, redirectUri, postLogoutRedirectUri, tokenBinding.toString(), edgeBaseUrl, backChannel,
+                playIntegrityCloudProjectNumber,
                 listOf(
                     retryPolicy.maxAttemptsPerOrigin, retryPolicy.maxTotalAttempts, retryPolicy.initialBackoff,
                     retryPolicy.backoffMultiplier, retryPolicy.maxBackoff, retryPolicy.totalBudget,
@@ -332,7 +347,7 @@ public class Versola internal constructor(
                     return existing
                 }
                 return build(
-                    context, logger, httpClient, tokenBinding, edge, retryPolicy, backChannel, browser, configuration,
+                    context, logger, httpClient, tokenBinding, edge, retryPolicy, backChannel, browser, configuration, playIntegrityCloudProjectNumber,
                 ).also {
                     registry.instance = it
                     registry.fingerprint = fingerprint
@@ -365,6 +380,7 @@ public class Versola internal constructor(
             backChannel: BackChannel,
             browser: BrowserAuthorizationSession?,
             configuration: VersolaConfiguration,
+            playIntegrityCloudProjectNumber: Long?,
         ): Versola {
             configuration.redirectUriWarning?.let(logger::warn)
             val applicationContext = context.applicationContext
@@ -444,6 +460,9 @@ public class Versola internal constructor(
                         httpClient,
                         proofFactory,
                         NativeStartAttestation { NativeAttestation.androidFields(checkNotNull(dpopKey).attestationChain()) },
+                        playIntegrityCloudProjectNumber?.let {
+                            PlayIntegrityEvidence(applicationContext, it, configuration.clientId) { checkNotNull(dpopKey).jkt() }
+                        },
                     )
                 }
             }
