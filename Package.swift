@@ -53,6 +53,21 @@ let package = Package(
             path: "ios/Tests/OAuthClientTests",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
+        // Versola's edge back channel (`/native/start|complete|token|revoke`, versola#420) and the
+        // app attestation it asks for on start (versola#423). Internal: a target and no product
+        // until the Versola facade that assembles it exists on iOS; `package` access only.
+        .target(
+            name: "VersolaEdge",
+            dependencies: ["OAuthCore"],
+            path: "ios/Sources/VersolaEdge",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "VersolaEdgeTests",
+            dependencies: ["VersolaEdge", "OAuthCore"],
+            path: "ios/Tests/VersolaEdgeTests",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
         // The generic facade's conformance driver (conformance/README.md, "Providers"; the
         // twin of android/conformance-oauth): scenarios 24 to 32 against a provider container,
         // through an in-process proxy, with the provider's login form driven over HTTP. Every

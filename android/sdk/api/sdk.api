@@ -29,7 +29,7 @@ public final class versola/sdk/Versola {
 }
 
 public final class versola/sdk/Versola$Companion {
-	public final fun configure (Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lversola/oauth/core/VersolaLogger;Lokhttp3/OkHttpClient;Lversola/oauth/core/TokenBinding;Ljava/lang/String;Lversola/oauth/core/RetryPolicy;Ljava/lang/String;Lversola/sdk/core/BackChannel;Lversola/oauth/core/BrowserAuthorizationSession;)Lversola/sdk/Versola;
-	public static synthetic fun configure$default (Lversola/sdk/Versola$Companion;Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lversola/oauth/core/VersolaLogger;Lokhttp3/OkHttpClient;Lversola/oauth/core/TokenBinding;Ljava/lang/String;Lversola/oauth/core/RetryPolicy;Ljava/lang/String;Lversola/sdk/core/BackChannel;Lversola/oauth/core/BrowserAuthorizationSession;ILjava/lang/Object;)Lversola/sdk/Versola;
+	public final fun configure (Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lversola/oauth/core/VersolaLogger;Lokhttp3/OkHttpClient;Lversola/oauth/core/TokenBinding;Ljava/lang/String;Lversola/oauth/core/RetryPolicy;Ljava/lang/String;Lversola/sdk/core/BackChannel;Lversola/oauth/core/BrowserAuthorizationSession;Ljava/lang/Long;)Lversola/sdk/Versola;
+	public static synthetic fun configure$default (Lversola/sdk/Versola$Companion;Landroid/content/Context;Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Lversola/oauth/core/VersolaLogger;Lokhttp3/OkHttpClient;Lversola/oauth/core/TokenBinding;Ljava/lang/String;Lversola/oauth/core/RetryPolicy;Ljava/lang/String;Lversola/sdk/core/BackChannel;Lversola/oauth/core/BrowserAuthorizationSession;Ljava/lang/Long;ILjava/lang/Object;)Lversola/sdk/Versola;
 }
 

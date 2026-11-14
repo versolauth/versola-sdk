@@ -527,6 +527,7 @@ one grant to one device-installation; reusing it across users on a shared device
 | ID token (raw, for `id_token_hint`) | Encrypted, `CredentialKeyProvider` | yes | no |
 | ID token claims (parsed) | Memory | no | no |
 | DPoP private key | Hardware keystore, non-exportable | yes | no (destroyed) |
+| App Attest key id and whether it has been attested (iOS, edge mode, [versola#423](https://github.com/versolauth/versola/issues/423)) | Keychain, `AfterFirstUnlockThisDeviceOnly`, never synchronised | yes | yes (it names the install, not the user) |
 | DPoP nonce, per origin | Memory | no | no |
 | Clock skew offset | Memory | no | no |
 | Discovery metadata, with the lifetime it was fetched with | Disk, unencrypted | yes, until the lifetime ends | yes |
@@ -537,8 +538,9 @@ iOS Keychain outlives it: a reinstall on the same device would otherwise open si
 previous install's user. The iOS SDK therefore writes a marker file beside its caches
 (Application Support, excluded from backup, so it goes with the app and is not restored by an
 iCloud backup) and, on the first launch that finds neither a marker nor any cache, deletes every
-Keychain item of the client (refresh token, ID token, rotation slot, pending request, DPoP key)
-before any of them is read. A launch that finds caches but no marker is an upgrade from a version
+Keychain item of the client (refresh token, ID token, rotation slot, pending request, DPoP key, App Attest
+key id) before any of them is read. (Where the guard is not built or is inert, below, an App Attest key id can
+outlive the reinstall: App Attest no longer knows its key, and the evidence source replaces it.) A launch that finds caches but no marker is an upgrade from a version
 that wrote none, and keeps its session. If the delete fails because the device is locked, the
 marker is not written and the operation that triggered it fails with `Recoverable(UnlockRequired)`;
 the next one tries again.

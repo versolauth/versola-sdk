@@ -74,6 +74,80 @@ The sealed blob replaces the PKCE verifier on the device: the SDK persists `stat
 blob before the browser opens and never sees the verifier. Edge keeps no state; auth remains
 the only token store.
 
+### App attestation on `/native/start` ([versola#423](https://github.com/versolauth/versola/issues/423))
+
+`POST {edge}/native/start/{clientId}` authenticates as the client for any caller, so a script can
+run its own login through edge. A client can therefore be set, per client in Central, to `off`,
+`report` or `enforce` that the app proves it is the genuine build on a genuine device. A client with
+no policy is not asked: nothing below is sent to it, and nothing changes for it.
+
+The app sends the evidence as extra form fields of `/native/start`; edge reads them and never
+passes them on to auth. Under `enforce` a request without a verifiable attestation of an accepted
+build is refused with `400 invalid_client_attestation` before anything is pushed to `/par`; under
+`report` edge verifies, counts and answers as if it had not. The attestation is tied to the DPoP
+key the request is signed with, which is the key every token of the flow is bound to.
+
+| Platform | Evidence | What binds it |
+|---|---|---|
+| Android | `attestation_platform=android` and `attestation_chain`, once per certificate (leaf first, each base64 DER), from Android Key Attestation of **the DPoP key itself** | The leaf's public key is the proof's key, so the chain is useless without the DPoP key. The key is generated with the attestation challenge `SHA-256("versola-attest-v1\n" + clientId)`, which names the client the chain was made for. |
+| Android, when the build's policy requires Play Integrity | `attestation_integrity_token`, beside the chain: the Play Integrity token the app got for the nonce `base64url(SHA-256("versola-attest-v1\n" + clientId + "\n" + jkt + "\n" + jti))`, no padding | The nonce is the iOS client data hash in URL-safe base64, so the verdict is good for one request by one DPoP key. Edge has Google decode it and requires the package, the nonce, a recent timestamp, `PLAY_RECOGNIZED`, one of the policy's certificate digests and `MEETS_DEVICE_INTEGRITY`. `attestation_platform` is sent once, not once per kind of evidence. |
+| iOS | `attestation_platform=ios`, `attestation_key_id` (the App Attest key id, base64) and **either** `attestation_object` (the first request of a key) **or** `attestation_assertion` (every later one) | App Attest signs only what it is handed, so the DPoP key cannot be the attested key. The app hands App Attest `clientDataHash = SHA-256("versola-attest-v1\n" + clientId + "\n" + jkt + "\n" + jti)`, `jkt` and `jti` being the thumbprint of the DPoP key and the `jti` of the proof sent on the same request. An assertion is good for exactly one proof, and its counter must move forward. |
+
+The Play Integrity token is asked for **after** the proof is minted, since its nonce needs the proof's `jti`, and again for
+every proof: a retry after a `use_dpop_nonce` challenge carries a new proof and so a new token. It is made only when the
+app was configured with a Google Cloud project number; a device or Play Store that cannot give one sends none, which the
+client's policy then judges, as with every other evidence.
+
+Test vectors, for an implementation to check its own hashing against: with `clientId` `mobile-app`
+the Android challenge is `da1a942191246aaada23ebad9694ba705d6babcd5bfec362779077b377440e15`, and
+with `jkt` `JKT` and `jti` `JTI` the iOS client data hash is
+`59241b9875b6c77d3d24ca23f08be296ecd13f10e52a5ffa3e7be2e6f07b6860` (both hex), which as the Play Integrity nonce is
+`WSQbmHW2x309JMoj8IviluzRPxDlKl_6Pnvi5vB7aGA`.
+
+Rules for the app, whichever platform:
+
+- Attestation is **evidence about a key, never a permission**. The SDK sends what it has and lets
+  edge decide; it does not skip a request, retry with other evidence or loosen anything on its own
+  when edge refuses. A device that cannot produce evidence (no hardware attestation, App Attest
+  unsupported) sends none, and the client's policy decides whether that is acceptable.
+- An Android key is attested **when it is generated**, so a key that was generated before the SDK
+  asked for attestation has no chain. Such a key is replaced by an attested one **only at the start of
+  a login (`/native/start`) and only while no grant is held**. Never while signing a later request: a
+  login is in flight between `/native/start` and `/native/complete`, possibly across the death of the
+  process, and its blob is bound to the key's thumbprint. With a grant held the key is kept (a grant is
+  bound to the thumbprint too) and no evidence is sent, and the next login after a logout gets an
+  attested key. A device that cannot attest a key generates it without, and is not asked again in the
+  same process.
+- An iOS attestation object is made for one request's proof and App Attest attests a key once, so it
+  is never re-sent: after a refusal the app attests a new key; after a request that failed once edge
+  had accepted it, the key is known and the app asserts with it next. An assertion for a key edge has
+  not been shown is refused with the description `this key has not been attested: send the attestation
+  object`, which is what tells the app to attest it.
+
+**Platform status.** The Android `Versola` facade sends the Android evidence under `BackChannel.Edge`
+(scenario 38, which has no driver yet).
+There is no iOS counterpart of the `Versola` facade yet, so no iOS request carries evidence today.
+The iOS half exists as internal building blocks that nothing public calls: `AppAttestEvidence`
+(`OAuthClient`, over `DCAppAttestService`) keeps the key id and whether it was attested in the Keychain
+(`state-machine.md`, persistence summary), attests a key on its first request and asserts on every later
+one, over the hash above; and the `VersolaEdge` target (a SwiftPM target with `package` access and no
+product) carries the edge channel itself, `/native/start|complete|token|revoke`, as an
+`AuthorizationStarter` and a `TokenClient`. The starter mints the DPoP proof first and asks for the
+evidence second, because an assertion is for that proof's `jti`. Edge checks the proof and its nonce
+before it looks at the evidence, so a `use_dpop_nonce` answer does not consume it, but an attestation
+object that rode on such a request was not seen: the starter forgets that key and the retry attests a
+new one, and the same is done on the refusal `this key has not been attested`. Any other refusal keeps
+the key. The facade that assembles these takes them as they are.
+
+On iOS, as on Android, what the device cannot give is no evidence and no error: a device or build
+without App Attest (a simulator, an app without the App Attest capability, an app extension), Apple's
+service out of reach, or a failure App Attest does not explain sends nothing for that request. A key
+App Attest does not know (one made by another install, or attested before a save was lost) is dropped,
+and a new one is made and attested in the same call, once; if that fails too, nothing is sent. The one
+exception to "no error" is the SDK's own store: the key id lives in the Keychain the refresh token lives
+in, and a Keychain that cannot be read or written fails the request as it fails every other operation
+(`Recoverable(UnlockRequired)` while the device is locked), whatever edge's policy for the client is.
+
 ## Settled — proof-key policy
 
 [versola#302](https://github.com/versolauth/versola/issues/302) closed on 2026-09-26. `Dpop.verify`

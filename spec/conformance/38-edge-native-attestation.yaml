@@ -1,0 +1,34 @@
+id: 38-edge-native-attestation
+title: Android Key Attestation of the DPoP key on edge's native start
+issues: [40, 423]
+applies_to: [android]
+mode: dpop
+preconditions:
+  - The tenant has the fapi2 security profile.
+  - A native client is registered with tls_client_auth, an edge-held certificate, requirePushedAuthorizationRequests, dpopBoundAccessTokens and one https App Link redirect URI.
+  - Edge is configured with a native block, and its attestation policy for the client is enforce, accepting the app's package name and the SHA-256 of the certificate the app is signed with.
+  - A second native client is registered the same way, with an enforce policy that accepts another package name.
+  - The SDK is configured with BackChannel.Edge, edgeBaseUrl, and the first client's id and redirect URI.
+  - No credentials and no DPoP key are present on the device.
+steps:
+  - actor: app
+    action: Call login with scopes openid and offline_access.
+  - actor: sdk
+    action: Generate the DPoP key with the attestation challenge SHA-256("versola-attest-v1\n" + client id), then POST edge's native start endpoint with the usual parameters plus attestation_platform=android and one attestation_chain field per certificate of the key's chain, leaf first.
+    expect: 200 with request_uri, state, blob, token_endpoint and revocation_endpoint.
+  - actor: sdk
+    action: Complete the login as in scenario 21.
+    expect: 200 with access_token, refresh_token, id_token and token_type=DPoP.
+  - actor: app
+    action: Log out, then configure the SDK with the second client's id and call login.
+  - actor: sdk
+    action: POST edge's native start endpoint for the second client with the same kind of evidence, made for that client.
+    expect: 400 with error invalid_client_attestation and an error_description naming what was wrong.
+assertions:
+  - The first start request carries exactly one attestation_platform field with the value android, and at least two attestation_chain fields, each the standard base64 of a DER certificate.
+  - The public key of the first certificate of the chain has the RFC 7638 thumbprint of the DPoP key the start request's proof is signed with, and the Key Attestation extension of that certificate carries SHA-256("versola-attest-v1\n" + client id) as its challenge.
+  - No attestation_* parameter appears on the complete, token or revoke requests.
+  - The attestation fields are in the form body, not in a header or the query string.
+  - After the 400, the SDK surfaces Configuration with detail AuthorizationRejected whose error is invalid_client_attestation, opens no browser, and sends no second start request for the same login call.
+  - A device that has no chain for its key (the Keystore made none) sends no attestation_* field at all, and the start request is otherwise identical to scenario 21's.
+  - Session state observed by the app is Unauthenticated then Authorizing then Authenticated for the first login, and Unauthenticated again after the refused start of the second.

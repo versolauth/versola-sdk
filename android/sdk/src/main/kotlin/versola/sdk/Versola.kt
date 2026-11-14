@@ -19,6 +19,8 @@ import versola.sdk.core.FileNativeEndpointsStore
 import versola.oauth.core.FileProviderMetadataCache
 import versola.oauth.core.HttpDiscoveryClient
 import versola.sdk.core.HttpNativeAuthorizationStarter
+import versola.sdk.core.NativeAttestation
+import versola.sdk.core.NativeStartAttestation
 import versola.oauth.core.HttpTokenClient
 import versola.oauth.core.TokenClient
 import versola.oauth.core.ProviderMetadata
@@ -254,6 +256,12 @@ public class Versola internal constructor(
              * here either (#1 §4).
              */
             browser: BrowserAuthorizationSession? = null,
+            /**
+             * The Google Cloud project number the app's Play Integrity API is linked to. With it, the app asks Play
+             * Integrity for a verdict on every `/native/start` and sends it to edge, which looks at it only for a build
+             * whose attestation policy requires one (versola#423). Needs [BackChannel.Edge]. Absent, no token is made.
+             */
+            playIntegrityCloudProjectNumber: Long? = null,
         ): Versola {
             // Validated first, so a refused configuration is refused the same way every time.
             val configuration = VersolaConfiguration.create(issuer, clientId, redirectUri, postLogoutRedirectUri)
@@ -276,6 +284,14 @@ public class Versola internal constructor(
                     )
                 }
                 url
+            }
+
+            if (playIntegrityCloudProjectNumber != null && backChannel != BackChannel.Edge) {
+                throw VersolaError.Configuration(
+                    VersolaError.Configuration.Detail.InvalidConfiguration(
+                        "playIntegrityCloudProjectNumber needs BackChannel.Edge: only edge asks for a Play Integrity verdict",
+                    ),
+                )
             }
 
             // The combinations the flow refuses one at a time are refused here with one message naming
@@ -306,6 +322,7 @@ public class Versola internal constructor(
             // are ignored: the first is kept.
             val fingerprint = listOf(
                 issuer, clientId, redirectUri, postLogoutRedirectUri, tokenBinding.toString(), edgeBaseUrl, backChannel,
+                playIntegrityCloudProjectNumber,
                 listOf(
                     retryPolicy.maxAttemptsPerOrigin, retryPolicy.maxTotalAttempts, retryPolicy.initialBackoff,
                     retryPolicy.backoffMultiplier, retryPolicy.maxBackoff, retryPolicy.totalBudget,
@@ -330,7 +347,7 @@ public class Versola internal constructor(
                     return existing
                 }
                 return build(
-                    context, logger, httpClient, tokenBinding, edge, retryPolicy, backChannel, browser, configuration,
+                    context, logger, httpClient, tokenBinding, edge, retryPolicy, backChannel, browser, configuration, playIntegrityCloudProjectNumber,
                 ).also {
                     registry.instance = it
                     registry.fingerprint = fingerprint
@@ -363,6 +380,7 @@ public class Versola internal constructor(
             backChannel: BackChannel,
             browser: BrowserAuthorizationSession?,
             configuration: VersolaConfiguration,
+            playIntegrityCloudProjectNumber: Long?,
         ): Versola {
             configuration.redirectUriWarning?.let(logger::warn)
             val applicationContext = context.applicationContext
@@ -373,19 +391,6 @@ public class Versola internal constructor(
             // Constructed, not generated: nothing touches the Keystore until the first call
             // that needs a thumbprint or a proof, so configure() stays a cheap main-thread
             // call even on a device where a StrongBox keygen takes a noticeable moment.
-            val dpopKey = when (tokenBinding) {
-                is TokenBinding.Dpop -> KeystoreDpopKey(
-                    requireHardware = tokenBinding.requireHardware,
-                    logger = logger,
-                )
-                TokenBinding.Bearer -> null
-            }
-
-            val discovery = DiscoveryService(
-                issuer = configuration.issuer,
-                client = HttpDiscoveryClient(httpClient),
-                cache = FileProviderMetadataCache(File(directory, "provider-metadata.json")),
-            ).also { it.logger = logger }
             // One instance per file per process, which is DataStore's constraint: a second
             // `configure()` in the same process — every `Activity.onCreate`, every rotation —
             // shares the store the first one opened. Opening it reads nothing; the file is
@@ -395,6 +400,35 @@ public class Versola internal constructor(
                 file = File(directory, "credentials"),
                 keyProvider = keyProviders(),
             )
+
+            // Under edge the key is also generated with the attestation challenge of this client, so
+            // that the chain the Keystore makes for it can go to edge on `/native/start` (#423). That
+            // path is also told whether a grant is held, which is what decides whether a key from
+            // before this existed may be replaced by an attested one: with a grant held it must not
+            // be, the grant being bound to its thumbprint.
+            val dpopKey = when (tokenBinding) {
+                is TokenBinding.Dpop -> if (backChannel == BackChannel.Edge) {
+                    KeystoreDpopKey(
+                        alias = KeystoreDpopKey.DEFAULT_ALIAS,
+                        requireHardware = tokenBinding.requireHardware,
+                        logger = logger,
+                        isGrantHeld = credentialStore::hasGrant,
+                        attestationChallenge = NativeAttestation.androidChallenge(configuration.clientId),
+                    )
+                } else {
+                    KeystoreDpopKey(
+                        requireHardware = tokenBinding.requireHardware,
+                        logger = logger,
+                    )
+                }
+                TokenBinding.Bearer -> null
+            }
+
+            val discovery = DiscoveryService(
+                issuer = configuration.issuer,
+                client = HttpDiscoveryClient(httpClient),
+                cache = FileProviderMetadataCache(File(directory, "provider-metadata.json")),
+            ).also { it.logger = logger }
             val proofFactory = dpopKey?.let { DpopProofFactory(it) }
             // One factory across auth and edge, deliberately. Its `DpopNonceCache` is keyed by
             // origin, so the two servers already hold independent nonces within it — which is
@@ -420,7 +454,16 @@ public class Versola internal constructor(
                             ),
                         )
                     }
-                    HttpNativeAuthorizationStarter(configuration, edge.toString(), httpClient, proofFactory)
+                    HttpNativeAuthorizationStarter(
+                        configuration,
+                        edge.toString(),
+                        httpClient,
+                        proofFactory,
+                        NativeStartAttestation { NativeAttestation.androidFields(checkNotNull(dpopKey).attestationChain()) },
+                        playIntegrityCloudProjectNumber?.let {
+                            PlayIntegrityEvidence(applicationContext, it, configuration.clientId) { checkNotNull(dpopKey).jkt() }
+                        },
+                    )
                 }
             }
             val flow = AuthorizationFlow(
