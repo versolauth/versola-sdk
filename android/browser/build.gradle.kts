@@ -61,7 +61,7 @@ dependencies {
     // Custom Tabs launch, the redirect activity and the foreground-return detector are all
     // framework interactions; Robolectric runs them in a plain JVM test rather than needing
     // an emulator, which CI does not have.
-    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("org.robolectric:robolectric:4.18")
     testImplementation("androidx.test:core:1.7.0")
 }
 

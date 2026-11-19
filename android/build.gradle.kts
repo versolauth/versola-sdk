@@ -1,7 +1,7 @@
 // Root build file. Version catalogue for plugins applied per-module; no code lives here.
 // See #4 for the layout this scaffolds and #1 §4 for the API 26 / target 36 floor.
 plugins {
-    id("com.android.library") version "9.5.0" apply false
+    id("com.android.library") version "9.5.1" apply false
     // The sample app (samples/oauth) is the only application module: the minified build that
     // proves no consumer keep rules are needed (architecture review F9).
     id("com.android.application") version "9.5.0" apply false
