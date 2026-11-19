@@ -72,7 +72,7 @@ dependencies {
     // The Keystore itself has no JVM implementation, but KeyGenParameterSpec is a plain
     // framework class: Robolectric is enough to assert what the storage key is asked for,
     // per API level, without the emulator CI does not have. Same version as :browser.
-    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("org.robolectric:robolectric:4.18")
 
     // Instrumented only. Same coroutines-test pin as the unit tests; the runner and the
     // AndroidX JUnit extension are what `connectedDebugAndroidTest` needs to find and run them.
