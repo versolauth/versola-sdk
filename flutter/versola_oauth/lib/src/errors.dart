@@ -100,6 +100,10 @@ enum RecoverableCause {
   unlockRequired,
   nonceLoop,
 
+  /// A re-authorization that had to come back as the session's user came back as another one.
+  /// Nothing of it was kept and the session is as it was. The generic client never raises it.
+  accountMismatch,
+
   /// A native cause this version of the binding does not know; `detail` carries its name. Not
   /// a reason to retry: the app cannot tell what it means, so it must not loop on it.
   unknown,

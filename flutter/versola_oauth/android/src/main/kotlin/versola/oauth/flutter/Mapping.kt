@@ -99,6 +99,8 @@ private fun VersolaError.toKindMessage(): ErrorMessage = when (this) {
         )
         Cause.UnlockRequired -> recoverable("unlockRequired")
         is Cause.NonceLoop -> recoverable("nonceLoop").copy(origin = c.origin)
+        // Raised by the Versola facade's step-up only; mapped here because the error type is shared.
+        Cause.AccountMismatch -> recoverable("accountMismatch")
     }
     is VersolaError.Reauthenticate -> when (val r = reason) {
         Reason.AuthorizationDenied -> reauthenticate("authorizationDenied")
