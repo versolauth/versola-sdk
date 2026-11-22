@@ -8,9 +8,9 @@ from it wherever Versola chose something for its users. Where this document is s
 facade's rule applies; where the two disagree, this one holds for the `Versola` facade.
 
 **Status.** This is the target the platforms are built to (ADR 0002). Android's `Versola`
-(`android/sdk`) implements it. iOS and Flutter have no `Versola` facade yet; until a platform
-follows, its gap is listed in the pull request that changes it, and the scenarios of section 15
-say which platforms hold them.
+(`android/sdk`) and iOS's (`ios/Sources/VersolaSDK`) implement it. Flutter has no `Versola` plugin
+yet; until it follows, its gap is listed in the pull request that changes it, and the scenarios of
+section 15 say which platforms hold them.
 
 Checked against `versolauth/versola` at `0a2b72d34` (branch `feat/central-topology-557`, draft pull
 request 1023), the working tree rather than its documentation. What that server does not do yet is

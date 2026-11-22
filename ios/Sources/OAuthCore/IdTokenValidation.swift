@@ -11,10 +11,8 @@ import Foundation
 /// the wrong type is `.malformed` rather than ignored.
 package struct JwksIdTokenValidator: IdTokenValidator {
     private let issuer: @Sendable () async throws -> String
-    private let clientId: String
     private let verifier: JwsVerifier
-    private let clockSkewTolerance: TimeInterval
-    private let clock: Clock
+    private let claims: IdTokenClaimCheck
 
     /// - Parameters:
     ///   - issuer: compared byte for byte with `iss`; supplied from discovery, since that is the
@@ -38,10 +36,8 @@ package struct JwksIdTokenValidator: IdTokenValidator {
         clock: Clock = .system
     ) {
         self.issuer = issuer
-        self.clientId = clientId
         self.verifier = JwsVerifier(jwksUri: jwksUri, allowedAlgorithms: allowedAlgorithms, jwks: jwks)
-        self.clockSkewTolerance = clockSkewTolerance
-        self.clock = clock
+        self.claims = IdTokenClaimCheck(clientId: clientId, clockSkewTolerance: clockSkewTolerance, clock: clock)
     }
 
     package func validate(
@@ -60,13 +56,23 @@ package struct JwksIdTokenValidator: IdTokenValidator {
         }
         let expectedIssuer = try await issuer()
         do {
-            return try check(token, expectedNonce, accessToken, maxAge, previous, expectedIssuer, serverTime)
+            return try claims.check(token, expectedNonce, accessToken, maxAge, previous, expectedIssuer, serverTime)
         } catch let rejection as JwsRejection {
             throw OAuthError.configuration(.idTokenRejected(rejection.reason))
         }
     }
 
-    private func check(
+}
+
+/// The claim checks of an ID token apart from its signature: what both validators of this file
+/// apply once they hold a parsed token, in one place so that they cannot drift. Throws
+/// `JwsRejection`, which the validator turns into `idTokenRejected`.
+struct IdTokenClaimCheck: Sendable {
+    let clientId: String
+    let clockSkewTolerance: TimeInterval
+    let clock: Clock
+
+    func check(
         _ token: ParsedJws,
         _ expectedNonce: String?,
         _ accessToken: String?,
@@ -158,7 +164,14 @@ package struct JwksIdTokenValidator: IdTokenValidator {
         // Core 3.1.3.6: base64url of the left half of the hash of the access token, the hash being
         // the one the JWS algorithm uses. Optional in the code flow, so absent is fine; present
         // and wrong is not.
-        if let atHash, let accessToken, let algorithm = token.alg.flatMap(JwsAlgorithm.init(rawValue:)) {
+        if let atHash, let accessToken {
+            // A validator that verified the signature has already refused an algorithm outside the
+            // closed set; one that did not (`TlsTrustedIdTokenValidator`) may meet any name, and a
+            // hash it cannot name the digest of is a claim it cannot check, which is a refusal and
+            // not a pass.
+            guard let algorithm = token.alg.flatMap(JwsAlgorithm.init(rawValue:)) else {
+                throw JwsRejection(.algorithm, "at_hash under an algorithm that names no digest")
+            }
             let digest = Self.digest(Data(accessToken.utf8), bytes: algorithm.digestBytes)
             let expected = JoseBase64Url.encode(digest.prefix(digest.count / 2))
             if !JoseConstantTime.equals(atHash, expected) {
@@ -187,6 +200,49 @@ package struct JwksIdTokenValidator: IdTokenValidator {
         case 32: return Data(SHA256.hash(data: data))
         case 48: return Data(SHA384.hash(data: data))
         default: return Data(SHA512.hash(data: data))
+        }
+    }
+}
+
+/// The ID-token checks for a token that reached the device from the party that redeemed the code,
+/// over TLS, where no key set can be fetched to verify its signature with: the Versola facade,
+/// whose tokens are relayed by edge and whose issuer serves no JWKS to a native app
+/// (`spec/versola-sdk-api.md` section 9). OpenID Connect Core 3.1.3.7 step 6 allows the TLS server
+/// validation to stand in for the signature of a token received from the token endpoint.
+///
+/// Everything else is checked as `JwksIdTokenValidator` checks it (the same code, `IdTokenClaimCheck`):
+/// `iss`, `aud` and `azp`, `exp`, `iat`, `nbf`, `nonce`, `auth_time` under `max_age`, `at_hash`, and
+/// on a refresh the unchanged `sub`. `alg: none` is refused, since a token that says it is unsigned
+/// is not one a provider issues to this client.
+///
+/// Legitimate only for a token that arrived directly from the token endpoint's party over TLS and
+/// is used for what that bounds (display of who is signed in, `id_token_hint`, the `sub`
+/// comparison). Not a mode of the other validator, not offered by the generic facade, and package
+/// access so that an integrator cannot reach it: a facade that can reach a key set verifies the
+/// signature, always.
+package struct TlsTrustedIdTokenValidator: IdTokenValidator {
+    private let issuer: String
+    private let claims: IdTokenClaimCheck
+
+    package init(issuer: String, clientId: String, clockSkewTolerance: TimeInterval = 60, clock: Clock = .system) {
+        self.issuer = issuer
+        self.claims = IdTokenClaimCheck(clientId: clientId, clockSkewTolerance: clockSkewTolerance, clock: clock)
+    }
+
+    package func validate(
+        idToken: String,
+        expectedNonce: String?,
+        accessToken: String?,
+        maxAge: Int?,
+        previous: IdTokenClaims?,
+        serverTime: Date?
+    ) async throws -> IdTokenClaims {
+        do {
+            let token = try Jws.parse(idToken)
+            if token.alg?.lowercased() == "none" { throw JwsRejection(.algorithm, "alg is none") }
+            return try claims.check(token, expectedNonce, accessToken, maxAge, previous, issuer, serverTime)
+        } catch let rejection as JwsRejection {
+            throw OAuthError.configuration(.idTokenRejected(rejection.reason))
         }
     }
 }

@@ -131,6 +131,18 @@ package actor SessionCoordinator: AccessTokenSource {
         return parsed
     }
 
+    /// The `sub` of the session that is stored, for a re-authorization that must come back as the
+    /// same user (`login`'s `expectedSubject`). Nil when no ID token is held. Unlike `restoreClaims`
+    /// a store that cannot be read is not swallowed: a step-up that cannot learn whose session it
+    /// strengthens must not open the browser, so the store's own error is the caller's.
+    package func sessionSubject() async throws -> String? {
+        if let claims { return claims.subject }
+        let stored: String?
+        if let inMemory = memorySession?.rawIdToken { stored = inMemory } else { stored = try await credentialStore.rawIdToken() }
+        guard let stored else { return nil }
+        return try? IdTokenClaimsParser.parseStored(stored).subject
+    }
+
     // MARK: - Access token
 
     package func accessToken() async throws -> AccessToken {
@@ -176,7 +188,14 @@ package actor SessionCoordinator: AccessTokenSource {
         acrValues: [String] = [],
         maxAge: Int? = nil,
         parameters: AuthorizationParameters = .none,
-        ephemeralBrowser: Bool = false
+        ephemeralBrowser: Bool = false,
+        // The `sub` the sign-in must come back as, for a re-authorization of a session that is not
+        // allowed to change hands (the Versola facade's step-up, whose back channel carries no
+        // `id_token_hint`). Another `sub` stores nothing, revokes what was issued and throws
+        // `recoverable(.accountMismatch)`, the session left as it was. Needs an ID-token validator:
+        // without validated claims there is no `sub` to compare, and the login is refused the same
+        // way rather than let through. Nil compares nothing, which is a plain `login()`.
+        expectedSubject: String? = nil
     ) async throws -> TokenResponse {
         // OpenID Connect Core §11: under `required` the scope that buys a refresh token is
         // asked for here; under `optional` the scopes go as given and the provider's own rule
@@ -193,7 +212,7 @@ package actor SessionCoordinator: AccessTokenSource {
         // (it is sent, once, and the server answers), and by then the user has already signed in.
         if let url = URL(string: try await flow.metadata().tokenEndpoint) { try await cooldown.check(DpopOrigin.of(url)) }
         let grant = try await flow.authorize(scopes: requested, acrValues: acrValues, maxAge: maxAge, parameters: parameters, ephemeralBrowser: ephemeralBrowser)
-        return try await finishLogin(grant, maxAge: maxAge)
+        return try await finishLogin(grant, maxAge: maxAge, expectedSubject: expectedSubject)
     }
 
     /// Finishes a login that outlived the process that started it (scenario 12): the redirect is
@@ -209,7 +228,7 @@ package actor SessionCoordinator: AccessTokenSource {
     /// The tail of a login, everything after the redirect has been validated. Shared by `login`
     /// and `resumePendingLogin` so a sign-in finished in a cold-started process passes through
     /// exactly the checks and the persistence order of one finished in the process that began it.
-    private func finishLogin(_ grant: AuthorizationGrant, maxAge: Int?) async throws -> TokenResponse {
+    private func finishLogin(_ grant: AuthorizationGrant, maxAge: Int?, expectedSubject: String? = nil) async throws -> TokenResponse {
         // The exchange and the persistence run in their own task: a caller cancelled after
         // the server spent the code must not strand a token that came back.
         let flow = self.flow
@@ -217,16 +236,26 @@ package actor SessionCoordinator: AccessTokenSource {
         let validator = self.idTokenValidator
         let startedIn = epoch
         let exchange = Task { [self] () throws -> (TokenResponse, IdTokenClaims?) in
+            // What the provider issued, once it has: a login that fails after this point discards it
+            // unused, and the refresh token is then a live credential nobody holds (below).
+            var exchanged: TokenResponse?
             do {
                 // The budget of the login this belongs to, the user's time in the browser left out of
                 // it (`OperationBudget.paused`): the exchange is made once (a repeat would replay a
                 // spent code); what can be repeated is the key set the validation reads.
                 let issued = try await tokenClient.exchange(grant)
+                exchanged = issued
                 // Validated before anything is persisted (`spec/oauth-sdk-api.md` section 11).
                 var validated: IdTokenClaims?
                 if let validator {
                     guard let idToken = issued.idToken else { throw OAuthError.configuration(.idTokenRejected(.malformed)) }
                     validated = try await validator.validate(idToken: idToken, expectedNonce: grant.nonce, accessToken: issued.accessToken, maxAge: maxAge, previous: nil, serverTime: issued.serverDate)
+                }
+                // Inside the block that abandons the login and revokes what was issued: another user's
+                // grant is discarded exactly as a rejected ID token's is, before anything is persisted,
+                // so the session this was meant to strengthen is untouched.
+                if let expectedSubject, validated?.subject != expectedSubject {
+                    throw OAuthError.recoverable(.accountMismatch)
                 }
                 warnIfNoExpiry(issued)
                 if refreshTokens == .required, issued.refreshToken == nil {
@@ -235,6 +264,12 @@ package actor SessionCoordinator: AccessTokenSource {
                 return (issued, validated)
             } catch {
                 await flow.abandonLogin()
+                // The provider already issued these and the SDK is throwing them away: an ID token
+                // that failed validation, or could not be checked, leaves a refresh token that is valid
+                // at the server for as long as it lives and that no device holds
+                // (`spec/oauth-sdk-api.md` section 11). Best effort, after the state has settled and
+                // detached from this call, so the caller gets the error that ended the login now.
+                if let exchanged { Self.revokeDiscarded(exchanged, with: tokenClient, logger: logger) }
                 throw error
             }
         }
@@ -254,6 +289,27 @@ package actor SessionCoordinator: AccessTokenSource {
             // leftover a new `login()` supersedes, not a login still in progress.
             await flow.redemptionFailed()
             throw error
+        }
+    }
+
+    /// One attempt, bounded, in a task of its own: the login's budget is over (the error is being
+    /// delivered) and a revocation is not worth more than a few seconds of a radio.
+    private static func revokeDiscarded(_ response: TokenResponse, with tokenClient: TokenClient, logger: OAuthLogger?) {
+        guard let refreshToken = response.refreshToken else { return }
+        Task.detached {
+            do {
+                try await withThrowingTaskGroup(of: Void.self) { group in
+                    group.addTask { try await tokenClient.revoke(refreshToken: refreshToken) }
+                    group.addTask {
+                        try await Task.sleep(nanoseconds: 5_000_000_000)
+                        logger?.warn("login: revoking the refresh token of the rejected response timed out; it dies at expiry instead")
+                    }
+                    _ = try await group.next()
+                    group.cancelAll()
+                }
+            } catch {
+                logger?.warn("login: revoking the refresh token of the rejected response failed (\(error is OAuthError ? String(describing: error) : String(describing: type(of: error)))); it dies at expiry instead")
+            }
         }
     }
 

@@ -4,8 +4,9 @@ paths: ["ios/**", "Package.swift"]
 
 # iOS / Swift
 
-`OAuthCore` and `OAuthClient` (product `VersolaOAuth`) are real since issue #46's B5; there is no
-iOS counterpart of the `Versola` facade yet. Copy the Android module of the same name for behaviour
+`OAuthCore` and `OAuthClient` (product `VersolaOAuth`) are real since issue #46's B5, and the
+`Versola` facade is `VersolaEdge` and `VersolaSDK` (product `VersolaSDK`,
+`spec/versola-sdk-api.md`). Copy the Android module of the same name for behaviour
 (`android-kotlin.md`), and the spec for what it must do (`spec/`). The two implementations are written against the same conformance
 transcripts, not against each other's code. Security rules are in `security.md`.
 
@@ -19,11 +20,13 @@ transcripts, not against each other's code. Security rules are in `security.md`.
 - Targets: `OAuthCore` (the protocol engine, Android's `:oauth-core`: Foundation, CryptoKit and
   Security only, no UI, no Keychain, no browser) and `OAuthClient` (the generic facade and the
   platform halves it wires: Keychain stores, `ASWebAuthenticationSession`, the authenticated
-  `URLSession` wrapper, the Secure Enclave DPoP key; product `VersolaOAuth`). The
-  five empty `Versola*` placeholder targets and products that stood for the Versola facade were
-  removed from the manifest (nothing imported them); when that facade exists on iOS it is added
-  as real targets that depend on `OAuthCore` the way Android's `:core` does, and `OAuthCore` never
-  on it. `OAuthConformanceTests` is the
+  `URLSession` wrapper, the Secure Enclave DPoP key; product `VersolaOAuth`). The Versola facade
+  is two more: `VersolaEdge` (Android's `:core`: the edge starter, the token client through
+  `/native/*`, the stated metadata; Foundation and `OAuthCore` only, `package` access, no product)
+  and `VersolaSDK` (the facade, product `VersolaSDK`, type `Versola`; it reuses `OAuthClient`'s
+  platform halves through `package` access and never copies them). `OAuthCore` depends on neither.
+  An app that imports both products must qualify `LoginOptions`, which each facade has its own of.
+  `OAuthConformanceTests` is the
   generic facade's conformance driver (`conformance/README.md`, "Providers"): skipped without
   `OAUTH_CONFORMANCE_ISSUER`, never a place for a stub of the SDK's own behaviour.
 - The package is source, not a binary XCFramework: the licence is Apache-2.0, there is nothing to

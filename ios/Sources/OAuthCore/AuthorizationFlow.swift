@@ -299,7 +299,7 @@ package actor AuthorizationFlow {
             // provider issues does not outlive them, the sheet cannot outlive them either (the wait is
             // cancelled, which dismisses it), and a redirect that is ignored while the login waits must
             // not keep it waiting for ever (`spec/state-machine.md`, scenario 15).
-            var remaining = PendingAuthorizationRequest.maxAge - clock.now().timeIntervalSince(pending.createdAt)
+            var remaining = pending.remaining(at: clock.now())
             // A pushed request's `request_uri` is dead after its own `expires_in`, usually far
             // shorter than the ten minutes: the wait ends with it.
             if let browserUriExpiresAt { remaining = min(remaining, browserUriExpiresAt.timeIntervalSince(clock.now())) }
@@ -378,7 +378,7 @@ package actor AuthorizationFlow {
                 throw OAuthError.recoverable(.pendingRequestExpired)
             }
             await states.set(.authorizing)
-            let remaining = PendingAuthorizationRequest.maxAge - now.timeIntervalSince(pending.createdAt)
+            let remaining = pending.remaining(at: now)
             awaitingRedirect = true
             defer { awaitingRedirect = false }
             guard let outcome = try await awaiting(pending, within: remaining, start: {

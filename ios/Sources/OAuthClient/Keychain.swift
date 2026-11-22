@@ -58,6 +58,16 @@ enum KeychainFailure {
     }
 }
 
+/// What a facade needs of the Keychain beyond the stores: the wipe of everything the SDK keeps for
+/// one storage key, which `FirstLaunchGuard` runs on a reinstall.
+package enum KeychainStorage {
+    /// Deletes every item of the storage key in this process's own access group; see
+    /// `KeychainItem.deleteAllInOwnGroup` for why nothing is deleted when the group is unknown.
+    package static func deleteAll(forStorageKey storageKey: String) throws {
+        try KeychainItem.deleteAllInOwnGroup(service: KeychainItem.service(forStorageKey: storageKey))
+    }
+}
+
 /// One generic-password item, and the only code that talks to `SecItem*`. Value type with no
 /// state: the stores serialise their own calls as actors.
 struct KeychainItem: Sendable {

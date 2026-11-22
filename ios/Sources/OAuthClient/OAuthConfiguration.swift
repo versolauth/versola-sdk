@@ -286,37 +286,37 @@ public struct LogoutOptions: Sendable, Equatable {
 
 // MARK: - Shared validation
 
-enum RedirectKind: Equatable { case universalLink, loopback, customScheme }
+package enum RedirectKind: Equatable { case universalLink, loopback, customScheme }
 
 /// URL rules shared by the configuration and the request scope. Swift's `URL` accepts almost
 /// anything, so parsing goes through `URLComponents` and the pieces are checked by hand.
-enum URLRules {
+package enum URLRules {
     /// The loopback names RFC 8252 section 7.3 allows, brackets stripped.
-    static let loopbackHosts: Set<String> = ["127.0.0.1", "localhost", "::1"]
+    package static let loopbackHosts: Set<String> = ["127.0.0.1", "localhost", "::1"]
 
-    static func invalid(_ detail: String) -> OAuthError {
+    package static func invalid(_ detail: String) -> OAuthError {
         .configuration(.invalidConfiguration(detail: detail))
     }
 
     /// Lower-cased, IPv6 brackets stripped, so `[::1]` and `::1` compare equal whichever way
     /// Foundation reports them.
-    static func normalizedHost(_ host: String?) -> String? {
+    package static func normalizedHost(_ host: String?) -> String? {
         guard var host = host?.lowercased(), !host.isEmpty else { return nil }
         if host.hasPrefix("[") && host.hasSuffix("]") { host = String(host.dropFirst().dropLast()) }
         return host.isEmpty ? nil : host
     }
 
-    static func isLoopback(_ host: String?) -> Bool {
+    package static func isLoopback(_ host: String?) -> Bool {
         normalizedHost(host).map(loopbackHosts.contains) ?? false
     }
 
-    static func isScopeToken(_ scope: String) -> Bool {
+    package static func isScopeToken(_ scope: String) -> Bool {
         !scope.isEmpty && !scope.unicodeScalars.contains { $0.properties.isWhitespace }
     }
 
     /// An absolute `https` URL with a host, or `http` to a loopback host.
     @discardableResult
-    static func requireHttps(_ name: String, _ url: String) throws -> URLComponents {
+    package static func requireHttps(_ name: String, _ url: String) throws -> URLComponents {
         guard let components = URLComponents(string: url), let scheme = components.scheme?.lowercased(),
               let host = normalizedHost(components.host)
         else { throw invalid("\(name) must be an absolute https URL (http only on loopback): \(url)") }
@@ -326,7 +326,7 @@ enum URLRules {
         return components
     }
 
-    static func requireIssuer(_ issuer: String) throws {
+    package static func requireIssuer(_ issuer: String) throws {
         let components: URLComponents
         do { components = try requireHttps("issuer", issuer) } catch {
             throw invalid("issuer must be an https URL with a host (http only on loopback): \(issuer)")
@@ -338,7 +338,7 @@ enum URLRules {
     }
 
     /// `scheme://host[:port]` with nothing after it but an optional `/`; returns the normalised origin.
-    static func parseOrigin(_ origin: String, name: String) throws -> String {
+    package static func parseOrigin(_ origin: String, name: String) throws -> String {
         let components = try requireHttps(name, origin)
         if !(components.path.isEmpty || components.path == "/") || components.query != nil
             || components.fragment != nil || components.user != nil || components.password != nil {
@@ -350,13 +350,13 @@ enum URLRules {
 
     /// `scheme://host:port` with the default port written out and the host lower-cased: the
     /// form the origin comparison and the per-origin DPoP nonce cache both use.
-    static func originString(scheme: String, host: String?, port: Int?) -> String {
+    package static func originString(scheme: String, host: String?, port: Int?) -> String {
         let scheme = scheme.lowercased()
         let effective = port ?? (scheme == "https" ? 443 : 80)
         return "\(scheme)://\(normalizedHost(host) ?? ""):\(effective)"
     }
 
-    static func parseRedirect(_ raw: String, name: String) throws -> (url: URL, kind: RedirectKind) {
+    package static func parseRedirect(_ raw: String, name: String) throws -> (url: URL, kind: RedirectKind) {
         guard let components = URLComponents(string: raw), let scheme = components.scheme?.lowercased(), !scheme.isEmpty,
               let url = URL(string: raw)
         else { throw invalid("\(name) must be an absolute URI: \(raw)") }
@@ -378,8 +378,8 @@ enum URLRules {
 }
 
 /// base64url without padding (RFC 4648 section 5), as JOSE and the storage key use it.
-enum Base64URLEncoder {
-    static func encode(_ data: Data) -> String {
+package enum Base64URLEncoder {
+    package static func encode(_ data: Data) -> String {
         data.base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
