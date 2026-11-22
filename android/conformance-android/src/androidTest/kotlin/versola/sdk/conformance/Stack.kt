@@ -13,6 +13,12 @@ import androidx.test.platform.app.InstrumentationRegistry
  */
 class Stack private constructor(
     val authUrl: String,
+    /**
+     * The issuer identifier the SDK is configured with, which it compares with the redirect's `iss`
+     * and the ID token's `iss` as written (`spec/versola-sdk-api.md` section 3). Auth's address by
+     * default; set `issuer` when the staged server announces it differently (a trailing slash).
+     */
+    val issuer: String,
     val centralUrl: String,
     val edgeUrl: String,
     /** Central's management API: Basic `central:<resource secret>`, as `CentralApi.live`. */
@@ -28,8 +34,10 @@ class Stack private constructor(
             val args = InstrumentationRegistry.getArguments()
             fun arg(name: String, default: String) = args.getString(name)?.takeIf { it.isNotBlank() } ?: default
             val upstreamPort = arg("upstreamPort", "18080").toInt()
+            val authUrl = arg("authUrl", "http://localhost:9003").trimEnd('/')
             return Stack(
-                authUrl = arg("authUrl", "http://localhost:9003").trimEnd('/'),
+                authUrl = authUrl,
+                issuer = arg("issuer", authUrl),
                 centralUrl = arg("centralUrl", "http://localhost:9001").trimEnd('/'),
                 edgeUrl = arg("edgeUrl", "http://localhost:9005").trimEnd('/'),
                 centralSecret = arg("centralSecret", "ZGV2LWNlbnRyYWwtYWRtaW4tc2VjcmV0LTMyYnl0ZXM"),

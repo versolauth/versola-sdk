@@ -290,7 +290,7 @@ adb reverse tcp:9005 tcp:9005
 The harness (issue #15, `conformance/README.md`) runs the scenario catalogue in
 `spec/conformance/` against a real `auth` + `central` + `edge` and asserts the observable
 behaviour the spec describes. The Android driver is `android/conformance-android`; it arrives
-with PR #44 and is not on `main` until that merges. It runs scenarios 01 and 21 today.
+with PR #44 and is not on `main` until that merges. It runs scenario 21 today (scenario 01's direct back channel left the `Versola` facade with ADR 0002).
 
 The stack is staged from a checkout of `versolauth/versola` following that repository's
 `develop.md` (central 9001, auth 9003/9007/9008, the internal TLS terminator, edge 9005,

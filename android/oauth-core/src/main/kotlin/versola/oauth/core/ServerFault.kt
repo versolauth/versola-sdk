@@ -86,3 +86,12 @@ internal object ServerFault {
         return if (wait > 0) minOf(wait, ONE_DAY_MILLIS) else null
     }
 }
+
+/**
+ * [ServerFault.failure] for a client a facade module writes itself (the Versola facade's
+ * `/native/start`), so that it reads a 408, a 429 or a 5xx, and a `Retry-After`, exactly as the
+ * clients of this module do. Null for a status that is not the server's fault.
+ */
+@VersolaInternalApi
+public fun serverFaultOrNull(status: Int, headers: Headers): VersolaError.Recoverable? =
+    if (ServerFault.isServerFault(status)) ServerFault.failure(status, headers) else null

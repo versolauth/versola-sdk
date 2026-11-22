@@ -5,9 +5,10 @@ against a **real staged `auth` + `central` + `edge`** from `versolauth/versola`,
 and asserts identical observable behaviour.
 
 **Status.** The Android driver exists as `android/conformance-android` (instrumented tests;
-nothing is published from it) and runs scenarios 01 and 21 — with the refresh, revocation and
-logout steps of 02, 11 and 18, the edge-nonce half of 04 and the blob-less replay of 22 — green against a stack staged
-from `versolauth/versola` at `d6203f93`, from an emulator. The rest of the catalogue, the
+nothing is published from it) and runs scenario 21 (with what scenario 01 asserted of the session folded into it) — with the refresh, revocation and
+logout steps of 02, 11 and 18, the edge-nonce half of 04 and the blob-less replay of 22. It was green against a stack
+staged from `versolauth/versola` at `d6203f93`, from an emulator, before the facade moved to `Versola.create`
+(ADR 0002); the rewritten test compiles and has not been run since. The rest of the catalogue, the
 fault-injection proxy and the transcript comparison with the reference client are the order
 of work at the bottom. iOS has no driver for the Versola facade yet.
 
@@ -80,7 +81,7 @@ Instrumentation arguments override the defaults (`Stack.kt`): `authUrl`, `centra
 `edgeUrl`, `centralSecret`, `edgeInternalSecret`, `upstreamPort`, `upstreamUrlFromEdge`.
 
 The browser leg is `HttpLoginBrowser`: auth's login conversation driven over HTTP, the way
-the e2e reference client drives it, handed to the SDK through `Versola.configure(browser = …)`.
+the e2e reference client drives it, handed to the SDK through the opt-in `Versola.create(…, browser = …)`.
 Custom Tabs, App Link delivery and the foreground-return detector are therefore not what this
 tier proves; they are the device tier's.
 
@@ -412,11 +413,15 @@ emulator reaches it through `adb reverse`, `develop.md`; `10.0.2.2` is refused a
 
 ## Order of work
 
-1. ~~The driver skeleton and scenario 01 on `BackChannel.Auth` against a `standard` tenant.~~
-   Done; the browser leg is the HTTP conversation rather than UI Automator, which turned out
-   to be both deterministic and enough.
-2. ~~Scenario 21 on `BackChannel.Edge`: a `fapi2` tenant, a native client with an edge
-   certificate issued by Central (`issueEdgeClientCertificate`), edge's `native` block.~~ Done.
+1. ~~The driver skeleton and scenario 01 on the direct back channel against a `standard`
+   tenant.~~ Done, then retired: the `Versola` facade signs in through edge only (ADR 0002), and
+   scenario 01's discovery and direct `/token` steps have no counterpart there. Its other steps
+   (the authenticated call with `ath`, the refresh renewed in place, logout and the new key after
+   it, the state sequence) are asserted through `/native/*` by the scenario 21 test. Not ported:
+   01's last assertion, that nothing credential-shaped reaches the log at the default level.
+2. ~~Scenario 21: a `fapi2` tenant, a native client with an edge certificate issued by Central
+   (`issueEdgeClientCertificate`), edge's `native` block.~~ Done against versola `d6203f93`; not
+   run since the facade moved to `Versola.create`, and not yet against a stack with cells.
 3. Scenarios 08 (concurrent refresh, asserting one rotation server-side), 10 and 14 (step-up
    through a resource with `stepUpAcr`), 15–17 and 20 — no fault injection needed.
 4. The proxy, then scenarios 03–06 and 23 (nonces, skew), 09 and 13 (dropped responses,

@@ -2478,6 +2478,207 @@ class SessionCoordinatorTest {
         )
     }
 
+    // ---- login(expectedSubject): a step-up that must come back as the same user ---------------
+
+    /** Vouches for any token and names [subject] as its user, which a test changes between logins. */
+    private class SubjectValidator(var subject: String) : IdTokenValidator {
+        override suspend fun validate(idToken: String, expectedNonce: String?, accessToken: String?, maxAge: Long?, previous: IdTokenClaims?, serverTime: java.time.Instant?): IdTokenClaims =
+            IdTokenClaims(
+                subject = subject, issuer = "https://id.example.com", audience = listOf("mobile-app"),
+                issuedAt = java.time.Instant.EPOCH, expiresAt = java.time.Instant.EPOCH.plusSeconds(3600),
+            )
+    }
+
+    private fun mismatch(error: VersolaError): VersolaError.Recoverable.Cause {
+        val recoverable = error as? VersolaError.Recoverable ?: throw AssertionError("not Recoverable: $error")
+        return recoverable.reason
+    }
+
+    @Test
+    fun `a step-up answered by another user stores nothing, revokes what was issued and leaves the session as it was`() = runTest {
+        val validator = SubjectValidator("alice")
+        val (coordinator, tokenClient, credentialStore) = generic(validator = validator)
+        tokenClient.exchangeResult = { issued(accessToken = "at-1", refreshToken = "rt-1", idToken = "first") }
+        coordinator.login(setOf("openid"))
+        val savesBefore = credentialStore.events.count { it == "save" }
+        validator.subject = "bob"
+        tokenClient.exchangeResult = { issued(accessToken = "at-2", refreshToken = "rt-2", idToken = "second") }
+
+        val error = failure { coordinator.login(setOf("openid"), expectedSubject = "alice") }
+
+        assertSame(VersolaError.Recoverable.Cause.AccountMismatch, mismatch(error))
+        assertEquals("recoverable.account_mismatch", error.code)
+        // Nothing of the second sign-in was kept: the grant, the ID token and the claims are the first's.
+        assertEquals(savesBefore, credentialStore.events.count { it == "save" })
+        assertEquals("rt-1", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        assertEquals("first", credentialStore.rawIdToken)
+        assertEquals("alice", coordinator.claims?.subject)
+        assertEquals("at-1", coordinator.currentAccessToken()?.accessToken)
+        assertEquals(0, credentialStore.clears)
+        assertEquals(0, teardowns)
+        // What the provider issued to the wrong user is revoked, and only that.
+        assertEquals("rt-2", tokenClient.revokeCalls.single().toString(Charsets.UTF_8))
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a step-up answered by the same user succeeds and replaces the grant`() = runTest {
+        val validator = SubjectValidator("alice")
+        val (coordinator, tokenClient, credentialStore) = generic(validator = validator)
+        tokenClient.exchangeResult = { issued(accessToken = "at-1", refreshToken = "rt-1", idToken = "first") }
+        coordinator.login(setOf("openid"))
+        tokenClient.exchangeResult = { issued(accessToken = "at-2", refreshToken = "rt-2", idToken = "second") }
+
+        val response = coordinator.login(setOf("openid"), expectedSubject = "alice")
+
+        assertEquals("at-2", response.accessToken)
+        assertEquals("rt-2", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        assertEquals("second", credentialStore.rawIdToken)
+        assertEquals("alice", coordinator.claims?.subject)
+        assertTrue(tokenClient.revokeCalls.isEmpty())
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a subject that differs only by case or a trailing space is another user`() = runTest {
+        val validator = SubjectValidator("Alice ")
+        val (coordinator, tokenClient, credentialStore) = generic(validator = validator)
+        tokenClient.exchangeResult = { issued(accessToken = "at", refreshToken = "rt", idToken = "t") }
+
+        val error = failure { coordinator.login(setOf("openid"), expectedSubject = "alice") }
+
+        assertSame(VersolaError.Recoverable.Cause.AccountMismatch, mismatch(error))
+        assertNull(credentialStore.refreshToken)
+    }
+
+    @Test
+    fun `an expected subject without a validator cannot be compared and is refused the same way`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = generic(validator = null)
+        tokenClient.exchangeResult = { issued(accessToken = "at", refreshToken = "rt", idToken = "t") }
+
+        val error = failure { coordinator.login(setOf("openid"), expectedSubject = "alice") }
+
+        assertSame(VersolaError.Recoverable.Cause.AccountMismatch, mismatch(error))
+        assertNull(credentialStore.refreshToken)
+        assertNull(coordinator.claims)
+        assertEquals("rt", tokenClient.revokeCalls.single().toString(Charsets.UTF_8))
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `without an expected subject another user's login is an ordinary login`() = runTest {
+        val validator = SubjectValidator("alice")
+        val (coordinator, tokenClient, credentialStore) = generic(validator = validator)
+        tokenClient.exchangeResult = { issued(accessToken = "at-1", refreshToken = "rt-1", idToken = "first") }
+        coordinator.login(setOf("openid"))
+        validator.subject = "bob"
+        tokenClient.exchangeResult = { issued(accessToken = "at-2", refreshToken = "rt-2", idToken = "second") }
+
+        coordinator.login(setOf("openid"))
+
+        assertEquals("rt-2", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        assertEquals("bob", coordinator.claims?.subject)
+        assertTrue(tokenClient.revokeCalls.isEmpty())
+    }
+
+    @Test
+    fun `two logins that differ only in the expected subject are not the same call`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val browserOpened = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val browser = FixedRedirectBrowser(pendingStore).apply {
+            loginOutcome = {
+                browserOpened.complete(Unit)
+                release.await()
+                BrowserOutcome.Redirect("https://app.example.com/oauth?code=the-code&state=${pendingStore.stored!!.state}&iss=$ISSUER")
+            }
+        }
+        val (coordinator, tokenClient, _) = generic(pendingStore, validator = SubjectValidator("alice"), browser = browser)
+        tokenClient.exchangeResult = { issued(accessToken = "at", refreshToken = "rt", idToken = "t") }
+        val first = async(start = CoroutineStart.UNDISPATCHED) {
+            coordinator.login(setOf("openid"), expectedSubject = "alice", refuseWhileAuthorizing = true)
+        }
+        browserOpened.await()
+
+        // Another expected subject is another request: it is refused as "a different request", where
+        // the identical call below joins the running one.
+        val different = failure { coordinator.login(setOf("openid"), expectedSubject = "bob", refuseWhileAuthorizing = true) }
+        val unspecified = failure { coordinator.login(setOf("openid"), expectedSubject = null, refuseWhileAuthorizing = true) }
+        val joined = async(start = CoroutineStart.UNDISPATCHED) {
+            coordinator.login(setOf("openid"), expectedSubject = "alice", refuseWhileAuthorizing = true)
+        }
+        release.complete(Unit)
+
+        for (error in listOf(different, unspecified)) {
+            val detail = (error as VersolaError.Configuration).detail as VersolaError.Configuration.Detail.InvalidConfiguration
+            assertTrue(detail.toString(), detail.toString().contains("different request"))
+        }
+        assertEquals("at", first.await().accessToken)
+        assertEquals("at", joined.await().accessToken)
+        assertEquals(1, tokenClient.exchangeCalls.size)
+    }
+
+    // ---- sessionSubject() -----------------------------------------------------------------
+
+    private fun storedIdToken(subject: String): String = Jose.jws(
+        "ES256",
+        Jose.p256.private,
+        Jose.json(
+            mapOf(
+                "iss" to Jose.str("https://id.example.com"),
+                "sub" to Jose.str(subject),
+                "aud" to Jose.str("mobile-app"),
+                "exp" to Jose.num(1_900_003_600),
+                "iat" to Jose.num(1_900_000_000),
+            ),
+        ),
+    )
+
+    @Test
+    fun `sessionSubject is the sub of the stored ID token`() = runTest {
+        val (coordinator, _, credentialStore) = generic(validator = RecordingValidator())
+        credentialStore.refreshToken = stored()
+        credentialStore.rawIdToken = storedIdToken("carol")
+
+        assertEquals("carol", coordinator.sessionSubject())
+    }
+
+    @Test
+    fun `sessionSubject is the sub of the claims a login validated`() = runTest {
+        val (coordinator, tokenClient, _) = generic(validator = SubjectValidator("alice"))
+        tokenClient.exchangeResult = { issued(accessToken = "at", refreshToken = "rt", idToken = "not-a-jwt") }
+        coordinator.login(setOf("openid"))
+
+        assertEquals("alice", coordinator.sessionSubject())
+    }
+
+    @Test
+    fun `sessionSubject is null with no session`() = runTest {
+        val (coordinator, _, _) = generic(validator = RecordingValidator())
+
+        assertNull(coordinator.sessionSubject())
+    }
+
+    @Test
+    fun `sessionSubject is null when the stored ID token cannot be read as claims`() = runTest {
+        val (coordinator, _, credentialStore) = generic(validator = RecordingValidator())
+        credentialStore.refreshToken = stored()
+        credentialStore.rawIdToken = "not-a-jwt"
+
+        assertNull(coordinator.sessionSubject())
+    }
+
+    @Test
+    fun `sessionSubject propagates a store that cannot be read instead of swallowing it`() = runTest {
+        val (coordinator, _, credentialStore) = generic(validator = RecordingValidator())
+        credentialStore.refreshToken = stored()
+        credentialStore.rawIdTokenFailure = { VersolaError.Recoverable(VersolaError.Recoverable.Cause.UnlockRequired) }
+
+        val error = failure { coordinator.sessionSubject() }
+
+        assertSame(VersolaError.Recoverable.Cause.UnlockRequired, (error as VersolaError.Recoverable).reason)
+    }
+
     private suspend fun failure(block: suspend () -> Unit): VersolaError = try {
         block()
         throw AssertionError("expected a VersolaError")

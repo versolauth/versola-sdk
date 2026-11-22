@@ -16,6 +16,9 @@ import versola.oauth.core.acceptIssued
 import versola.oauth.core.dateForClockSkew
 import versola.oauth.core.discoveryJson
 import versola.oauth.core.originOf
+import versola.oauth.core.retrying
+import versola.oauth.core.serverFaultOrNull
+import versola.oauth.core.VersolaInternalApi
 import versola.oauth.core.wwwAuthenticateError
 import java.io.File
 import java.io.IOException
@@ -23,54 +26,33 @@ import versola.oauth.core.SdkDispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
 /**
- * Who the device talks to on the back channel — `/par`, `/token` and `/revoke`.
+ * What `/native/start` is asked for: the authorization parameters edge passes through to `/par`,
+ * and no other. The list is edge's (`NativeService.PassThroughParameters`), and edge drops
+ * anything outside it without an error, so a field here that edge does not forward would be a
+ * setting that silently does nothing (`spec/versola-sdk-api.md` section 5).
  *
- * FAPI 2.0 admits confidential clients only, and a mobile app cannot keep a credential. On a
- * tenant with that profile the server refuses a public client at every one of those endpoints
- * (`ClientAuthentication` answers `invalid_client`), so the SDK cannot present itself there.
- * Edge fronts the app instead (versola#420): it authenticates to auth over mutual TLS, pushes
- * the authorization request, redeems the code and refreshes — forwarding the device's DPoP
- * proof unchanged, so every token is still bound to the key in the device's hardware. The
- * browser leg, `/authorize`, goes to auth directly in both cases.
- *
- * Which one applies is a property of the deployment, not of the device, and is not in the
- * OAuth metadata — a tenant's security profile is not advertised — so it is configuration.
+ * [claims] and [authorizationDetails] are JSON as text, sent as given.
  */
-public sealed class BackChannel {
-
-    /**
-     * The default: the device is a public client of auth and calls `/token` and `/revoke`
-     * itself with `client_id` alone. Works on a tenant with the `standard` profile and
-     * against any conforming OpenID provider.
-     */
-    public data object Auth : BackChannel()
-
-    /**
-     * Edge's `POST /native/{start,complete,token,revoke}/{clientId}` endpoints front auth.
-     * Required on a tenant with the `fapi2` profile — the server's default for a new tenant.
-     *
-     * Three consequences the configuration must satisfy, each refused at `configure()`:
-     * `edgeBaseUrl` is required; the redirect URI must be a verified App Link, because the
-     * server registers an edge-fronted native client with `https` redirect URIs only; and
-     * the session is key-bound, because every native endpoint demands a DPoP proof —
-     * [TokenBinding.Bearer] has nothing to present there.
-     */
-    public data object Edge : BackChannel()
-}
-
-/** What `/native/start` is asked for: the authorization parameters edge passes through to `/par`. */
+@VersolaInternalApi
 public class NativeStartRequest(
     public val redirectUri: String,
     public val scopes: Set<String>,
     public val nonce: String,
-    public val acrValues: List<String>,
-    public val maxAge: Long?,
+    public val acrValues: List<String> = emptyList(),
+    public val maxAge: Long? = null,
+    public val prompt: String? = null,
+    public val loginHint: String? = null,
+    public val uiLocales: List<String> = emptyList(),
+    public val resources: List<String> = emptyList(),
+    public val claims: String? = null,
+    public val authorizationDetails: String? = null,
 )
 
 /**
@@ -78,6 +60,7 @@ public class NativeStartRequest(
  * the exchange need; nothing the device decides itself. The PKCE verifier is sealed inside
  * [blob] and never reaches the app.
  */
+@VersolaInternalApi
 @Serializable
 public data class NativeStart(
     @SerialName("client_id")
@@ -105,25 +88,46 @@ public data class NativeStart(
     @SerialName("revocation_endpoint")
     public val revocationEndpoint: String = "",
 ) {
+    /**
+     * `spec/errors.md`: an answer the flow cannot use is refused before the browser opens. Every
+     * member below is one the sign-in cannot do without, and the three endpoints must be `https`
+     * (cleartext to the developer's own machine only): one is opened in the browser and the other
+     * two are what the proofs of the session are signed for, so none is taken on trust in the
+     * clear. The values themselves stay out of the message.
+     */
     internal fun validate(): NativeStart {
         for ((name, value) in listOf(
             "request_uri" to requestUri,
             "state" to state,
             "blob" to blob,
+            "authorization_endpoint" to authorizationEndpoint,
             "token_endpoint" to tokenEndpoint,
             "revocation_endpoint" to revocationEndpoint,
         )) {
-            if (value.isBlank()) {
-                throw VersolaError.Configuration(
-                    VersolaError.Configuration.Detail.TokenResponseMalformed("/native/start omitted $name"),
-                )
+            if (value.isBlank()) throw malformed("/native/start omitted $name")
+        }
+        if (expiresIn <= 0) throw malformed("/native/start omitted expires_in, or it is not positive")
+        for ((name, value) in listOf(
+            "authorization_endpoint" to authorizationEndpoint,
+            "token_endpoint" to tokenEndpoint,
+            "revocation_endpoint" to revocationEndpoint,
+        )) {
+            if (!isSecureEndpoint(value)) {
+                throw malformed("/native/start answered a $name that is not an https URL (http only on loopback)")
             }
         }
         return this
     }
+
+    private fun malformed(detail: String): VersolaError.Configuration =
+        VersolaError.Configuration(VersolaError.Configuration.Detail.TokenResponseMalformed(detail))
+
+    /** Never the blob or the `state`: the blob stands in for the PKCE verifier (`security.md`). */
+    override fun toString(): String = "NativeStart(redacted, expiresIn=$expiresIn)"
 }
 
 /** Opens the authorization request through edge. */
+@VersolaInternalApi
 public interface NativeAuthorizationStarter {
     public suspend fun start(request: NativeStartRequest): NativeStart
 }
@@ -134,6 +138,7 @@ public interface NativeAuthorizationStarter {
  * make. Not credential material: URLs edge hands to anyone who asks, kept across logout like
  * discovery metadata.
  */
+@VersolaInternalApi
 @Serializable
 public data class NativeEndpoints(
     @SerialName("token_endpoint")
@@ -142,12 +147,14 @@ public data class NativeEndpoints(
     public val revocationEndpoint: String,
 )
 
+@VersolaInternalApi
 public interface NativeEndpointsStore {
     public suspend fun load(): NativeEndpoints?
     public suspend fun save(endpoints: NativeEndpoints)
 }
 
 /** A plain JSON file, by the same reasoning as [FileProviderMetadataCache]. */
+@VersolaInternalApi
 public class FileNativeEndpointsStore(private val file: File) : NativeEndpointsStore {
 
     override suspend fun load(): NativeEndpoints? = withContext(SdkDispatchers.blocking) {
@@ -178,9 +185,13 @@ public class FileNativeEndpointsStore(private val file: File) : NativeEndpointsS
  * calls. The exchange that follows signs for auth's token endpoint instead; see
  * [EdgeNativeTokenClient].
  *
- * One nonce retry, no budget of its own, no redirects followed — the same shape as
- * [HttpTokenClient], for the same reasons.
+ * One nonce retry, no redirects followed — the same shape as [HttpTokenClient], for the same
+ * reasons. Repeated under the operation's retry budget like a pushed authorization request
+ * (`spec/retry-policy.md`): a second start creates a second `request_uri` and the first expires
+ * unused, so nothing is spent. Every attempt, a repeat and the answer to a nonce challenge alike,
+ * mints a new proof: edge refuses a `/native/start` proof it has seen.
  */
+@VersolaInternalApi
 public class HttpNativeAuthorizationStarter(
     private val configuration: VersolaConfiguration,
     edgeBaseUrl: String,
@@ -202,8 +213,22 @@ public class HttpNativeAuthorizationStarter(
             .add("nonce", request.nonce)
             .apply { if (request.acrValues.isNotEmpty()) add("acr_values", request.acrValues.joinToString(" ")) }
             .apply { request.maxAge?.let { add("max_age", it.toString()) } }
+            .apply { request.prompt?.let { add("prompt", it) } }
+            .apply { request.loginHint?.let { add("login_hint", it) } }
+            .apply { if (request.uiLocales.isNotEmpty()) add("ui_locales", request.uiLocales.joinToString(" ")) }
+            // RFC 8707 section 2: one `resource` per value, the only parameter edge lets repeat.
+            .apply { request.resources.forEach { add("resource", it) } }
+            .apply { request.claims?.let { add("claims", it) } }
+            .apply { request.authorizationDetails?.let { add("authorization_details", it) } }
             .toByteArray()
 
+        // The budget and the cooldown are edge's origin's: this request goes to edge, and edge is
+        // the one that answers 429 or 503 here (`spec/retry-policy.md`, "Cooldown").
+        return retrying(originOf(url)) { startOnce(body) }
+    }
+
+    /** One start, with the single nonce retry `spec/retry-policy.md` fixes outside the budget. */
+    private suspend fun startOnce(body: ByteArray): NativeStart {
         var nonceRetried = false
         while (true) {
             val response = attempt(body)
@@ -241,7 +266,7 @@ public class HttpNativeAuthorizationStarter(
                         response.code == 401 &&
                             wwwAuthenticateError(response.headers("WWW-Authenticate")) == "use_dpop_nonce" ->
                             Outcome.UseDpopNonce(nonce)
-                        else -> throw rejected(response.code, payload)
+                        else -> throw rejected(response.code, payload, response.headers)
                     }
                 }
             } catch (e: IOException) {
@@ -274,7 +299,7 @@ public class HttpNativeAuthorizationStarter(
      * surfaced here as an error the app can actually see, which is the whole advantage PAR
      * brings to scenario 17.
      */
-    private fun rejected(status: Int, payload: String): VersolaError {
+    private fun rejected(status: Int, payload: String, headers: okhttp3.Headers): VersolaError {
         if (status == 404) {
             return VersolaError.Configuration(
                 EdgeClientUnknown(configuration.clientId),
@@ -288,11 +313,10 @@ public class HttpNativeAuthorizationStarter(
                 ),
             )
         }
-        if (status >= 500 || status == 408 || status == 429) {
-            return VersolaError.Recoverable(
-                VersolaError.Recoverable.Cause.Network("edge returned HTTP $status to /native/start"),
-            )
-        }
+        // Edge's rate limit (429) and overload admission (503) answer with `Retry-After` and no
+        // body; read as every client of the core reads them, so the budget waits what edge asked
+        // and a wait that does not fit is handed to the app with the value (`spec/errors.md`).
+        serverFaultOrNull(status, headers)?.let { return it }
         val error = try {
             discoveryJson.decodeFromString(TokenErrorPayload.serializer(), payload)
         } catch (e: Exception) {
@@ -326,3 +350,12 @@ public class HttpNativeAuthorizationStarter(
 internal fun nativeEndpointUrl(edgeBaseUrl: String, endpoint: String, clientId: String): String =
     edgeBaseUrl.trimEnd('/') + "/native/" + endpoint + "/" +
         java.net.URLEncoder.encode(clientId, "UTF-8").replace("+", "%20")
+
+/** `https`, or cleartext to the developer's own machine only (`security.md`). */
+internal fun isSecureEndpoint(url: String): Boolean {
+    val parsed = url.toHttpUrlOrNull() ?: return false
+    return parsed.scheme == "https" || parsed.host in LOOPBACK_HOSTS
+}
+
+/** OkHttp spells the IPv6 loopback without brackets. */
+private val LOOPBACK_HOSTS = setOf("localhost", "127.0.0.1", "::1")

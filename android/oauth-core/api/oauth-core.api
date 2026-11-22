@@ -248,12 +248,13 @@ public final class versola/oauth/core/MtlsEndpointAliases$Companion {
 public final class versola/oauth/core/PendingAuthorizationRequest {
 	public static final field Companion Lversola/oauth/core/PendingAuthorizationRequest$Companion;
 	public static final field MAX_AGE_MILLIS J
-	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/util/List;Ljava/lang/Long;JLjava/util/Map;ZLjava/util/List;)V
-	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/util/List;Ljava/lang/Long;JLjava/util/Map;ZLjava/util/List;ILkotlin/jvm/internal/DefaultConstructorMarker;)V
+	public fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/util/List;Ljava/lang/Long;JLjava/util/Map;ZLjava/util/List;J)V
+	public synthetic fun <init> (Ljava/lang/String;Ljava/lang/String;Ljava/lang/String;Ljava/util/List;Ljava/lang/String;Ljava/util/List;Ljava/lang/Long;JLjava/util/Map;ZLjava/util/List;JILkotlin/jvm/internal/DefaultConstructorMarker;)V
 	public final fun getAcrValues ()Ljava/util/List;
 	public final fun getCreatedAtEpochMillis ()J
 	public final fun getExtension ()Ljava/util/Map;
 	public final fun getIssRequired ()Z
+	public final fun getLifetimeMillis ()J
 	public final fun getMaxAge ()Ljava/lang/Long;
 	public final fun getNonce ()Ljava/lang/String;
 	public final fun getRedirectUri ()Ljava/lang/String;
@@ -801,6 +802,13 @@ public final class versola/oauth/core/VersolaError$Recoverable : versola/oauth/c
 }
 
 public abstract interface class versola/oauth/core/VersolaError$Recoverable$Cause {
+}
+
+public final class versola/oauth/core/VersolaError$Recoverable$Cause$AccountMismatch : versola/oauth/core/VersolaError$Recoverable$Cause {
+	public static final field INSTANCE Lversola/oauth/core/VersolaError$Recoverable$Cause$AccountMismatch;
+	public fun equals (Ljava/lang/Object;)Z
+	public fun hashCode ()I
+	public fun toString ()Ljava/lang/String;
 }
 
 public final class versola/oauth/core/VersolaError$Recoverable$Cause$Network : versola/oauth/core/VersolaError$Recoverable$Cause {

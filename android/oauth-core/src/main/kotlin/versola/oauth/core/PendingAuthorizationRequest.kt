@@ -50,10 +50,21 @@ public class PendingAuthorizationRequest public constructor(
      * why it defaults.
      */
     public val resources: List<String> = emptyList(),
+    /**
+     * How long the request lives from [createdAtEpochMillis], when whoever issued it said so: a
+     * starter whose back channel seals an expiry of its own (the Versola facade's edge flow, whose
+     * blob dies with the lifetime `/native/start` answers) sets it, so that a redirect arriving
+     * later is not sent to an exchange that can only be refused. Never longer than
+     * [MAX_AGE_MILLIS], which is what a request without one gets, and what a record persisted
+     * before this field existed reads as.
+     */
+    public val lifetimeMillis: Long = MAX_AGE_MILLIS,
 ) {
 
+    private val boundedLifetimeMillis: Long get() = lifetimeMillis.coerceIn(0, MAX_AGE_MILLIS)
+
     /**
-     * A pending request older than [MAX_AGE_MILLIS] is discarded on restore, leaving
+     * A pending request older than its lifetime ([lifetimeMillis], at most [MAX_AGE_MILLIS]) is discarded on restore, leaving
      * `Unauthenticated` — authorization codes do not outlive that anyway. A request that claims to
      * have been created after [nowEpochMillis] by more than [FUTURE_TOLERANCE_MILLIS] is expired too:
      * the wall clock was stepped back since, and "age" computed from it would hold the request, and
@@ -62,12 +73,12 @@ public class PendingAuthorizationRequest public constructor(
      */
     public fun isExpired(nowEpochMillis: Long): Boolean {
         val age = nowEpochMillis - createdAtEpochMillis
-        return age >= MAX_AGE_MILLIS || age < -FUTURE_TOLERANCE_MILLIS
+        return age >= boundedLifetimeMillis || age < -FUTURE_TOLERANCE_MILLIS
     }
 
-    /** What is left of the request's life at [nowEpochMillis]: at most [MAX_AGE_MILLIS], at least zero. */
+    /** What is left of the request's life at [nowEpochMillis]: at most its lifetime, at least zero. */
     internal fun remainingMillis(nowEpochMillis: Long): Long =
-        (MAX_AGE_MILLIS - (nowEpochMillis - createdAtEpochMillis)).coerceIn(0, MAX_AGE_MILLIS)
+        (boundedLifetimeMillis - (nowEpochMillis - createdAtEpochMillis)).coerceIn(0, boundedLifetimeMillis)
 
     /**
      * Neither `state` nor `nonce` nor the verifier: the `state` is what a redirect is matched
@@ -122,7 +133,7 @@ public object PendingAuthorizationCodec {
 
     private val KNOWN_MEMBERS = setOf(
         "state", "nonce", "codeVerifier", "scopes", "redirectUri", "acrValues", "maxAge",
-        "createdAtEpochMillis", "issRequired", "resources",
+        "createdAtEpochMillis", "issRequired", "resources", "lifetimeMillis",
     )
 }
 

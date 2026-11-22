@@ -2,33 +2,41 @@ package versola.sdk
 
 import android.content.Context
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
-import versola.oauth.core.SdkDispatchers
+import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import versola.sdk.browser.AuthTabAuthorizationSession
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
 import versola.oauth.core.AuthorizationFlow
-import versola.oauth.core.AuthorizationGrant
-import versola.sdk.core.BackChannel
-import versola.sdk.core.EdgeAuthorizationStarter
 import versola.oauth.core.BrowserAuthorizationSession
+import versola.oauth.core.CredentialKeyProvider
 import versola.oauth.core.DiscoveryService
-import versola.sdk.core.EdgeNativeTokenClient
-import versola.sdk.core.FileNativeEndpointsStore
-import versola.oauth.core.FileProviderMetadataCache
-import versola.oauth.core.HttpDiscoveryClient
-import versola.sdk.core.HttpNativeAuthorizationStarter
-import versola.oauth.core.HttpTokenClient
-import versola.oauth.core.TokenClient
-import versola.oauth.core.ProviderMetadata
-import versola.oauth.core.RetryPolicy
+import versola.oauth.core.IdTokenClaims
+import versola.oauth.core.LogoutOutcome
+import versola.oauth.core.SdkDispatchers
 import versola.oauth.core.SessionCoordinator
 import versola.oauth.core.SessionState
+import versola.oauth.core.TlsTrustedIdTokenValidator
 import versola.oauth.core.TokenBinding
-import versola.oauth.core.VersolaConfiguration
+import versola.oauth.core.TokenResponse
 import versola.oauth.core.VersolaError
-import versola.oauth.core.VersolaLogger
+import versola.oauth.core.VersolaInternalApi
+import versola.sdk.browser.AuthTabAuthorizationSession
+import versola.sdk.core.EdgeAuthorizationStarter
+import versola.sdk.core.EdgeMetadata
+import versola.sdk.core.EdgeNativeTokenClient
+import versola.sdk.core.FileNativeEndpointsStore
+import versola.sdk.core.HttpNativeAuthorizationStarter
 import versola.sdk.dpop.DpopProofFactory
 import versola.sdk.dpop.KeyAttestation
 import versola.sdk.dpop.KeystoreDpopKey
@@ -38,156 +46,179 @@ import versola.sdk.okhttp.authenticated
 import versola.sdk.storage.DataStoreCredentialStore
 import versola.sdk.storage.FilePendingAuthorizationStore
 import versola.sdk.storage.HardwareKeyProvider
-import okhttp3.HttpUrl
-import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
-import okhttp3.Interceptor
-import okhttp3.OkHttpClient
-import okhttp3.Request
-import okhttp3.Response
 
 /**
- * The SDK's entry point: the Android wiring of [AuthorizationFlow], which holds the protocol
- * behaviour itself.
+ * A session with a Versola deployment, for a native app (`spec/versola-sdk-api.md`): sign-in in
+ * the system browser, started and finished through the edge's native endpoints, refresh and
+ * revocation through the same edge, authenticated HTTP to it, and sign-out. The app sees a
+ * session, observable through [sessionState], and never a token.
  *
- * What #5 delivers is the browser leg — discovery, the authorization request, the system
- * browser, and a validated [AuthorizationGrant]. Redeeming that grant at the token endpoint
- * is #8, and `login()` — `authorize()` plus that exchange, ending in
- * [SessionState.Authenticated] — arrives with it. #9 adds the other end: [httpClient] and
- * [call], through which most integrators should never see a token at all.
+ * The edge is the only server this class calls. It is the OAuth client towards `auth`; the device
+ * holds a DPoP key, generated in the Keystore at the first sign-in and never exported, and every
+ * token is bound to it. There is no discovery, no bearer mode and no direct call to `auth`: a
+ * deployment with cells has an edge at its issuer's address, which serves the sign-in pages and
+ * nothing a client calls. An app that talks to an `auth` directly uses `OAuthClient`.
  */
-public class Versola internal constructor(
+public class Versola private constructor(
+    public val configuration: VersolaConfiguration,
     private val flow: AuthorizationFlow,
-    /**
-     * Null under [TokenBinding.Bearer], and the one place that difference is visible: every
-     * caller that needs a proof already has to ask whether the session is key-bound.
-     */
-    public val dpop: DpopProofFactory?,
-    private val dpopKey: KeystoreDpopKey?,
     private val coordinator: SessionCoordinator,
+    private val proofs: DpopProofFactory,
+    private val dpopKey: KeystoreDpopKey,
+    private val grantedScope: GrantedScopeStore,
     private val baseHttpClient: OkHttpClient,
-    /** Null when `configure()` was not told where edge is; see [requireEdge]. */
-    private val edgeBaseUrl: HttpUrl?,
-) {
-
-    public val configuration: VersolaConfiguration get() = flow.configuration
+) : VersolaApi {
 
     /**
-     * Which keystore tier the DPoP key actually reached, or null under
-     * [TokenBinding.Bearer]. Suspending because the key is generated on first use rather than
-     * inside [configure]; asking this is what generates it.
+     * The state machine of `spec/state-machine.md`, observable. Cold, and its first emission is
+     * the restored state: an app killed while the browser was up observes `Authorizing` on cold
+     * start, and the sign-in whose redirect reaches that process is finished by the SDK itself.
      */
-    public suspend fun keyAttestation(): KeyAttestation? = dpopKey?.attestation()
+    override val sessionState: Flow<SessionState> get() = flow.sessionState
 
-    /** The state machine of `spec/state-machine.md`, observable. */
-    public val sessionState: Flow<SessionState> get() = coordinator.sessionState
-
-    /** The state now, after the restore a cold start owes; see `OAuthClient.currentSessionState`. */
-    public suspend fun currentSessionState(): SessionState = coordinator.sessionState.first()
-
-    /** The provider's metadata, fetched once and cached on disk across restarts and logout. */
-    public suspend fun metadata(): ProviderMetadata = flow.metadata()
-
-    /** Opens the system browser, waits for the redirect, and validates it. */
-    public suspend fun authorize(
-        scopes: Set<String>,
-        acrValues: List<String> = emptyList(),
-        maxAge: Long? = null,
-    ): AuthorizationGrant = flow.authorize(scopes, acrValues, maxAge)
-
-    /** Finishes an authorization that outlived the process that started it. */
-    public suspend fun resumePendingAuthorization(): AuthorizationGrant? =
-        flow.resumePendingAuthorization()
+    /** The state now, after the restore a cold start owes; for code that must choose a screen at once. */
+    override suspend fun currentSessionState(): SessionState = flow.sessionState.first()
 
     /**
-     * [authorize] and the code exchange, ending in [SessionState.Authenticated] with the
-     * grant durably stored.
+     * The claims of this session's ID token, or null when there is no session. Its `iss`, `aud`,
+     * `exp`, `nonce` and `auth_time` were checked; its signature was not, because no key set is
+     * reachable from a native app (`spec/versola-sdk-api.md` section 9). Use it to show who is
+     * signed in; what the user may do is the edge's decision, made from the access token.
+     */
+    override val claims: IdTokenClaims? get() = coordinator.claims
+
+    /**
+     * Signs in: asks the edge to start an authorization, opens the system browser on the address
+     * it answers, validates the redirect, redeems the code through the edge, checks the ID token
+     * and persists the grant, in that order. [SessionState.Authenticated] is published only once
+     * the grant is durably stored. Returns nothing on purpose: the session is observable.
      *
-     * Returns nothing on purpose. What it produced is a session, and the session is observable
-     * through [sessionState]; handing back a token here would make the escape hatch the first
-     * thing an integrator saw.
+     * While `Authenticated`, a successful sign-in replaces the session, as another user if that
+     * is who signed in; a cancelled or failed one leaves it as it was. The same call made again
+     * while one is in flight joins it; a different one is refused with
+     * `Configuration(InvalidConfiguration)`.
+     *
+     * The sign-in has as long as the edge said (`expires_in` of its answer, at most ten minutes).
+     * After that the call fails with `Recoverable(PendingRequestExpired)`: offer to start again.
      */
-    public suspend fun login(
-        scopes: Set<String>,
-        acrValues: List<String> = emptyList(),
-        maxAge: Long? = null,
-    ) {
-        coordinator.login(scopes, acrValues, maxAge)
+    override suspend fun login(options: LoginOptions) {
+        authorize(options, options.acrValues, options.maxAge, expectedSubject = null)
     }
 
     /**
-     * Spends the refresh grant, once, however many callers ask at the same time.
+     * Answers a [VersolaError.StepUp] by signing the user in again at the authentication context
+     * the edge asked for, then leaves the app to re-issue the call that was refused. Without
+     * [options] the scopes are the ones the session was granted, which the SDK remembers.
      *
-     * Rarely needed directly: [httpClient] refreshes on its own when a token is within its
-     * refresh skew or a call comes back 401.
+     * The step-up must come back as the user of the session. Nothing on the wire ties the two
+     * together, so the SDK compares the subject: a person who signs in as someone else in the
+     * browser gets `Recoverable(AccountMismatch)`, nothing of that sign-in is kept and the
+     * session is as it was. Tell the user which account to continue with.
      */
-    public suspend fun refresh() {
+    override suspend fun stepUp(challenge: VersolaError.StepUp, options: LoginOptions?) {
+        // Read before the browser opens, and not swallowed: a step-up that cannot learn whose
+        // session it strengthens (a locked store) fails here with the store's own error.
+        val subject = coordinator.sessionSubject() ?: throw VersolaConfiguration.invalid(
+            "stepUp() strengthens a session and there is none; call login()",
+        )
+        val effective = options ?: LoginOptions(scopes = grantedScope.load())
+        authorize(effective, challenge.acrValues, challenge.maxAge, expectedSubject = subject)
+    }
+
+    private suspend fun authorize(
+        options: LoginOptions,
+        acrValues: List<String>,
+        maxAge: Long?,
+        expectedSubject: String?,
+    ) {
+        val requested = options.scopes + OPENID
+        val response: TokenResponse = try {
+            coordinator.login(
+                scopes = requested,
+                acrValues = acrValues,
+                maxAge = maxAge,
+                parameters = options.parameters,
+                ephemeralBrowser = options.ephemeralBrowser,
+                refuseWhileAuthorizing = true,
+                expectedSubject = expectedSubject,
+            )
+        } catch (e: CancellationException) {
+            finishInBackgroundIfAbandoned()
+            throw e
+        }
+        // What the next step-up asks for again. The response's own `scope` when it has one (the
+        // server may grant less than was asked), else what was requested. After the grant is
+        // stored, and not fatal: a lost copy costs a step-up its remembered scopes, not a session.
+        withContext(NonCancellable) { grantedScope.save(response.scopes.ifEmpty { requested }) }
+    }
+
+    /**
+     * A caller cancelled while its browser was up leaves the request stored, and the tab can still
+     * deliver its redirect (the screen went away, not the sign-in). The process finishes it, as it
+     * does after a restart; see `OAuthClient` for the same rule.
+     */
+    private suspend fun finishInBackgroundIfAbandoned() {
+        val abandoned = withContext(NonCancellable) { flow.sessionState.first() == SessionState.Authorizing }
+        if (abandoned) resumeScope.launch { resumeQuietly() }
+    }
+
+    private suspend fun resumeQuietly() {
+        try {
+            coordinator.resumePendingLogin()?.let { response ->
+                withContext(NonCancellable) { if (response.scopes.isNotEmpty()) grantedScope.save(response.scopes) }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            // The typed error's own text, which carries no secret, or only the class name.
+            configuration.logger.warn(
+                "resuming the pending authorization failed: ${if (e is VersolaError) e.toString() else e.javaClass.simpleName}",
+            )
+        }
+    }
+
+    /**
+     * Signs out: revokes the refresh token through the edge, ends the session at the issuer in
+     * the system browser, and wipes everything credential-shaped, the DPoP key included. The wipe
+     * is unconditional: [SessionState.Unauthenticated] is reached whatever the two server-side
+     * steps did, and the outcome says which of them the server acknowledged.
+     */
+    override suspend fun logout(options: LogoutOptions): LogoutOutcome =
+        coordinator.logout(revoke = options.revoke, endSession = options.endSession)
+
+    /**
+     * Spends the refresh token now, once, however many callers ask. Rarely needed: [httpClient]
+     * refreshes when a token is within its refresh skew or a call comes back 401.
+     */
+    override suspend fun refresh() {
         coordinator.refresh()
     }
 
     /**
-     * The access token, refreshed first if it is at or within its refresh skew.
-     *
-     * **The escape hatch.** [httpClient] and [call] attach this token, the matching DPoP proof
-     * and the right scheme without the value ever passing through application code, and that
-     * is the path to take. A token handed out here is one an integrator can log.
+     * Which Keystore tier the DPoP key reached, read back from the key and not from what was asked
+     * for. Suspending because the key is generated on first use; asking this generates it.
      */
-    public suspend fun accessToken(): String = coordinator.accessToken().value
+    override suspend fun keyAttestation(): KeyAttestation? = dpopKey.attestation()
 
     /**
-     * Answers a [VersolaError.StepUp] by re-authorizing at the authentication context edge
-     * asked for, then leaves the app to re-issue the call that was refused.
+     * A client that authenticates every request to the edge: the access token, a DPoP proof for
+     * that request, one nonce retry, one proof retry, one refresh and replay on a 401 that is
+     * neither, and the edge's step-up challenge raised as [VersolaError.StepUp]. A request to any
+     * other origin passes through untouched, and the scope cannot be widened: the token is bound
+     * to the device key and is presented to the edge only.
      *
-     * [scopes] is required rather than remembered. The granted scope set is not persisted, so
-     * a remembered one would be absent after process death — which is exactly the state a
-     * step-up is most likely to be met from, a session restored from a stored grant. The app
-     * passed the same set to [login] and still has it.
-     *
-     * The call is not replayed here either. It needs the browser, which needs an Activity and
-     * an unbounded amount of the user's time, so it cannot happen inside an interceptor; and a
-     * request whose body was already consumed cannot be rebuilt by anyone but the app.
+     * Built over the configured client, with redirects switched off: a `Location` from anything
+     * answering as the edge would repeat the request, and the proof minted for it, somewhere else.
+     * Errors arrive as [VersolaHttpException], because an interceptor may raise nothing else
+     * without crashing an enqueued call; [call] unwraps them. `execute()` blocks its thread while
+     * a token is refreshed; use `enqueue` or [call] where a thread is dear.
      */
-    public suspend fun stepUp(challenge: VersolaError.StepUp, scopes: Set<String>) {
-        coordinator.login(scopes, challenge.acrValues, challenge.maxAge)
-    }
+    public fun httpClient(): OkHttpClient = authenticated(
+        baseHttpClient,
+        VersolaInterceptor(coordinator, configuration.edgeOrigin.toHttpUrl(), proofs),
+    )
 
-    /**
-     * Signs out: revokes the refresh token, ends the server session through the system
-     * browser, and wipes everything credential-shaped — refresh token, pending slot, pending
-     * authorization request, both nonce caches, and the DPoP key, which the next [login]
-     * regenerates under a new `jkt`.
-     *
-     * The local wipe is unconditional: [SessionState.Unauthenticated] is reached even when the
-     * browser is dismissed mid-flow or either server call fails. Only the server-side teardown
-     * is best effort, and the return value says whether auth acknowledged it.
-     */
-    public suspend fun logout(): Boolean = coordinator.logout().sessionEnded
-
-    /**
-     * A client that authenticates every call to edge: the access token, a DPoP proof over it,
-     * one nonce retry, one proof retry, and one refresh-and-replay on a 401 that is neither.
-     *
-     * Built over the client `configure()` was given, so its timeouts, connection pool and
-     * cache are the integrator's. Redirects are switched off for the same reason
-     * `HttpTokenClient` switches them off: a `Location` from anything answering as edge would
-     * repeat the request — and the proof minted for *this* origin — at another one.
-     */
-    public fun httpClient(): OkHttpClient = authenticated(baseHttpClient, interceptor())
-
-    /**
-     * The authentication behind [httpClient] and [call]. Not offered on its own: an application
-     * interceptor on a client that follows redirects would send its `DPoP` proof to whatever a
-     * `Location` names, so the only client it is installed on is the one built with redirects off.
-     */
-    private fun interceptor(): Interceptor = VersolaInterceptor(coordinator, requireEdge(), dpop)
-
-    /**
-     * One authenticated call, with the error taxonomy raised as itself.
-     *
-     * The primary path. Through [httpClient] alone a failure arrives as a
-     * [VersolaHttpException], because an OkHttp interceptor may raise nothing else without
-     * crashing an asynchronous call; here it is unwrapped, and an app matches on
-     * [VersolaError] the way it does everywhere else in the SDK.
-     */
+    /** One authenticated call through [httpClient], with the error taxonomy raised as itself. */
     public suspend fun call(request: Request): Response = withContext(SdkDispatchers.blockedCalls) {
         try {
             httpClient().newCall(request).execute()
@@ -196,303 +227,216 @@ public class Versola internal constructor(
         }
     }
 
-    private fun requireEdge(): HttpUrl = edgeBaseUrl ?: throw VersolaError.Configuration(
-        VersolaError.Configuration.Detail.InvalidConfiguration(
-            "configure() needs edgeBaseUrl to reach edge; it is not in the OAuth metadata (#1 §2.1)",
-        ),
-    )
+    /** A redirect delivered to a cold-started process finishes its sign-in with no caller to ask. */
+    private fun resumeInBackground() {
+        flow.onRestoredAuthorizing = { resumeScope.launch { resumeQuietly() } }
+        resumeScope.launch {
+            try {
+                flow.sessionState.first()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                configuration.logger.warn(
+                    "restoring the session failed: ${if (e is VersolaError) e.toString() else e.javaClass.simpleName}",
+                )
+            }
+        }
+    }
 
     public companion object {
+        private const val OPENID = "openid"
+
+        private val clients = ConcurrentHashMap<String, Versola>()
+
+        /** Where a cold-started process finishes the sign-in its redirect answers; a test substitutes its own. */
+        @Volatile
+        internal var resumeScope: CoroutineScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+
+        // One for the process, so that two configurations with the default are the same client;
+        // the call deadline bounds a call that connects and then drips (`AUDIT C5`).
+        private val defaultHttpClient: OkHttpClient by lazy {
+            OkHttpClient.Builder()
+                .connectTimeout(10, TimeUnit.SECONDS)
+                .readTimeout(10, TimeUnit.SECONDS)
+                .callTimeout(60, TimeUnit.SECONDS)
+                .build()
+        }
 
         /**
-         * TEST SEAM (internal): where the credential and pending-request wrapping key comes from.
-         * The Keystore does not exist on the JVM, so a Robolectric test that must get past the first
-         * wrap swaps it; nothing in production assigns it.
-         */
-        internal var keyProviders: () -> versola.oauth.core.CredentialKeyProvider = { HardwareKeyProvider() }
-
-        /**
-         * Validates the configuration eagerly and wires the default implementations.
+         * Wires the client for [configuration]. No network I/O and no key generation happen here:
+         * the DPoP key is generated at the first sign-in, and there is no discovery to fetch.
          *
-         * [edgeBaseUrl] is separate configuration rather than something discovery could
-         * supply, because it is not in the OAuth metadata (#1 §2.1). Optional so that an app
-         * using only the authorization legs need not invent one; [httpClient], [interceptor]
-         * and [call] then raise a `Configuration` error naming it.
+         * One instance per edge, issuer and client id per process: a second call with the same
+         * configuration returns the first instance, so an `Activity.onCreate` may call this on
+         * every rotation; one that differs in anything else is refused with
+         * `Configuration(InvalidConfiguration)` rather than silently sharing the first one's
+         * settings. The `httpClient` and the `logger` are compared by identity, so hoist them.
          */
-        public fun configure(
+        public fun create(context: Context, configuration: VersolaConfiguration): Versola =
+            create(context, configuration, browser = null, keyProvider = null)
+
+        /**
+         * Wiring: [create] with the browser leg replaced, which is what the conformance driver
+         * does to drive the sign-in pages over HTTP, and the wrapping key replaced, for a JVM test
+         * that has no Keystore. The browser contract stays URI-only, so a web view is no more
+         * representable here than anywhere else.
+         */
+        @VersolaInternalApi
+        public fun create(
             context: Context,
-            issuer: String,
-            clientId: String,
-            redirectUri: String,
-            logger: VersolaLogger = AndroidLogger(),
-            httpClient: OkHttpClient = defaultHttpClient,
-            // Appended rather than inserted: every parameter before this one keeps the
-            // position it had in #5, so a call written against that signature still compiles.
-            tokenBinding: TokenBinding = TokenBinding.Dpop(),
-            edgeBaseUrl: String? = null,
-            retryPolicy: RetryPolicy = RetryPolicy.Default,
-            /**
-             * Where auth sends the browser once `logout()` has ended the server session.
-             * Optional: without it the signed-out page stays open until the user dismisses
-             * it, and the local sign-out completes regardless. Must be in the tenant's
-             * `postLogoutRedirectUris` and, like [redirectUri], should be a verified App Link
-             * delivered to `VersolaRedirectActivity`.
-             */
-            postLogoutRedirectUri: String? = null,
-            /**
-             * [BackChannel.Edge] for a client on a FAPI 2.0 tenant — the server's default
-             * profile for a new tenant — where auth refuses a public client at `/token` and
-             * edge's `/native/{start,complete,token,revoke}` endpoints front the app instead. Needs [edgeBaseUrl], an
-             * https [redirectUri] and DPoP. [BackChannel.Auth] is the plain OAuth public
-             * client and works against any provider.
-             */
-            backChannel: BackChannel = BackChannel.Auth,
-            /**
-             * The browser leg. Auth Tab (Custom Tabs fallback) by default; the conformance harness substitutes a
-             * session that drives auth's login conversation over HTTP. The interface takes
-             * URIs and nothing else, so nothing a WebView could be smuggled through exists
-             * here either (#1 §4).
-             */
-            browser: BrowserAuthorizationSession? = null,
-        ): Versola {
-            // Validated first, so a refused configuration is refused the same way every time.
-            val configuration = VersolaConfiguration.create(issuer, clientId, redirectUri, postLogoutRedirectUri)
-            // Parsed at configuration time, not at the first call: a base URL that is not a
-            // URL is a deployment mistake, and `spec/errors.md` has those fail where they are
-            // one line to fix rather than behind a login screen.
-            val edge = edgeBaseUrl?.let {
-                val url = it.toHttpUrlOrNull() ?: throw VersolaError.Configuration(
-                    VersolaError.Configuration.Detail.InvalidConfiguration(
-                        "edgeBaseUrl must be an absolute http or https URL: $it",
-                    ),
-                )
-                // Tokens and proofs go to this origin: https, or cleartext to the developer's own
-                // machine only, as the issuer and the generic facade's protected origins (`AUDIT Z3`).
-                if (url.scheme != "https" && url.host !in LOOPBACK_HOSTS) {
-                    throw VersolaError.Configuration(
-                        VersolaError.Configuration.Detail.InvalidConfiguration(
-                            "edgeBaseUrl must be https (http only on a loopback host: localhost, 127.0.0.1, [::1]): $it",
-                        ),
+            configuration: VersolaConfiguration,
+            browser: BrowserAuthorizationSession?,
+            keyProvider: CredentialKeyProvider? = null,
+        ): Versola = synchronized(clients) {
+            // Lookup, check and build under one lock: two callers racing with different
+            // configurations for one key must not both pass the check on an empty map.
+            clients[configuration.storageKey]?.let { existing ->
+                val same = existing.configuration.fingerprint == configuration.fingerprint &&
+                    existing.configuration.httpClient === configuration.httpClient &&
+                    existing.configuration.logger === configuration.logger
+                if (!same) {
+                    throw VersolaConfiguration.invalid(
+                        "create() was already called in this process for this edge and client with a different " +
+                            "configuration; keep the VersolaConfiguration, its OkHttpClient and its logger, or pass the same ones",
                     )
                 }
-                url
+                return existing
             }
-
-            // The combinations the flow refuses one at a time are refused here with one message naming
-            // the knob, before the registry below: a refused configuration is refused whatever instance
-            // exists.
-            if (backChannel == BackChannel.Edge) {
-                if (edge == null) {
-                    throw VersolaError.Configuration(
-                        VersolaError.Configuration.Detail.InvalidConfiguration(
-                            "BackChannel.Edge needs edgeBaseUrl: the native endpoints are edge's",
-                        ),
-                    )
-                }
-                if (tokenBinding !is TokenBinding.Dpop) {
-                    throw VersolaError.Configuration(
-                        VersolaError.Configuration.Detail.InvalidConfiguration(
-                            "BackChannel.Edge needs TokenBinding.Dpop: edge's native endpoints accept no bearer presentation",
-                        ),
-                    )
-                }
-            }
-            // One instance per process, because the storage directory below is one per app: a second
-            // `configure()` (every `Activity.onCreate`, every rotation) with the same configuration
-            // returns the first instance instead of building a second coordinator, with its own refresh
-            // epoch and token cache, over the one credential store, so a `logout()` on one could not
-            // fence the other's in-flight refresh (`AUDIT C2`). A different configuration is refused,
-            // like `OAuthClient.create`. `logger` and `browser` of a later call are not part of it and
-            // are ignored: the first is kept.
-            val fingerprint = listOf(
-                issuer, clientId, redirectUri, postLogoutRedirectUri, tokenBinding.toString(), edgeBaseUrl, backChannel,
-                listOf(
-                    retryPolicy.maxAttemptsPerOrigin, retryPolicy.maxTotalAttempts, retryPolicy.initialBackoff,
-                    retryPolicy.backoffMultiplier, retryPolicy.maxBackoff, retryPolicy.totalBudget,
-                ),
-            ).joinToString("\u0000")
-            synchronized(registry) {
-                registry.instance?.let { existing ->
-                    if (registry.fingerprint != fingerprint) {
-                        throw VersolaError.Configuration(
-                            VersolaError.Configuration.Detail.InvalidConfiguration(
-                                "configure() was already called in this process with a different configuration",
-                            ),
-                        )
-                    }
-                    if (registry.httpClient !== httpClient) {
-                        throw VersolaError.Configuration(
-                            VersolaError.Configuration.Detail.InvalidConfiguration(
-                                "configure() was already called in this process with another httpClient; keep the OkHttpClient, or pass the same one",
-                            ),
-                        )
-                    }
-                    return existing
-                }
-                return build(
-                    context, logger, httpClient, tokenBinding, edge, retryPolicy, backChannel, browser, configuration,
-                ).also {
-                    registry.instance = it
-                    registry.fingerprint = fingerprint
-                    registry.httpClient = httpClient
-                }
-            }
+            build(context.applicationContext, configuration, browser, keyProvider)
+                .also { clients[configuration.storageKey] = it }
+                .also { it.resumeInBackground() }
         }
 
-        /** The one instance of this process and what it was configured with; see [configure]. */
-        private class Registry {
-            var instance: Versola? = null
-            var fingerprint: String? = null
-            var httpClient: OkHttpClient? = null
-        }
-
-        private val registry = Registry()
-
-        /** TEST SEAM (internal): forgets the instance, so the next [configure] builds anew. */
+        /** TEST SEAM (internal): forgets every instance, so the next [create] builds anew. */
         internal fun forgetAll() {
-            synchronized(registry) { registry.instance = null }
+            synchronized(clients) { clients.clear() }
         }
 
         private fun build(
             context: Context,
-            logger: VersolaLogger,
-            httpClient: OkHttpClient,
-            tokenBinding: TokenBinding,
-            edge: HttpUrl?,
-            retryPolicy: RetryPolicy,
-            backChannel: BackChannel,
-            browser: BrowserAuthorizationSession?,
             configuration: VersolaConfiguration,
+            browser: BrowserAuthorizationSession?,
+            keyProvider: CredentialKeyProvider?,
         ): Versola {
-            configuration.redirectUriWarning?.let(logger::warn)
-            val applicationContext = context.applicationContext
-            // noBackupFilesDir: neither the pending request nor, later, the refresh token may
-            // be restored onto a different device out of a cloud backup.
-            val directory = File(applicationContext.noBackupFilesDir, "versola")
-
-            // Constructed, not generated: nothing touches the Keystore until the first call
-            // that needs a thumbprint or a proof, so configure() stays a cheap main-thread
-            // call even on a device where a StrongBox keygen takes a noticeable moment.
-            val dpopKey = when (tokenBinding) {
-                is TokenBinding.Dpop -> KeystoreDpopKey(
-                    requireHardware = tokenBinding.requireHardware,
-                    logger = logger,
-                )
-                TokenBinding.Bearer -> null
-            }
-
-            val discovery = DiscoveryService(
-                issuer = configuration.issuer,
-                client = HttpDiscoveryClient(httpClient),
-                cache = FileProviderMetadataCache(File(directory, "provider-metadata.json")),
-            ).also { it.logger = logger }
-            // One instance per file per process, which is DataStore's constraint: a second
-            // `configure()` in the same process — every `Activity.onCreate`, every rotation —
-            // shares the store the first one opened. Opening it reads nothing; the file is
-            // read on first access, and the Keystore is not touched until something asks to
-            // unwrap.
-            val credentialStore = DataStoreCredentialStore.forFile(
-                file = File(directory, "credentials"),
-                keyProvider = keyProviders(),
+            val core = configuration.core
+            val logger = configuration.logger
+            val httpClient = configuration.httpClient ?: defaultHttpClient
+            val edge = configuration.edgeOrigin
+            // noBackupFilesDir: neither the pending request nor the refresh token may be restored
+            // onto another device out of a cloud backup. One directory per client.
+            val directory = File(File(context.noBackupFilesDir, "versola"), configuration.storageKey)
+            val keys = keyProvider ?: HardwareKeyProvider(
+                alias = "versola-sdk-${configuration.storageKey}.storage",
+                unlockPolicy = configuration.unlockPolicy,
             )
-            val proofFactory = dpopKey?.let { DpopProofFactory(it) }
-            // One factory across auth and edge, deliberately. Its `DpopNonceCache` is keyed by
-            // origin, so the two servers already hold independent nonces within it — which is
-            // scenario 04's requirement — while a second factory would split the clock offset
-            // learned from one server's `Date` header away from the other's proofs.
+            // One instance per file per process, which is DataStore's constraint and why there is
+            // one client per storage key. Opening it reads nothing.
+            val credentialStore = DataStoreCredentialStore.forFile(File(directory, "credentials"), keys)
 
-            // Through edge, the three things the flow refuses one at a time are refused here
-            // with one message naming the knob, before any of the flow's own checks run.
-            val nativeStarter = when (backChannel) {
-                BackChannel.Auth -> null
-                BackChannel.Edge -> {
-                    if (edge == null) {
-                        throw VersolaError.Configuration(
-                            VersolaError.Configuration.Detail.InvalidConfiguration(
-                                "BackChannel.Edge needs edgeBaseUrl: the native endpoints are edge's",
-                            ),
-                        )
-                    }
-                    if (proofFactory == null) {
-                        throw VersolaError.Configuration(
-                            VersolaError.Configuration.Detail.InvalidConfiguration(
-                                "BackChannel.Edge needs TokenBinding.Dpop: edge's native endpoints accept no bearer presentation",
-                            ),
-                        )
-                    }
-                    HttpNativeAuthorizationStarter(configuration, edge.toString(), httpClient, proofFactory)
-                }
-            }
+            // Constructed, not generated: nothing touches the Keystore until the first call that
+            // needs a thumbprint or a proof, so create() stays a cheap main-thread call.
+            val binding = TokenBinding.Dpop(requireHardware = configuration.requireHardwareKey)
+            val dpopKey = KeystoreDpopKey(
+                alias = "versola-sdk-${configuration.storageKey}.dpop",
+                requireHardware = configuration.requireHardwareKey,
+                logger = logger,
+                // A proof asked for with the grant stored and the key gone is not signed by a new key.
+                isGrantHeld = credentialStore::hasGrant,
+            )
+            // One factory for the edge and for the proofs addressed to auth's endpoints. Its nonce
+            // cache and its clock offsets are keyed by origin, so the two never mix (scenario 04).
+            val proofs = DpopProofFactory(dpopKey)
+
+            // Stated, not fetched: the issuer's address serves no discovery document.
+            val discovery = DiscoveryService(
+                issuer = core.issuer,
+                // The issuer as the app wrote it, not the core's copy, which drops a trailing
+                // slash: the redirect's `iss` and the ID token's are compared with this value by
+                // simple string comparison (RFC 9207), and `https://a/` and `https://a` are two
+                // issuers.
+                client = EdgeMetadata(configuration.issuer, edge, core.clientId),
+                cache = EdgeMetadata.NoCache,
+            )
             val flow = AuthorizationFlow(
-                configuration = configuration,
+                configuration = core,
                 discovery = discovery,
-                pendingStore = FilePendingAuthorizationStore(
-                    file = File(directory, "pending-authorization"),
-                    keyProvider = keyProviders(),
-                ),
-                browser = browser ?: AuthTabAuthorizationSession(applicationContext, logger),
-                tokenBinding = tokenBinding,
+                pendingStore = FilePendingAuthorizationStore(File(directory, "pending-authorization"), keys),
+                browser = browser ?: AuthTabAuthorizationSession(context, logger),
+                tokenBinding = binding,
                 dpopKey = dpopKey,
                 hasStoredGrant = credentialStore::hasGrant,
-                starter = nativeStarter?.let { EdgeAuthorizationStarter(configuration, tokenBinding, it) },
-            )
-            val tokenClient: TokenClient = if (nativeStarter == null) {
-                HttpTokenClient(
-                    configuration = configuration,
-                    discovery = discovery,
-                    httpClient = httpClient,
-                    dpop = proofFactory,
-                    tokenBinding = tokenBinding,
-                )
-            } else {
-                EdgeNativeTokenClient(
-                    configuration = configuration,
-                    edgeBaseUrl = checkNotNull(edge).toString(),
-                    httpClient = httpClient,
-                    dpop = checkNotNull(proofFactory),
-                    discovery = discovery,
-                    // Unencrypted and kept across logout, like discovery metadata: two URLs
-                    // edge hands to anyone who asks.
-                    endpoints = FileNativeEndpointsStore(File(directory, "native-endpoints.json")),
-                    tokenBinding = tokenBinding as TokenBinding.Dpop,
-                )
-            }
-
-            return Versola(
-                flow = flow,
-                dpop = proofFactory,
-                dpopKey = dpopKey,
-                coordinator = SessionCoordinator(
-                    flow = flow,
-                    tokenClient = tokenClient,
-                    credentialStore = credentialStore,
-                    retryPolicy = retryPolicy,
-                    // What `:core` cannot reach and `spec/state-machine.md` wipes with the
-                    // grant: the per-origin nonce caches and the DPoP key (scenario 18).
-                    onCredentialsWiped = {
-                        proofFactory?.nonces?.clear()
-                        dpopKey?.destroy()
-                    },
-                    logger = logger,
-                    // The cache of the access token ages, and a `Retry-After` cooldown runs, with the
-                    // device's real time: the default clock (System.nanoTime) stops in deep sleep, and
-                    // an hour-old token would be served as fresh (`AUDIT C4`).
-                    retryClock = { android.os.SystemClock.elapsedRealtime() },
-                    elapsedMillis = { android.os.SystemClock.elapsedRealtime() },
+                starter = EdgeAuthorizationStarter(
+                    core,
+                    HttpNativeAuthorizationStarter(core, edge, httpClient, proofs),
                 ),
-                baseHttpClient = httpClient,
-                edgeBaseUrl = edge,
+                logger = logger,
             )
+            val grantedScope = GrantedScopeStore(File(directory, "granted-scope"))
+            val coordinator = SessionCoordinator(
+                flow = flow,
+                tokenClient = EdgeNativeTokenClient(
+                    configuration = core,
+                    edgeBaseUrl = edge,
+                    httpClient = httpClient,
+                    dpop = proofs,
+                    // Unencrypted: two URLs the edge hands to anyone who asks.
+                    endpoints = FileNativeEndpointsStore(File(directory, "native-endpoints.json")),
+                    tokenBinding = binding,
+                ),
+                credentialStore = credentialStore,
+                retryPolicy = configuration.retryPolicy,
+                // What the core cannot reach and `spec/state-machine.md` wipes with the grant.
+                onCredentialsWiped = {
+                    proofs.nonces.clear()
+                    dpopKey.destroy()
+                    grantedScope.clear()
+                },
+                logger = logger,
+                // Claims without the signature: no key set is reachable (`TlsTrustedIdTokenValidator`).
+                idTokenValidator = TlsTrustedIdTokenValidator(
+                    issuer = configuration.issuer,
+                    clientId = core.clientId,
+                    clockSkewTolerance = configuration.clockSkewTolerance,
+                ),
+                // The token cache ages, and a Retry-After cooldown runs, with the device's real
+                // time: the default clock (System.nanoTime) stops in deep sleep (`AUDIT C4`).
+                retryClock = { android.os.SystemClock.elapsedRealtime() },
+                elapsedMillis = { android.os.SystemClock.elapsedRealtime() },
+            )
+            return Versola(configuration, flow, coordinator, proofs, dpopKey, grantedScope, httpClient)
         }
+    }
+}
 
-        private val LOOPBACK_HOSTS = setOf("localhost", "127.0.0.1", "::1", "[::1]")
+/**
+ * The scope of the stored grant, so that a step-up can ask for it again without the app having to
+ * remember what it passed to `login()` in another process (`spec/versola-sdk-api.md` section 6).
+ * Not credential material: scope names. A plain file beside the credentials, removed with them.
+ */
+internal class GrantedScopeStore(private val file: File) {
 
-        // One for the process, so that two `configure()` calls with the default are the same
-        // client; the call deadline bounds a call that connects and then drips (`AUDIT C5`).
-        private val defaultHttpClient: OkHttpClient = OkHttpClient.Builder()
-            .connectTimeout(10, TimeUnit.SECONDS)
-            .readTimeout(10, TimeUnit.SECONDS)
-            .callTimeout(60, TimeUnit.SECONDS)
-            .build()
+    suspend fun load(): Set<String> = withContext(SdkDispatchers.blocking) {
+        try {
+            if (file.exists()) file.readText().split(' ').filter { it.isNotEmpty() }.toSet() else emptySet()
+        } catch (e: java.io.IOException) {
+            emptySet()
+        }
+    }
+
+    suspend fun save(scopes: Set<String>) {
+        withContext(SdkDispatchers.blocking) {
+            try {
+                file.parentFile?.mkdirs()
+                val temporary = File(file.parentFile, file.name + ".tmp")
+                temporary.writeText(scopes.joinToString(" "))
+                if (!temporary.renameTo(file)) temporary.delete()
+            } catch (e: java.io.IOException) {
+                // A step-up then asks for `openid` and `offline_access` alone; the session is unaffected.
+            }
+        }
+    }
+
+    suspend fun clear() {
+        withContext(SdkDispatchers.blocking) { file.delete() }
     }
 }

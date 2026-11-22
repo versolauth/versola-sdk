@@ -16,8 +16,12 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import versola.oauth.core.VersolaInternalApi
+import versola.sdk.LoginOptions
 import versola.sdk.Versola
-import versola.sdk.core.BackChannel
+import versola.sdk.VersolaConfiguration
+import versola.sdk.dpop.DpopProofFactory
+import versola.sdk.dpop.KeystoreDpopKey
 import versola.sdk.core.EdgeClientUnknown
 import versola.oauth.core.SessionState
 import versola.oauth.core.VersolaError
@@ -41,8 +45,17 @@ import org.junit.runner.RunWith
 /**
  * Scenario 21, with 22's blob-less replay and 18 through `/native/revoke`: the SDK on a
  * `fapi2` tenant, where it cannot be a public client of auth and goes through edge's native
- * endpoints instead. Asserted from the transcript, as in [Scenario01HappyPathTest].
+ * endpoints, the only way the `Versola` facade signs in (`spec/versola-sdk-api.md`). Asserted
+ * from the transcript of what the SDK actually sent, not from the call having succeeded. This is
+ * also the driver's only scenario for the facade's happy path: the old scenario 01 test, which
+ * drove a direct back channel on a `standard` tenant, went with that back channel, and the steps
+ * it covered (login, the authenticated call with `ath`, a refresh renewed in place, logout and a
+ * new key after it) are asserted here through the native endpoints.
+ *
+ * The browser leg is [HttpLoginBrowser]; everything else is `Versola.create()` as an app would
+ * call it. Instrumented: needs an emulator and the staged stack.
  */
+@OptIn(VersolaInternalApi::class)
 @RunWith(AndroidJUnit4::class)
 class Scenario21EdgeNativeTest {
 
@@ -75,16 +88,14 @@ class Scenario21EdgeNativeTest {
             upstream = stack.upstreamUrlFromEdge,
         )
         val browser = HttpLoginBrowser(http, fixture.login, fixture.password)
-        val versola = Versola.configure(
-            context = application,
-            issuer = stack.authUrl,
+        val configuration = VersolaConfiguration(
+            edgeUrl = stack.edgeUrl,
             clientId = fixture.clientId,
             redirectUri = fixture.redirectUri,
+            issuer = stack.issuer,
             httpClient = http,
-            edgeBaseUrl = stack.edgeUrl,
-            backChannel = BackChannel.Edge,
-            browser = browser,
         )
+        val versola = Versola.create(application, configuration, browser)
         // Whatever a previous scenario left behind in the shared store ends here, through the
         // SDK rather than by deleting files under a live DataStore.
         if (versola.sessionState.first() != SessionState.Unauthenticated) versola.logout()
@@ -96,14 +107,25 @@ class Scenario21EdgeNativeTest {
         // ---- start → authorize → complete ----------------------------------------------------
         loginUntilFronted(versola, central, setOf("openid"))
 
-        // Discovery is cached on disk across scenarios (deliberately: it is not credential
-        // material), so the document is read back from the SDK rather than off the wire.
-        val metadata = versola.metadata()
+        // The SDK reads no discovery document and no key set: nothing of the kind was requested.
+        assertEquals(
+            "the SDK requested a discovery document or a key set",
+            emptyList<String>(),
+            transcript.entries.map { it.path }.filter { it.contains("/.well-known/") || it.endsWith("/jwks") },
+        )
+        // Nor does it call auth itself: what reached auth's address is the browser's pages.
+        assertEquals(
+            "the SDK called auth directly",
+            emptyList<String>(),
+            transcript.entries.filter { it.url.startsWith(stack.authUrl) }.map { it.path }
+                .filter { it.endsWith("/token") || it.endsWith("/revoke") || it.endsWith("/par") },
+        )
         val start = transcript.matching("POST", "/native/start/${fixture.clientId}").last { it.status == 200 }
         val startForm = start.form
         assertEquals(fixture.redirectUri, startForm["redirect_uri"])
         assertTrue(startForm["scope"]!!.split(' ').containsAll(listOf("openid", "offline_access")))
-        assertNotNull(startForm["nonce"])
+        val nonce = startForm["nonce"]!!
+        assertTrue("nonce must carry at least 128 bits", nonce.length >= 22)
         for (theirs in listOf("code_challenge", "code_challenge_method", "state", "response_type", "dpop_jkt", "client_id")) {
             assertFalse("$theirs is edge's, not the device's", startForm.containsKey(theirs))
         }
@@ -114,9 +136,11 @@ class Scenario21EdgeNativeTest {
         assertNull(startProof["ath"])
         val started = start.responseJson!!
         val deviceJkt = thumbprint(start.proofHeader!!["jwk"]!!.jsonObject)
+        assertNotEquals("state is edge's and the nonce the device's", started["state"]!!.jsonPrimitive.content, nonce)
 
         val authorizeUri = browser.opened.first().toHttpUrl()
-        assertEquals(metadata.authorizationEndpoint, authorizeUri.toString().substringBefore('?'))
+        // The authorization_endpoint of the start answer, as edge wrote it.
+        assertEquals(started["authorization_endpoint"]!!.jsonPrimitive.content, authorizeUri.toString().substringBefore('?'))
         assertEquals(setOf("client_id", "request_uri"), authorizeUri.queryParameterNames)
         assertEquals(fixture.clientId, authorizeUri.queryParameter("client_id"))
         assertEquals(started["request_uri"]!!.jsonPrimitive.content, authorizeUri.queryParameter("request_uri"))
@@ -126,7 +150,7 @@ class Scenario21EdgeNativeTest {
         val completeForm = complete.form
         assertEquals(started["state"]!!.jsonPrimitive.content, completeForm["state"])
         assertEquals(started["blob"]!!.jsonPrimitive.content, completeForm["blob"])
-        assertEquals(stack.authUrl, completeForm["iss"]!!.trimEnd('/'))
+        assertEquals("the redirect's iss is the configured issuer, as written", stack.issuer, completeForm["iss"])
         assertNotNull(completeForm["code"])
         assertFalse("the verifier is sealed in the blob and never on the device", completeForm.containsKey("code_verifier"))
         val completeProof = complete.proofClaims!!
@@ -144,9 +168,13 @@ class Scenario21EdgeNativeTest {
 
         // ---- 22: the code without its blob is refused, and was not spent ------------------------
         val code = completeForm["code"]!!
+        // A proof of the device key, minted for the replay without any capability of the facade's
+        // (it has none): the same Keystore entry is opened under its alias and checked to be the key
+        // that signed `/native/start`, so a refusal below is for the missing blob and not a key mismatch.
+        val deviceProofs = deviceProofs(configuration, deviceJkt)
         val withoutBlob = http.newCall(
             Request.Builder().url(complete.url)
-                .header("DPoP", versola.dpop!!.proof("POST", started["token_endpoint"]!!.jsonPrimitive.content))
+                .header("DPoP", deviceProofs.proof("POST", started["token_endpoint"]!!.jsonPrimitive.content))
                 .post(FormBody.Builder().add("code", code).add("state", completeForm["state"]!!).add("iss", completeForm["iss"]!!).build())
                 .build(),
         ).execute().use { it.code to it.body.string() }
@@ -182,7 +210,7 @@ class Scenario21EdgeNativeTest {
         )
 
         // ---- 18 through /native/revoke -------------------------------------------------------------
-        val replayProof = versola.dpop!!.proof("POST", started["token_endpoint"]!!.jsonPrimitive.content)
+        val replayProof = deviceProofs.proof("POST", started["token_endpoint"]!!.jsonPrimitive.content)
         transcript.clear()
         versola.logout()
         val revoke = transcript.matching("POST", "/native/revoke/${fixture.clientId}").single()
@@ -216,7 +244,7 @@ class Scenario21EdgeNativeTest {
         var last: VersolaError? = null
         repeat(30) {
             try {
-                versola.login(scopes)
+                versola.login(LoginOptions(scopes = scopes))
                 return
             } catch (e: VersolaError.Configuration) {
                 val detail = e.detail
@@ -239,6 +267,26 @@ class Scenario21EdgeNativeTest {
             withContext(Dispatchers.IO) { Thread.sleep(1000) }
         }
         error("edge never routed $url")
+    }
+
+    /**
+     * Proofs by the device key the facade generated, for the two replays above, without a
+     * proof-minting capability on `Versola` (security review F6): the key is opened under the alias
+     * the facade stores it by, which is `versola-sdk-` plus the configuration's storage key (the
+     * first 16 characters of the base64url SHA-256 of `edge origin, issuer, client id`, newline
+     * separated) plus `.dpop`. That formula is internal to the SDK and repeated here; the
+     * `expectedJkt` check fails loudly if it ever drifts, and `isGrantHeld = { true }` makes an
+     * absent key an error rather than a new key. `logout()` destroys the key, so the replay proof
+     * is minted before it.
+     */
+    private suspend fun deviceProofs(configuration: VersolaConfiguration, expectedJkt: String): DpopProofFactory {
+        val storageKey = Base64.getUrlEncoder().withoutPadding().encodeToString(
+            MessageDigest.getInstance("SHA-256")
+                .digest("${configuration.edgeUrl.trimEnd('/')}\n${configuration.issuer}\n${configuration.clientId}".toByteArray(Charsets.UTF_8)),
+        ).take(16)
+        val key = KeystoreDpopKey(alias = "versola-sdk-$storageKey.dpop", isGrantHeld = { true })
+        assertEquals("not the key of this session: the alias formula drifted", expectedJkt, key.jkt())
+        return DpopProofFactory(key)
     }
 
     /** RFC 7638: SHA-256 over the canonical `{"crv","kty","x","y"}` member set, base64url. */

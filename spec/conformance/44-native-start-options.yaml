@@ -22,7 +22,7 @@ assertions:
   - The claims and authorization_details values are the app's text byte for byte, form-encoded once.
   - The start request carries no client_id, state, response_type, code_challenge, code_challenge_method, dpop_jkt, id_token_hint or response_mode.
   - The ID token's auth_time is checked against max_age 300, and its acr is exposed in the claims.
-  - The refresh request carries both resource values.
+  - The complete request and the refresh request carry no resource parameter.
   - The public API of every platform offers no way to add a parameter outside this list; the check is on the API dump, the Swift interface and the Dart API, not on a request.
 notes: >
   The list is NativeService.PassThroughParameters. Edge drops any other parameter without an

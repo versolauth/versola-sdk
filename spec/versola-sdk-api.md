@@ -7,10 +7,10 @@ and the retry policy (`retry-policy.md`) with the generic facade (`oauth-sdk-api
 from it wherever Versola chose something for its users. Where this document is silent, the generic
 facade's rule applies; where the two disagree, this one holds for the `Versola` facade.
 
-**Status.** This is the target the platforms are built to (ADR 0002). Android's `Versola` predates
-it and still carries the direct back channel (`BackChannel.Auth`), discovery and no ID-token check;
-iOS and Flutter have no `Versola` facade yet. Until a platform follows, its gap is listed in the
-pull request that changes it, and the scenarios of section 15 say which platforms hold them.
+**Status.** This is the target the platforms are built to (ADR 0002). Android's `Versola`
+(`android/sdk`) implements it. iOS and Flutter have no `Versola` facade yet; until a platform
+follows, its gap is listed in the pull request that changes it, and the scenarios of section 15
+say which platforms hold them.
 
 Checked against `versolauth/versola` at `0a2b72d34` (branch `feat/central-topology-557`, draft pull
 request 1023), the working tree rather than its documentation. What that server does not do yet is
@@ -121,7 +121,7 @@ val versola = Versola.create(context, VersolaConfiguration(
 | `prompt` | `prompt` | the generic facade's closed enum (`None`, `Login`, `Consent`, `SelectAccount`, `Create`); `None` makes an interaction error `Reauthenticate(InteractionRequired)` |
 | `loginHint` | `login_hint` | |
 | `uiLocales` | `ui_locales` | list, in order |
-| `resources` | `resource` (RFC 8707) | repeatable; also sent on a refresh |
+| `resources` | `resource` (RFC 8707) | repeatable. Sent at `/native/start` only: `/native/complete` takes none, and the SDK sends none on a refresh |
 | `claims` | `claims` | a JSON object as text, passed as given |
 | `authorizationDetails` | `authorization_details` (RFC 9396) | a JSON array as text, passed as given |
 | `ephemeralBrowser` | platform | `false`; `oauth-sdk-api.md` section 6 |

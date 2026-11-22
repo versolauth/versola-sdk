@@ -180,6 +180,19 @@ public class SessionCoordinator(
     private var warnedExpiresIn = false
 
     /**
+     * The `sub` of the session that is stored, for a re-authorization that must come back as the
+     * same user ([login]'s `expectedSubject`). Null when no ID token is held. Unlike
+     * [restoreClaims] a store that cannot be read is not swallowed: a step-up that cannot learn
+     * whose session it strengthens must not open the browser, so the store's own error is the
+     * caller's.
+     */
+    public suspend fun sessionSubject(): String? {
+        claims?.let { return it.subject }
+        val stored = memorySession?.rawIdToken ?: credentialStore.rawIdToken()
+        return stored?.let(IdTokenClaims::ofStored)?.subject
+    }
+
+    /**
      * [claims] as the stored ID token has them, read once after a cold start: a stored grant
      * restores `Authenticated` with nothing in memory, and the app's claims and the refresh
      * check against the previous `sub` need what the token carried. Nothing is re-verified;
@@ -285,8 +298,17 @@ public class SessionCoordinator(
          * turn for the browser, as the Versola facade's always did.
          */
         refuseWhileAuthorizing: Boolean = false,
+        /**
+         * The `sub` the sign-in must come back as, for a re-authorization of a session that is not
+         * allowed to change hands (the Versola facade's step-up, whose back channel carries no
+         * `id_token_hint`). Another `sub` stores nothing, revokes what was issued and fails with
+         * `Recoverable(AccountMismatch)`, the session left as it was. Needs an [idTokenValidator]:
+         * without validated claims there is no `sub` to compare, and the login is refused the
+         * same way rather than let through. Null compares nothing, which is a plain `login()`.
+         */
+        expectedSubject: String? = null,
     ): TokenResponse {
-        val request = LoginRequest(scopes, acrValues, maxAge, parameters, ephemeralBrowser)
+        val request = LoginRequest(scopes, acrValues, maxAge, parameters, ephemeralBrowser, expectedSubject)
         while (true) {
             val running = LoginFlight(request)
             val joined: LoginFlight? = synchronized(loginLock) {
@@ -336,11 +358,12 @@ public class SessionCoordinator(
         val maxAge: Long?,
         val parameters: AuthorizationParameters,
         val ephemeralBrowser: Boolean,
+        val expectedSubject: String? = null,
     ) {
         /** Field by field: [AuthorizationParameters] is not a data class, and what is sent is what counts. */
         fun sameAs(other: LoginRequest): Boolean =
             scopes == other.scopes && acrValues == other.acrValues && maxAge == other.maxAge &&
-                ephemeralBrowser == other.ephemeralBrowser &&
+                ephemeralBrowser == other.ephemeralBrowser && expectedSubject == other.expectedSubject &&
                 parameters.prompt == other.parameters.prompt && parameters.loginHint == other.parameters.loginHint &&
                 parameters.uiLocales == other.parameters.uiLocales && parameters.resources == other.parameters.resources &&
                 parameters.extra == other.parameters.extra
@@ -363,6 +386,7 @@ public class SessionCoordinator(
 
     private suspend fun loginOnce(request: LoginRequest): TokenResponse = loginBody(
         request.scopes, request.acrValues, request.maxAge, request.parameters, request.ephemeralBrowser,
+        request.expectedSubject,
     )
 
     private suspend fun loginBody(
@@ -371,6 +395,7 @@ public class SessionCoordinator(
         maxAge: Long?,
         parameters: AuthorizationParameters,
         ephemeralBrowser: Boolean,
+        expectedSubject: String?,
     ): TokenResponse = retryScope.operation {
         // OpenID Connect Core §11: a refresh token is issued for a grant that asked for
         // `offline_access`, and auth issues none otherwise. This session model has nothing to
@@ -396,7 +421,7 @@ public class SessionCoordinator(
         // code just obtained is not wasted on a request the provider was going to answer anyway).
         retryScope.refuseIfCoolingDown(tokenOrigin())
         val grant = flow.authorize(requested, acrValues, maxAge, parameters, ephemeralBrowser)
-        finishLogin(grant, maxAge)
+        finishLogin(grant, maxAge, expectedSubject)
     }
 
     /**
@@ -404,16 +429,20 @@ public class SessionCoordinator(
      * [resumePendingLogin] so that a sign-in finished in a cold-started process passes through
      * exactly the checks and the persistence order of one finished in the process that began it.
      */
-    private suspend fun finishLogin(grant: AuthorizationGrant, maxAge: Long?): TokenResponse =
+    private suspend fun finishLogin(
+        grant: AuthorizationGrant,
+        maxAge: Long?,
+        expectedSubject: String? = null,
+    ): TokenResponse =
         // However it ends — a grant stored, a refusal, a cancelled caller, a store that would not
         // write — the exchange is over, and `login()` is no longer refused on its account.
         try {
-            exchange(grant, maxAge)
+            exchange(grant, maxAge, expectedSubject)
         } finally {
             flow.exchangeFinished()
         }
 
-    private suspend fun exchange(grant: AuthorizationGrant, maxAge: Long?): TokenResponse {
+    private suspend fun exchange(grant: AuthorizationGrant, maxAge: Long?, expectedSubject: String?): TokenResponse {
         // One attempt, with no retry budget around it. An authorization code is single-use
         // and the token endpoint offers no idempotency for `authorization_code` —
         // `Idempotency-Key` is honoured for the refresh family alone (`OAuthTokenService`) —
@@ -450,6 +479,12 @@ public class SessionCoordinator(
                     previous = null,
                     serverTime = issued.serverDate,
                 )
+            }
+            // Inside the block that abandons the login and revokes what was issued: another user's
+            // grant is discarded exactly as a rejected ID token's is, before anything is persisted,
+            // so the session this was meant to strengthen is untouched (`spec/state-machine.md`).
+            if (expectedSubject != null && validated?.subject != expectedSubject) {
+                throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.AccountMismatch)
             }
             warnIfNoExpiry(issued)
             if (refreshTokens == RefreshTokenPolicy.Required) {
