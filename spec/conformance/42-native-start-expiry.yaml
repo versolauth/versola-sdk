@@ -1,0 +1,36 @@
+id: 42-native-start-expiry
+title: A sign-in that outlives the lifetime edge gave its request ends as expired, without a complete request
+issues: [40]
+applies_to: [android, ios, flutter]
+mode: dpop
+fault_injection: [process-death]
+preconditions:
+  - Auth's request_uri lifetime is 60 seconds and edge's blob lifetime is longer.
+  - No credentials are present on the device.
+steps:
+  - actor: app
+    action: Call login.
+  - actor: sdk
+    action: POST edge's native start endpoint.
+    expect: 200 with expires_in 60.
+  - actor: user
+    action: Complete the sign-in in the browser 70 seconds after the start answer.
+  - actor: auth
+    action: Redirect to the App Link with code, state and iss.
+  - actor: harness
+    action: Repeat, killing the app process while the browser is foreground and cold-starting it 70 seconds after the start answer.
+  - actor: harness
+    action: Repeat with the sign-in completed 30 seconds after the start answer.
+assertions:
+  - 60 seconds after the start answer login fails with Recoverable, cause PendingRequestExpired, and the pending request is wiped.
+  - The redirect that arrives afterwards is ignored; no native complete request is sent for it.
+  - After the cold start the restored state is Unauthenticated, not Authorizing, and no complete request is sent.
+  - A sign-in completed within the lifetime sends the complete request and reaches Authenticated.
+  - The expiry is measured from the start answer on a clock that keeps running while the device sleeps, and across the process restart from the persisted expiry.
+  - The error is never Reauthenticate, and a grant stored before the login is untouched.
+notes: >
+  Edge seals min(the request_uri's lifetime, its blob lifetime) into the blob and refuses a
+  complete after it with invalid_grant. The SDK knows the same moment from expires_in and does not
+  spend a request to be told; reporting a slow sign-in as a rejected grant would send the app's
+  user through an error path for having taken a minute. That the default lifetime is 60 seconds
+  is the server's to change (server-dependencies.md, Open).

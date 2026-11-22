@@ -7,7 +7,7 @@ preconditions:
   - The tenant has the fapi2 security profile.
   - A native client is registered with tls_client_auth, an edge-held certificate, requirePushedAuthorizationRequests, dpopBoundAccessTokens and one https App Link redirect URI.
   - Edge is configured with a native block for the auth it fronts.
-  - The SDK is configured with BackChannel.Edge, edgeBaseUrl, and that redirect URI.
+  - The SDK is configured with edgeUrl, clientId and that redirect URI (versola-sdk-api.md section 3).
   - No credentials are present on the device.
 steps:
   - actor: app
@@ -16,7 +16,7 @@ steps:
     action: POST edge's native start endpoint for the client with redirect_uri, scope and nonce, and a DPoP proof whose htu is that endpoint.
     expect: 200 with request_uri, state, blob, token_endpoint and revocation_endpoint.
   - actor: sdk
-    action: Persist state, the blob and the two endpoints, then open discovery's authorization_endpoint with client_id and request_uri in the system browser.
+    action: Persist state, the blob, the two endpoints and the request's expiry, then open the authorization_endpoint of the start answer with client_id and request_uri in the system browser.
   - actor: user
     action: Authenticate in the browser.
   - actor: auth
@@ -32,7 +32,8 @@ steps:
     expect: 200 with the same refresh_token value echoed back.
 assertions:
   - The start request carries no code_challenge, state, response_type, dpop_jkt or client_id parameter; those are edge's.
-  - The browser is opened on discovery's authorization endpoint with exactly client_id and request_uri, and the redirect URI is an https App Link.
+  - The browser is opened on the authorization_endpoint of the start answer with exactly client_id and request_uri, and the redirect URI is an https App Link.
+  - The SDK requests no discovery document and no key set, and sends every request of its own to edge's origin.
   - The redirect is held to the state edge issued, compared in constant time, and a redirect without iss is refused before any network call.
   - The proof on the complete request has htm=POST and htu equal to the token_endpoint from start, not edge's URL, and no ath claim.
   - The access token's cnf.jkt equals the thumbprint of the device key, and the token carries no x5t#S256.

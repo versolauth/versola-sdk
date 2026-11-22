@@ -193,7 +193,10 @@ attempts ran out while the server kept asking), the SDK remembers, per origin an
 moment the server said it would accept requests again. A `Retry-After` that fits, is waited out
 and is followed by a success starts nothing, so a concurrent call is not refused on its account.
 The origin is the one the request goes to: a revocation endpoint on another host than the token
-endpoint has its own allowance and its own cooldown. Until the time passes every SDK-originated
+endpoint has its own allowance and its own cooldown. For the `Versola` facade that is edge's origin
+for every native call, whatever `htu` the proof names: the `token_endpoint` a proof is signed for is
+auth's and is never dialled, and edge relays no `Retry-After` of auth's, so the only server that
+can ask the facade for quiet is edge. Until the time passes every SDK-originated
 request to that origin (a refresh triggered by a call, a revocation, a UserInfo) fails
 immediately with the same `Recoverable(Server)`, `retryAfter` set to what is left and `attempts` 0,
 **without sending anything**. Without this, an app that calls `accessToken()` in a loop, or fifty screens

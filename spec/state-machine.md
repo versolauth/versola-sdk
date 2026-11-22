@@ -60,15 +60,22 @@ authorization request**: PKCE `code_verifier`, `state`, `nonce`, requested scope
 Persisting before opening the browser, not after, is the whole point: the app can be killed
 between the two.
 
-**Through edge (`BackChannel.Edge`, #40)** the request is built by edge rather than by the
-SDK: `login()` first calls `POST {edge}/native/start/{clientId}` with a DPoP proof signed for
-that URL, and edge generates the PKCE pair and the `state`, pushes the request to `/par` with
-`dpop_jkt` taken from the proof, and answers with a `request_uri`, the `state`, a sealed blob
-holding the verifier, and the two auth endpoints later proofs are signed for. What the SDK
-persists before the browser opens is then edge's `state`, the blob, the nonce, the scopes, the
-redirect URI, the step-up parameters and those two endpoints — there is no `code_verifier` on
-the device in this mode, and the browser opens on discovery's `authorization_endpoint` with
-`client_id` and `request_uri` only. The persistence moment and its reason are unchanged.
+**Through edge (the `Versola` facade, `versola-sdk-api.md`, #40)** the request is built by edge
+rather than by the SDK: `login()` first calls `POST {edge}/native/start/{clientId}` with a DPoP
+proof signed for that URL, and edge generates the PKCE pair and the `state`, pushes the request to
+`/par` with `dpop_jkt` taken from the proof, and answers with a `request_uri`, the `state`, a
+sealed blob holding the verifier, the `authorization_endpoint` to open, the two auth endpoints
+later proofs are signed for, and `expires_in`. What the SDK persists before the browser opens is
+then edge's `state`, the blob, the nonce, the options of the login, the redirect URI, the step-up
+parameters, those two endpoints and the request's expiry: there is no `code_verifier` on the device
+in this mode, and the browser opens on the `authorization_endpoint` edge answered, with `client_id`
+and `request_uri` only. The facade reads no discovery document: an issuer whose address is an
+edge's serves none. The persistence moment and its reason are unchanged.
+
+The request lives as long as edge said, not a fixed ten minutes: `expires_in` seconds from the
+answer, capped at ten minutes. Edge seals the same moment into the blob, so a redirect that comes
+later could only be answered `invalid_grant`; wherever this document says "ten minutes" for a
+pending request, the `Versola` facade reads that expiry.
 
 ### `Authorizing → Authenticated`
 
@@ -406,6 +413,16 @@ re-enters `Authorizing` carrying those parameters, and the originating call is r
 The originating request is held in memory only. A process death during step-up loses it, and
 the app is expected to re-issue the call.
 
+**The step-up must come back as the same user (the `Versola` facade).** `/native/start` forwards no
+`id_token_hint`, so the authorization a step-up starts is not tied to the session's user by
+anything on the wire, and the person may sign in as someone else in the browser. The SDK compares
+the `sub` of the new ID token with the session's before anything is stored. A different `sub`
+leaves the stored grant as it was (the state settles on `Authenticated`, as after every failed
+login over a stored grant), stores nothing of the new grant, revokes the refresh token it carried (best effort, as a
+rejected ID token's) and fails the call with `Recoverable(AccountMismatch)`. A `login()` is not
+held to this: signing in as another user there is an account switch and replaces the grant.
+Scenario 43.
+
 ### `Authenticated → Locked → Authenticated`
 
 Reachable only under `UnlockPolicy.OnAppUnlock`. Under the default, `UnlockPolicy.None`, no
@@ -496,9 +513,10 @@ undecryptable. This is indistinguishable from tampering and is treated as sign-o
 
 ### `Authenticated → LoggingOut → Unauthenticated`
 
-`logout()` revokes the refresh token at `/revoke` (through `/native/revoke` under
-`BackChannel.Edge`, with a proof signed for the remembered `revocation_endpoint`), opens auth's
-`/logout` with `id_token_hint`, `client_id`, `post_logout_redirect_uri` and a `state`, then wipes local
+`logout()` revokes the refresh token at `/revoke` (the `Versola` facade: through `/native/revoke`,
+with a proof signed for the remembered `revocation_endpoint`), opens auth's
+`/logout` (the `Versola` facade: the configured issuer's `/logout`, which an edge serves when the
+issuer's address is an edge's) with `id_token_hint`, `client_id`, `post_logout_redirect_uri` and a `state`, then wipes local
 state. Revocation comes first: a user who dismisses the signed-out page has still had the grant
 killed at the server. The `id_token_hint` is the last ID token held, which every refresh
 renews; auth silently ignores an expired hint and then has no session to end, so a session
@@ -521,8 +539,9 @@ one grant to one device-installation; reusing it across users on a shared device
 | Refresh token, unwrapped | Memory, one token request, zeroed after | no | no |
 | Pending refresh generation | Encrypted | yes | no |
 | Pending authorization request | Encrypted | yes, ≤10 min | no |
-| Sealed blob from `/native/start` (edge mode) | Encrypted, inside the pending request | yes, ≤10 min | no |
+| Sealed blob from `/native/start` (edge mode) | Encrypted, inside the pending request | yes, until the expiry edge gave, ≤10 min | no |
 | `token_endpoint` and `revocation_endpoint` from `/native/start` (edge mode) | Disk, unencrypted | yes | yes |
+| Granted scope (the `Versola` facade; what `stepUp()` asks for again) | Disk, unencrypted | yes | no |
 | Access token | Memory | no | no |
 | ID token (raw, for `id_token_hint`) | Encrypted, `CredentialKeyProvider` | yes | no |
 | ID token claims (parsed) | Memory | no | no |
@@ -564,9 +583,10 @@ what anything is verified against, and a `logout()` offline must still finish). 
 refetched is not served, because a withdrawn signing key is what it would still vouch for (the one
 exception is a refresh's ID token, up to a week past expiry: `retry-policy.md`, "A stale key set for a refresh"). The two native
 endpoints are kept for the same reason: a refresh in a later process signs for them and has no
-`/native/start` of its own to learn them from. Without the file the SDK falls back to
-discovery's `mtls_endpoint_aliases`, then to the plain endpoints — inferences, where the file
-is edge's own answer.
+`/native/start` of its own to learn them from. They are written before the refresh token is, so a
+grant without them is a damaged store: there is no discovery to infer them from, the proof a
+refresh needs cannot be addressed, and the refresh fails with
+`Reauthenticate(CredentialsInvalidated)` and wipes, as for a DPoP key that is gone.
 
 **Record binding (Android).** The key provider wraps each encrypted item with the name of its
 slot in front of the secret (`credentials/refreshToken`, `credentials/rawIdToken`,

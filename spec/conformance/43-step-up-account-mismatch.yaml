@@ -1,0 +1,35 @@
+id: 43-step-up-account-mismatch
+title: A step-up that comes back as another user is refused and the session is left as it was
+issues: [40, 9, 14]
+applies_to: [android, ios, flutter]
+mode: dpop
+preconditions:
+  - The session is Authenticated as user A, with a refresh token and an ID token stored.
+  - Edge answered a call with insufficient_user_authentication, and the app holds the StepUp error.
+  - A second account, user B, exists in the same tenant.
+steps:
+  - actor: app
+    action: Call stepUp with the challenge and no options.
+  - actor: sdk
+    action: POST edge's native start endpoint with the challenge's acr_values and max_age and the scope of the stored grant.
+  - actor: user
+    action: Sign in as user B in the browser.
+  - actor: sdk
+    action: POST edge's native complete endpoint.
+    expect: 200 with tokens for user B.
+  - actor: harness
+    action: Repeat with the user signing in as user A.
+  - actor: harness
+    action: Repeat from an Authenticated session with the app calling login instead of stepUp and the user signing in as user B.
+assertions:
+  - The start request of the step-up carries the scope the first login was granted, with no scope passed by the app.
+  - With user B, stepUp fails with Recoverable, cause AccountMismatch, code recoverable.account_mismatch.
+  - With user B, the stored refresh token, ID token and claims are user A's, unchanged byte for byte, the DPoP key is the same key, and a refresh afterwards answers 200.
+  - With user B, the refresh token of the refused grant is sent to edge's native revoke endpoint exactly once and appears in no later request and no file.
+  - With user B, the state observed is Authenticated, Authorizing, Authenticated; it is never Unauthenticated.
+  - With user A, stepUp succeeds and the stored grant is the new one.
+  - With login instead of stepUp, user B's grant replaces user A's and the claims are user B's.
+notes: >
+  Edge's /native/start forwards no id_token_hint, so nothing on the wire binds the step-up to the
+  session's user; the comparison of sub is the SDK's (state-machine.md). The check needs an ID
+  token on both sides, which is why the facade always asks for openid.

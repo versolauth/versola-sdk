@@ -1,0 +1,30 @@
+id: 44-native-start-options
+title: Login options reach the pushed request as the parameters edge forwards, and nothing else is sent
+issues: [128, 40]
+applies_to: [android, ios, flutter]
+mode: dpop
+preconditions:
+  - A native client is registered as in scenario 21, with two resources in its audience.
+  - No credentials are present on the device.
+steps:
+  - actor: app
+    action: Call login with scopes profile, acrValues sensitive, maxAge 300, prompt Login, loginHint, uiLocales kk and ru, two resources, a claims object and an authorization_details array.
+  - actor: sdk
+    action: POST edge's native start endpoint.
+    expect: 200 with a request_uri.
+  - actor: user
+    action: Complete the sign-in.
+  - actor: app
+    action: Force a refresh.
+assertions:
+  - The start request's form has exactly the names redirect_uri, scope, nonce, acr_values, max_age, prompt, login_hint, ui_locales, resource (twice), claims and authorization_details.
+  - scope is openid, offline_access and profile, space-separated; ui_locales is "kk ru"; acr_values is "sensitive"; max_age is 300.
+  - The claims and authorization_details values are the app's text byte for byte, form-encoded once.
+  - The start request carries no client_id, state, response_type, code_challenge, code_challenge_method, dpop_jkt, id_token_hint or response_mode.
+  - The ID token's auth_time is checked against max_age 300, and its acr is exposed in the claims.
+  - The refresh request carries both resource values.
+  - The public API of every platform offers no way to add a parameter outside this list; the check is on the API dump, the Swift interface and the Dart API, not on a request.
+notes: >
+  The list is NativeService.PassThroughParameters. Edge drops any other parameter without an
+  error, which is why the facade has typed options and no parameter map (ADR 0002, decision 4):
+  issue 128 asked for a map before the allow-list existed.
