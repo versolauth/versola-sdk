@@ -57,7 +57,7 @@ android/         Gradle multi-project: oauth-core (protocol engine, plain Kotlin
                  edge back channel), dpop, storage, browser, okhttp, sdk (the Versola facade),
                  oauth (the generic OAuthClient facade)
 ios/Sources/     Swift targets (OAuthCore, OAuthClient); the manifest is Package.swift at the repo root
-flutter/         versola_oauth: the Flutter binding (Pigeon bridge over the native facades)
+flutter/         versola_oauth and versola: the Flutter bindings (Pigeon bridges over the two native facades)
 conformance/     harness driving every SDK against a staged Versola stack
 tools/           validate-scenarios.py, the release scripts, verify-consumer/ (throwaway consumer apps, below)
 ```
@@ -179,7 +179,10 @@ process has no app host, so the real-Keychain tests still answer `-34018` there;
 
 ### Flutter
 
-Run from `flutter/versola_oauth/`. Flutter is pinned in `flutter/.fvmrc`; `fvm install` in
+Run from `flutter/versola_oauth/` (the generic facade's plugin) or `flutter/versola/` (the Versola
+facade's; the same commands, with `:versola:testDebugUnitTest` for its Kotlin glue, and its example
+substitutes both `io.versola:oauth-android` and `io.versola:versola-android` with the checkout's
+`:oauth` and `:sdk`). Flutter is pinned in `flutter/.fvmrc`; `fvm install` in
 `flutter/` fetches it once, and every command goes through `fvm` so the system Flutter, if any,
 is never used. No protocol logic lives in Dart: the binding calls the native SDKs through Pigeon.
 

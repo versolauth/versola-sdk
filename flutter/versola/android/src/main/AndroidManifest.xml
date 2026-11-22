@@ -1,0 +1,6 @@
+<!--
+  Nothing of the plugin's own: the SDK's :browser module brings the redirect and Auth Tab
+  activities, and the app re-declares versola.sdk.browser.VersolaRedirectActivity with its
+  redirect URI's intent filter (the example app's manifest shows the snippet).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" />

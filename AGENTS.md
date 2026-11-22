@@ -34,8 +34,8 @@ python3 tools/validate-scenarios.py                   # spec: scenarios against 
 npx markdownlint-cli2 "**/*.md"                        # spec.yml's markdown job
 ```
 
-Flutter commands (`fvm flutter analyze`, `fvm flutter test` in `flutter/versola_oauth`) apply to the
-plugin; the toolchain pin is described in `develop.md`. JDK 21 is required for Gradle (`JAVA_HOME`);
+Flutter commands (`fvm flutter analyze`, `fvm flutter test` in `flutter/versola_oauth` and `flutter/versola`) apply to
+the plugins; the toolchain pin is described in `develop.md`. JDK 21 is required for Gradle (`JAVA_HOME`);
 the exact emulator and staged-stack recipes are in `develop.md`. Do not paste them from memory.
 
 ## Definition of Done

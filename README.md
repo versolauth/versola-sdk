@@ -342,7 +342,7 @@ Apache-2.0. See [LICENSE](LICENSE).
 spec/            the specification: state machine, errors, retry policy, providers, API
 android/         Gradle multi-project (module :oauth is the SDK; :oauth-core is the protocol engine)
 ios/             Swift sources and tests; the manifest is Package.swift at the repository root
-flutter/         versola_oauth: the Flutter binding (Pigeon), with an example app
+flutter/         versola_oauth and versola: the Flutter bindings (Pigeon), each with an example app
 conformance/     test harness and the provider containers (Keycloak, Ory Hydra)
 docs/            decision records and reviews, and the release runbook
 ```
