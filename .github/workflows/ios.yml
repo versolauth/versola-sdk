@@ -32,11 +32,13 @@ jobs:
       - name: SPM resolution from a clean checkout
         run: swift package resolve
 
-      # The schemes Xcode generates for the package. With one library product (VersolaOAuth) the
-      # only scheme is named after the *package* (`Versola`, `name:` in Package.swift): there is no
-      # `Versola-Package` aggregate, which exists from two products on, and no scheme named after the
-      # product (Xcode 26.6 on the runner printed exactly `Versola`). Printed on every run so a
-      # scheme that moves with an Xcode upgrade is readable in the log.
+      # The schemes Xcode generates for the package. With two library products (VersolaOAuth and
+      # VersolaSDK) there is one scheme per product and the `Versola-Package` aggregate, which is
+      # the only one that holds every target and every test target; Xcode 26.6 on the runner
+      # printed exactly `Versola-Package`, `VersolaOAuth`, `VersolaSDK`. With a single product the
+      # only scheme was named after the *package* (`Versola`), which is why that name is gone.
+      # Printed on every run so a scheme that moves with an Xcode upgrade or a change of the
+      # product list is readable in the log.
       - name: List the schemes
         run: xcodebuild -list
 
@@ -60,7 +62,7 @@ jobs:
 
       # Building for a generic simulator needs no signing; tests use the prepared concrete UDID.
       - name: Build
-        run: xcodebuild build -scheme Versola -destination "generic/platform=iOS Simulator"
+        run: xcodebuild build -scheme Versola-Package -destination "generic/platform=iOS Simulator"
 
       - name: Unit tests
-        run: xcodebuild test -scheme Versola -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_ID"
+        run: xcodebuild test -scheme Versola-Package -destination "platform=iOS Simulator,id=$IOS_SIMULATOR_ID"
