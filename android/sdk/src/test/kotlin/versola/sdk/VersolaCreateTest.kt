@@ -158,6 +158,22 @@ class VersolaCreateTest {
         assertNotSame(first, second)
     }
 
+    // The logger default is one shared instance: a fresh one per configuration would make the
+    // identity comparison refuse the second create() of an Activity.onCreate on rotation.
+    @Test
+    fun `two configurations built with the defaults only give the same instance`() {
+        fun defaults() = VersolaConfiguration(
+            edgeUrl = "https://id.example.com",
+            clientId = "defaults-only",
+            redirectUri = "https://app.example.com/oauth",
+        )
+
+        val first = Versola.create(application, defaults())
+        val second = Versola.create(application, defaults())
+
+        assertSame(first, second)
+    }
+
     @Test
     fun `a different edgeUrl is a different instance`() {
         val first = Versola.create(application, configuration(clientId = "c"))
@@ -177,7 +193,7 @@ class VersolaCreateTest {
             )
 
             assertEquals(SessionState.Unauthenticated, runBlocking { versola.currentSessionState() })
-            assertEquals(null, versola.claims)
+            assertEquals(null, runBlocking { versola.claims() })
             assertEquals("no request, not even a discovery fetch", emptyList<String>(), edge.requests.map { it.target })
         }
     }

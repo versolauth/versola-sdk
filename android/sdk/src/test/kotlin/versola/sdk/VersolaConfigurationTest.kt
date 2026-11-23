@@ -26,7 +26,7 @@ class VersolaConfigurationTest {
         edgeUrl: String = "https://id.example.com",
         clientId: String = "acme-mobile",
         redirectUri: String = "https://app.example.com/oauth",
-        issuer: String = edgeUrl,
+        issuer: String? = null,
         postLogoutRedirectUri: String? = null,
         clockSkewTolerance: Duration = 60.seconds,
     ) = VersolaConfiguration(
@@ -97,9 +97,18 @@ class VersolaConfigurationTest {
     // --- issuer ---
 
     @Test
-    fun `the issuer defaults to the edgeUrl as written`() {
+    fun `the issuer defaults to the edge's origin`() {
         assertEquals("https://id.example.com", configuration(edgeUrl = "https://id.example.com").issuer)
-        assertEquals("https://id.example.com/", configuration(edgeUrl = "https://id.example.com/").issuer)
+    }
+
+    // The sign-in compares `iss` as written (RFC 9207) and the deployment's issuer has no slash: a
+    // default that kept the edgeUrl's slash would fail every sign-in with IssuerMismatch.
+    @Test
+    fun `a trailing slash on the edgeUrl does not reach the default issuer`() {
+        val configuration = configuration(edgeUrl = "https://id.example.com/")
+
+        assertEquals("https://id.example.com", configuration.issuer)
+        assertEquals("https://id.example.com", configuration.core.issuer)
     }
 
     @Test

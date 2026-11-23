@@ -22,6 +22,10 @@ final class EdgeTokenClientTests: XCTestCase {
         return (try EdgeNativeTokenClient(clientId: F.clientId, issuer: F.issuer, edgeUrl: F.edgeUrl, httpClient: http, dpop: dpop, endpoints: store, clock: Clock(now: { F.now })), store)
     }
 
+    private func client(_ http: ScriptedHTTP, failing store: FailingEndpointsStore) throws -> EdgeNativeTokenClient {
+        try EdgeNativeTokenClient(clientId: F.clientId, issuer: F.issuer, edgeUrl: F.edgeUrl, httpClient: http, dpop: F.proofSource(), endpoints: store, clock: Clock(now: { F.now }))
+    }
+
     private func grant(
         code: String = "v1.kz-2.Zz+/=", state: String = "edge-state-1", iss: String? = F.issuer,
         extensions: [String: String]? = nil
@@ -417,6 +421,126 @@ final class EdgeTokenClientTests: XCTestCase {
         XCTAssertEqual(urls, [F.completeUrl, F.tokenUrl, F.revokeUrl])
     }
 
+    // MARK: the endpoint store failing
+
+    private func osStatus(_ status: OSStatus) -> Error { NSError(domain: NSOSStatusErrorDomain, code: Int(status)) }
+
+    private func storeDetail(_ error: Error) -> String {
+        let bridged = error as NSError
+        return "the edge endpoints store failed (\(bridged.domain) \(bridged.code))"
+    }
+
+    func testAFailedSaveAfterTheCodeWasSpentIsTypedAndRevokesTheIssuedRefreshToken() async throws {
+        let failure = CocoaError(.fileWriteOutOfSpace)
+        let http = ScriptedHTTP([F.answer(200, [:], F.tokenAnswer()), F.answer(200)])
+        let client = try client(http, failing: FailingEndpointsStore(saveFailure: failure))
+
+        let error = await thrown { try await client.exchange(self.grant()) }
+
+        XCTAssertEqual(error, .configuration(.invalidConfiguration(detail: storeDetail(failure))))
+        let requests = await http.requests
+        XCTAssertEqual(requests.map(\.url.absoluteString), [F.completeUrl, F.revokeUrl], "the code was spent, then the token it bought was revoked")
+        let form = F.decodeForm(requests[1])
+        XCTAssertEqual(form.first { $0.0 == "token" }?.1, "rt-1")
+        // Signed for auth's revocation endpoint, not for edge's URL: from the endpoints in hand, not the store.
+        XCTAssertEqual(F.proofClaims(requests[1])["htu"] as? String, F.revocationEndpoint)
+    }
+
+    func testAFailedSaveBecauseTheDeviceIsLockedIsUnlockRequiredAndStillRevokes() async throws {
+        let http = ScriptedHTTP([F.answer(200, [:], F.tokenAnswer()), F.answer(200)])
+        let client = try client(http, failing: FailingEndpointsStore(saveFailure: osStatus(errSecInteractionNotAllowed)))
+
+        let error = await thrown { try await client.exchange(self.grant()) }
+
+        XCTAssertEqual(error, .recoverable(.unlockRequired))
+        let count = await http.requests.count
+        XCTAssertEqual(count, 2)
+    }
+
+    func testARevocationThatFailsAfterAFailedSaveChangesNothingAboutTheErrorTheCallerGets() async throws {
+        let world = RetryWorld()
+        let failure = CocoaError(.fileWriteNoPermission)
+        let http = ScriptedHTTP(steps: [.answer(F.answer(200, [:], F.tokenAnswer())), .fail])
+        let client = try client(http, failing: FailingEndpointsStore(saveFailure: failure))
+
+        let error = await thrown { try await world.within(world.budget()) { try await client.exchange(self.grant()) } }
+
+        XCTAssertEqual(error, .configuration(.invalidConfiguration(detail: storeDetail(failure))))
+    }
+
+    func testAFailedSaveOfAResponseWithNoRefreshTokenRevokesNothing() async throws {
+        let body = #"{"access_token":"at-1","token_type":"DPoP","expires_in":300,"id_token":"idt"}"#
+        let http = ScriptedHTTP([F.answer(200, [:], body)])
+        let client = try client(http, failing: FailingEndpointsStore(saveFailure: CocoaError(.fileWriteOutOfSpace)))
+
+        let error = await thrown { try await client.exchange(self.grant()) }
+
+        XCTAssertNotNil(error)
+        let count = await http.requests.count
+        XCTAssertEqual(count, 1)
+    }
+
+    func testALoadThatFailsForATransientReasonIsNotNoEndpointsAndSendsNothing() async throws {
+        let failure = CocoaError(.fileReadUnknown)
+        let http = ScriptedHTTP([F.answer(200, [:], F.tokenAnswer())])
+        let client = try client(http, failing: FailingEndpointsStore(loadFailure: failure))
+
+        let refresh = await thrown { try await client.refresh(refreshToken: self.refreshToken, idempotencyKey: "k") }
+        let revoke = await thrown { try await client.revoke(refreshToken: self.refreshToken) }
+
+        // Not `credentialsInvalidated`, which ends in a wiped session for a grant that is perfectly good.
+        XCTAssertEqual(refresh, .configuration(.invalidConfiguration(detail: storeDetail(failure))))
+        XCTAssertEqual(revoke, refresh)
+        let count = await http.requests.count
+        XCTAssertEqual(count, 0)
+    }
+
+    func testALoadThatFailsBecauseTheDeviceIsLockedIsUnlockRequiredAndNotCredentialsInvalidated() async throws {
+        let http = ScriptedHTTP([F.answer(200, [:], F.tokenAnswer())])
+        let client = try client(http, failing: FailingEndpointsStore(loadFailure: osStatus(errSecInteractionNotAllowed)))
+
+        let error = await thrown { try await client.refresh(refreshToken: self.refreshToken, idempotencyKey: "k") }
+
+        XCTAssertEqual(error, .recoverable(.unlockRequired))
+        let count = await http.requests.count
+        XCTAssertEqual(count, 0)
+    }
+
+    func testFileStoreThatCannotReadAnExistingFileThrowsTypedAndKeepsTheFile() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("versola-edge-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // A directory where the file should be: it exists, and reading it fails, which is not "absent".
+        let file = directory.appendingPathComponent("native-endpoints.json")
+        try FileManager.default.createDirectory(at: file, withIntermediateDirectories: true)
+
+        let error = await thrown { try await FileEdgeEndpointsStore(file: file).load() }
+
+        guard case .configuration(.invalidConfiguration)? = error else { return XCTFail("expected a typed store failure, got \(String(describing: error))") }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: file.path), "an unreadable item is not a damaged one: nothing is deleted")
+    }
+
+    func testFileStoreThatCannotWriteThrowsTyped() async throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("versola-edge-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        // A file where the directory should be: createDirectory fails.
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let blocker = directory.appendingPathComponent("blocker")
+        try Data("x".utf8).write(to: blocker)
+        let store = FileEdgeEndpointsStore(file: blocker.appendingPathComponent("native-endpoints.json"))
+
+        let error = await thrown { try await store.save(EdgeNativeEndpoints(tokenEndpoint: F.tokenEndpoint, revocationEndpoint: F.revocationEndpoint)) }
+
+        guard case .configuration(.invalidConfiguration)? = error else { return XCTFail("expected a typed store failure, got \(String(describing: error))") }
+    }
+
+    func testTheStoreFailureClassifierMapsTheThreeUnavailableStatusesToUnlockRequired() {
+        for status in [errSecInteractionNotAllowed, errSecNotAvailable, errSecAuthFailed] {
+            XCTAssertEqual(edgeStoreFailure(osStatus(status)), .recoverable(.unlockRequired), "\(status)")
+        }
+        XCTAssertEqual(edgeStoreFailure(osStatus(errSecItemNotFound)), .configuration(.invalidConfiguration(detail: storeDetail(osStatus(errSecItemNotFound)))))
+        XCTAssertEqual(edgeStoreFailure(OAuthError.recoverable(.unlockRequired)), .recoverable(.unlockRequired))
+    }
+
     // MARK: the endpoint store
 
     func testFileStoreRoundTripsAndAnUnreadableFileIsDeletedAndReadAsAbsent() async throws {
@@ -443,5 +567,25 @@ final class EdgeTokenClientTests: XCTestCase {
         let text = String(decoding: data, as: UTF8.self)
         XCTAssertTrue(text.contains("token_endpoint") && text.contains("revocation_endpoint"))
         XCTAssertFalse(text.contains("rt-1"))
+    }
+}
+
+/// A store that fails where a test says, for the paths a plain file cannot be made to fail on cue.
+actor FailingEndpointsStore: EdgeEndpointsStore {
+    private let loadFailure: Error?
+    private let saveFailure: Error?
+
+    init(loadFailure: Error? = nil, saveFailure: Error? = nil) {
+        self.loadFailure = loadFailure
+        self.saveFailure = saveFailure
+    }
+
+    func load() async throws -> EdgeNativeEndpoints? {
+        if let loadFailure { throw loadFailure }
+        return EdgeNativeEndpoints(tokenEndpoint: EdgeFixture.tokenEndpoint, revocationEndpoint: EdgeFixture.revocationEndpoint)
+    }
+
+    func save(_ endpoints: EdgeNativeEndpoints) async throws {
+        if let saveFailure { throw saveFailure }
     }
 }

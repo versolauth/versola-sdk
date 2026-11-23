@@ -155,7 +155,8 @@ package protocol NativeAuthorizationStarter: Sendable {
 /// with edge's nonce, cached under edge's origin like the authenticated session's. The exchange that
 /// follows signs for the token endpoint edge answers instead (`EdgeNativeTokenClient`).
 ///
-/// One nonce retry and no redirects followed, for the reasons `HTTPTokenClient` has. Repeated under
+/// One nonce retry, one `invalid_dpop_proof` retry and no redirects followed, for the reasons
+/// `HTTPTokenClient` has. Repeated under
 /// the operation's retry budget like a pushed authorization request (`spec/retry-policy.md`): a
 /// second start creates a second `request_uri` and the first expires unused, so nothing is spent.
 /// Every attempt, a repeat and the answer to a nonce challenge alike, mints a new proof: edge
@@ -181,9 +182,15 @@ package struct HTTPNativeAuthorizationStarter: NativeAuthorizationStarter {
         return try await OperationBudget.run(origin: origin) { try await self.startOnce(body: body, origin: origin) }
     }
 
-    /// One start, with the single nonce retry `spec/retry-policy.md` fixes outside the budget.
+    /// One start, with the single nonce retry `spec/retry-policy.md` fixes outside the budget, and the
+    /// single `invalid_dpop_proof` retry `spec/errors.md` fixes beside it, as `TokenRequestExecutor` has
+    /// both: the response's `Date` is observed on every answer (above), so the retry's proof is minted
+    /// from the server's clock, which is what a skewed device needs. A second refusal is the verdict the
+    /// executor gives for it, `reauthenticate(.credentialsInvalidated)`: the key does not match what edge
+    /// holds for it, and no further proof changes that.
     private func startOnce(body: Data, origin: String) async throws -> NativeStart {
         var nonceAnswered = false
+        var proofRetried = false
         while true {
             let proof = try await dpop.proof(method: "POST", url: url, nonce: await dpop.nonce(for: origin), accessToken: nil)
             let response = try await send(body: body, proof: proof)
@@ -198,8 +205,20 @@ package struct HTTPNativeAuthorizationStarter: NativeAuthorizationStarter {
                 nonceAnswered = true
                 continue
             }
+            // Edge relays auth's refusal of the proof as a 400 with the error in the JSON body, and its own
+            // as a 401 with the error in `WWW-Authenticate`; both are the same condition.
+            if isInvalidProof(response) {
+                if proofRetried { throw OAuthError.reauthenticate(.credentialsInvalidated) }
+                proofRetried = true
+                continue
+            }
             throw rejected(response)
         }
+    }
+
+    private func isInvalidProof(_ response: HTTPResponse) -> Bool {
+        if response.header("WWW-Authenticate").flatMap(wwwAuthenticateError) == "invalid_dpop_proof" { return true }
+        return TokenErrorPayload.parseStrict(response.body)?.error == "invalid_dpop_proof"
     }
 
     private func send(body: Data, proof: String) async throws -> HTTPResponse {

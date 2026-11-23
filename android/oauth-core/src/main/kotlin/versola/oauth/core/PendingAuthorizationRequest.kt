@@ -59,7 +59,27 @@ public class PendingAuthorizationRequest public constructor(
      * before this field existed reads as.
      */
     public val lifetimeMillis: Long = MAX_AGE_MILLIS,
+    /**
+     * The `sub` the sign-in must come back as, for a re-authorization of a session that may not
+     * change hands (the Versola facade's step-up). It travels with the request, as [maxAge] does,
+     * because the login may be finished by a process that has no caller to ask: the caller was
+     * cancelled while the browser was up, or the process died and the redirect reached its
+     * successor, and either way the same-user check has to be there. A `sub` is an identifier, not
+     * a secret, but it is kept out of [toString] like the rest. Null for a plain sign-in, and for
+     * anything persisted before this field existed, which is why it defaults. Copied onto the
+     * [AuthorizationGrant] by the validator.
+     */
+    public val expectedSubject: String? = null,
 ) {
+
+    /** This request bound to [subject], for a flow that learns it after its starter built the request. */
+    internal fun expectingSubject(subject: String?): PendingAuthorizationRequest =
+        if (subject == null) this else PendingAuthorizationRequest(
+            state = state, nonce = nonce, codeVerifier = codeVerifier, scopes = scopes,
+            redirectUri = redirectUri, acrValues = acrValues, maxAge = maxAge,
+            createdAtEpochMillis = createdAtEpochMillis, extension = extension, issRequired = issRequired,
+            resources = resources, lifetimeMillis = lifetimeMillis, expectedSubject = subject,
+        )
 
     private val boundedLifetimeMillis: Long get() = lifetimeMillis.coerceIn(0, MAX_AGE_MILLIS)
 
@@ -133,7 +153,7 @@ public object PendingAuthorizationCodec {
 
     private val KNOWN_MEMBERS = setOf(
         "state", "nonce", "codeVerifier", "scopes", "redirectUri", "acrValues", "maxAge",
-        "createdAtEpochMillis", "issRequired", "resources", "lifetimeMillis",
+        "createdAtEpochMillis", "issRequired", "resources", "lifetimeMillis", "expectedSubject",
     )
 }
 

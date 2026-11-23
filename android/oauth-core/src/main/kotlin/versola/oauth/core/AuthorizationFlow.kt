@@ -386,12 +386,14 @@ public class AuthorizationFlow(
         parameters: AuthorizationParameters = AuthorizationParameters(),
         /** `spec/oauth-sdk-api.md` section 6: a browser without the user's shared state. */
         ephemeralBrowser: Boolean = false,
+        /** Stored with the pending request, so that whoever finishes the login checks it ([PendingAuthorizationRequest.expectedSubject]). */
+        expectedSubject: String? = null,
     ): AuthorizationGrant {
         // A resume that is only waiting for a redirect gives way: its request is the leftover this
         // call supersedes below. Before the lock, because the resume is holding it.
         preemptResume()
         return AUTHORIZE_LOCK.withLock {
-            leg { authorizeUnderLock(scopes, acrValues, maxAge, parameters, ephemeralBrowser) }
+            leg { authorizeUnderLock(scopes, acrValues, maxAge, parameters, ephemeralBrowser, expectedSubject) }
         }
     }
 
@@ -401,13 +403,14 @@ public class AuthorizationFlow(
         maxAge: Long?,
         parameters: AuthorizationParameters,
         ephemeralBrowser: Boolean,
+        expectedSubject: String?,
     ): AuthorizationGrant {
         // Created before discovery and the rest: a sign-out that arrives while this call is still
         // getting ready ends the wait it is about to start rather than finding nothing to end.
         val loginSignal = CompletableDeferred<Unit>()
         this.loginSignal = loginSignal
         try {
-            return authorizeAwaiting(scopes, acrValues, maxAge, parameters, ephemeralBrowser, loginSignal)
+            return authorizeAwaiting(scopes, acrValues, maxAge, parameters, ephemeralBrowser, expectedSubject, loginSignal)
         } finally {
             this.loginSignal = null
         }
@@ -419,6 +422,7 @@ public class AuthorizationFlow(
         maxAge: Long?,
         parameters: AuthorizationParameters,
         ephemeralBrowser: Boolean,
+        expectedSubject: String?,
         loginSignal: CompletableDeferred<Unit>,
     ): AuthorizationGrant {
         ensureRestored()
@@ -439,9 +443,9 @@ public class AuthorizationFlow(
             parameters = parameters,
         )
         val (pending, uri) = if (starter == null) {
-            request.toPending(clock()) to request.toUri(metadata.authorizationEndpoint)
+            request.toPending(clock()).expectingSubject(expectedSubject) to request.toUri(metadata.authorizationEndpoint)
         } else {
-            starter.start(request, metadata, clock()).let { it.pending to it.browserUri }
+            starter.start(request, metadata, clock()).let { it.pending.expectingSubject(expectedSubject) to it.browserUri }
         }
         // A request still in the slot is a leftover nobody awaits (else this call would not be here,
         // the lock being held for as long as one is awaited): superseded. A redirect its tab still

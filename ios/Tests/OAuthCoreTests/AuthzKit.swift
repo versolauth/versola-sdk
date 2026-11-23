@@ -41,11 +41,13 @@ enum AuthzKit {
     }
 
     static func pending(
-        state: String = "state-1", createdAt: Date = now, issRequired: Bool = false, maxAge: Int? = nil
+        state: String = "state-1", createdAt: Date = now, issRequired: Bool = false, maxAge: Int? = nil,
+        expectedSubject: String? = nil
     ) -> PendingAuthorizationRequest {
         PendingAuthorizationRequest(
             state: state, nonce: "nonce-1", codeVerifier: String(repeating: "v", count: 43),
-            scopes: ["openid"], redirectUri: redirect, maxAge: maxAge, createdAt: createdAt, issRequired: issRequired
+            scopes: ["openid"], redirectUri: redirect, maxAge: maxAge, createdAt: createdAt, issRequired: issRequired,
+            expectedSubject: expectedSubject
         )
     }
 

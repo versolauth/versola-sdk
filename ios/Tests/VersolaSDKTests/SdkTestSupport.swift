@@ -63,7 +63,14 @@ actor ScriptedEdge: HTTPClient {
     var startOverride: HTTPResponse?
     var refreshOverride: HTTPResponse?
     var revokeOverride: HTTPResponse?
+    /// Held after `/native/complete` has been received and before it is answered: the server has the code
+    /// and the caller can be cancelled meanwhile.
+    var completeGate: Gate?
+    /// Leaves `scope` out of the token response, which a provider may do when it granted what was asked.
+    var omitScope = false
+    func setOmitScope(_ value: Bool) { omitScope = value }
 
+    func setCompleteGate(_ gate: Gate?) { completeGate = gate }
     func setAudience(_ audience: String) { self.audience = audience }
     func setSubjects(_ subjects: [String]) { self.subjects = subjects }
     func setIdTokenIssuer(_ issuer: String) { idTokenIssuer = issuer }
@@ -91,6 +98,7 @@ actor ScriptedEdge: HTTPClient {
         }
         if path.hasPrefix("/native/complete/") {
             completes.append(form)
+            if let gate = completeGate { await gate.wait() }
             if let completeOverride { return completeOverride }
             let subject = subjects[min(completes.count - 1, subjects.count - 1)]
             let refreshToken = "rt-\(completes.count)"
@@ -100,6 +108,7 @@ actor ScriptedEdge: HTTPClient {
                 "access_token": "at-\(completes.count)", "token_type": "DPoP", "expires_in": 300,
                 "refresh_token": refreshToken, "scope": "openid offline_access",
             ]
+            if omitScope { members.removeValue(forKey: "scope") }
             if includeIdToken { members["id_token"] = idToken(subject: subject, nonce: nonce) }
             return HTTPResponse(statusCode: 200, headers: json, body: try JSONSerialization.data(withJSONObject: members))
         }

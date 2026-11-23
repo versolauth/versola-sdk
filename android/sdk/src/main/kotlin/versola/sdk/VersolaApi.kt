@@ -16,7 +16,7 @@ import versola.sdk.dpop.KeyAttestation
 public interface VersolaApi {
     public val sessionState: Flow<SessionState>
     public suspend fun currentSessionState(): SessionState
-    public val claims: IdTokenClaims?
+    public suspend fun claims(): IdTokenClaims?
     public suspend fun login(options: LoginOptions = LoginOptions())
     public suspend fun stepUp(challenge: VersolaError.StepUp, options: LoginOptions? = null)
     public suspend fun logout(options: LogoutOptions = LogoutOptions()): LogoutOutcome

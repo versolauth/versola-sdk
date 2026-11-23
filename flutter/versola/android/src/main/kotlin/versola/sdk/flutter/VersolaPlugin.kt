@@ -110,7 +110,7 @@ public class VersolaPlugin : FlutterPlugin, VersolaHostApi {
 
     override suspend fun claims(handle: String): VersolaClaimsResult = attempt(::VersolaClaimsFailure) {
         VersolaClaimsOk(
-            client(handle).claims?.let { c ->
+            client(handle).claims()?.let { c ->
                 VersolaIdTokenClaimsMessage(
                     subject = c.subject,
                     issuer = c.issuer,

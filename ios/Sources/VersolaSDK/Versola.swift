@@ -251,10 +251,14 @@ public final class Versola: VersolaApi, Sendable {
     }
 
     /// The response's own `scope` when it has one (the server may grant less than was asked), else
-    /// what was requested.
-    private static func rememberScope(of response: TokenResponse, requested: [String], in store: any GrantedScopeStore) async {
+    /// what was requested. A nil `requested` is a login whose request is not known here (one finished
+    /// by the resume, in a process that never saw the call): a response with no `scope` then leaves the
+    /// remembered scope alone, rather than overwriting what the app asked for with a guess.
+    private static func rememberScope(of response: TokenResponse, requested: [String]?, in store: any GrantedScopeStore) async {
         let granted = response.scope.map { Set($0.split(separator: " ").map(String.init)) } ?? []
-        await store.save(granted.isEmpty ? Set(requested).union(["offline_access"]) : granted)
+        if !granted.isEmpty { return await store.save(granted) }
+        guard let requested else { return }
+        await store.save(Set(requested).union(["offline_access"]))
     }
 
     /// Finishes an authorization that outlived the process that started it. The SDK starts this work
@@ -448,7 +452,7 @@ public final class Versola: VersolaApi, Sendable {
             run: {
                 let resumed = try await coordinator.operation { try await coordinator.resumePendingLogin() }
                 guard let resumed else { return false }
-                await Self.rememberScope(of: resumed, requested: ["openid"], in: grantedScope)
+                await Self.rememberScope(of: resumed, requested: nil, in: grantedScope)
                 return true
             },
             // The typed error's own text, which carries no secret; for anything else only the type.

@@ -512,4 +512,56 @@ class EdgeNativeTokenClientTest {
         assertEquals(503, cause.status)
         assertEquals(3_000L, cause.retryAfterMillis)
     }
+
+    // ---- the endpoints store fails after the code is spent -----------------------------------
+
+    private class FailingEndpoints(private val failure: () -> Throwable) : NativeEndpointsStore {
+        override suspend fun load(): NativeEndpoints? = null
+        override suspend fun save(endpoints: NativeEndpoints) {
+            throw failure()
+        }
+    }
+
+    // The coordinator never sees a response this call throws instead of returning, so the refresh
+    // token the server issued is a live credential nobody holds unless the client revokes it.
+    @Test
+    fun `an endpoints store that cannot save after the token response revokes the issued refresh token and raises its own error`() = runTest {
+        server.enqueue(issued())
+        server.enqueue(MockResponse.Builder().code(200).build())
+        val storeError = VersolaError.Recoverable(VersolaError.Recoverable.Cause.Network("native endpoints store: write failed"))
+
+        val error = failure { client(FailingEndpoints { storeError }).exchange(edgeGrant()) }
+
+        assertSame(storeError, error)
+        assertEquals(2, server.requestCount)
+        server.takeRequest()
+        val revocation = server.takeRequest()
+        assertEquals("/native/revoke/mobile-app", revocation.url.encodedPath)
+        val form = decoded(revocation.body!!.utf8())
+        assertEquals("rt", form["token"])
+        assertEquals("refresh_token", form["token_type_hint"])
+        // Signed for the revocation endpoint this very response was addressed to, not for one a store would have said.
+        assertEquals("$AUTH_MTLS/revoke", proofs.proofsFor.last())
+    }
+
+    @Test
+    fun `a revocation that fails too does not replace the store's error`() = runTest {
+        server.enqueue(issued())
+        server.enqueue(MockResponse.Builder().code(500).build())
+        val storeError = VersolaError.Recoverable(VersolaError.Recoverable.Cause.Network("native endpoints store: write failed"))
+
+        val error = failure { client(FailingEndpoints { storeError }).exchange(edgeGrant()) }
+
+        assertSame(storeError, error)
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun `an endpoints store that saves leaves nothing to revoke`() = runTest {
+        server.enqueue(issued())
+
+        client(MemoryEndpoints()).exchange(edgeGrant())
+
+        assertEquals(1, server.requestCount)
+    }
 }

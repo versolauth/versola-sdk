@@ -16,6 +16,8 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import okhttp3.Request
+import okhttp3.ResponseBody.Companion.asResponseBody
+import okio.buffer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -28,6 +30,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import versola.oauth.core.AuthorizationParameters
+import versola.oauth.core.BrowserOutcome
+import versola.oauth.core.CredentialKeyProvider
 import versola.oauth.core.IdTokenRejection
 import versola.oauth.core.SessionState
 import versola.oauth.core.VersolaError
@@ -45,6 +49,19 @@ private class CollectingLogger : VersolaLogger {
 
     override fun warn(message: String) {
         lines += message
+    }
+}
+
+/** The JVM key stand-in whose unwrap can be made to fail, as a locked Keystore does (`UnlockRequired`). */
+private class LockableKeyProvider : CredentialKeyProvider {
+    @Volatile
+    var locked = false
+
+    override suspend fun wrap(plaintext: ByteArray): ByteArray = plaintext.reversedArray()
+
+    override suspend fun unwrap(blob: ByteArray): ByteArray {
+        if (locked) throw VersolaError.Recoverable(VersolaError.Recoverable.Cause.UnlockRequired)
+        return blob.reversedArray()
     }
 }
 
@@ -182,7 +199,7 @@ class VersolaTest {
     @Test
     fun `login redeems the code at edge with state, iss and the blob, and the claims come from the ID token`() = bounded {
         val versola = versola()
-        assertNull(versola.claims)
+        assertNull(versola.claims())
 
         versola.login()
 
@@ -198,7 +215,7 @@ class VersolaTest {
         assertNull(complete.proofClaims!!["ath"])
 
         assertEquals(SessionState.Authenticated, versola.currentSessionState())
-        val claims = versola.claims!!
+        val claims = versola.claims()!!
         assertEquals("alice", claims.subject)
         assertEquals(edge.url, claims.issuer)
         assertEquals(listOf(clientId), claims.audience)
@@ -251,7 +268,7 @@ class VersolaTest {
         assertEquals("https://evil.example.com", detail.received)
         assertEquals(emptyList<String>(), edge.requestsTo("/native/complete").map { it.path })
         assertEquals(SessionState.Unauthenticated, versola.currentSessionState())
-        assertNull(versola.claims)
+        assertNull(versola.claims())
     }
 
     @Test
@@ -292,7 +309,7 @@ class VersolaTest {
 
         assertEquals(SessionState.Authenticated, versola.currentSessionState())
         assertEquals(issuer, edge.requestsTo("/native/complete/").single().field("iss"))
-        assertEquals(issuer, versola.claims!!.issuer)
+        assertEquals(issuer, versola.claims()!!.issuer)
     }
 
     @Test
@@ -317,7 +334,7 @@ class VersolaTest {
         val detail = configurationDetail(error) as VersolaError.Configuration.Detail.IdTokenRejected
         assertEquals(reason, detail.reason)
         assertEquals(SessionState.Unauthenticated, versola.currentSessionState())
-        assertNull(versola.claims)
+        assertNull(versola.claims())
         // Nothing was stored: a fresh instance over the same storage restores no session.
         Versola.forgetAll()
         assertEquals(SessionState.Unauthenticated, versola(configuration()).currentSessionState())
@@ -412,7 +429,7 @@ class VersolaTest {
             second.field("scope")!!.split(' ').toSet(),
         )
         assertEquals(SessionState.Authenticated, versola.currentSessionState())
-        assertEquals("alice", versola.claims!!.subject)
+        assertEquals("alice", versola.claims()!!.subject)
     }
 
     @Test
@@ -438,7 +455,7 @@ class VersolaTest {
         val error = failure { versola.stepUp(VersolaError.StepUp(listOf("sensitive"), 60)) }
 
         assertEquals(VersolaError.Recoverable.Cause.AccountMismatch, recoverableReason(error))
-        assertEquals("the session is the first user's", "alice", versola.claims!!.subject)
+        assertEquals("the session is the first user's", "alice", versola.claims()!!.subject)
         assertEquals(SessionState.Authenticated, versola.currentSessionState())
         // Detached: awaited with a bound, not slept for.
         val revoke = edge.server.await { it.path == "/native/revoke/$clientId" }
@@ -458,8 +475,69 @@ class VersolaTest {
 
         assertEquals(2, edge.issued.size)
         assertEquals(SessionState.Authenticated, versola.currentSessionState())
-        assertEquals("alice", versola.claims!!.subject)
+        assertEquals("alice", versola.claims()!!.subject)
         assertEquals("a successful step-up revokes nothing", emptyList<String>(), edge.requestsTo("/native/revoke").map { it.path })
+    }
+
+    @Test
+    fun `a stepUp whose caller is cancelled while the browser is up and is answered by another user leaves the first user's session`() = bounded {
+        val versola = versola()
+        versola.login()
+        browser.entered.receive()
+        edge.subject = "mallory"
+        edge.server.drain()
+        browser.gate = CompletableDeferred()
+        val redirect = CompletableDeferred<BrowserOutcome>()
+        browser.pendingRedirect = redirect
+
+        val stepUp = scopes.launch { versola.stepUp(VersolaError.StepUp(listOf("sensitive"), 60)) }
+        val opened = browser.entered.receive()
+        // The screen goes away with the tab still open: the process finishes the sign-in itself.
+        stepUp.cancel()
+        stepUp.join()
+        redirect.complete(browser.redirectFor(opened))
+
+        // Mallory's grant is refused at the exchange and revoked; awaited with a bound, not slept for.
+        val revoke = edge.server.await { it.path == "/native/revoke/$clientId" }
+        assertNotNull("the refused refresh token was not revoked", revoke)
+        assertEquals(edge.issued.last().refreshToken, revoke!!.field("token"))
+        assertEquals("alice", versola.claims()!!.subject)
+        assertEquals(SessionState.Authenticated, versola.currentSessionState())
+        assertEquals("the first user's session was not replaced", 2, edge.issued.size)
+    }
+
+    // --- claims across a restart ---
+
+    @Test
+    fun `claims are known after a cold start, with no call made`() = bounded {
+        versola().login()
+        Versola.forgetAll()
+
+        val restarted = versola()
+
+        assertEquals(SessionState.Authenticated, restarted.currentSessionState())
+        assertEquals("alice", restarted.claims()!!.subject)
+        assertEquals("no token request was needed to know who is signed in", emptyList<String>(), edge.requestsTo("/native/token").map { it.path })
+    }
+
+    @Test
+    fun `claims of a store that cannot be read are raised, not null, and are read again once it can`() = bounded {
+        val keys = LockableKeyProvider()
+        Versola.create(application, configuration(), browser, keys).login()
+        Versola.forgetAll()
+        val restarted = Versola.create(application, configuration(), browser, keys)
+        keys.locked = true
+
+        val error = failure { restarted.claims() }
+
+        assertEquals(VersolaError.Recoverable::class, error::class)
+        keys.locked = false
+        assertEquals("alice", restarted.claims()!!.subject)
+    }
+
+    @Test
+    fun `claims are null without a session`() = bounded {
+        assertNull(versola().claims())
     }
 
     // --- logout ---
@@ -480,7 +558,7 @@ class VersolaTest {
         assertTrue(outcome.tokenRevoked)
         assertFalse(outcome.sessionEnded)
         assertEquals(SessionState.Unauthenticated, versola.currentSessionState())
-        assertNull(versola.claims)
+        assertNull(versola.claims())
     }
 
     @Test
@@ -500,7 +578,7 @@ class VersolaTest {
         assertTrue(outcome.tokenRevoked)
         assertTrue(outcome.sessionEnded)
         assertEquals(SessionState.Unauthenticated, versola.currentSessionState())
-        assertNull(versola.claims)
+        assertNull(versola.claims())
     }
 
     @Test
@@ -571,6 +649,77 @@ class VersolaTest {
 
         assertTrue("was $error", error is VersolaError.Reauthenticate)
         assertEquals(emptyList<String>(), edge.requestsTo("/resources/").map { it.path })
+    }
+
+    // --- cancellation of call() ---
+
+    private class CancelWatch : okhttp3.EventListener() {
+        val canceled = CompletableDeferred<Unit>()
+        override fun canceled(call: okhttp3.Call) {
+            canceled.complete(Unit)
+        }
+    }
+
+    @Test
+    fun `cancelling the caller of call cancels the call in flight and returns within a bound`() = bounded {
+        val watch = CancelWatch()
+        val client = okhttp3.OkHttpClient.Builder().eventListener(watch).build()
+        val versola = versola(
+            VersolaConfiguration(edgeUrl = edge.url, clientId = clientId, redirectUri = REDIRECT_URI, logger = logger, httpClient = client),
+        )
+        versola.login()
+        val gate = java.util.concurrent.CountDownLatch(1)
+        edge.resourceGate = gate
+        try {
+            val caller = scopes.async { versola.call(Request.Builder().url("${edge.url}/resources/hold").get().build()) }
+            assertNotNull("the request never reached the edge", edge.server.await { it.path == "/resources/hold" })
+
+            caller.cancel()
+
+            // The edge still holds its answer: the caller can only be released by the call being cancelled.
+            withTimeout(5_000) { caller.join() }
+            assertTrue(caller.isCancelled)
+            withTimeout(5_000) { watch.canceled.await() }
+        } finally {
+            gate.countDown()
+        }
+    }
+
+    @Test
+    fun `a response that completes after the caller was cancelled is closed, not leaked`() = bounded {
+        val parked = CompletableDeferred<Unit>()
+        val closed = CompletableDeferred<Unit>()
+        val release = java.util.concurrent.CountDownLatch(1)
+        val client = okhttp3.OkHttpClient.Builder()
+            .addInterceptor { chain ->
+                val response = chain.proceed(chain.request())
+                if (chain.request().url.encodedPath != "/resources/late") return@addInterceptor response
+                // The answer is in, and the app's interceptor holds it while the caller gives up.
+                parked.complete(Unit)
+                check(release.await(20, java.util.concurrent.TimeUnit.SECONDS)) { "the test never released the response" }
+                val body = response.body
+                val tracked = object : okio.ForwardingSource(body.source()) {
+                    override fun close() {
+                        closed.complete(Unit)
+                        super.close()
+                    }
+                }
+                response.newBuilder().body(tracked.buffer().asResponseBody(body.contentType(), body.contentLength())).build()
+            }
+            .build()
+        val versola = versola(
+            VersolaConfiguration(edgeUrl = edge.url, clientId = clientId, redirectUri = REDIRECT_URI, logger = logger, httpClient = client),
+        )
+        versola.login()
+        val caller = scopes.async { versola.call(Request.Builder().url("${edge.url}/resources/late").get().build()) }
+        withTimeout(5_000) { parked.await() }
+
+        caller.cancel()
+        release.countDown()
+
+        withTimeout(5_000) { caller.join() }
+        assertTrue(caller.isCancelled)
+        withTimeout(5_000) { closed.await() }
     }
 
     // --- the key ---

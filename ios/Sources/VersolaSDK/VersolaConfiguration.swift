@@ -96,7 +96,13 @@ public struct VersolaConfiguration: Sendable {
         if clientId.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw URLRules.invalid("clientId must not be blank")
         }
-        let effectiveIssuer = issuer ?? edgeUrl
+        // The edge origin without the trailing slash `edgeUrl` is allowed to carry. An issuer the app did
+        // not write defaults to it, so that `https://id.example.com/` as `edgeUrl` does not become an issuer
+        // the provider never advertises: `iss` is compared byte for byte (RFC 9207) and the sign-in would
+        // end in an issuer mismatch after the browser. An issuer the app passes is kept exactly as written.
+        var origin = edgeUrl
+        while origin.hasSuffix("/") { origin.removeLast() }
+        let effectiveIssuer = issuer ?? origin
         try URLRules.requireIssuer(effectiveIssuer)
         // An edge-fronted native client redirects to an https link only, in every tenant.
         let redirect = try URLRules.parseRedirect(redirectUri, name: "redirectUri")
@@ -107,9 +113,6 @@ public struct VersolaConfiguration: Sendable {
         if let postLogout, postLogout.kind != .universalLink {
             throw URLRules.invalid("postLogoutRedirectUri must be an https Universal Link")
         }
-
-        var origin = edgeUrl
-        while origin.hasSuffix("/") { origin.removeLast() }
 
         self.edgeUrl = edgeUrl
         self.clientId = clientId

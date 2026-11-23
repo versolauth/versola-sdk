@@ -1,5 +1,6 @@
 import Foundation
 import OAuthCore
+import Security
 
 /// The two `htu` values the device signs for after login, kept so that a refresh or a revocation in
 /// a later process (the common case) needs no `/native/start` it has no reason to make. Not
@@ -34,17 +35,27 @@ package actor InMemoryEdgeEndpointsStore: EdgeEndpointsStore {
     package func save(_ endpoints: EdgeNativeEndpoints) async throws { self.endpoints = endpoints }
 }
 
-/// A plain JSON file, replaced atomically; a file this version cannot read is deleted and read as
-/// absent. Absent is not a fallback to anything: a refresh with no endpoints is
-/// `reauthenticate(.credentialsInvalidated)`, since nothing here may be inferred (see
+/// A plain JSON file, replaced atomically. Absent and undecodable are the same answer, nil: a file
+/// this version cannot parse is deleted, and absent is not a fallback to anything (a refresh with no
+/// endpoints is `reauthenticate(.credentialsInvalidated)`, since nothing here may be inferred, see
 /// `EdgeNativeTokenClient`), so a damaged file costs one sign-in and never a guessed address.
+///
+/// Nothing else is nil. A file that exists and cannot be read right now (the store out of reach, a
+/// fault of the volume) is an error, typed by ``edgeStoreFailure(_:)``: read as "no endpoints" it would
+/// end in `credentialsInvalidated` and a wiped session, for a grant that is perfectly good.
 package struct FileEdgeEndpointsStore: EdgeEndpointsStore {
     private let file: URL
 
     package init(file: URL) { self.file = file }
 
     package func load() async throws -> EdgeNativeEndpoints? {
-        guard let data = try? Data(contentsOf: file) else { return nil }
+        let data: Data
+        do {
+            data = try Data(contentsOf: file)
+        } catch {
+            if isAbsentFile(error) { return nil }
+            throw edgeStoreFailure(error)
+        }
         guard let endpoints = try? JSONDecoder().decode(EdgeNativeEndpoints.self, from: data) else {
             try? FileManager.default.removeItem(at: file)
             return nil
@@ -53,9 +64,44 @@ package struct FileEdgeEndpointsStore: EdgeEndpointsStore {
     }
 
     package func save(_ endpoints: EdgeNativeEndpoints) async throws {
-        try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try JSONEncoder().encode(endpoints).write(to: file, options: .atomic)
+        do {
+            try FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(endpoints).write(to: file, options: .atomic)
+        } catch {
+            throw edgeStoreFailure(error)
+        }
     }
+}
+
+/// Whether a read failed because there is no file: the one failure that means "nothing stored".
+package func isAbsentFile(_ error: Error) -> Bool {
+    let bridged = error as NSError
+    if bridged.domain == NSCocoaErrorDomain, [NSFileNoSuchFileError, NSFileReadNoSuchFileError].contains(bridged.code) { return true }
+    if bridged.domain == NSPOSIXErrorDomain, bridged.code == Int(ENOENT) { return true }
+    if let underlying = bridged.userInfo[NSUnderlyingErrorKey] as? Error { return isAbsentFile(underlying) }
+    return false
+}
+
+/// How a failure of the endpoints store is typed, the way the credential stores type theirs
+/// (`KeychainFailure`, `KeychainItem.error(for:)` in `OAuthClient`): a store that is out of reach for
+/// now (`errSecInteractionNotAllowed`, `errSecNotAvailable`, `errSecAuthFailed`: the device is locked or
+/// has not been unlocked since boot) is `recoverable(.unlockRequired)`, the grant intact; any other is
+/// a fault no retry changes, `configuration(.invalidConfiguration)`. An `OAuthError` already typed
+/// passes through. The detail names the error's domain and code and nothing of the file's content, and
+/// never the path.
+package func edgeStoreFailure(_ error: Error) -> OAuthError {
+    if let typed = error as? OAuthError { return typed }
+    let bridged = error as NSError
+    if bridged.domain == NSOSStatusErrorDomain {
+        let status = OSStatus(truncatingIfNeeded: bridged.code)
+        if status == errSecInteractionNotAllowed || status == errSecNotAvailable || status == errSecAuthFailed {
+            return .recoverable(.unlockRequired)
+        }
+    }
+    if let underlying = bridged.userInfo[NSUnderlyingErrorKey] as? NSError, underlying.domain == NSOSStatusErrorDomain {
+        return edgeStoreFailure(underlying)
+    }
+    return .configuration(.invalidConfiguration(detail: "the edge endpoints store failed (\(bridged.domain) \(bridged.code))"))
 }
 
 /// Keys of `PendingAuthorizationRequest.extensions` that the edge flow writes and

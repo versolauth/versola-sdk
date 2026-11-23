@@ -250,7 +250,8 @@ package actor AuthorizationFlow {
         acrValues: [String] = [],
         maxAge: Int? = nil,
         parameters: AuthorizationParameters = .none,
-        ephemeralBrowser: Bool = false
+        ephemeralBrowser: Bool = false,
+        expectedSubject: String? = nil
     ) async throws -> AuthorizationGrant {
         try await exclusivelyOrRefuse {
             try await ensureRestored()
@@ -271,7 +272,7 @@ package actor AuthorizationFlow {
                 parameters: parameters,
                 random: random
             )
-            let pending: PendingAuthorizationRequest
+            var pending: PendingAuthorizationRequest
             let uri: URL
             var browserUriExpiresAt: Date?
             if let starter {
@@ -285,6 +286,8 @@ package actor AuthorizationFlow {
                 )
                 uri = try request.toUri(authorizationEndpoint: metadata.authorizationEndpoint)
             }
+            // Persisted with the request, so a login finished by a cold-started process still compares it.
+            if let expectedSubject { pending = pending.requiring(subject: expectedSubject) }
             // A request nobody awaits (a system cancel kept it, a resume was never started) is
             // replaced by this one. Its tab, if it still exists, can redirect later, with a `state`
             // that is not this request's: that redirect is ignored.

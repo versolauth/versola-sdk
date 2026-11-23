@@ -12,6 +12,7 @@ import versola.oauth.core.VersolaError
 import versola.oauth.core.acceptIssued
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
 import versola.oauth.core.VersolaInternalApi
 
@@ -111,9 +112,29 @@ public class EdgeNativeTokenClient(
         // grant on disk always has them beside it, and under NonCancellable for the same reason
         // the token is persisted that way: the code is spent.
         withContext(NonCancellable) {
-            endpoints.save(NativeEndpoints(tokenEndpoint, revocationEndpoint))
+            try {
+                endpoints.save(NativeEndpoints(tokenEndpoint, revocationEndpoint))
+            } catch (e: Throwable) {
+                // The code is spent and the server issued a refresh token that nobody will hold:
+                // the coordinator never sees `issued` (this call throws), so its discard-and-revoke
+                // path cannot collect it. Revoked here, best effort and bounded, at the endpoint
+                // this very response was addressed to, since the store that would have said so is
+                // the thing that failed.
+                revokeUnheld(issued, revocationEndpoint)
+                throw e
+            }
         }
         return issued
+    }
+
+    private suspend fun revokeUnheld(issued: TokenResponse, revocationEndpoint: String) {
+        try {
+            withTimeoutOrNull(UNHELD_REVOCATION_TIMEOUT_MILLIS) {
+                executor.revokeIssued(issued, revokeUrl, revocationEndpoint, onStatus = unknownClient)
+            }
+        } catch (e: Exception) {
+            // Nothing more to do: the token dies at its expiry, and the error that matters is the store's.
+        }
     }
 
     override suspend fun refresh(refreshToken: ByteArray, idempotencyKey: String): TokenResponse {
@@ -173,4 +194,9 @@ public class EdgeNativeTokenClient(
     private suspend fun resolveEndpoints(): NativeEndpoints =
         endpoints.load()?.takeIf { isSecureEndpoint(it.tokenEndpoint) && isSecureEndpoint(it.revocationEndpoint) }
             ?: throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.CredentialsInvalidated)
+
+    private companion object {
+        /** One attempt and a few seconds: the login is already failing, and a radio is not worth more. */
+        const val UNHELD_REVOCATION_TIMEOUT_MILLIS = 5_000L
+    }
 }

@@ -84,7 +84,25 @@ package struct EdgeNativeTokenClient: TokenClient {
         // code is spent, and a cancelled caller must not leave the grant without them.
         let store = endpoints
         let saved = EdgeNativeEndpoints(tokenEndpoint: tokenEndpoint, revocationEndpoint: revocationEndpoint)
-        try await Task { try await store.save(saved) }.value
+        let revocation = revokeUrl
+        let tokenExecutor = executor
+        let onUnknown = unknownClient
+        try await Task {
+            do {
+                try await store.save(saved)
+            } catch {
+                // The code is spent and the refresh token it bought is a live credential at the server that
+                // no device will hold: the coordinator never sees it, because this call throws instead of
+                // returning it, so it is revoked here, best effort, for the revocation endpoint in hand (the
+                // store that failed is the one a later revoke would read it from). Failing to revoke changes
+                // nothing about what the caller is told: the sign-in is over, with the store's own failure.
+                if let refreshToken = issued.refreshToken {
+                    let revokeBody = FormEncoding.body([("token_type_hint", "refresh_token"), ("token", refreshToken)])
+                    try? await tokenExecutor.revoke(url: revocation, body: revokeBody, proofFor: URL(string: revocationEndpoint), onStatus: onUnknown)
+                }
+                throw edgeStoreFailure(error)
+            }
+        }.value
         return issued
     }
 
@@ -114,7 +132,11 @@ package struct EdgeNativeTokenClient: TokenClient {
     /// token is, so a grant without them is a damaged store, and the proof a refresh needs cannot be
     /// addressed: the same verdict as a DPoP key that is gone (`spec/errors.md`).
     private func resolveEndpoints() async throws -> EdgeNativeEndpoints {
-        guard let stored = try await endpoints.load(),
+        // A load that fails is the store's failure, typed, and not "no endpoints": only an absent or an
+        // undecodable record is that, and it is the store that tells the two apart (`FileEdgeEndpointsStore`).
+        let loaded: EdgeNativeEndpoints?
+        do { loaded = try await endpoints.load() } catch { throw edgeStoreFailure(error) }
+        guard let stored = loaded,
               isSecureEdgeEndpoint(stored.tokenEndpoint), isSecureEdgeEndpoint(stored.revocationEndpoint)
         else { throw Self.noEndpoints() }
         return stored

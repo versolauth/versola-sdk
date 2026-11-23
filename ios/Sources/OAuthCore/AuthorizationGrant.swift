@@ -24,11 +24,15 @@ package struct AuthorizationGrant: Sendable, CustomStringConvertible {
     /// another process than the one that asked has no caller to remember it, and the ID token's
     /// `auth_time` check must not depend on there being one.
     package let maxAge: Int?
+    /// The `sub` the pending request required the sign-in to come back as, restored from it for the
+    /// same reason as ``maxAge``: a login finished without its caller must still refuse another user.
+    package let expectedSubject: String?
 
     package init(
         code: String, codeVerifier: String, redirectUri: String, resources: [String] = [],
         extensions: [String: String] = [:], nonce: String = "", scopes: [String] = [],
-        state: String = "", iss: String? = nil, maxAge: Int? = nil
+        state: String = "", iss: String? = nil, maxAge: Int? = nil,
+        expectedSubject: String? = nil
     ) {
         self.code = code
         self.codeVerifier = codeVerifier
@@ -40,6 +44,7 @@ package struct AuthorizationGrant: Sendable, CustomStringConvertible {
         self.state = state
         self.maxAge = maxAge
         self.iss = iss
+        self.expectedSubject = expectedSubject
     }
 
     /// Credential material on several counts: never printed.

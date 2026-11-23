@@ -5,6 +5,8 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.cancellation.CancellationException
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -12,6 +14,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.OkHttpClient
@@ -84,8 +87,14 @@ public class Versola private constructor(
      * `exp`, `nonce` and `auth_time` were checked; its signature was not, because no key set is
      * reachable from a native app (`spec/versola-sdk-api.md` section 9). Use it to show who is
      * signed in; what the user may do is the edge's decision, made from the access token.
+     *
+     * Suspending, and read from the stored ID token on a cold start: the state is `Authenticated`
+     * as soon as a grant is stored, and that is decided without the credential key, so the claims
+     * (which are in the encrypted store) cannot be part of publishing it. A store that cannot be
+     * read now (a locked key) fails here with its own `Recoverable` error and is read again by the
+     * next call; null always means there is no session.
      */
-    override val claims: IdTokenClaims? get() = coordinator.claims
+    override suspend fun claims(): IdTokenClaims? = coordinator.storedClaims()
 
     /**
      * Signs in: asks the edge to start an authorization, opens the system browser on the address
@@ -218,12 +227,32 @@ public class Versola private constructor(
         VersolaInterceptor(coordinator, configuration.edgeOrigin.toHttpUrl(), proofs),
     )
 
-    /** One authenticated call through [httpClient], with the error taxonomy raised as itself. */
-    public suspend fun call(request: Request): Response = withContext(SdkDispatchers.blockedCalls) {
-        try {
-            httpClient().newCall(request).execute()
-        } catch (e: VersolaHttpException) {
-            throw e.error
+    /**
+     * One authenticated call through [httpClient], with the error taxonomy raised as itself.
+     *
+     * The call runs blocked on [SdkDispatchers.blockedCalls]: the interceptor parks its thread while
+     * a token is refreshed, so the wait is on a thread of the SDK's own and never on OkHttp's
+     * dispatcher, which the refresh needs. Cancelling the caller cancels the OkHttp call
+     * (`Call.cancel()`), which closes its socket and ends a blocked read; a refresh the
+     * interceptor is waiting on is the coordinator's and runs to its end, as a refresh does. A
+     * response that completes after the caller lost interest is closed here, so a cancelled call
+     * leaks no body. The caller owns, and closes, the response it does get.
+     */
+    public suspend fun call(request: Request): Response {
+        val call = httpClient().newCall(request)
+        return suspendCancellableCoroutine { continuation ->
+            continuation.invokeOnCancellation { call.cancel() }
+            callScope.launch(SdkDispatchers.blockedCalls) {
+                try {
+                    val response = call.execute()
+                    // A resume that finds the caller gone drops the value, and the handler closes it.
+                    continuation.resume(response) { response.close() }
+                } catch (e: VersolaHttpException) {
+                    continuation.resumeWithException(e.error)
+                } catch (e: Throwable) {
+                    continuation.resumeWithException(e)
+                }
+            }
         }
     }
 
@@ -247,6 +276,11 @@ public class Versola private constructor(
         private const val OPENID = "openid"
 
         private val clients = ConcurrentHashMap<String, Versola>()
+
+        // What the blocked threads of `call()` are started from. Not structured on the caller, whose
+        // cancellation must not abandon a thread mid-`execute()`: cancelling the OkHttp call is what
+        // ends it, and the call's own deadline bounds the rest.
+        private val callScope = CoroutineScope(SupervisorJob())
 
         /** Where a cold-started process finishes the sign-in its redirect answers; a test substitutes its own. */
         @Volatile

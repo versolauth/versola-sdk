@@ -25,6 +25,7 @@ import java.io.IOException
 import versola.oauth.core.SdkDispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.Serializable
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
@@ -153,28 +154,63 @@ public interface NativeEndpointsStore {
     public suspend fun save(endpoints: NativeEndpoints)
 }
 
-/** A plain JSON file, by the same reasoning as [FileProviderMetadataCache]. */
+/**
+ * A plain JSON file, by the same reasoning as [FileProviderMetadataCache].
+ *
+ * Its failures are typed the way the credential store's I/O failures are (`StorageFailure.toError`
+ * in `:storage`): a store that cannot be read or written now is `Recoverable(Network)`, which
+ * leaves the grant intact and may be repeated, never an untyped `IOException` and never a verdict
+ * on the grant. Only a file that is not what this store writes is a verdict, and only on the file.
+ */
 @VersolaInternalApi
 public class FileNativeEndpointsStore(private val file: File) : NativeEndpointsStore {
 
+    /**
+     * Null when there is no file, and when the file holds something this store did not write: that
+     * file is deleted, since no retry can read it, and the refresh that asked ends in
+     * `CredentialsInvalidated` because the proof it needs cannot be addressed. A read that failed
+     * is not a verdict on the file (a transient I/O error, a locked volume): it is raised, the file
+     * is left, and the next call reads again. Deleting on it would turn one failed read into a
+     * signed-out user.
+     */
     override suspend fun load(): NativeEndpoints? = withContext(SdkDispatchers.blocking) {
-        if (!file.exists()) return@withContext null
+        val text = try {
+            if (!file.exists()) return@withContext null
+            file.readText()
+        } catch (e: IOException) {
+            throw unavailable("read", e)
+        }
         try {
-            discoveryJson.decodeFromString(NativeEndpoints.serializer(), file.readText())
-        } catch (e: Exception) {
+            discoveryJson.decodeFromString(NativeEndpoints.serializer(), text)
+        } catch (e: SerializationException) {
+            file.delete()
+            null
+        } catch (e: IllegalArgumentException) {
             file.delete()
             null
         }
     }
 
+    /** Throws `Recoverable(Network)` when the endpoints could not be written, a failed rename included. */
     override suspend fun save(endpoints: NativeEndpoints) {
         withContext(SdkDispatchers.blocking) {
-            file.parentFile?.mkdirs()
             val temporary = File(file.parentFile, file.name + ".tmp")
-            temporary.writeText(discoveryJson.encodeToString(NativeEndpoints.serializer(), endpoints))
-            if (!temporary.renameTo(file)) temporary.delete()
+            try {
+                file.parentFile?.mkdirs()
+                temporary.writeText(discoveryJson.encodeToString(NativeEndpoints.serializer(), endpoints))
+                if (!temporary.renameTo(file)) throw IOException("rename failed")
+            } catch (e: IOException) {
+                temporary.delete()
+                throw unavailable("write", e)
+            }
         }
     }
+
+    private fun unavailable(what: String, cause: IOException): VersolaError.Recoverable =
+        VersolaError.Recoverable(
+            VersolaError.Recoverable.Cause.Network("native endpoints store: $what failed: ${cause.javaClass.simpleName}"),
+            cause,
+        )
 }
 
 /**
@@ -185,7 +221,7 @@ public class FileNativeEndpointsStore(private val file: File) : NativeEndpointsS
  * calls. The exchange that follows signs for auth's token endpoint instead; see
  * [EdgeNativeTokenClient].
  *
- * One nonce retry, no redirects followed — the same shape as [HttpTokenClient], for the same
+ * One nonce retry and one proof retry, no redirects followed — the same shape as [HttpTokenClient], for the same
  * reasons. Repeated under the operation's retry budget like a pushed authorization request
  * (`spec/retry-policy.md`): a second start creates a second `request_uri` and the first expires
  * unused, so nothing is spent. Every attempt, a repeat and the answer to a nonce challenge alike,
@@ -230,10 +266,21 @@ public class HttpNativeAuthorizationStarter(
     /** One start, with the single nonce retry `spec/retry-policy.md` fixes outside the budget. */
     private suspend fun startOnce(body: ByteArray): NativeStart {
         var nonceRetried = false
+        var proofRetried = false
         while (true) {
             val response = attempt(body)
             when (response) {
                 is Outcome.Started -> return response.start
+                is Outcome.InvalidProof -> {
+                    // The same rule as the token endpoint's (`HttpTokenClient`): the one recoverable
+                    // cause is clock skew, and `attempt` has already observed the rejection's `Date`,
+                    // so the next proof is minted (a new `jti`) with `iat` corrected. A second
+                    // refusal means the key is not one the deployment accepts (`spec/errors.md`).
+                    if (proofRetried) {
+                        throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.CredentialsInvalidated)
+                    }
+                    proofRetried = true
+                }
                 is Outcome.UseDpopNonce -> {
                     if (nonceRetried || response.nonce.isNullOrEmpty()) {
                         throw VersolaError.Recoverable(
@@ -266,6 +313,8 @@ public class HttpNativeAuthorizationStarter(
                         response.code == 401 &&
                             wwwAuthenticateError(response.headers("WWW-Authenticate")) == "use_dpop_nonce" ->
                             Outcome.UseDpopNonce(nonce)
+                        isInvalidDpopProof(response.code, payload, response.headers("WWW-Authenticate")) ->
+                            Outcome.InvalidProof
                         else -> throw rejected(response.code, payload, response.headers)
                     }
                 }
@@ -336,8 +385,24 @@ public class HttpNativeAuthorizationStarter(
         )
     }
 
+    /**
+     * Edge's `invalid_dpop_proof`, in either shape it takes: a 400 whose JSON body carries the
+     * code (what `/native/start` answers, relaying auth) or a 401 with it in `WWW-Authenticate`
+     * (edge's own challenge), the two `HttpTokenClient` reads as well.
+     */
+    private fun isInvalidDpopProof(status: Int, payload: String, wwwAuthenticate: List<String>): Boolean {
+        if (status == 401 && wwwAuthenticateError(wwwAuthenticate) == "invalid_dpop_proof") return true
+        if (status != 400) return false
+        return try {
+            discoveryJson.decodeFromString(TokenErrorPayload.serializer(), payload).error == "invalid_dpop_proof"
+        } catch (e: Exception) {
+            false
+        }
+    }
+
     private sealed interface Outcome {
         class Started(val start: NativeStart) : Outcome
+        object InvalidProof : Outcome
         class UseDpopNonce(val nonce: String?) : Outcome
     }
 

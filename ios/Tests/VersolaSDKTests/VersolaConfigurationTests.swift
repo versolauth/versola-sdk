@@ -38,10 +38,26 @@ final class VersolaConfigurationTests: XCTestCase {
         XCTAssertTrue(configuration.urlSession === URLSession.shared)
     }
 
-    func testIssuerDefaultIsEdgeUrlAsWrittenTrailingSlashIncluded() throws {
+    // Changed deliberately: this test used to pin the default issuer as `edgeUrl` as written, trailing slash
+    // included, which made `https://id.example.com/` an issuer no provider advertises and ended every sign-in in
+    // an issuer mismatch after the browser.
+    func testIssuerDefaultIsTheEdgeOriginWithoutTheTrailingSlashOfEdgeUrl() throws {
         let configuration = try make(edgeUrl: "https://id.example.com/")
-        XCTAssertEqual(configuration.issuer, "https://id.example.com/")
+        XCTAssertEqual(configuration.issuer, "https://id.example.com")
+        XCTAssertEqual(configuration.core.issuer, "https://id.example.com")
         XCTAssertEqual(configuration.edgeOrigin, "https://id.example.com")
+    }
+
+    func testTheDefaultIssuerOfASlashedAndAnUnslashedEdgeUrlIsTheSameClient() throws {
+        let slashed = try make(edgeUrl: "https://id.example.com/")
+        let plain = try make(edgeUrl: "https://id.example.com")
+        XCTAssertEqual(slashed.storageKey, plain.storageKey)
+        XCTAssertEqual(slashed.fingerprint, plain.fingerprint)
+    }
+
+    func testAnExplicitIssuerWithATrailingSlashIsKeptWhateverEdgeUrlLooksLike() throws {
+        let configuration = try make(edgeUrl: "https://id.example.com/", issuer: "https://id.example.com/")
+        XCTAssertEqual(configuration.issuer, "https://id.example.com/", "an issuer the app wrote is compared exactly as written")
     }
 
     func testAnExplicitIssuerIsKeptAsWritten() throws {

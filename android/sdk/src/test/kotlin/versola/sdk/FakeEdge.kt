@@ -202,6 +202,10 @@ internal class FakeEdge(val clientId: String) : AutoCloseable {
     /** Members of the start answer a test overrides; a null value removes the member. */
     var startOverrides: Map<String, Any?> = emptyMap()
 
+    /** When set, a request to `/resources/hold` and `/resources/late` waits on it (20 s at most), as a slow upstream does. */
+    @Volatile
+    var resourceGate: java.util.concurrent.CountDownLatch? = null
+
     val starts = CopyOnWriteArrayList<StartRecord>()
     val issued = CopyOnWriteArrayList<Issued>()
 
@@ -218,7 +222,10 @@ internal class FakeEdge(val clientId: String) : AutoCloseable {
         call.method == "POST" && call.path == "/native/complete/$clientId" -> complete(call)
         call.method == "POST" && call.path == "/native/token/$clientId" -> refresh()
         call.method == "POST" && call.path == "/native/revoke/$clientId" -> HttpReply(200)
-        call.path.startsWith("/resources/") -> HttpReply(200, mapOf("Content-Type" to "text/plain"), "ok")
+        call.path.startsWith("/resources/") -> {
+            if (call.path == "/resources/hold" || call.path == "/resources/late") resourceGate?.await(20, java.util.concurrent.TimeUnit.SECONDS)
+            HttpReply(200, mapOf("Content-Type" to "text/plain"), "ok")
+        }
         else -> HttpReply(404)
     }
 
@@ -336,15 +343,27 @@ internal class ScriptedBrowser(private val edge: FakeEdge) : BrowserAuthorizatio
     /** Never answers, as a tab the user left open. */
     var hold: Boolean = false
 
+    /** Every address the browser was asked to open, as it was asked: lets a test wait for the browser to be up. */
+    val entered = kotlinx.coroutines.channels.Channel<String>(kotlinx.coroutines.channels.Channel.UNLIMITED)
+
+    /** What a process finishing a sign-in without its caller is handed, once a test completes it. */
+    var pendingRedirect: CompletableDeferred<BrowserOutcome>? = null
+
     override suspend fun authorize(uri: String): BrowserOutcome {
         opened += uri
+        entered.trySend(uri)
         gate?.await()
         if (hold) awaitCancellation()
         val query = queryOf(uri)
         if (uri.substringBefore('?').endsWith("/logout")) {
             return BrowserOutcome.Redirect("$POST_LOGOUT_REDIRECT_URI?state=${java.net.URLEncoder.encode(query.getValue("state"), "UTF-8")}")
         }
-        val start = edge.starts.last { it.requestUri == query["request_uri"] }
+        return redirectFor(uri)
+    }
+
+    /** The redirect that answers the authorization [uri] opened, as the browser would deliver it. */
+    fun redirectFor(uri: String): BrowserOutcome.Redirect {
+        val start = edge.starts.last { it.requestUri == queryOf(uri)["request_uri"] }
         return BrowserOutcome.Redirect(
             buildString {
                 append("$REDIRECT_URI?code=the-code&state=${start.state}")
@@ -353,5 +372,5 @@ internal class ScriptedBrowser(private val edge: FakeEdge) : BrowserAuthorizatio
         )
     }
 
-    override suspend fun awaitPendingRedirect(): BrowserOutcome = awaitCancellation()
+    override suspend fun awaitPendingRedirect(): BrowserOutcome = pendingRedirect?.await() ?: awaitCancellation()
 }

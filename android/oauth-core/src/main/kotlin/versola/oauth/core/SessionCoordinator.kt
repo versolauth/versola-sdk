@@ -201,15 +201,36 @@ public class SessionCoordinator(
     public suspend fun restoreClaims(): IdTokenClaims? {
         claims?.let { return it }
         if (idTokenValidator == null || claimsRestored) return null
-        val stored = try {
-            memorySession?.rawIdToken ?: credentialStore.rawIdToken()
+        return try {
+            readStoredClaims()
         } catch (e: VersolaError) {
             // A store that cannot be read now (a locked key) is not read again by every
             // `accessToken()`: that path stops asking until something changes (`AUDIT C13`).
             claimsRestoreFailed = true
-            return null
+            null
         }
+    }
+
+    /**
+     * The claims of the session, restored from the stored ID token when this process has not read
+     * it yet: what a facade's `claims()` answers, so that an app that relaunched knows who is
+     * signed in before its first request. Unlike [restoreClaims] a store that cannot be read is not
+     * turned into null: null says there is no session (or no validator, or no ID token), and a
+     * locked store must not say that. The store's own typed error is the caller's, and the next
+     * call reads again. Suspends, and is a method rather than the property [claims], because the
+     * state is published from the grant's presence alone, without the key
+     * ([AuthorizationFlow.hasStoredGrant]), and reading the ID token needs it.
+     */
+    public suspend fun storedClaims(): IdTokenClaims? {
+        claims?.let { return it }
+        if (idTokenValidator == null || claimsRestored) return null
+        return readStoredClaims()
+    }
+
+    private suspend fun readStoredClaims(): IdTokenClaims? {
+        val stored = memorySession?.rawIdToken ?: credentialStore.rawIdToken()
         claimsRestored = true
+        claimsRestoreFailed = false
         return stored?.let(IdTokenClaims::ofStored)?.also { claims = it }
     }
 
@@ -420,8 +441,8 @@ public class SessionCoordinator(
         // refusal costs the user nothing; the code exchange after the browser is never refused (a
         // code just obtained is not wasted on a request the provider was going to answer anyway).
         retryScope.refuseIfCoolingDown(tokenOrigin())
-        val grant = flow.authorize(requested, acrValues, maxAge, parameters, ephemeralBrowser)
-        finishLogin(grant, maxAge, expectedSubject)
+        val grant = flow.authorize(requested, acrValues, maxAge, parameters, ephemeralBrowser, expectedSubject)
+        finishLogin(grant, maxAge)
     }
 
     /**
@@ -429,20 +450,34 @@ public class SessionCoordinator(
      * [resumePendingLogin] so that a sign-in finished in a cold-started process passes through
      * exactly the checks and the persistence order of one finished in the process that began it.
      */
-    private suspend fun finishLogin(
-        grant: AuthorizationGrant,
-        maxAge: Long?,
-        expectedSubject: String? = null,
-    ): TokenResponse =
+    private suspend fun finishLogin(grant: AuthorizationGrant, maxAge: Long?): TokenResponse =
         // However it ends — a grant stored, a refusal, a cancelled caller, a store that would not
         // write — the exchange is over, and `login()` is no longer refused on its account.
         try {
-            exchange(grant, maxAge, expectedSubject)
+            exchange(grant, maxAge)
         } finally {
             flow.exchangeFinished()
         }
 
-    private suspend fun exchange(grant: AuthorizationGrant, maxAge: Long?, expectedSubject: String?): TokenResponse {
+    /**
+     * From the moment the code is sent, the exchange, the ID-token validation, the subject check and
+     * the persistence are one unit that the caller's cancellation cannot interrupt: the server has
+     * spent the code and issued a refresh token by the time the answer is on its way, and a login
+     * abandoned at that point would leave a live credential that nobody holds (a refresh that was
+     * cancelled is saved for the same reason, `performRefresh`). The caller's cancellation is
+     * rethrown after the unit, so a screen that went away still sees it, and the session it leaves
+     * behind is the signed-in one. The wait for the browser before this stays cancellable.
+     * The unit is bounded by the token request's own timeouts, not by the caller.
+     */
+    private suspend fun exchange(grant: AuthorizationGrant, maxAge: Long?): TokenResponse {
+        val caller = currentCoroutineContext()
+        val response = withContext(NonCancellable) { exchangeUninterrupted(grant, maxAge) }
+        caller.ensureActive()
+        return response
+    }
+
+    private suspend fun exchangeUninterrupted(grant: AuthorizationGrant, maxAge: Long?): TokenResponse {
+        val expectedSubject = grant.expectedSubject
         // One attempt, with no retry budget around it. An authorization code is single-use
         // and the token endpoint offers no idempotency for `authorization_code` —
         // `Idempotency-Key` is honoured for the refresh family alone (`OAuthTokenService`) —
@@ -497,13 +532,9 @@ public class SessionCoordinator(
                 )
             }
             issued
-        } catch (e: CancellationException) {
-            // The caller walked away mid-exchange. The response may still arrive at a server
-            // that has already spent the code, and nothing here can collect it: the slot is
-            // abandoned for the same reason a failure abandons it.
-            withContext(NonCancellable) { flow.abandonLogin() }
-            throw e
         } catch (e: Throwable) {
+            // Not the caller's cancellation, which cannot reach this block: a timeout inside the
+            // token client, say, is a failed exchange like any other.
             flow.abandonLogin()
             // The provider already issued these and the SDK is throwing them away: an ID token that
             // failed validation, or could not be checked, leaves a refresh token that is valid at the

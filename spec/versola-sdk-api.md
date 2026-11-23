@@ -75,7 +75,7 @@ One value type, `VersolaConfiguration`, validated eagerly: a bad value is
 | Field | Type | Default | Rules |
 |---|---|---|---|
 | `edgeUrl` | URL | required | The public origin of the edge (its `edge-url`). `https`, or `http` on a loopback host only (`localhost`, `127.0.0.1`, `[::1]`; `security.md`). An origin: no path, query or fragment, because edge computes every proof's `htu` from its own configured origin and the request path |
-| `issuer` | string | `edgeUrl` as written | The issuer identifier of the deployment, compared with the redirect's `iss` (RFC 9207) and the ID token's `iss` by simple string comparison, no normalisation. `https` (loopback exception as above), no query or fragment. Set it when the issuer is not this edge: a partner edge always, a deployment whose issuer is another address, an issuer written with a trailing slash |
+| `issuer` | string | the origin of `edgeUrl` | The issuer identifier of the deployment, compared with the redirect's `iss` (RFC 9207) and the ID token's `iss` by simple string comparison, no normalisation. `https` (loopback exception as above), no query or fragment. Set it when the issuer is not this edge: a partner edge always, a deployment whose issuer is another address, an issuer written with a trailing slash. The default is the origin (scheme, host, a non-default port), so a trailing slash on `edgeUrl` does not reach it; a value the app passes is compared exactly as it was written |
 | `clientId` | string | required | non-blank |
 | `redirectUri` | URI | required | `https` with a host, no fragment: an App Link or Universal Link of the app. A private-use scheme or a loopback address is refused; an edge-fronted native client cannot register one in any tenant |
 | `postLogoutRedirectUri` | URI | none | same rule as `redirectUri`; `oauth-sdk-api.md` section 3 says what happens without one |
@@ -90,8 +90,9 @@ No `tokenBinding`, no `scopes` default, no `endpoints`, no `protectedOrigins`, n
 `pushedAuthorization`: each is fixed by what the native endpoints are (DPoP always, a pushed
 request always, tokens to the edge only).
 
-`issuer` defaults to `edgeUrl` because that is what a first-party deployment is, with or without
-cells. A wrong default is not a silent hazard: the first redirect fails with
+`issuer` defaults to the origin of `edgeUrl` because that is what a first-party deployment is, with
+or without cells. The origin and not the string: `https://id.example.com/` is a valid `edgeUrl`,
+and an issuer that kept its slash would fail every sign-in after the browser. A wrong default is not a silent hazard: the first redirect fails with
 `Configuration(IssuerMismatch(expected, received))` before any network call, and edge checks `iss`
 again at `/native/complete`.
 
@@ -183,6 +184,13 @@ the session's:
 A session whose ID token cannot be read (it is stored encrypted and the store is locked) fails the
 step-up with the store's own `Recoverable` before the browser opens.
 
+The `sub` the step-up expects is stored with the pending request, so the rule holds for a step-up
+that is finished without its caller: one whose caller was cancelled while the browser was up and
+whose redirect the live process still receives. A pending request with no expected `sub` is a
+login and replaces the grant. A step-up whose process died is not finished at all: on restore a
+stored grant outranks a pending request (`state-machine.md`, "process death"), the request is dropped
+and the session stays as it was.
+
 ## 7. Proofs, nonces and the three addresses
 
 Every native call carries exactly one `DPoP` header, minted for that request: a repeat under the
@@ -267,7 +275,11 @@ When the server serves the key set at the issuer's address, the signature check 
 `oauth-sdk-api.md` section 11 becomes step 1 here and this paragraph goes. There is no switch in
 between: a build either can verify or cannot.
 
-`IdTokenClaims` is the generic facade's type. `claims` is null when unauthenticated.
+`IdTokenClaims` is the generic facade's type. `claims` is null when unauthenticated. It is an
+asynchronous read on every platform: after a cold start the state is `Authenticated` before the
+stored ID token has been read (the state is decided without the storage key, so that a cold start
+asks for no unlock), and the accessor reads it then. A store that cannot be read raises the store's
+own error rather than answering null, and the next call reads again.
 
 ## 10. The authenticated client
 
@@ -330,7 +342,7 @@ complete without asking who they are.
 | Step-up | `suspend fun stepUp(challenge, options = null)` | `func stepUp(_ challenge: OAuthError, options:) async throws` | `Future<void> stepUp(challenge, [options])` |
 | Sign-out | `suspend fun logout(options = LogoutOptions()): LogoutOutcome` | `func logout(_:) async -> LogoutOutcome` | `Future<LogoutOutcome> logout([options])` |
 | Refresh | `suspend fun refresh()` | `func refresh() async throws` | `Future<void> refresh()` |
-| Claims | `val claims: IdTokenClaims?` | `var claims: IdTokenClaims? { get async }` | `Future<IdTokenClaims?> claims()` |
+| Claims | `suspend fun claims(): IdTokenClaims?` | `var claims: IdTokenClaims? { get async }` | `Future<IdTokenClaims?> claims()` |
 | HTTP | `httpClient()`, `call(request)` | `session()` | `httpClient()` |
 | Key tier | `suspend fun keyAttestation(): KeyAttestation?` | `func keyAttestation() async throws -> KeyAttestation?` | `Future<String?> keyAttestation()` |
 | Redirect | the manifest-declared redirect activity; an Auth Tab's result | `handleRedirect(_ url: URL) async -> Bool` | native |

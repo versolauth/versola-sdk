@@ -26,13 +26,18 @@ private class StarterProofSource : DpopProofSource {
     val proofsFor = mutableListOf<String>()
     val observed = mutableListOf<Triple<String, String?, String?>>()
 
+    /** `proof` and `observe` in the order they happened: a corrected clock only helps a proof minted after it. */
+    val order = mutableListOf<String>()
+
     override suspend fun proof(method: String, url: String, accessToken: String?): String {
         proofsFor += url
+        order += "proof-${proofsFor.size}"
         return "proof-${proofsFor.size}"
     }
 
     override fun observe(url: String, dateHeader: String?, nonceHeader: String?) {
         observed += Triple(url, dateHeader, nonceHeader)
+        order += "observe"
     }
 }
 
@@ -126,6 +131,71 @@ class NativeAuthorizationStarterTest {
         assertEquals("$edge/native/start/mobile-app", proofs.observed.first().first)
         assertEquals("edge-nonce-1", proofs.observed.first().third)
         assertEquals(2, proofs.proofsFor.size)
+    }
+
+    private fun invalidProof(date: String = SERVER_DATE) = MockResponse.Builder().code(400)
+        .setHeader("Content-Type", "application/json")
+        .setHeader("Date", date)
+        .body("""{"error":"invalid_dpop_proof","error_description":"iat outside the window"}""")
+        .build()
+
+    // Edge relays auth's refusal as a 400 JSON body. The one recoverable cause is clock skew, and the
+    // `Date` of the refusal is what corrects it, so the repeat is a new proof minted after it was observed.
+    @Test
+    fun `an invalid_dpop_proof is retried once with a new proof minted after the Date was observed`() = runTest {
+        server.enqueue(invalidProof())
+        server.enqueue(started())
+
+        val start = starter().start(request())
+
+        assertEquals("edge-state", start.state)
+        assertEquals(2, server.requestCount)
+        assertEquals(listOf("proof-1", "observe", "proof-2", "observe"), proofs.order)
+        assertEquals(SERVER_DATE, proofs.observed.first().second)
+        val first = server.takeRequest()
+        val second = server.takeRequest()
+        assertEquals("proof-1", first.headers["DPoP"])
+        assertEquals("a new jti: another proof, not the first resent", "proof-2", second.headers["DPoP"])
+    }
+
+    @Test
+    fun `an invalid_dpop_proof in edge's 401 shape is retried the same way`() = runTest {
+        server.enqueue(
+            MockResponse.Builder().code(401)
+                .setHeader("WWW-Authenticate", """DPoP error="invalid_dpop_proof"""")
+                .setHeader("Date", SERVER_DATE)
+                .build(),
+        )
+        server.enqueue(started())
+
+        starter().start(request())
+
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun `a second invalid_dpop_proof is Reauthenticate CredentialsInvalidated after exactly two requests`() = runTest {
+        server.enqueue(invalidProof())
+        server.enqueue(invalidProof())
+        server.enqueue(started())
+
+        val error = failure { starter().start(request()) } as VersolaError.Reauthenticate
+
+        assertSame(VersolaError.Reauthenticate.Reason.CredentialsInvalidated, error.reason)
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun `an invalid_request is still a Configuration refusal and is not retried`() = runTest {
+        server.enqueue(
+            MockResponse.Builder().code(400).setHeader("Content-Type", "application/json")
+                .body("""{"error":"invalid_request"}""").build(),
+        )
+
+        val error = failure { starter().start(request()) } as VersolaError.Configuration
+
+        assertTrue(error.detail is VersolaError.Configuration.Detail.AuthorizationRejected)
+        assertEquals(1, server.requestCount)
     }
 
     @Test
@@ -520,3 +590,5 @@ class NativeAuthorizationStarterTest {
         assertNull(wwwAuthenticateError(emptyList()))
     }
 }
+
+private const val SERVER_DATE = "Tue, 15 Nov 1994 08:12:31 GMT"

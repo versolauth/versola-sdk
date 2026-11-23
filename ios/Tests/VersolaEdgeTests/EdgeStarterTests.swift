@@ -179,6 +179,61 @@ final class EdgeStarterTests: XCTestCase {
         XCTAssertFalse(identifiers.contains(nil))
     }
 
+    // MARK: invalid_dpop_proof, answered once as the token endpoint's is
+
+    private let invalidProof400 = F.answer(400, [:], #"{"error":"invalid_dpop_proof","error_description":"iat is out of range"}"#)
+
+    func testInvalidDpopProofIsRetriedOnceWithANewProofWhoseIatIsCorrectedByTheResponsesDate() async throws {
+        // The device is an hour behind edge: the first proof is stamped with the device's time, and the
+        // retry with the time the refusal's `Date` taught.
+        let skew: TimeInterval = 3600
+        let date = HTTPDate.format(F.now.addingTimeInterval(skew))
+        let http = ScriptedHTTP([
+            F.answer(400, ["Date": date], #"{"error":"invalid_dpop_proof"}"#), F.answer(200, [:], F.startAnswer()),
+        ])
+        let dpop = DpopProofFactory(key: SoftwareDpopKey(), clock: Clock(now: { F.now }))
+
+        let result = try await edgeStarter(http, dpop: dpop).start(request: authorizationRequest(), metadata: AuthzMetadata.value, now: F.now)
+
+        XCTAssertEqual(result.pending.state, "edge-state-1")
+        let requests = await http.requests
+        XCTAssertEqual(requests.count, 2, "one retry")
+        let first = F.proofClaims(requests[0]), second = F.proofClaims(requests[1])
+        XCTAssertNotEqual(first["jti"] as? String, second["jti"] as? String, "edge refuses a start proof it has seen")
+        XCTAssertEqual(first["iat"] as? Double, F.now.timeIntervalSince1970)
+        XCTAssertEqual(second["iat"] as? Double, F.now.timeIntervalSince1970 + skew)
+    }
+
+    func testInvalidDpopProofInEdgesOwn401ShapeIsRetriedToo() async throws {
+        let http = ScriptedHTTP([F.answer(401, ["WWW-Authenticate": #"DPoP error="invalid_dpop_proof""#]), F.answer(200, [:], F.startAnswer())])
+
+        _ = try await started(http)
+
+        let count = await http.requests.count
+        XCTAssertEqual(count, 2)
+    }
+
+    func testTwoInvalidDpopProofRefusalsAreReauthenticateWithExactlyTwoRequests() async {
+        let http = ScriptedHTTP([invalidProof400])
+
+        let error = await thrown { try await self.started(http) }
+
+        // The verdict TokenRequestExecutor gives for the same two refusals at the token endpoint.
+        XCTAssertEqual(error, .reauthenticate(.credentialsInvalidated))
+        let count = await http.requests.count
+        XCTAssertEqual(count, 2, "one retry and no third request")
+    }
+
+    func testAnOAuthRefusalOtherThanInvalidDpopProofIsStillNotRetried() async {
+        let http = ScriptedHTTP([F.answer(400, [:], #"{"error":"invalid_request"}"#)])
+
+        let error = await thrown { try await self.started(http) }
+
+        XCTAssertEqual(error, .configuration(.authorizationRejected(code: "invalid_request", description: nil)))
+        let count = await http.requests.count
+        XCTAssertEqual(count, 1)
+    }
+
     // MARK: Retry-After and the budget, keyed by edge's origin
 
     func testRetryAfterOnA429IsReadAndTheCallIsRepeatedUnderTheBudget() async {

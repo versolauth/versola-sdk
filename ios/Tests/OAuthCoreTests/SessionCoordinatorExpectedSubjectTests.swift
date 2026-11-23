@@ -121,6 +121,97 @@ extension SessionCoordinatorTests {
         await AuthzKit.waitUntil("the rejected response's refresh token is revoked") { await f.tokens.calls.contains(.revoke("rt-1")) }
     }
 
+    // MARK: expectedSubject carried by the pending request
+
+    /// A cold-started process: the request is read back from the store and the redirect is delivered
+    /// to `awaitPendingRedirect`, with no caller that remembers anything.
+    private func restoring(expectedSubject: String?) -> (pending: PendingAuthorizationRequest, browser: ScriptedBrowser) {
+        let pending = AuthzKit.pending(state: "restored-state", createdAt: Date().addingTimeInterval(-60), expectedSubject: expectedSubject)
+        let browser = ScriptedBrowser(
+            onAuthorize: { _, _ in throw NSError(domain: "test", code: 1) },
+            onAwait: { _ in .redirect(AuthzKit.redirect(answering: URL(string: "https://x.example.com/?state=restored-state")!)) }
+        )
+        return (pending, browser)
+    }
+
+    /// A step-up's request exists beside a stored grant. A restore that finds both discards the request as the
+    /// residue of a finished login (`AuthorizationFlow.restore`), so the request is stored after the restore, as it
+    /// is when the process that asked is alive and only its caller is gone (a cancelled task, a backgrounded app).
+    private func seedPending(_ pending: PendingAuthorizationRequest, in f: Fixture) async throws {
+        try await f.flow.ensureRestored()
+        try await f.pendingStore.save(pending)
+    }
+
+    func testAResumedStepUpAnsweredByAnotherUserStoresNothingRevokesWhatWasIssuedAndLeavesTheSessionAsItWas() async throws {
+        let store = MemoryCredentials()
+        let first = response(refresh: "rt-1", subject: "alice")
+        try await store.save(refreshToken: "rt-1", rawIdToken: first.idToken)
+        let (pending, browser) = restoring(expectedSubject: "alice")
+        let f = try fixture(answers: [.success(response(refresh: "rt-2", subject: "bob"))], policy: .required, store: store, browser: browser)
+        try await seedPending(pending, in: f)
+
+        // The process that asked is gone: only what the pending request carried can refuse bob.
+        let error = await failure { try await f.coordinator.resumePendingLogin() }
+
+        XCTAssertEqual(error, .recoverable(.accountMismatch))
+        let refresh = await f.store.refresh
+        let idToken = await f.store.idToken
+        let clears = await f.store.clears
+        XCTAssertEqual(refresh, "rt-1", "the existing session's grant is untouched")
+        XCTAssertEqual(idToken, first.idToken)
+        XCTAssertEqual(clears, 0)
+        let stored = await f.pendingStore.stored
+        XCTAssertNil(stored)
+        await AuthzKit.waitUntil("the refused refresh token is revoked") { await f.tokens.calls.contains(.revoke("rt-2")) }
+        let revocations = await f.tokens.calls.filter { if case .revoke = $0 { return true } else { return false } }
+        XCTAssertEqual(revocations, [.revoke("rt-2")])
+    }
+
+    func testAResumedStepUpAnsweredByTheSameUserReplacesTheGrant() async throws {
+        let store = MemoryCredentials()
+        try await store.save(refreshToken: "rt-1", rawIdToken: response(refresh: "rt-1", subject: "alice").idToken)
+        let (pending, browser) = restoring(expectedSubject: "alice")
+        let second = response(refresh: "rt-2", subject: "alice")
+        let f = try fixture(answers: [.success(second)], policy: .required, store: store, browser: browser)
+        try await seedPending(pending, in: f)
+
+        let resumed = try await f.coordinator.resumePendingLogin()
+
+        XCTAssertEqual(resumed?.accessToken, second.accessToken)
+        let refresh = await f.store.refresh
+        let claims = await f.coordinator.claims
+        let calls = await f.tokens.calls
+        XCTAssertEqual(refresh, "rt-2")
+        XCTAssertEqual(claims?.subject, "alice")
+        XCTAssertFalse(calls.contains(.revoke("rt-2")))
+    }
+
+    func testAResumedLoginWithoutAnExpectedSubjectAcceptsAnotherUser() async throws {
+        let (pending, browser) = restoring(expectedSubject: nil)
+        let f = try fixture(answers: [.success(response(refresh: "rt-2", subject: "bob"))], policy: .required, pending: pending, browser: browser)
+
+        try await f.coordinator.resumePendingLogin()
+
+        let claims = await f.coordinator.claims
+        XCTAssertEqual(claims?.subject, "bob")
+    }
+
+    func testTheExpectedSubjectIsPersistedWithThePendingRequestBeforeTheBrowserOpens() async throws {
+        let holder = Box<MemoryPendingStore?>(nil)
+        let seen = Box<PendingAuthorizationRequest?>(nil)
+        let browser = ScriptedBrowser { uri, _ in
+            await seen.set(await holder.value?.stored)
+            return .redirect(AuthzKit.redirect(answering: uri))
+        }
+        let f = try fixture(answers: [.success(response(refresh: "rt-1", subject: "alice"))], policy: .required, browser: browser)
+        await holder.set(f.pendingStore)
+
+        try await f.coordinator.login(scopes: ["openid"], expectedSubject: "alice")
+
+        let persisted = await seen.value
+        XCTAssertEqual(persisted?.expectedSubject, "alice")
+    }
+
     // MARK: sessionSubject
 
     func testSessionSubjectIsTheSubOfTheStoredIdToken() async throws {

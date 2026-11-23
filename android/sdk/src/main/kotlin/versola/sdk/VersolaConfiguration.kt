@@ -42,13 +42,14 @@ public class VersolaConfiguration(
     public val redirectUri: String,
     /**
      * The issuer of the deployment, compared as written with the `iss` of the redirect (RFC 9207)
-     * and of the ID token. Defaults to [edgeUrl], which is what it is for a deployment's own edge.
-     * Set it when the issuer is another address: always for a partner's edge (the issuer is the
-     * operator's), and when the deployment writes its issuer differently, a trailing slash
-     * included. A wrong value fails the first sign-in with `Configuration(IssuerMismatch)`,
-     * before any token request.
+     * and of the ID token. Null takes [edgeUrl]'s origin without a trailing slash, which is what it
+     * is for a deployment's own edge; [issuer] then reads as that origin. Set it when the issuer
+     * is another address: always for a partner's edge (the issuer is the operator's), and when the
+     * deployment writes its issuer differently, a trailing slash included: an issuer passed here
+     * is kept exactly as written, since `https://a/` and `https://a` are two issuers. A wrong
+     * value fails the first sign-in with `Configuration(IssuerMismatch)`, before any token request.
      */
-    public val issuer: String = edgeUrl,
+    issuer: String? = null,
     /**
      * Where the browser returns to after `logout()` ended the server session; an `https` App
      * Link like [redirectUri], registered among the tenant's post-logout redirect URIs. Without
@@ -66,7 +67,12 @@ public class VersolaConfiguration(
     public val retryPolicy: RetryPolicy = RetryPolicy.Default,
     /** How far the device clock may be from the server's when the ID token's times are judged; at most 5 minutes. */
     public val clockSkewTolerance: Duration = 60.seconds,
-    public val logger: VersolaLogger = AndroidLogger(),
+    /**
+     * Where the SDK's warnings go. The default is one instance shared by every configuration, so
+     * that two configurations built with defaults are the same client for `create()`, which compares
+     * loggers by identity.
+     */
+    public val logger: VersolaLogger = defaultLogger,
     /**
      * The client the SDK's own requests and the authenticated client are built on, so that its
      * timeouts, pool, pinning and proxy are the app's. Null uses one shared client with 10 s
@@ -77,6 +83,9 @@ public class VersolaConfiguration(
      */
     public val httpClient: OkHttpClient? = null,
 ) {
+
+    /** The issuer the sign-in is held to: the app's own, as written, or the edge's origin. See the constructor's `issuer`. */
+    public val issuer: String = issuer ?: edgeUrl.trimEnd('/')
 
     internal val core: CoreConfiguration
 
@@ -96,7 +105,7 @@ public class VersolaConfiguration(
         // The issuer, the client id and the two redirect URIs are held to the core's rules
         // (https or loopback, no query or fragment, non-blank), and to one more of this facade's:
         // an edge-fronted native client redirects to an https link only.
-        core = CoreConfiguration.create(issuer, clientId, redirectUri, postLogoutRedirectUri)
+        core = CoreConfiguration.create(this.issuer, clientId, redirectUri, postLogoutRedirectUri)
         if (core.redirectUri.kind != RedirectUriKind.AppLink) {
             throw invalid("redirectUri must be an https App Link: a client fronted by edge has no other kind")
         }
@@ -115,7 +124,7 @@ public class VersolaConfiguration(
      */
     internal val storageKey: String = Base64.getUrlEncoder().withoutPadding().encodeToString(
         MessageDigest.getInstance("SHA-256")
-            .digest("$edgeOrigin\n$issuer\n$clientId".toByteArray(Charsets.UTF_8)),
+            .digest("$edgeOrigin\n${this.issuer}\n$clientId".toByteArray(Charsets.UTF_8)),
     ).take(STORAGE_KEY_LENGTH)
 
     /** Everything a second `create()` for the same storage must agree on; the client and the logger by identity. */
@@ -128,6 +137,8 @@ public class VersolaConfiguration(
 
     internal companion object {
         private const val STORAGE_KEY_LENGTH = 16
+
+        private val defaultLogger: VersolaLogger = AndroidLogger()
 
         // OkHttp spells the IPv6 loopback without brackets.
         private val LOOPBACK_HOSTS = setOf("localhost", "127.0.0.1", "::1")

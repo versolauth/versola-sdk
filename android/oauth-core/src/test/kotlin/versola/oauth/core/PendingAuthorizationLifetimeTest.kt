@@ -2,6 +2,7 @@ package versola.oauth.core
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -129,5 +130,44 @@ class PendingAuthorizationLifetimeTest {
         val decoded = PendingAuthorizationCodec.decode(record.toByteArray())
 
         assertTrue(decoded.isExpired(1 + PendingAuthorizationRequest.MAX_AGE_MILLIS))
+    }
+
+    // ---- expectedSubject: the step-up's same-user check, persisted with the request ----
+
+    private fun expecting(subject: String?) = PendingAuthorizationRequest(
+        state = "s", nonce = "n", codeVerifier = "v", scopes = listOf("openid"),
+        redirectUri = "https://app.example.com/oauth", acrValues = emptyList(), maxAge = null,
+        createdAtEpochMillis = created, expectedSubject = subject,
+    )
+
+    @Test
+    fun `the expected subject survives the codec`() {
+        val decoded = PendingAuthorizationCodec.decode(PendingAuthorizationCodec.encode(expecting("alice")))
+
+        assertEquals("alice", decoded.expectedSubject)
+    }
+
+    @Test
+    fun `a record written without an expected subject decodes as none`() {
+        val old = """{"state":"s","nonce":"n","codeVerifier":"v","scopes":["openid"],"redirectUri":"https://app.example.com/oauth","acrValues":[],"maxAge":null,"createdAtEpochMillis":1}"""
+
+        assertNull(PendingAuthorizationCodec.decode(old.toByteArray()).expectedSubject)
+        assertNull(PendingAuthorizationCodec.decode(PendingAuthorizationCodec.encode(expecting(null))).expectedSubject)
+    }
+
+    @Test
+    fun `the expected subject is a known member and not a starter's legacy artefact`() {
+        // Without an `extension` every unknown string member is kept in it; the subject is a string.
+        val record = """{"state":"s","nonce":"n","codeVerifier":"v","scopes":["openid"],"redirectUri":"https://app.example.com/oauth","acrValues":[],"maxAge":null,"createdAtEpochMillis":1,"expectedSubject":"alice","blob":"sealed"}"""
+
+        val decoded = PendingAuthorizationCodec.decode(record.toByteArray())
+
+        assertEquals("alice", decoded.expectedSubject)
+        assertEquals(mapOf("blob" to "sealed"), decoded.extension)
+    }
+
+    @Test
+    fun `the expected subject stays out of toString`() {
+        assertFalse(expecting("alice-subject").toString().contains("alice-subject"))
     }
 }

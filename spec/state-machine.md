@@ -92,6 +92,12 @@ On redirect, in this order, all before any network call:
 Then the code is exchanged. The token response is persisted **before** it is returned to the
 caller, and the pending request is wiped only after the refresh token is durably stored.
 
+A caller cancelled once the code has been sent does not stop the exchange: the code is spent the
+moment the server reads it, and a refresh token issued for it would otherwise be a live credential
+nobody holds. The exchange, the ID-token checks and the persistence run to their end; the grant is
+stored (or refused and revoked, as for any caller), and the caller then sees its cancellation.
+Waiting for the browser stays cancellable.
+
 Through edge, step 2 is not conditional: `/native/complete` requires `iss`, so a redirect
 without one is refused whatever discovery advertises. The exchange is
 `POST {edge}/native/complete/{clientId}` with `code`, `state`, `iss` and the blob, and a proof
@@ -421,7 +427,10 @@ leaves the stored grant as it was (the state settles on `Authenticated`, as afte
 login over a stored grant), stores nothing of the new grant, revokes the refresh token it carried (best effort, as a
 rejected ID token's) and fails the call with `Recoverable(AccountMismatch)`. A `login()` is not
 held to this: signing in as another user there is an account switch and replaces the grant.
-Scenario 43.
+The expected `sub` is part of the pending request, so a step-up finished without its caller (the
+caller was cancelled during the browser leg and the live process still receives the redirect) is
+held to the same rule. A step-up whose process died is dropped on restore, where the stored grant
+outranks the pending request. Scenario 43.
 
 ### `Authenticated → Locked → Authenticated`
 
@@ -538,7 +547,7 @@ one grant to one device-installation; reusing it across users on a shared device
 | Refresh token | Encrypted, `CredentialKeyProvider` | yes | no |
 | Refresh token, unwrapped | Memory, one token request, zeroed after | no | no |
 | Pending refresh generation | Encrypted | yes | no |
-| Pending authorization request | Encrypted | yes, ≤10 min | no |
+| Pending authorization request (with the `sub` a step-up expects, when it is one) | Encrypted | yes, ≤10 min | no |
 | Sealed blob from `/native/start` (edge mode) | Encrypted, inside the pending request | yes, until the expiry edge gave, ≤10 min | no |
 | `token_endpoint` and `revocation_endpoint` from `/native/start` (edge mode) | Disk, unencrypted | yes | yes |
 | Granted scope (the `Versola` facade; what `stepUp()` asks for again) | Disk, unencrypted | yes | no |
@@ -586,7 +595,12 @@ endpoints are kept for the same reason: a refresh in a later process signs for t
 `/native/start` of its own to learn them from. They are written before the refresh token is, so a
 grant without them is a damaged store: there is no discovery to infer them from, the proof a
 refresh needs cannot be addressed, and the refresh fails with
-`Reauthenticate(CredentialsInvalidated)` and wipes, as for a DPoP key that is gone.
+`Reauthenticate(CredentialsInvalidated)` and wipes, as for a DPoP key that is gone. Only a record
+that is absent or is not what the store writes counts as "without them": a read that fails for a
+reason of the moment (the device is locked, the file cannot be read now) raises the store's own
+error, in the category the platform's credential store uses, and wipes nothing. A write that fails
+after `/native/complete` answered fails the login with the same error, and the refresh token just
+issued, which nothing would hold, is revoked best effort.
 
 **Record binding (Android).** The key provider wraps each encrypted item with the name of its
 slot in front of the secret (`credentials/refreshToken`, `credentials/rawIdToken`,
