@@ -69,7 +69,7 @@ for API 36. If you cannot start an emulator, say the device tier was not run (`t
   detail, `RefreshTokenPolicy`, `IdTokenValidator`). A Versola behaviour that cannot be a seam
   lives in `:core`, never in `:oauth-core`. `:oauth` sends only what a standard defines: no
   `Idempotency-Key`, no `offline_access` added, bearer by default.
-- Versola-specific code (`BackChannel`, `EdgeNativeTokenClient`, native endpoints, mTLS aliases)
+- Versola-specific code (`EdgeAuthorizationStarter`, `EdgeNativeTokenClient`, `EdgeMetadata`, the native endpoints)
   depends on generic code, never the reverse. Behaviour the core shows that a generic provider
   would reject is a bug (README, "Portability").
 - Every module applies `explicitApi()`: public declarations spell out visibility and return types.

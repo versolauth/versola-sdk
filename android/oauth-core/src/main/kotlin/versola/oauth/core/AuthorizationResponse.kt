@@ -34,6 +34,12 @@ public class AuthorizationGrant @VersolaInternalApi public constructor(
      * `auth_time` check (OpenID Connect Core 3.1.3.7 step 11) must not depend on there being one.
      */
     @VersolaInternalApi public val maxAge: Long? = null,
+    /**
+     * The `sub` the sign-in must come back as, restored from the pending request for the same
+     * reason as [maxAge]: a login finished without its caller still owes the step-up's
+     * same-user check ([PendingAuthorizationRequest.expectedSubject]).
+     */
+    @VersolaInternalApi public val expectedSubject: String? = null,
 ) {
 
     /** Credential material on both counts. */
@@ -124,6 +130,7 @@ public object AuthorizationResponseValidator {
             extension = pending.extension,
             resources = pending.resources,
             maxAge = pending.maxAge,
+            expectedSubject = pending.expectedSubject,
         )
     }
 

@@ -338,6 +338,28 @@ public class TokenRequestExecutor(
     }
 
     /**
+     * RFC 7009 for the refresh token of [issued], a response whose caller cannot keep it: a client
+     * whose own bookkeeping failed after the server answered (the Versola facade's native endpoints
+     * file) must not leave a live credential that nobody holds, and [TokenResponse.refreshToken] is
+     * not readable outside this module. Takes no ownership of [issued]; the copy it sends is zeroed.
+     * Does nothing for a response without a refresh token.
+     */
+    public suspend fun revokeIssued(issued: TokenResponse, url: String, htu: String?, onStatus: (Int) -> VersolaError? = { null }) {
+        val token = issued.refreshToken?.copyOf() ?: return
+        val form = FormBody()
+            .add("token_type_hint", "refresh_token")
+            .addBytes("token", token)
+        token.fill(0)
+        val body = form.toByteArray()
+        form.clear()
+        try {
+            revoke(url, body, htu, onStatus)
+        } finally {
+            body.fill(0)
+        }
+    }
+
+    /**
      * RFC 7009 through the same client: a 2xx is the whole answer, and a refusal maps the way
      * a token-endpoint refusal does. No nonce retry — auth's revocation endpoint reads no
      * proof, and edge checks only that the proof it forwards is signed for the right URL.

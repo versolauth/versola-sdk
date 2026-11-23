@@ -150,6 +150,7 @@ extension OAuthError {
                 m.attempts = Int64(attempts); m.elapsedMillis = elapsedMillis
             case .unlockRequired: m.kind = "unlockRequired"
             case .nonceLoop(let origin): m.kind = "nonceLoop"; m.origin = origin
+            case .accountMismatch: m.kind = "accountMismatch"
             }
         case .reauthenticate(let reason):
             m = ErrorMessage(category: .reauthenticate, kind: "", message: description)
@@ -183,6 +184,9 @@ extension OAuthError {
             case .userInfoRejected(let detail): m.kind = "userInfoRejected"; m.detail = detail
             case .providerUnsupported(let capability): m.kind = "providerUnsupported"; m.capability = capability
             case .hardwareBindingUnavailable(let detail): m.kind = "hardwareBindingUnavailable"; m.detail = detail
+            // A facade's own detail (the Versola facade's, which this plugin does not bind): a case
+            // Dart has no name for is `unknown` with the name, never a guessed real case.
+            case .facade(let name, _): m.kind = "unknown"; m.detail = name
             }
         }
         // The stable `code` of `spec/errors.md`, distinct from `m.code`, the provider's OAuth error code.

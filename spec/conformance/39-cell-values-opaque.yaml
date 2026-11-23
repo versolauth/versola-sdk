@@ -1,0 +1,42 @@
+id: 39-cell-values-opaque
+title: Values that name a cell are stored and sent byte for byte, on a deployment with two cells
+issues: [40]
+applies_to: [android, ios, flutter]
+mode: dpop
+fault_injection: [process-death]
+preconditions:
+  - The deployment has two auth cells, each with a cell-id, behind one edge whose address is the issuer.
+  - A native client is registered as in scenario 21, on a tenant assigned to that edge.
+  - The SDK is configured with edgeUrl, clientId and the redirect URI, and no issuer.
+  - The user's account is held by one of the two cells.
+steps:
+  - actor: app
+    action: Call login.
+  - actor: sdk
+    action: POST edge's native start endpoint.
+    expect: 200 with a request_uri of the form urn:ietf:params:oauth:request_uri:v1.<cell>.<value>.
+  - actor: sdk
+    action: Open the authorization_endpoint of that answer with client_id and request_uri.
+  - actor: auth
+    action: Redirect to the App Link with a code of the form v1.<cell>.<value>, state and iss.
+  - actor: sdk
+    action: POST edge's native complete endpoint.
+    expect: 200 with a refresh_token of the form v1.<cell>.<value> and an access token whose JOSE header carries cell.
+  - actor: harness
+    action: Kill the app process and cold-start it.
+  - actor: app
+    action: Force a refresh, issue a GET through the SDK's HTTP client, then call logout.
+assertions:
+  - The request_uri in the browser URL, percent-decoded, equals the request_uri of the start answer byte for byte.
+  - The code in the complete request equals the code of the redirect byte for byte, and the refresh_token in the refresh and revoke requests equals the one in the token response byte for byte, before and after the process restart.
+  - The refresh answers 200 and echoes the same refresh_token value, which shows edge routed it to the cell that issued it.
+  - The SDK sends no request to any host but edge's, and none to a /.well-known/ path, /token, /par, /userinfo or /revoke.
+  - Every proof for the complete, refresh and revoke requests has htu equal to the token_endpoint or revocation_endpoint of the start answer, whichever cell served the call.
+  - The same build, with the same configuration but for edgeUrl, passes scenario 21 against a deployment with no cell, whose values carry no prefix.
+  - No log line at any level contains a code, a refresh token, a request_uri or a part of one.
+notes: >
+  The cell is in the value so that edge can route; the SDK has no notion of one
+  (versola-sdk-api.md section 8). The last-but-one assertion is the other half of the same rule: a
+  client that expected the prefix would break on a deployment without cells. This scenario is also
+  what shows whether a proof signed for the one token_endpoint edge names is accepted by every
+  cell (server-dependencies.md, "Proof htu with several cells").

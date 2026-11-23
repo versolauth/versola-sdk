@@ -1,0 +1,37 @@
+id: 41-native-start-rate-limited
+title: Edge's 429 and 503 on the native endpoints are honoured by Retry-After and never spend a code twice
+issues: [22, 40]
+applies_to: [android, ios, flutter]
+mode: dpop
+fault_injection: [respond-with-status]
+preconditions:
+  - The SDK is configured with the default RetryPolicy (totalBudget 20 s).
+  - No credentials are present on the device.
+steps:
+  - actor: harness
+    action: Answer the first native start request with 429, no body and Retry-After 2, then forward the second.
+  - actor: app
+    action: Call login and complete it.
+  - actor: harness
+    action: Answer the next native start request with 503 and Retry-After 30.
+  - actor: app
+    action: Call login, then call login again at once.
+  - actor: harness
+    action: After the cooldown, let a login reach the redirect, then answer the native complete request with 429 and Retry-After 1.
+  - actor: harness
+    action: With a session Authenticated and its access token expired, answer the native token request with 429 and Retry-After 2, then forward the second.
+  - actor: app
+    action: Issue a GET through the SDK's HTTP client.
+assertions:
+  - With Retry-After 2 on start the second start request arrives no earlier than two seconds after the first and no later than three, carries a proof with a new jti, and the login completes.
+  - With Retry-After 30 on start the SDK sends no second request and does not sleep; login fails at once with Recoverable, cause Server, status 503, retryAfter 30 s, and the browser is not opened.
+  - The second login call sends nothing and fails with Recoverable, cause Server, attempts 0, and a retryAfter of what is left of the 30 seconds; the browser is not opened.
+  - The complete request answered 429 is not repeated; login fails with Recoverable, cause Server, status 429, the pending request is wiped and the state settles on what it was before login.
+  - The refresh answered 429 is repeated once after two seconds with the same refresh_token and the same Idempotency-Key, and the GET succeeds.
+  - No RateLimit or RateLimit-Policy header value changes any delay.
+  - The cooldown and every budget are recorded against edge's origin; nothing is recorded against the origin of the token_endpoint the proofs name.
+notes: >
+  Edge's rate limit and its overload admission are the only servers that ask the facade for quiet:
+  edge relays no Retry-After of auth's (server-dependencies.md). The rules are retry-policy.md's;
+  scenarios 35 and 36 hold them for the generic facade, and this one holds the native calls,
+  whose proof names another origin than the request goes to.

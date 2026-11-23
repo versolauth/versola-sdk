@@ -224,7 +224,10 @@ jobs:
         with:
           persist-credentials: false
       - run: swift package resolve
-      - run: xcodebuild build -scheme Versola -destination "generic/platform=iOS Simulator"
+      # The aggregate scheme Xcode generates for a package with two library products (ios.yml says
+      # why `Versola` no longer exists): it builds both products, which is what a consumer of
+      # either one resolves at this tag.
+      - run: xcodebuild build -scheme Versola-Package -destination "generic/platform=iOS Simulator"
 
   # The GitHub release for the tag, with notes generated from the merged pull requests. Created
   # only after the Android bundle validated and the Swift package built at the tag, so a failed

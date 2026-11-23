@@ -4,17 +4,14 @@ import versola.oauth.core.AuthorizationGrant
 import versola.oauth.core.AuthorizationResponseValidator
 import versola.oauth.core.PendingAuthorizationCodec
 import versola.oauth.core.CodeVerifier
-import versola.oauth.core.DiscoveryClient
-import versola.oauth.core.DiscoveryService
 import versola.oauth.core.DpopProofSource
-import versola.oauth.core.FileProviderMetadataCache
-import versola.oauth.core.MtlsEndpointAliases
-import versola.oauth.core.ProviderMetadata
 import versola.oauth.core.TokenBinding
 import versola.oauth.core.TokenResponse
 import versola.oauth.core.VersolaConfiguration
 import versola.oauth.core.VersolaError
 import java.io.File
+import java.net.URLDecoder
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
@@ -77,33 +74,24 @@ class EdgeNativeTokenClientTest {
 
     private fun client(
         endpoints: NativeEndpointsStore = MemoryEndpoints(),
-        aliases: MtlsEndpointAliases? = null,
         binding: TokenBinding.Dpop = TokenBinding.Dpop(),
-    ): EdgeNativeTokenClient {
-        val metadata = ProviderMetadata(
-            issuer = "https://id.versola.io",
-            authorizationEndpoint = "https://id.versola.io/authorize",
-            tokenEndpoint = "https://id.versola.io/token",
-            revocationEndpoint = "https://id.versola.io/revoke",
-            dpopSigningAlgValuesSupported = listOf("ES256"),
-            mtlsEndpointAliases = aliases,
-        )
-        return EdgeNativeTokenClient(
-            configuration = VersolaConfiguration.create("https://id.versola.io", "mobile-app", "https://app.example.com/oauth"),
-            edgeBaseUrl = edge,
-            httpClient = OkHttpClient(),
-            dpop = proofs,
-            discovery = DiscoveryService(
-                issuer = "https://id.versola.io",
-                client = object : DiscoveryClient {
-                    override suspend fun fetch(issuer: String): ProviderMetadata = metadata
-                },
-                cache = FileProviderMetadataCache(File(folder.newFolder(), "metadata.json")),
-            ),
-            endpoints = endpoints,
-            tokenBinding = binding,
-        )
-    }
+    ): EdgeNativeTokenClient = EdgeNativeTokenClient(
+        configuration = VersolaConfiguration.create("https://id.versola.io", "mobile-app", "https://app.example.com/oauth"),
+        edgeBaseUrl = edge,
+        httpClient = OkHttpClient(),
+        dpop = proofs,
+        endpoints = endpoints,
+        tokenBinding = binding,
+    )
+
+    private val remembered get() = MemoryEndpoints(NativeEndpoints("$AUTH_MTLS/token", "$AUTH_MTLS/revoke"))
+
+    /** The form as the server decodes it: the first value of every field, byte for byte. */
+    private fun decoded(body: String): Map<String, String> =
+        body.split('&').filter { it.isNotEmpty() }.associate {
+            val (name, value) = it.split('=', limit = 2)
+            URLDecoder.decode(name, "UTF-8") to URLDecoder.decode(value, "UTF-8")
+        }
 
     private fun edgeGrant() = AuthorizationGrant(
         code = "the-code",
@@ -313,28 +301,274 @@ class EdgeNativeTokenClientTest {
     }
 
     @Test
-    fun `without a remembered endpoint the mutual-TLS alias is signed for, then the plain endpoint`() = runTest {
-        server.enqueue(issued())
-        client(aliases = MtlsEndpointAliases(tokenEndpoint = "https://mtls.id.versola.io/token"))
-            .refresh("rt".toByteArray(), "k")
-        assertEquals("https://mtls.id.versola.io/token", proofs.proofsFor.last())
+    fun `without remembered endpoints a refresh is Reauthenticate CredentialsInvalidated and sends nothing`() = runTest {
+        val token = "rt".toByteArray()
 
-        server.enqueue(issued())
-        client().refresh("rt".toByteArray(), "k")
-        assertEquals("https://id.versola.io/token", proofs.proofsFor.last())
+        val error = failure { client().refresh(token, "k") } as VersolaError.Reauthenticate
+
+        assertSame(VersolaError.Reauthenticate.Reason.CredentialsInvalidated, error.reason)
+        assertEquals(0, server.requestCount)
+        assertTrue("no proof was minted", proofs.proofsFor.isEmpty())
+        assertTrue("the refresh token is zeroed even when nothing is sent", token.all { it == 0.toByte() })
     }
 
     @Test
-    fun `the endpoints file survives a process restart and is read before any inference`() = runTest {
+    fun `without remembered endpoints a revoke is Reauthenticate CredentialsInvalidated and sends nothing`() = runTest {
+        val token = "rt".toByteArray()
+
+        val error = failure { client().revoke(token) } as VersolaError.Reauthenticate
+
+        assertSame(VersolaError.Reauthenticate.Reason.CredentialsInvalidated, error.reason)
+        assertEquals(0, server.requestCount)
+        assertTrue(proofs.proofsFor.isEmpty())
+        assertTrue(token.all { it == 0.toByte() })
+    }
+
+    @Test
+    fun `remembered endpoints that are not https are treated as none, for a refresh and for a revoke`() = runTest {
+        val insecure = listOf(
+            NativeEndpoints("http://id.versola.io:9008/token", "$AUTH_MTLS/revoke"),
+            NativeEndpoints("$AUTH_MTLS/token", "http://id.versola.io:9008/revoke"),
+            NativeEndpoints("http://10.0.2.2:9008/token", "http://10.0.2.2:9008/revoke"),
+            NativeEndpoints("javascript:alert(1)", "$AUTH_MTLS/revoke"),
+            NativeEndpoints("", ""),
+        )
+        for (stored in insecure) {
+            val refresh = failure { client(MemoryEndpoints(stored)).refresh("rt".toByteArray(), "k") } as VersolaError.Reauthenticate
+            val revoke = failure { client(MemoryEndpoints(stored)).revoke("rt".toByteArray()) } as VersolaError.Reauthenticate
+            assertSame("$stored", VersolaError.Reauthenticate.Reason.CredentialsInvalidated, refresh.reason)
+            assertSame("$stored", VersolaError.Reauthenticate.Reason.CredentialsInvalidated, revoke.reason)
+        }
+        assertEquals(0, server.requestCount)
+        assertTrue(proofs.proofsFor.isEmpty())
+    }
+
+    @Test
+    fun `remembered endpoints on the developer's own machine are used over cleartext`() = runTest {
+        server.enqueue(issued())
+
+        client(MemoryEndpoints(NativeEndpoints("http://localhost:9008/token", "http://127.0.0.1:9008/revoke")))
+            .refresh("rt".toByteArray(), "k")
+
+        assertEquals(listOf("http://localhost:9008/token"), proofs.proofsFor)
+    }
+
+    @Test
+    fun `the endpoints file survives a process restart and is what a later refresh signs for`() = runTest {
         val file = File(folder.newFolder(), "native-endpoints.json")
         server.enqueue(issued())
         client(FileNativeEndpointsStore(file)).exchange(edgeGrant())
         assertTrue(file.exists())
 
         server.enqueue(issued())
-        client(FileNativeEndpointsStore(file), aliases = MtlsEndpointAliases(tokenEndpoint = "https://other/token"))
-            .refresh("rt".toByteArray(), "k")
+        client(FileNativeEndpointsStore(file)).refresh("rt".toByteArray(), "k")
 
         assertEquals("$AUTH_MTLS/token", proofs.proofsFor.last())
+    }
+
+    // ---- values are opaque ------------------------------------------------------------------
+
+    @Test
+    fun `a code, a state and a blob with dots, dashes, tildes and plus signs reach the server byte for byte`() = runTest {
+        server.enqueue(issued())
+        val code = "v1.kz-1.aB-c_D.e~f"
+        val blob = "v1.kz-1.AAA.BBB-CCC_ddd.eee+/=="
+        val grant = AuthorizationGrant(
+            code = code,
+            codeVerifier = CodeVerifier(""),
+            redirectUri = "https://app.example.com/oauth",
+            nonce = "n",
+            scopes = setOf("openid"),
+            state = "st.1~x+y/z=",
+            iss = "https://id.versola.io",
+            extension = mapOf(
+                EdgeAuthorizationStarter.BLOB to blob,
+                EdgeAuthorizationStarter.TOKEN_ENDPOINT to "$AUTH_MTLS/token",
+                EdgeAuthorizationStarter.REVOCATION_ENDPOINT to "$AUTH_MTLS/revoke",
+            ),
+        )
+
+        client().exchange(grant)
+
+        val form = decoded(server.takeRequest().body!!.utf8())
+        assertEquals(code, form["code"])
+        assertEquals("st.1~x+y/z=", form["state"])
+        assertEquals("https://id.versola.io", form["iss"])
+        assertEquals(blob, form["blob"])
+    }
+
+    @Test
+    fun `a refresh token with plus, slash and equals signs reaches the server byte for byte`() = runTest {
+        server.enqueue(issued())
+        val refreshToken = "v1.kz-2.Zz+/="
+
+        client(remembered).refresh(refreshToken.toByteArray(), "k")
+
+        val form = decoded(server.takeRequest().body!!.utf8())
+        assertEquals(refreshToken, form["refresh_token"])
+        assertEquals("refresh_token", form["grant_type"])
+    }
+
+    @Test
+    fun `a revoked token with plus, slash and equals signs reaches the server byte for byte`() = runTest {
+        server.enqueue(MockResponse.Builder().code(200).build())
+        val refreshToken = "v1.kz-2.Zz+/=.a~b"
+
+        client(remembered).revoke(refreshToken.toByteArray())
+
+        assertEquals(refreshToken, decoded(server.takeRequest().body!!.utf8())["token"])
+    }
+
+    // ---- the htu of every proof is auth's, never edge's -------------------------------------
+
+    @Test
+    fun `the proof for complete and for token is signed for the stored token endpoint, for revoke the revocation endpoint`() = runTest {
+        server.enqueue(issued())
+        server.enqueue(issued())
+        server.enqueue(MockResponse.Builder().code(200).build())
+        val endpoints = MemoryEndpoints()
+        val client = client(endpoints)
+
+        client.exchange(edgeGrant())
+        client.refresh("rt".toByteArray(), "k")
+        client.revoke("rt".toByteArray())
+
+        assertEquals(listOf("$AUTH_MTLS/token", "$AUTH_MTLS/token", "$AUTH_MTLS/revoke"), proofs.proofsFor)
+        assertTrue("never edge's URL", proofs.proofsFor.none { it.startsWith(edge) })
+    }
+
+    @Test
+    fun `endpoints another login stored are what the next refresh signs for`() = runTest {
+        val endpoints = remembered
+        server.enqueue(issued())
+        server.enqueue(issued())
+        val client = client(endpoints)
+
+        client.exchange(
+            AuthorizationGrant(
+                code = "c", codeVerifier = CodeVerifier(""), redirectUri = "https://app.example.com/oauth", nonce = "n",
+                scopes = setOf("openid"), state = "s", iss = "https://id.versola.io",
+                extension = mapOf(
+                    EdgeAuthorizationStarter.BLOB to "b",
+                    EdgeAuthorizationStarter.TOKEN_ENDPOINT to "https://cell2.versola.io:9008/token",
+                    EdgeAuthorizationStarter.REVOCATION_ENDPOINT to "https://cell2.versola.io:9008/revoke",
+                ),
+            ),
+        )
+        client.refresh("rt".toByteArray(), "k")
+
+        assertEquals(
+            listOf("https://cell2.versola.io:9008/token", "https://cell2.versola.io:9008/token"),
+            proofs.proofsFor,
+        )
+        assertEquals(NativeEndpoints("https://cell2.versola.io:9008/token", "https://cell2.versola.io:9008/revoke"), endpoints.stored)
+    }
+
+    // ---- the answers --------------------------------------------------------------------------
+
+    @Test
+    fun `an invalid_grant with no description on token is Reauthenticate GrantRejected`() = runTest {
+        server.enqueue(
+            MockResponse.Builder().code(400).setHeader("Content-Type", "application/json")
+                .body("""{"error":"invalid_grant"}""").build(),
+        )
+
+        val error = failure { client(remembered).refresh("rt".toByteArray(), "k") } as VersolaError.Reauthenticate
+
+        assertSame(VersolaError.Reauthenticate.Reason.GrantRejected, error.reason)
+    }
+
+    @Test
+    fun `an invalid_grant with no description on complete is a rejected code and not a retry`() = runTest {
+        server.enqueue(
+            MockResponse.Builder().code(400).setHeader("Content-Type", "application/json")
+                .body("""{"error":"invalid_grant"}""").build(),
+        )
+
+        val error = failure { client().exchange(edgeGrant()) }
+
+        assertTrue(error.toString(), error is VersolaError.Configuration || error is VersolaError.Reauthenticate)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun `a 429 with Retry-After on token is Recoverable Server with the wait in milliseconds`() = runTest {
+        server.enqueue(MockResponse.Builder().code(429).setHeader("Retry-After", "7").build())
+
+        val error = failure { client(remembered).refresh("rt".toByteArray(), "k") } as VersolaError.Recoverable
+
+        val cause = error.reason as VersolaError.Recoverable.Cause.Server
+        assertEquals(429, cause.status)
+        assertEquals(7_000L, cause.retryAfterMillis)
+        assertEquals(1, server.requestCount)
+    }
+
+    @Test
+    fun `a 503 with Retry-After on token is Recoverable Server too`() = runTest {
+        server.enqueue(MockResponse.Builder().code(503).setHeader("Retry-After", "3").build())
+
+        val error = failure { client(remembered).refresh("rt".toByteArray(), "k") } as VersolaError.Recoverable
+
+        val cause = error.reason as VersolaError.Recoverable.Cause.Server
+        assertEquals(503, cause.status)
+        assertEquals(3_000L, cause.retryAfterMillis)
+    }
+
+    // ---- the endpoints store fails after the code is spent -----------------------------------
+
+    private class FailingEndpoints(private val failure: () -> Throwable) : NativeEndpointsStore {
+        override suspend fun load(): NativeEndpoints? = null
+        override suspend fun save(endpoints: NativeEndpoints) {
+            throw failure()
+        }
+    }
+
+    // The coordinator never sees a response this call throws instead of returning, so the refresh
+    // token the server issued is a live credential nobody holds unless the client revokes it.
+    // Not `runTest`: the revocation is bounded by a timeout, and under virtual time that timeout
+    // fires as soon as the scheduler idles, which it does while the real socket is still answering.
+    // The request then went out or not by a race. Real time here, with the answer already enqueued.
+    @Test
+    fun `an endpoints store that cannot save after the token response revokes the issued refresh token and raises its own error`(): Unit = runBlocking {
+        server.enqueue(issued())
+        server.enqueue(MockResponse.Builder().code(200).build())
+        val storeError = VersolaError.Recoverable(VersolaError.Recoverable.Cause.Network("native endpoints store: write failed"))
+
+        val error = failure { client(FailingEndpoints { storeError }).exchange(edgeGrant()) }
+
+        assertSame(storeError, error)
+        assertEquals(2, server.requestCount)
+        server.takeRequest()
+        val revocation = server.takeRequest()
+        assertEquals("/native/revoke/mobile-app", revocation.url.encodedPath)
+        val form = decoded(revocation.body!!.utf8())
+        assertEquals("rt", form["token"])
+        assertEquals("refresh_token", form["token_type_hint"])
+        // Signed for the revocation endpoint this very response was addressed to, not for one a store would have said.
+        assertEquals("$AUTH_MTLS/revoke", proofs.proofsFor.last())
+    }
+
+    // Not `runTest`: the revocation is bounded by a timeout, and under virtual time that timeout
+    // fires as soon as the scheduler idles, which it does while the real socket is still answering.
+    // The request then went out or not by a race. Real time here, with the answer already enqueued.
+    @Test
+    fun `a revocation that fails too does not replace the store's error`(): Unit = runBlocking {
+        server.enqueue(issued())
+        server.enqueue(MockResponse.Builder().code(500).build())
+        val storeError = VersolaError.Recoverable(VersolaError.Recoverable.Cause.Network("native endpoints store: write failed"))
+
+        val error = failure { client(FailingEndpoints { storeError }).exchange(edgeGrant()) }
+
+        assertSame(storeError, error)
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun `an endpoints store that saves leaves nothing to revoke`() = runTest {
+        server.enqueue(issued())
+
+        client(MemoryEndpoints()).exchange(edgeGrant())
+
+        assertEquals(1, server.requestCount)
     }
 }

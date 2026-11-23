@@ -59,6 +59,9 @@ class MappingTest {
         assertEquals("https://api.example.com", loop.origin)
         assertEquals("userCancelled", VersolaError.Recoverable(Cause.UserCancelled).toMessage().kind)
         assertEquals("unlockRequired", VersolaError.Recoverable(Cause.UnlockRequired).toMessage().kind)
+        val mismatch = VersolaError.Recoverable(Cause.AccountMismatch).toMessage()
+        assertEquals("accountMismatch", mismatch.kind)
+        assertEquals("recoverable.account_mismatch", mismatch.sdkCode)
     }
 
     @Test

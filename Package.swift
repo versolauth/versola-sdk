@@ -17,6 +17,10 @@ let package = Package(
     products: [
         // The generic facade (issue #46, spec/oauth-sdk-api.md): what an app imports.
         .library(name: "VersolaOAuth", targets: ["OAuthClient"]),
+        // The Versola facade (spec/versola-sdk-api.md, ADR 0002): a session through a deployment's
+        // edge. The module is VersolaSDK and the type is Versola, so that a qualified name can tell
+        // the two apart.
+        .library(name: "VersolaSDK", targets: ["VersolaSDK"]),
     ],
     targets: [
         // The protocol engine of the generic OAuth SDK (ADR 0001, Android's :oauth-core):
@@ -51,6 +55,38 @@ let package = Package(
             name: "OAuthClientTests",
             dependencies: ["OAuthClient"],
             path: "ios/Tests/OAuthClientTests",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        // Versola's edge back channel (`/native/start|complete|token|revoke`), Android's `:core`:
+        // the starter that has edge build and push the request, the token client that redeems and
+        // refreshes through edge, and the metadata the core reads, stated instead of discovered.
+        // Foundation and OAuthCore only. Internal: a target and no product; `package` access.
+        .target(
+            name: "VersolaEdge",
+            dependencies: ["OAuthCore"],
+            path: "ios/Sources/VersolaEdge",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "VersolaEdgeTests",
+            dependencies: ["VersolaEdge", "OAuthCore"],
+            path: "ios/Tests/VersolaEdgeTests",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        // The Versola facade: VersolaConfiguration, Versola, and the wiring of the edge channel
+        // over the platform halves OAuthClient already has (Keychain stores,
+        // ASWebAuthenticationSession, the authenticated URLSession, the Secure Enclave DPoP key),
+        // which it reaches through `package` access rather than a second copy of them.
+        .target(
+            name: "VersolaSDK",
+            dependencies: ["OAuthCore", "OAuthClient", "VersolaEdge"],
+            path: "ios/Sources/VersolaSDK",
+            swiftSettings: [.swiftLanguageMode(.v6)]
+        ),
+        .testTarget(
+            name: "VersolaSDKTests",
+            dependencies: ["VersolaSDK", "VersolaEdge", "OAuthClient", "OAuthCore"],
+            path: "ios/Tests/VersolaSDKTests",
             swiftSettings: [.swiftLanguageMode(.v6)]
         ),
         // The generic facade's conformance driver (conformance/README.md, "Providers"; the

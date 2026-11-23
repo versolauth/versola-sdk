@@ -1,0 +1,60 @@
+name: versola
+description: >-
+  Flutter binding for the Versola native-app SDK: sign in to a Versola deployment through its
+  edge, DPoP-bound tokens that never leave the device's hardware-backed store, authenticated
+  HTTP to the edge, step-up and sign-out, for Android and iOS.
+version: 0.3.1
+repository: https://github.com/versolauth/versola-sdk
+homepage: https://versola.io
+documentation: https://docs.versola.io/sdk/flutter/
+issue_tracker: https://github.com/versolauth/versola-sdk/issues
+topics:
+  - oauth
+  - oidc
+  - authentication
+  - dpop
+# Publishing is not set up for this package (publish-pubdev.yml covers versola_oauth only).
+
+environment:
+  # Pinned tightly (.claude/rules/flutter.md): pubspec.lock is not committed, so these ranges
+  # are what makes a build repeatable. The toolchain is flutter/.fvmrc (3.47.8, Dart 3.13.7).
+  sdk: ">=3.13.0 <3.14.0"
+  flutter: ">=3.47.0 <3.48.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # Imported by Pigeon's generated Dart bridge. Dart-team package, BSD-3-Clause.
+  meta: ^1.19.0
+  # The `Client` type of Versola.httpClient(); a range across 1.x with the tested version as its
+  # floor, as versola_oauth has it (flutter.md, "Packages and dependencies").
+  http: ">=1.6.0 <2.0.0"
+  # The shared types of the two facades (SessionState, the error hierarchy, IdTokenClaims,
+  # LogoutOptions, LogoutOutcome, RetryPolicy, UnlockPolicy, Prompt) are not copied: this plugin
+  # re-exports them from the generic plugin. Resolved from this checkout (dependency_overrides
+  # below) while neither is published: a `path:` here would make the package unpublishable and
+  # the analyzer says so (`invalid_dependency`), where an override is ignored by dependents.
+  versola_oauth: ^0.3.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: 6.0.0
+  # The bridge generator; the version is part of the contract, since both native halves are
+  # generated from pigeons/messages.dart with it. Flutter-team package, BSD-3-Clause.
+  pigeon: 29.0.12
+
+# The checkout's own versola_oauth. Overrides apply to the root package only, so the example app
+# repeats this block.
+dependency_overrides:
+  versola_oauth:
+    path: ../versola_oauth
+
+flutter:
+  plugin:
+    platforms:
+      android:
+        package: versola.sdk.flutter
+        pluginClass: VersolaPlugin
+      ios:
+        pluginClass: VersolaPlugin

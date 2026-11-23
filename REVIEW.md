@@ -58,7 +58,7 @@ opt-in marker is free to change, a public one is not.
 
 1. **State the problem in one sentence**, from the linked issue, not from the diff.
 2. **Find what already serves it.** Search before judging: the facade (`Versola`, `OAuthClient` once
-   #46 lands), `VersolaConfiguration`, `RetryPolicy`, `BackChannel`, `VersolaError`, and the sibling
+   #46 lands), `VersolaConfiguration`, `LoginOptions`, `RetryPolicy`, `VersolaError`, and the sibling
    platform that already solved it. Never conclude "nothing exists" unsearched.
 3. **List the alternatives**, always including "extend the existing option or sealed type
    additively" and "no new surface (derive it from discovery, the response, the state machine, or an
@@ -88,7 +88,7 @@ an existing one, extend it:
 - **Different caller**: an app, a test harness, the conformance driver. Only the first is public;
   the others use the opt-in marker or a test-fixtures module.
 - **Different contract owner**: standard behaviour (RFC 9449, 9207, 7636, 9470) stays RFC-shaped;
-  Versola-only behaviour (edge `/native/*`, `BackChannel.Edge`) belongs to the Versola facade, not
+  Versola-only behaviour (edge `/native/*`, cells, the issuer served by an edge) belongs to the Versola facade, not
   the generic OAuth facade.
 - **Different security property**: misuse must be unrepresentable, not documented: a redacting
   secret type, a closed enum or a sealed result, not a boolean the app can flip.
@@ -146,7 +146,7 @@ errors, metrics, intents or crash reports; no client secret is representable.
   `WebView` or `WKWebView` is unreachable from every public API: `BrowserAuthorizationSession` takes
   a URI. Ephemeral browsing is opt-in; it breaks passkeys.
 - **Redirect validation, before any network call.** `state` in constant time (length folded in, no
-  early exit), then `iss` (RFC 9207; mandatory under `BackChannel.Edge`), then `error`, then `code`;
+  early exit), then `iss` (RFC 9207; always mandatory in the Versola facade), then `error`, then `code`;
   duplicate parameters rejected. `VersolaRedirectActivity` is exported: an explicit intent from any
   app reaches it, so it checks scheme, host and path against the configured redirect, or
   `anything://x?state=junk` aborts a live login and pins `AUTHORIZE_LOCK`.
@@ -156,7 +156,7 @@ errors, metrics, intents or crash reports; no client secret is representable.
   it. Claim handling without these checks is a blocker.
 - **PKCE and client secret.** S256 only, 32 bytes from `SecureRandom` /
   `SystemRandomNumberGenerator`, no `plain`, no opt-out. No client secret is representable
-  (`invalid_client` on a `fapi2` tenant means `BackChannel.Edge`, not "add a secret").
+  (`invalid_client` on a `fapi2` tenant means the Versola facade and edge, not "add a secret").
 - **DPoP proof scope.** `htm`/`htu` match the server's normalisation (scheme, host, port, raw path;
   query and fragment stripped); `ath` is base64url SHA-256 of the token; nonces are cached per
   origin, one retry per origin per operation. Build `htu` from the parsed URL: a full string given
@@ -171,8 +171,8 @@ errors, metrics, intents or crash reports; no client secret is representable.
   are not zeroed). Nothing credential-shaped crosses the Flutter bridge. No real secrets, client ids
   or issuers anywhere: `example.com`.
 - **Intents and links.** Explicit intents inside the SDK; verified App Links, and Universal Links
-  with the `webcredentials` service on iOS (`applinks` alone fails); a custom scheme only under
-  `BackChannel.Auth`, with a warning.
+  with the `webcredentials` service on iOS (`applinks` alone fails); a custom scheme only in
+  the generic facade, with a warning; the Versola facade refuses one.
 - **Dependencies and CI.** A new dependency, workflow permission, unpinned action or untrusted
   input interpolated into `run:` needs approval. Recommend the `security-review` skill here.
 
@@ -204,9 +204,9 @@ errors, metrics, intents or crash reports; no client secret is representable.
   every `Throwable` (`URISyntaxException`, `InvalidKeyException`, DataStore
   `IllegalStateException`). A `catch (e: Exception) { clear(); null }` must not swallow
   `UnlockRequired`: out of reach is not gone.
-- **Single instances.** DataStore allows one active instance per file and `Versola.configure()` in
+- **Single instances.** DataStore allows one active instance per file and `Versola.create()` in
   `Activity.onCreate` re-runs on every rotation: two calls must not yield two stores over
-  `noBackupFilesDir/versola/credentials`, and the storage alias is generated once under a lock or
+  `noBackupFilesDir/versola/<storage key>/credentials`, and the storage alias is generated once under a lock or
   the first wrapped blob is orphaned. Flags read outside the lock that wrote them (`restored`) are
   `@Volatile`; Swift shared state is an `actor`.
 - **State machine.** Transitions match `spec/state-machine.md`: seven states, no others.
@@ -247,7 +247,7 @@ Platform lifecycle facts the protocol code cannot see; judge against the platfor
   a `ProviderException` from the StrongBox attempt
   (`StrongBoxUnavailableException` is one) falls back. `KeyPermanentlyInvalidatedException` after a biometric
   enrolment change deletes and regenerates the key, or every `login()` fails forever.
-  `UnlockPolicy.OnAppUnlock` is reachable from `configure()`.
+  `UnlockPolicy.OnAppUnlock` is reachable from both facades' configuration.
 - **API 26 floor and R8.** No API above 26 without a `Build.VERSION` guard; a new reflective use
   ships consumer rules and keeps the R8 sample green.
 
@@ -259,7 +259,7 @@ Platform lifecycle facts the protocol code cannot see; judge against the platfor
   ephemeral is off by default.
 - **Platform floor.** The https callback (`Callback.https(host:path:)`) needs iOS 17.4, while
   `Package.swift` says `.iOS(.v16)` and an edge-fronted client has https redirects only, so
-  `BackChannel.Edge` has no browser leg on 16.0 to 17.3. Changing the floor is an "Ask Before".
+  the Versola facade has no browser leg on 16.0 to 17.3. Changing the floor is an "Ask Before".
 - **Keychain.** `AfterFirstUnlockThisDeviceOnly`, not synchronizable; write the new item before
   deleting the old (`SecItemUpdate`); `errSecInteractionNotAllowed` is `UnlockRequired`, never a
   sign-out; `SecureEnclave.isAvailable` decides the software fallback and the reported tier.

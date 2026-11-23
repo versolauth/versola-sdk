@@ -44,6 +44,7 @@ public sealed class VersolaError(
             is Cause.Server -> "server"
             Cause.UnlockRequired -> "unlock_required"
             is Cause.NonceLoop -> "nonce_loop"
+            Cause.AccountMismatch -> "account_mismatch"
         }
 
         public sealed interface Cause {
@@ -115,6 +116,15 @@ public sealed class VersolaError(
              * (scenario 05).
              */
             public data class NonceLoop(public val origin: String) : Cause
+
+            /**
+             * A step-up was answered by another user than the one the session belongs to: the
+             * person signed in as someone else in the browser. Nothing of that sign-in was kept
+             * and the session is as it was. Tell the user which account to continue with and let
+             * them try again; a `login()` is not the remedy, the grant held is still good
+             * (`spec/state-machine.md`, scenario 43).
+             */
+            public data object AccountMismatch : Cause
         }
     }
 

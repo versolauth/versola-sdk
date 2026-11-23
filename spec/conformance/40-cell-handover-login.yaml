@@ -1,0 +1,37 @@
+id: 40-cell-handover-login
+title: A sign-in placed in the wrong cell is handed to the user's home cell and completes as one login
+issues: [40]
+applies_to: [android, ios, flutter]
+mode: dpop
+preconditions:
+  - The deployment has two auth cells behind one edge whose address is the issuer; only one of them is open for new sign-ins.
+  - The user's account is held by the other cell, and the browser carries no session cookie.
+  - The client's sign-in flow starts with a typed phone number or email address.
+steps:
+  - actor: app
+    action: Call login with maxAge 0.
+  - actor: sdk
+    action: POST edge's native start endpoint, persist the pending request, open the browser.
+  - actor: user
+    action: Type the address of the account in the browser.
+  - actor: auth
+    action: The open cell redirects the browser to the home cell's handoff; the home cell asks for the first factor.
+  - actor: user
+    action: Complete the sign-in.
+  - actor: auth
+    action: Redirect to the App Link with a code issued by the home cell, the state edge issued at start, and iss.
+  - actor: sdk
+    action: POST edge's native complete endpoint with that code and the blob from start.
+    expect: 200 with tokens.
+assertions:
+  - The SDK makes exactly one start request and one complete request; it makes no request between opening the browser and the redirect.
+  - The state on the redirect equals the state of the start answer, and iss equals the configured issuer.
+  - The access token's cnf.jkt equals the thumbprint of the device key that signed the start proof.
+  - The ID token's nonce equals the nonce the SDK sent at start, and its auth_time is no older than the login.
+  - A refresh after the login answers 200.
+  - Session state observed by the app is Unauthenticated then Authorizing then Authenticated, with no other value in between.
+notes: >
+  The handover is the browser's and the server's; the scenario exists to hold that nothing the
+  device persisted at start (the blob, the state, the nonce, the key) is invalidated by it. The
+  handover does not carry max_age (server-dependencies.md); the auth_time assertion holds because
+  the home cell has no session for a user it is handed.

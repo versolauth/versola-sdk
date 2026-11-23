@@ -336,7 +336,7 @@ public final class OAuthClient: OAuthApi {
     /// percent-encoding included: `URL.path` would decode `%2F` and drop a trailing slash, so
     /// `/oauth/` and `/oauth%2Fx` must not match `/oauth` and `/oauth/x`. An empty http(s) path is
     /// `/` (RFC 9110 section 4.2.3). Kept pure so the rule is tested directly.
-    static func isRedirect(_ url: URL, to redirectUri: URL) -> Bool {
+    package static func isRedirect(_ url: URL, to redirectUri: URL) -> Bool {
         guard let actual = URLComponents(url: url, resolvingAgainstBaseURL: false),
               let expected = URLComponents(url: redirectUri, resolvingAgainstBaseURL: false),
               let actualScheme = actual.scheme?.lowercased(), actualScheme == expected.scheme?.lowercased()
@@ -505,9 +505,9 @@ public final class OAuthClient: OAuthApi {
 
     /// Application Support, excluded from backup: the pending request and the refresh token
     /// are in the Keychain, but the caches must not be restored onto another device either.
-    private static func cacheDirectory(for storageKey: String) throws -> URL {
+    package static func cacheDirectory(for storageKey: String, under name: String = "versola-oauth") throws -> URL {
         let base = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
-        var directory = base.appendingPathComponent("versola-oauth", isDirectory: true).appendingPathComponent(storageKey, isDirectory: true)
+        var directory = base.appendingPathComponent(name, isDirectory: true).appendingPathComponent(storageKey, isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         var values = URLResourceValues()
         values.isExcludedFromBackup = true
@@ -527,7 +527,7 @@ public final class OAuthClient: OAuthApi {
     /// one. A window attached to no scene (an app that has not adopted UIScene) is read as
     /// foreground: the cancel is then a user's, and the pending request is wiped rather than kept.
     @MainActor
-    private static func isForeground(window: ASPresentationAnchor) -> Bool {
+    package static func isForeground(window: ASPresentationAnchor) -> Bool {
         #if canImport(UIKit)
         guard let scene = window.windowScene else { return true }
         return scene.activationState != .background
@@ -548,7 +548,7 @@ import AppKit
 /// a task this actor owns, not in a caller's: a caller that is cancelled stops waiting and leaves
 /// it running, and `logout` and `forgetAll` can end it. Callers wait for it, carry its failure,
 /// and (when it had nothing to do) take their own turn. Waiting honours cancellation.
-private actor ResumeFlight {
+package actor ResumeFlight {
     enum Outcome: Sendable {
         /// A pending authorization was finished.
         case completed
@@ -568,22 +568,23 @@ private actor ResumeFlight {
     /// object, is built before the coordinator the work needs.
     private let work = OSAllocatedUnfairLock<Work?>(initialState: nil)
     private var task: Task<Void, Never>?
+    package init() {}
     private var waiters: [(id: UUID, continuation: CheckedContinuation<Outcome, any Error>)] = []
 
-    nonisolated func bind(run: @escaping @Sendable () async throws -> Bool, log: @escaping @Sendable (any Error) -> Void) {
+    package nonisolated func bind(run: @escaping @Sendable () async throws -> Bool, log: @escaping @Sendable (any Error) -> Void) {
         work.withLock { $0 = Work(run: run, log: log) }
     }
 
     /// The restore found `authorizing`. Starts the resume unless one is running; a failure is
     /// only logged, as nobody is waiting on it.
-    func startIfIdle() {
+    package func startIfIdle() {
         guard task == nil, let work = work.withLock({ $0 }) else { return }
         launch(work, logFailure: true)
     }
 
     /// An explicit call: waits for the running resume, or starts one. Returns when a resume
     /// finished the sign-in or was ended; throws a resume's failure or the caller's cancellation.
-    func resume() async throws {
+    package func resume() async throws {
         var started = false
         while true {
             if task == nil {
@@ -602,7 +603,7 @@ private actor ResumeFlight {
     }
 
     /// Ends the running resume and waits until it has let go of the flow's gate.
-    func cancelInFlight() async {
+    package func cancelInFlight() async {
         guard let task else { return }
         task.cancel()
         await task.value
@@ -673,19 +674,32 @@ private struct EndSessionOverride: DiscoveryClient {
 
 
 /// What a `login()` or `stepUp()` asks for; two calls that ask for the same thing are one.
-private struct LoginRequest: Equatable, Sendable {
+package struct LoginRequest: Equatable, Sendable {
     let scopes: [String]
     let acrValues: [String]
     let maxAge: Int?
     let parameters: AuthorizationParameters
     let ephemeralBrowser: Bool
+    /// The `sub` the sign-in must come back as (the Versola facade's step-up). Part of what makes two
+    /// calls the same: a step-up and a login that differ in nothing else are not one flight, or the
+    /// second would be handed an outcome that is not the one it asked for.
+    let expectedSubject: String?
+
+    package init(scopes: [String], acrValues: [String], maxAge: Int?, parameters: AuthorizationParameters, ephemeralBrowser: Bool, expectedSubject: String? = nil) {
+        self.scopes = scopes
+        self.acrValues = acrValues
+        self.maxAge = maxAge
+        self.parameters = parameters
+        self.ephemeralBrowser = ephemeralBrowser
+        self.expectedSubject = expectedSubject
+    }
 }
 
 /// The authorization one client is carrying out through `login()` / `stepUp()`, shared by the
 /// callers that asked for it: concurrent refreshes coalesce the same way. A joiner that is
 /// cancelled leaves; the work is cancelled only when nobody is waiting for it any more, so the first
 /// caller being cancelled does not end the sign-in a joiner is still waiting for.
-private actor LoginFlights {
+package actor LoginFlights {
     private struct Flight {
         let id: UInt64
         let request: LoginRequest
@@ -696,11 +710,13 @@ private actor LoginFlights {
     private var current: Flight?
     private var nextId: UInt64 = 0
 
+    package init() {}
+
     /// Runs `work` as the flight of `request`, or joins the one running when it is the same request.
     /// `elsewhere` says whether this process is carrying out an authorization that is not a flight of
     /// this actor (the end-session page, a resume's exchange); that, and a flight of another
     /// request, are refused with `refusal`.
-    func run(
+    package func run(
         _ request: LoginRequest, refusal: OAuthError, elsewhere: @Sendable () async -> Bool,
         work: @escaping @Sendable () async throws -> Void
     ) async throws {
@@ -758,7 +774,7 @@ private actor LoginFlights {
     }
 
     /// Ends the flight whatever its waiters: `logout()` takes precedence over a sign-in.
-    func cancelAll() {
+    package func cancelAll() {
         current?.task.cancel()
     }
 

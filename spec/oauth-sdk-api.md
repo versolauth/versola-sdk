@@ -2,8 +2,8 @@
 
 Normative for the generic facade on every platform (issue #46, part B). The `Versola` facade is
 a separate public API that shares this document's protocol core and may differ where Versola chose
-something for its users (edge back channel, security profiles, DPoP by default); it is documented
-by `README.md` and the existing spec. The state machine (`state-machine.md`), the error taxonomy
+something for its users (edge back channel, security profiles, DPoP by default); it is specified
+by `versola-sdk-api.md`. The state machine (`state-machine.md`), the error taxonomy
 (`errors.md`) and the retry policy (`retry-policy.md`) apply to both facades unchanged; this
 document only adds what the generic facade exposes and how it decides defaults.
 
@@ -234,7 +234,8 @@ is the precise error scenario 17 cannot give without PAR.
   to, and the core sends only what a standard defines (ADR 0001). The pending-rotation slot is still
   persisted, so a process killed mid-rotation restarts with the outgoing token and retries once; a
   provider that already rotated answers `invalid_grant`, which is `Reauthenticate(GrantRejected)`.
-  Scenarios 09 and 13 therefore hold for the Versola facade only.
+  Scenarios 09 and 13 therefore do not hold for this facade (`conformance/README.md` says what
+  became of them).
 - An `id_token` on a refresh response is validated with the same rules as at login, except that
   `nonce` is not required and `auth_time` must not move backwards (OIDC Core 12.2). The rotated
   refresh token is stored **before** that validation and survives its failure; a rejected ID token
@@ -422,8 +423,8 @@ As `state-machine.md`'s persistence summary, minus the edge-mode rows, plus:
 | Configuration hash (storage key) | Disk | yes | yes |
 
 Granted scopes are not persisted: `stepUp()` re-requests the configured scopes, or the ones its
-options carry, which an app that changed them per login still has. The Versola facade requires
-them as a parameter for the same reason.
+options carry, which an app that changed them per login still has. The Versola facade persists
+the granted scope and asks for it again (`versola-sdk-api.md` section 6).
 
 ## 15. Logging
 
@@ -443,8 +444,9 @@ refresh token issued, `offline_access` advertised but not configured, a response
 1. `IdTokenRejected` as `Configuration` (section 11) versus a fifth category; the spec's
    four-category rule argues for `Configuration`.
 2. `login()` while an authorization is in flight joined when the call is the same (section 5), refused when it differs, versus cancelling the outstanding request. A request nobody awaits, or a resume that only waits for its redirect, is superseded.
-3. `stepUp()` takes the configured scopes by default (section 5); the Versola facade requires
-   them as a parameter. The two differ in signature, not in what is sent.
+3. `stepUp()` takes the configured scopes by default (section 5); the Versola facade has no
+   configured scopes and asks for the scope of the stored grant (`versola-sdk-api.md` section 6).
+   Whether this facade's `stepUp()` should also refuse another user, as that one does, is open.
 4. The discovery and key-set cache lifetime bounds (5 minutes to 24 hours, 24 hours without `Cache-Control`) and the 30-second refresh skew: fixed, not configurable.
 5. Whether `authenticatedSession` on iOS should be a `URLSession` subclass or a wrapper; a wrapper
    keeps the surface small.

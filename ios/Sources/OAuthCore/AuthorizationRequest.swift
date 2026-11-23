@@ -28,7 +28,7 @@ package enum FormEncoding {
         return url
     }
 
-    static func percentEncode(_ value: String) -> String {
+    package static func percentEncode(_ value: String) -> String {
         var out = ""
         out.reserveCapacity(value.utf8.count)
         for byte in value.utf8 {

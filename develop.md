@@ -57,7 +57,7 @@ android/         Gradle multi-project: oauth-core (protocol engine, plain Kotlin
                  edge back channel), dpop, storage, browser, okhttp, sdk (the Versola facade),
                  oauth (the generic OAuthClient facade)
 ios/Sources/     Swift targets (OAuthCore, OAuthClient); the manifest is Package.swift at the repo root
-flutter/         versola_oauth: the Flutter binding (Pigeon bridge over the native facades)
+flutter/         versola_oauth and versola: the Flutter bindings (Pigeon bridges over the two native facades)
 conformance/     harness driving every SDK against a staged Versola stack
 tools/           validate-scenarios.py, the release scripts, verify-consumer/ (throwaway consumer apps, below)
 ```
@@ -134,8 +134,8 @@ Run from the repository root. These are the `ios.yml` steps.
 
 ```bash
 swift package resolve
-xcodebuild build -scheme Versola -destination "platform=iOS Simulator,name=iPhone 17"
-xcodebuild test  -scheme Versola -destination "platform=iOS Simulator,name=iPhone 17"
+xcodebuild build -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 17"
+xcodebuild test  -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 17"
 ```
 
 `swift build` and `swift test` on the Mac host work too (the manifest lists macOS 14.4, so the
@@ -179,7 +179,10 @@ process has no app host, so the real-Keychain tests still answer `-34018` there;
 
 ### Flutter
 
-Run from `flutter/versola_oauth/`. Flutter is pinned in `flutter/.fvmrc`; `fvm install` in
+Run from `flutter/versola_oauth/` (the generic facade's plugin) or `flutter/versola/` (the Versola
+facade's; the same commands, with `:versola:testDebugUnitTest` for its Kotlin glue, and its example
+substitutes both `io.versola:oauth-android` and `io.versola:versola-android` with the checkout's
+`:oauth` and `:sdk`). Flutter is pinned in `flutter/.fvmrc`; `fvm install` in
 `flutter/` fetches it once, and every command goes through `fvm` so the system Flutter, if any,
 is never used. No protocol logic lives in Dart: the binding calls the native SDKs through Pigeon.
 
@@ -290,7 +293,7 @@ adb reverse tcp:9005 tcp:9005
 The harness (issue #15, `conformance/README.md`) runs the scenario catalogue in
 `spec/conformance/` against a real `auth` + `central` + `edge` and asserts the observable
 behaviour the spec describes. The Android driver is `android/conformance-android`; it arrives
-with PR #44 and is not on `main` until that merges. It runs scenarios 01 and 21 today.
+with PR #44 and is not on `main` until that merges. It runs scenario 21 today (scenario 01's direct back channel left the `Versola` facade with ADR 0002).
 
 The stack is staged from a checkout of `versolauth/versola` following that repository's
 `develop.md` (central 9001, auth 9003/9007/9008, the internal TLS terminator, edge 9005,
@@ -442,7 +445,7 @@ answer it. Without `ISSUER` in the runner's environment every test is skipped.
 Both host apps double as small example apps over the generic facade: launch one with the issuer
 (`adb shell am start -n versola.conformance.browser.app/.HostActivity --es issuer ...`, or the
 `ISSUER` environment variable on iOS) and use the buttons by hand. `ios/BrowserLegHost` is not part
-of `Package.swift`, and `xcodebuild -scheme Versola` does not see it.
+of `Package.swift`, and `xcodebuild -scheme Versola-Package` does not see it.
 
 ## Agent setup
 
@@ -456,7 +459,7 @@ written so they keep holding after the planned `versola.*` package move (#46).
 
 1. `cd android && ./gradlew test apiCheck` is green. Run `lint` too if you touched resources or
    the manifest.
-2. `xcodebuild test -scheme Versola -destination "platform=iOS Simulator,name=iPhone 17"`
+2. `xcodebuild test -scheme Versola-Package -destination "platform=iOS Simulator,name=iPhone 17"`
    is green if anything under `ios/` or `Package.swift` changed.
 3. `python3 tools/validate-scenarios.py` passes if anything under `spec/` changed, and
    `npx markdownlint-cli2 "**/*.md"` is clean if any Markdown did.

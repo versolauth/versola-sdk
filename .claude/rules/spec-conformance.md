@@ -54,9 +54,11 @@ the standard's text first, then against the other platforms.
   `SessionState` and `VersolaError` on Android, and their Swift and Dart twins. Drift of this kind
   (a state in the spec that no code enters) is architecture review finding F4; the planned CI check
   over the `.api` dumps is meant to catch it, and until it exists you check by hand.
-- Scenarios 01 to 20 run under `BackChannel.Auth` on a `standard` tenant; 21 to 23 exist for what
-  only edge's native flow has. A step that exists under both back channels runs under both and
-  behaves the same.
+- The `Versola` facade has one back channel, edge's native endpoints (ADR 0002,
+  `spec/versola-sdk-api.md`). Scenarios 01 to 20 were written for a direct one: under this facade
+  their steps run through `/native/*` on a `fapi2` tenant. 21 to 23 and 39 to 44 exist for what only
+  the edge flow has, and 07, 09, 10 and 13 (bearer tokens) are not this facade's
+  (`spec/conformance/README.md`).
 
 ## Providers
 

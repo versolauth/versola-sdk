@@ -1,0 +1,31 @@
+name: versola_example
+description: "Sign-in, sign-out and the session state over the versola binding."
+# The following line prevents the package from being accidentally published to
+# pub.dev using `flutter pub publish`. This is preferred for private packages.
+publish_to: 'none' # Remove this line if you wish to publish to pub.dev
+
+environment:
+  sdk: ">=3.13.0 <3.14.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+
+  versola:
+    # The example app is bundled with the plugin so we use a path dependency on the parent
+    # directory to use the current plugin's version. A real application uses `versola: ^x.y.z`.
+    path: ../
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+
+# The checkout's own versola_oauth, which the plugin's pubspec resolves the same way: overrides
+# apply to the root package only, so the app repeats them.
+dependency_overrides:
+  versola_oauth:
+    path: ../../versola_oauth
+
+flutter:
+  uses-material-design: true

@@ -4,8 +4,12 @@ paths: ["flutter/**"]
 
 # Flutter
 
-`flutter/versola_oauth` is the generic SDK's binding (issue #46, B6); the Versola plugin comes
-later. Flutter is pinned in `flutter/.fvmrc` and run through fvm (`develop.md`). Security rules are
+`flutter/versola_oauth` is the generic SDK's binding (issue #46, B6) and `flutter/versola` is the
+`Versola` facade's (`spec/versola-sdk-api.md`): its own Pigeon contract with `Versola`-prefixed
+names, glue over `io.versola:versola-android` (the example substitutes `:sdk`) and the `VersolaSDK`
+product, no `accessToken()` and no origin set. It re-exports the shared Dart types (states, errors,
+claims) from `versola_oauth` by name and copies none, so an app with `versola` also builds the
+generic plugin's native half. A rule below that names `versola_oauth` holds for both. Flutter is pinned in `flutter/.fvmrc` and run through fvm (`develop.md`). Security rules are
 in `security.md`; what the platform SDKs do is in `android-kotlin.md` and `ios-swift.md`.
 
 ## A binding, not a third implementation

@@ -780,6 +780,7 @@ class SessionCoordinatorTest {
     private fun restoredPending(
         maxAge: Long? = null,
         ageMillis: Long = 60_000,
+        expectedSubject: String? = null,
     ) = PendingAuthorizationRequest(
         state = "restored-state",
         nonce = "restored-nonce",
@@ -789,6 +790,7 @@ class SessionCoordinatorTest {
         acrValues = emptyList(),
         maxAge = maxAge,
         createdAtEpochMillis = System.currentTimeMillis() - ageMillis,
+        expectedSubject = expectedSubject,
     )
 
     private fun redirect(state: String? = "restored-state", iss: String? = ISSUER) = BrowserOutcome.Redirect(
@@ -2476,6 +2478,355 @@ class SessionCoordinatorTest {
             "10 accessToken() calls caused ${credentialStore.rawIdTokenReads} Keystore reads of the ID token",
             credentialStore.rawIdTokenReads <= 1,
         )
+    }
+
+    // ---- login(expectedSubject): a step-up that must come back as the same user ---------------
+
+    /** Vouches for any token and names [subject] as its user, which a test changes between logins. */
+    private class SubjectValidator(var subject: String) : IdTokenValidator {
+        override suspend fun validate(idToken: String, expectedNonce: String?, accessToken: String?, maxAge: Long?, previous: IdTokenClaims?, serverTime: java.time.Instant?): IdTokenClaims =
+            IdTokenClaims(
+                subject = subject, issuer = "https://id.example.com", audience = listOf("mobile-app"),
+                issuedAt = java.time.Instant.EPOCH, expiresAt = java.time.Instant.EPOCH.plusSeconds(3600),
+            )
+    }
+
+    private fun mismatch(error: VersolaError): VersolaError.Recoverable.Cause {
+        val recoverable = error as? VersolaError.Recoverable ?: throw AssertionError("not Recoverable: $error")
+        return recoverable.reason
+    }
+
+    @Test
+    fun `a step-up answered by another user stores nothing, revokes what was issued and leaves the session as it was`() = runTest {
+        val validator = SubjectValidator("alice")
+        val (coordinator, tokenClient, credentialStore) = generic(validator = validator)
+        tokenClient.exchangeResult = { issued(accessToken = "at-1", refreshToken = "rt-1", idToken = "first") }
+        coordinator.login(setOf("openid"))
+        val savesBefore = credentialStore.events.count { it == "save" }
+        validator.subject = "bob"
+        tokenClient.exchangeResult = { issued(accessToken = "at-2", refreshToken = "rt-2", idToken = "second") }
+
+        val error = failure { coordinator.login(setOf("openid"), expectedSubject = "alice") }
+
+        assertSame(VersolaError.Recoverable.Cause.AccountMismatch, mismatch(error))
+        assertEquals("recoverable.account_mismatch", error.code)
+        // Nothing of the second sign-in was kept: the grant, the ID token and the claims are the first's.
+        assertEquals(savesBefore, credentialStore.events.count { it == "save" })
+        assertEquals("rt-1", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        assertEquals("first", credentialStore.rawIdToken)
+        assertEquals("alice", coordinator.claims?.subject)
+        assertEquals("at-1", coordinator.currentAccessToken()?.accessToken)
+        assertEquals(0, credentialStore.clears)
+        assertEquals(0, teardowns)
+        // What the provider issued to the wrong user is revoked, and only that.
+        assertEquals("rt-2", tokenClient.revokeCalls.single().toString(Charsets.UTF_8))
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a step-up answered by the same user succeeds and replaces the grant`() = runTest {
+        val validator = SubjectValidator("alice")
+        val (coordinator, tokenClient, credentialStore) = generic(validator = validator)
+        tokenClient.exchangeResult = { issued(accessToken = "at-1", refreshToken = "rt-1", idToken = "first") }
+        coordinator.login(setOf("openid"))
+        tokenClient.exchangeResult = { issued(accessToken = "at-2", refreshToken = "rt-2", idToken = "second") }
+
+        val response = coordinator.login(setOf("openid"), expectedSubject = "alice")
+
+        assertEquals("at-2", response.accessToken)
+        assertEquals("rt-2", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        assertEquals("second", credentialStore.rawIdToken)
+        assertEquals("alice", coordinator.claims?.subject)
+        assertTrue(tokenClient.revokeCalls.isEmpty())
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a subject that differs only by case or a trailing space is another user`() = runTest {
+        val validator = SubjectValidator("Alice ")
+        val (coordinator, tokenClient, credentialStore) = generic(validator = validator)
+        tokenClient.exchangeResult = { issued(accessToken = "at", refreshToken = "rt", idToken = "t") }
+
+        val error = failure { coordinator.login(setOf("openid"), expectedSubject = "alice") }
+
+        assertSame(VersolaError.Recoverable.Cause.AccountMismatch, mismatch(error))
+        assertNull(credentialStore.refreshToken)
+    }
+
+    @Test
+    fun `an expected subject without a validator cannot be compared and is refused the same way`() = runTest {
+        val (coordinator, tokenClient, credentialStore) = generic(validator = null)
+        tokenClient.exchangeResult = { issued(accessToken = "at", refreshToken = "rt", idToken = "t") }
+
+        val error = failure { coordinator.login(setOf("openid"), expectedSubject = "alice") }
+
+        assertSame(VersolaError.Recoverable.Cause.AccountMismatch, mismatch(error))
+        assertNull(credentialStore.refreshToken)
+        assertNull(coordinator.claims)
+        assertEquals("rt", tokenClient.revokeCalls.single().toString(Charsets.UTF_8))
+        assertEquals(SessionState.Unauthenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `without an expected subject another user's login is an ordinary login`() = runTest {
+        val validator = SubjectValidator("alice")
+        val (coordinator, tokenClient, credentialStore) = generic(validator = validator)
+        tokenClient.exchangeResult = { issued(accessToken = "at-1", refreshToken = "rt-1", idToken = "first") }
+        coordinator.login(setOf("openid"))
+        validator.subject = "bob"
+        tokenClient.exchangeResult = { issued(accessToken = "at-2", refreshToken = "rt-2", idToken = "second") }
+
+        coordinator.login(setOf("openid"))
+
+        assertEquals("rt-2", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        assertEquals("bob", coordinator.claims?.subject)
+        assertTrue(tokenClient.revokeCalls.isEmpty())
+    }
+
+    @Test
+    fun `two logins that differ only in the expected subject are not the same call`() = runTest {
+        val pendingStore = RecordingPendingStore()
+        val browserOpened = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val browser = FixedRedirectBrowser(pendingStore).apply {
+            loginOutcome = {
+                browserOpened.complete(Unit)
+                release.await()
+                BrowserOutcome.Redirect("https://app.example.com/oauth?code=the-code&state=${pendingStore.stored!!.state}&iss=$ISSUER")
+            }
+        }
+        val (coordinator, tokenClient, _) = generic(pendingStore, validator = SubjectValidator("alice"), browser = browser)
+        tokenClient.exchangeResult = { issued(accessToken = "at", refreshToken = "rt", idToken = "t") }
+        val first = async(start = CoroutineStart.UNDISPATCHED) {
+            coordinator.login(setOf("openid"), expectedSubject = "alice", refuseWhileAuthorizing = true)
+        }
+        browserOpened.await()
+
+        // Another expected subject is another request: it is refused as "a different request", where
+        // the identical call below joins the running one.
+        val different = failure { coordinator.login(setOf("openid"), expectedSubject = "bob", refuseWhileAuthorizing = true) }
+        val unspecified = failure { coordinator.login(setOf("openid"), expectedSubject = null, refuseWhileAuthorizing = true) }
+        val joined = async(start = CoroutineStart.UNDISPATCHED) {
+            coordinator.login(setOf("openid"), expectedSubject = "alice", refuseWhileAuthorizing = true)
+        }
+        release.complete(Unit)
+
+        for (error in listOf(different, unspecified)) {
+            val detail = (error as VersolaError.Configuration).detail as VersolaError.Configuration.Detail.InvalidConfiguration
+            assertTrue(detail.toString(), detail.toString().contains("different request"))
+        }
+        assertEquals("at", first.await().accessToken)
+        assertEquals("at", joined.await().accessToken)
+        assertEquals(1, tokenClient.exchangeCalls.size)
+    }
+
+    // ---- sessionSubject() -----------------------------------------------------------------
+
+    private fun storedIdToken(subject: String): String = Jose.jws(
+        "ES256",
+        Jose.p256.private,
+        Jose.json(
+            mapOf(
+                "iss" to Jose.str("https://id.example.com"),
+                "sub" to Jose.str(subject),
+                "aud" to Jose.str("mobile-app"),
+                "exp" to Jose.num(1_900_003_600),
+                "iat" to Jose.num(1_900_000_000),
+            ),
+        ),
+    )
+
+    @Test
+    fun `sessionSubject is the sub of the stored ID token`() = runTest {
+        val (coordinator, _, credentialStore) = generic(validator = RecordingValidator())
+        credentialStore.refreshToken = stored()
+        credentialStore.rawIdToken = storedIdToken("carol")
+
+        assertEquals("carol", coordinator.sessionSubject())
+    }
+
+    @Test
+    fun `sessionSubject is the sub of the claims a login validated`() = runTest {
+        val (coordinator, tokenClient, _) = generic(validator = SubjectValidator("alice"))
+        tokenClient.exchangeResult = { issued(accessToken = "at", refreshToken = "rt", idToken = "not-a-jwt") }
+        coordinator.login(setOf("openid"))
+
+        assertEquals("alice", coordinator.sessionSubject())
+    }
+
+    @Test
+    fun `sessionSubject is null with no session`() = runTest {
+        val (coordinator, _, _) = generic(validator = RecordingValidator())
+
+        assertNull(coordinator.sessionSubject())
+    }
+
+    @Test
+    fun `sessionSubject is null when the stored ID token cannot be read as claims`() = runTest {
+        val (coordinator, _, credentialStore) = generic(validator = RecordingValidator())
+        credentialStore.refreshToken = stored()
+        credentialStore.rawIdToken = "not-a-jwt"
+
+        assertNull(coordinator.sessionSubject())
+    }
+
+    @Test
+    fun `sessionSubject propagates a store that cannot be read instead of swallowing it`() = runTest {
+        val (coordinator, _, credentialStore) = generic(validator = RecordingValidator())
+        credentialStore.refreshToken = stored()
+        credentialStore.rawIdTokenFailure = { VersolaError.Recoverable(VersolaError.Recoverable.Cause.UnlockRequired) }
+
+        val error = failure { coordinator.sessionSubject() }
+
+        assertSame(VersolaError.Recoverable.Cause.UnlockRequired, (error as VersolaError.Recoverable).reason)
+    }
+
+    @Test
+    fun `storedClaims propagates a store that cannot be read and reads again once it can`() = runTest {
+        val (coordinator, _, credentialStore) = generic(validator = RecordingValidator())
+        credentialStore.refreshToken = stored()
+        credentialStore.rawIdTokenFailure = { VersolaError.Recoverable(VersolaError.Recoverable.Cause.UnlockRequired) }
+
+        val error = failure { coordinator.storedClaims() }
+        assertSame(VersolaError.Recoverable.Cause.UnlockRequired, (error as VersolaError.Recoverable).reason)
+
+        credentialStore.rawIdTokenFailure = null
+        credentialStore.rawIdToken = "not-a-jwt"
+        assertNull("a token that is not claims is no session's claims, not an error", coordinator.storedClaims())
+        assertEquals("the failed read was not remembered as an answer", 2, credentialStore.rawIdTokenReads)
+    }
+
+    // ---- the step-up's same-user check travels with the pending request ---------------------
+
+    /**
+     * A step-up whose caller was cancelled while the browser was up is finished by the process
+     * through [SessionCoordinator.resumePendingLogin], with no caller to remember who the session
+     * belongs to: the request it restores says so.
+     */
+    private fun signedInAsAlice(): Triple<SessionCoordinator, ColdStart, Triple<FakeTokenClient, FakeCredentialStore, SubjectValidator>> {
+        val start = coldStart(pending = null)
+        val validator = SubjectValidator("alice")
+        val (coordinator, tokenClient, credentialStore) = generic(start.pending, validator = validator, browser = start.browser)
+        tokenClient.exchangeResult = { issued(accessToken = "at-1", refreshToken = "rt-1", idToken = "first") }
+        return Triple(coordinator, start, Triple(tokenClient, credentialStore, validator))
+    }
+
+    @Test
+    fun `a pending step-up finished without its caller and answered by another user stores nothing and revokes what was issued`() = runTest {
+        val (coordinator, start, collaborators) = signedInAsAlice()
+        val (tokenClient, credentialStore, validator) = collaborators
+        coordinator.login(setOf("openid"))
+        start.pending.stored = restoredPending(expectedSubject = "alice")
+        start.browser.pendingRedirect = { redirect() }
+        validator.subject = "bob"
+        tokenClient.exchangeResult = { issued(accessToken = "at-2", refreshToken = "rt-2", idToken = "second") }
+
+        val error = failure { coordinator.resumePendingLogin() }
+
+        assertSame(VersolaError.Recoverable.Cause.AccountMismatch, mismatch(error))
+        assertEquals("rt-1", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        assertEquals("first", credentialStore.rawIdToken)
+        assertEquals("alice", coordinator.claims?.subject)
+        assertEquals("at-1", coordinator.currentAccessToken()?.accessToken)
+        assertEquals(0, credentialStore.clears)
+        assertEquals(0, teardowns)
+        assertEquals("rt-2", tokenClient.revokeCalls.single().toString(Charsets.UTF_8))
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a pending step-up finished without its caller and answered by the same user replaces the grant`() = runTest {
+        val (coordinator, start, collaborators) = signedInAsAlice()
+        val (tokenClient, credentialStore, _) = collaborators
+        coordinator.login(setOf("openid"))
+        start.pending.stored = restoredPending(expectedSubject = "alice")
+        start.browser.pendingRedirect = { redirect() }
+        tokenClient.exchangeResult = { issued(accessToken = "at-2", refreshToken = "rt-2", idToken = "second") }
+
+        val response = coordinator.resumePendingLogin()
+
+        assertEquals("at-2", checkNotNull(response).accessToken)
+        assertEquals("rt-2", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        assertEquals("alice", coordinator.claims?.subject)
+        assertTrue(tokenClient.revokeCalls.isEmpty())
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+    }
+
+    @Test
+    fun `a pending request without an expected subject is an ordinary login whoever answers`() = runTest {
+        val (coordinator, start, collaborators) = signedInAsAlice()
+        val (tokenClient, credentialStore, validator) = collaborators
+        coordinator.login(setOf("openid"))
+        start.pending.stored = restoredPending()
+        start.browser.pendingRedirect = { redirect() }
+        validator.subject = "bob"
+        tokenClient.exchangeResult = { issued(accessToken = "at-2", refreshToken = "rt-2", idToken = "second") }
+
+        coordinator.resumePendingLogin()
+
+        assertEquals("rt-2", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        assertEquals("bob", coordinator.claims?.subject)
+    }
+
+    @Test
+    fun `login stores the expected subject on the pending request the browser leg persists`() = runTest {
+        val start = coldStart(pending = null)
+        val (coordinator, tokenClient, _) = generic(start.pending, validator = SubjectValidator("alice"), browser = start.browser)
+        tokenClient.exchangeResult = { issued(accessToken = "at", refreshToken = "rt", idToken = "t") }
+        var saved: PendingAuthorizationRequest? = null
+        start.browser.loginOutcome = { _ ->
+            saved = start.pending.stored
+            BrowserOutcome.Redirect("https://app.example.com/oauth?code=c&state=${saved!!.state}&iss=$ISSUER")
+        }
+
+        coordinator.login(setOf("openid"), expectedSubject = "alice")
+
+        assertEquals("alice", saved?.expectedSubject)
+        assertEquals("alice", tokenClient.exchangeCalls.single().expectedSubject)
+    }
+
+    // ---- the code exchange is not abandoned with its caller ---------------------------------
+
+    // The code is spent and a refresh token issued once the request is sent: a caller cancelled
+    // while it is in flight must not discard what comes back (`android-kotlin.md`, "Persistence").
+    @Test
+    fun `a login cancelled while the token request is in flight still stores the grant the server issued`() = runTest {
+        val credentialStore = FakeCredentialStore()
+        val requestSent = CompletableDeferred<Unit>()
+        val serverAnswers = CountDownLatch(1)
+        var tokenRequests = 0
+        val coordinator = httpCoordinator(credentialStore) { chain ->
+            tokenRequests++
+            requestSent.complete(Unit)
+            check(serverAnswers.await(20, TimeUnit.SECONDS)) { "the test never released the response" }
+            Response.Builder()
+                .request(chain.request())
+                .protocol(Protocol.HTTP_1_1)
+                .code(200)
+                .message("OK")
+                .body(
+                    """{"access_token":"at1","token_type":"Bearer","expires_in":3600,"refresh_token":"rt1"}"""
+                        .toResponseBody("application/json".toMediaType()),
+                )
+                .build()
+        }
+        val outcome = CompletableDeferred<Result<TokenResponse>>()
+
+        val caller = launch(start = CoroutineStart.UNDISPATCHED) {
+            outcome.complete(runCatching { coordinator.login(setOf("openid")) })
+        }
+        requestSent.await()
+        // The screen goes away while the server has already spent the code and issued rt1.
+        caller.cancel()
+        serverAnswers.countDown()
+        caller.join()
+
+        assertEquals("rt1", credentialStore.refreshToken?.toString(Charsets.UTF_8))
+        assertEquals(SessionState.Authenticated, coordinator.sessionState.first())
+        assertEquals("at1", coordinator.currentAccessToken()?.accessToken)
+        assertEquals("one attempt, no retry of a spent code", 1, tokenRequests)
+        val result = outcome.await()
+        assertTrue("the caller still sees its cancellation: $result", result.exceptionOrNull() is kotlinx.coroutines.CancellationException)
     }
 
     private suspend fun failure(block: suspend () -> Unit): VersolaError = try {

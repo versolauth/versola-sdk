@@ -11,11 +11,7 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
-import versola.oauth.core.DiscoveryClient
-import versola.oauth.core.DiscoveryService
 import versola.oauth.core.DpopProofSource
-import versola.oauth.core.FileProviderMetadataCache
-import versola.oauth.core.ProviderMetadata
 import versola.oauth.core.TokenBinding
 import versola.oauth.core.VersolaConfiguration
 
@@ -63,24 +59,11 @@ class CoreIoSaturationTest {
                 .body("""{"access_token":"at","token_type":"DPoP","expires_in":3600,"refresh_token":"rt2"}""")
                 .build(),
         )
-        val metadata = ProviderMetadata(
-            issuer = "https://id.example.com",
-            authorizationEndpoint = "https://id.example.com/authorize",
-            tokenEndpoint = "https://id.example.com/token",
-            dpopSigningAlgValuesSupported = listOf("ES256"),
-        )
         val client = EdgeNativeTokenClient(
             configuration = VersolaConfiguration.create("https://id.example.com", "mobile-app", "https://app.example.com/oauth"),
             edgeBaseUrl = edge,
             httpClient = OkHttpClient(),
             dpop = QuietProofSource(),
-            discovery = DiscoveryService(
-                issuer = "https://id.example.com",
-                client = object : DiscoveryClient {
-                    override suspend fun fetch(issuer: String): ProviderMetadata = metadata
-                },
-                cache = FileProviderMetadataCache(File(folder.newFolder(), "metadata.json")),
-            ),
             endpoints = store,
             tokenBinding = TokenBinding.Dpop(),
         )

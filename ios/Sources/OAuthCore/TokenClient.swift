@@ -46,6 +46,7 @@ package struct HTTPTokenClient: TokenClient {
     private let sendIdempotencyKey: Bool
     /// The device's clock, which a response's `Date` is checked against before it is believed.
     private let clock: Clock
+    private let executor: TokenRequestExecutor
 
     /// - Parameters:
     ///   - dpop: nil for a session that is not key-bound.
@@ -61,6 +62,7 @@ package struct HTTPTokenClient: TokenClient {
         clock: Clock = .system
     ) throws {
         self.clock = clock
+        self.executor = TokenRequestExecutor(httpClient: httpClient, dpop: dpop, clock: clock)
         // The same pairing the flow refuses: with no proof source a key-bound request goes out
         // unbound. Wiring, not deployment, so it fails here rather than at the first exchange.
         if case .dpop = tokenBinding, dpop == nil {
@@ -162,10 +164,10 @@ package struct HTTPTokenClient: TokenClient {
         let response: TokenResponse
         if once {
             response = try await OperationBudget.runOnce(origin: DpopOrigin.of(url)) {
-                try await self.execute(url: url, body: body, idempotencyKey: idempotencyKey, proofFor: proofFor)
+                try await self.executor.execute(url: url, body: body, idempotencyKey: idempotencyKey, proofFor: proofFor)
             }
         } else {
-            response = try await execute(url: url, body: body, idempotencyKey: idempotencyKey, proofFor: proofFor)
+            response = try await executor.execute(url: url, body: body, idempotencyKey: idempotencyKey, proofFor: proofFor)
         }
         try accept(response)
         return response
@@ -178,17 +180,40 @@ package struct HTTPTokenClient: TokenClient {
         }
     }
 
+    static let formHeaders = TokenRequestExecutor.formHeaders
+}
+
+/// The token request itself: the proof, the two challenges answered once each, the response read.
+/// Shared by `HTTPTokenClient` and a facade's relayed token client, so that a request that is
+/// signed for one address and sent to another reads its answer exactly as the direct one does.
+package struct TokenRequestExecutor: Sendable {
+    private let httpClient: HTTPClient
+    private let dpop: DpopProofSource?
+    /// The device's clock, which a response's `Date` is checked against before it is believed.
+    private let clock: Clock
+
+    package init(httpClient: HTTPClient, dpop: DpopProofSource?, clock: Clock = .system) {
+        self.httpClient = httpClient
+        self.dpop = dpop
+        self.clock = clock
+    }
+
     private enum Attempt {
         case issued(TokenResponse)
         case useDpopNonce(String?)
         case invalidProof
     }
 
-    private func execute(url: URL, body: Data, idempotencyKey: String?, proofFor: URL?) async throws -> TokenResponse {
+    /// - Parameters:
+    ///   - proofFor: the `htu` of the proof, or nil for a request that carries none. It is not always `url`: a facade whose
+    ///     requests go through a relay signs for the address the relay forwards the proof to.
+    ///   - onStatus: a status a facade can name more precisely than the generic reading, asked after the
+    ///     DPoP challenges have been answered and before the answer is read as a server failure or an OAuth error.
+    package func execute(url: URL, body: Data, idempotencyKey: String?, proofFor: URL?, onStatus: @Sendable (Int) -> OAuthError? = { _ in nil }) async throws -> TokenResponse {
         var nonceRetried = false
         var proofRetried = false
         while true {
-            switch try await attempt(url: url, body: body, idempotencyKey: idempotencyKey, proofFor: proofFor) {
+            switch try await attempt(url: url, body: body, idempotencyKey: idempotencyKey, proofFor: proofFor, onStatus: onStatus) {
             case .issued(let response):
                 return response
             case .useDpopNonce(let nonce):
@@ -206,7 +231,7 @@ package struct HTTPTokenClient: TokenClient {
         }
     }
 
-    private func attempt(url: URL, body: Data, idempotencyKey: String?, proofFor: URL?) async throws -> Attempt {
+    private func attempt(url: URL, body: Data, idempotencyKey: String?, proofFor: URL?, onStatus: @Sendable (Int) -> OAuthError?) async throws -> Attempt {
         var headers = Self.formHeaders
         if let idempotencyKey { headers["Idempotency-Key"] = idempotencyKey }
         if let proofFor, let dpop {
@@ -233,7 +258,7 @@ package struct HTTPTokenClient: TokenClient {
         if (200..<300).contains(response.statusCode) {
             return .issued(try Self.issued(response.body, dateHeader: response.header("Date"), age: response.header("Age"), deviceNow: clock.now()))
         }
-        return try Self.rejected(response)
+        return try Self.rejected(response, onStatus: onStatus)
     }
 
     private static func issued(_ body: Data, dateHeader: String?, age: String?, deviceNow: Date) throws -> TokenResponse {
@@ -289,7 +314,7 @@ package struct HTTPTokenClient: TokenClient {
         )
     }
 
-    private static func rejected(_ response: HTTPResponse) throws -> Attempt {
+    private static func rejected(_ response: HTTPResponse, onStatus: @Sendable (Int) -> OAuthError?) throws -> Attempt {
         let status = response.statusCode
         let body = response.body
         let nonce = response.header("DPoP-Nonce")
@@ -306,6 +331,7 @@ package struct HTTPTokenClient: TokenClient {
             default: break
             }
         }
+        if let named = onStatus(status) { throw named }
         // 5xx is the provider having a bad moment, and its body is as likely to be an HTML
         // page as JSON. A 408, a 429 and a 5xx are `server`, with the `Retry-After` of a 429
         // or a 503; whether it is repeated is the caller's budget's decision (a refresh is, the
@@ -328,22 +354,72 @@ package struct HTTPTokenClient: TokenClient {
         }
     }
 
-    static let formHeaders: [String: String] = [
+    /// `POST` with a proof signed for `proofFor` (nil: none), repeated under the operation's budget
+    /// and answering one `use_dpop_nonce`, a revoked-twice token being a success (RFC 7009 section 2.2).
+    /// The answer is read as `execute` reads one, except that a 2xx carries nothing to parse.
+    package func revoke(url: URL, body: Data, proofFor: URL?, onStatus: @Sendable (Int) -> OAuthError? = { _ in nil }) async throws {
+        let httpClient = self.httpClient
+        let dpop = self.dpop
+        try await OperationBudget.run(origin: DpopOrigin.of(url)) {
+            var nonceAnswered = false
+            while true {
+                var headers = Self.formHeaders
+                let proofOrigin = proofFor.map(DpopOrigin.of)
+                if let proofFor, let dpop, let proofOrigin {
+                    headers["DPoP"] = try await dpop.proof(method: "POST", url: proofFor, nonce: await dpop.nonce(for: proofOrigin), accessToken: nil)
+                }
+                let response: HTTPResponse
+                do {
+                    response = try await httpClient.send(HTTPRequest(method: .post, url: url, headers: headers, body: body))
+                } catch let error as OAuthError {
+                    throw error
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    throw OAuthError.recoverable(.network(detail: "revocation request failed", attempts: 1, elapsedMillis: 0))
+                }
+                if let dpop {
+                    await dpop.observe(serverDate: response.header("Date"), age: response.header("Age"), origin: DpopOrigin.of(url))
+                    if let nonce = response.header("DPoP-Nonce"), !nonce.isEmpty {
+                        await dpop.observe(nonce: nonce, origin: proofOrigin ?? DpopOrigin.of(url))
+                    }
+                }
+                if (200..<300).contains(response.statusCode) { return }
+                // Both shapes of the challenge, as `rejected` reads them: edge's own 401 with
+                // `WWW-Authenticate`, and a relayed 400 with the error in the JSON.
+                let nonce = response.header("DPoP-Nonce")
+                let challenged = response.statusCode == 401 && response.header("WWW-Authenticate").flatMap(wwwAuthenticateError) == "use_dpop_nonce"
+                if challenged || TokenErrorPayload.parse(response.body).error == "use_dpop_nonce" {
+                    if nonceAnswered || nonce == nil || nonce!.isEmpty { throw OAuthError.recoverable(.nonceLoop(origin: proofOrigin ?? DpopOrigin.of(url))) }
+                    nonceAnswered = true
+                    continue
+                }
+                if let named = onStatus(response.statusCode) { throw named }
+                if let failure = ServerFailure.error(for: response) { throw failure }
+                let error = TokenErrorPayload.parse(response.body)
+                throw OAuthError.configuration(.tokenRequestRejected(
+                    code: error.error.isEmpty ? "(no error code in a HTTP \(response.statusCode) response)" : error.error,
+                    description: error.errorDescription
+                ))
+            }
+        }
+    }
+
+    package static let formHeaders: [String: String] = [
         "Accept": "application/json",
         "Content-Type": "application/x-www-form-urlencoded",
     ]
-
 }
 
 /// An RFC 6749 §5.2 error body. Lenient: the fields are read when present.
-struct TokenErrorPayload: Sendable {
-    var error: String = ""
-    var errorDescription: String?
+package struct TokenErrorPayload: Sendable {
+    package var error: String = ""
+    package var errorDescription: String?
 
-    static func parse(_ body: Data) -> TokenErrorPayload { parseStrict(body) ?? TokenErrorPayload() }
+    package static func parse(_ body: Data) -> TokenErrorPayload { parseStrict(body) ?? TokenErrorPayload() }
 
     /// nil when the body is not a JSON object at all.
-    static func parseStrict(_ body: Data) -> TokenErrorPayload? {
+    package static func parseStrict(_ body: Data) -> TokenErrorPayload? {
         guard let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else { return nil }
         return TokenErrorPayload(error: object["error"] as? String ?? "", errorDescription: object["error_description"] as? String)
     }

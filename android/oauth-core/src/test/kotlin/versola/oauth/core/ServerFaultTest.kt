@@ -134,4 +134,46 @@ class ServerFaultTest {
             assertNull("$status", cause.retryAfterMillis)
         }
     }
+
+    // ---- serverFaultOrNull: the public face of ServerFault.failure for a facade's own client ----
+
+    @Test
+    fun `serverFaultOrNull reads Retry-After on 429 and 503`() {
+        for (status in listOf(429, 503)) {
+            val fault = serverFaultOrNull(status, headers("Retry-After" to "7"))
+            val cause = fault?.reason as VersolaError.Recoverable.Cause.Server
+            assertEquals(status, cause.status)
+            assertEquals("$status", 7_000L, cause.retryAfterMillis)
+        }
+    }
+
+    @Test
+    fun `serverFaultOrNull does not read Retry-After on a 500`() {
+        val cause = serverFaultOrNull(500, headers("Retry-After" to "7"))?.reason as VersolaError.Recoverable.Cause.Server
+
+        assertEquals(500, cause.status)
+        assertNull(cause.retryAfterMillis)
+    }
+
+    @Test
+    fun `serverFaultOrNull is null for a status that is not the server's fault`() {
+        for (status in listOf(400, 401, 403, 404, 410)) {
+            assertNull("$status", serverFaultOrNull(status, headers("Retry-After" to "7")))
+        }
+    }
+
+    @Test
+    fun `serverFaultOrNull on a 429 without a usable Retry-After carries none`() {
+        val cause = serverFaultOrNull(429, headers("Retry-After" to "soon"))?.reason as VersolaError.Recoverable.Cause.Server
+
+        assertNull(cause.retryAfterMillis)
+    }
+
+    @Test
+    fun `the account mismatch cause has its own stable code`() {
+        assertEquals(
+            "recoverable.account_mismatch",
+            VersolaError.Recoverable(VersolaError.Recoverable.Cause.AccountMismatch).code,
+        )
+    }
 }

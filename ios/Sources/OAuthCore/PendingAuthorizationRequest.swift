@@ -19,6 +19,23 @@ package struct PendingAuthorizationRequest: Sendable, Equatable, Codable, Custom
     package let issRequired: Bool
     /// What a facade's starter attached (an edge blob, its endpoints); the core keeps it opaque.
     package let extensions: [String: String]
+    /// The `sub` the sign-in must come back as: a step-up asked for by a session that must not change
+    /// hands (the Versola facade's). It travels with the request, as `maxAge` does, because the login
+    /// can be finished by a process that has no caller to remember it (the app was killed during the
+    /// browser leg and the redirect cold-started it), and a check that lived only in the caller's
+    /// argument would be lost exactly there. A `sub` is not a secret, but it is kept out of
+    /// `description` like the rest. Stored as `expectedSubject`; a record written before the field
+    /// existed has none and reads as nil, which compares nothing.
+    package let expectedSubject: String?
+
+    /// How long the request lives from `createdAt`, when whoever issued it said so: a starter whose
+    /// back channel seals an expiry of its own (the Versola facade's edge flow, whose blob dies with
+    /// the lifetime `/native/start` answers) sets it, so that a redirect arriving later is not sent to
+    /// an exchange that can only be refused. Never longer than ``maxAge``, which is what a request
+    /// without one gets and what a record persisted before this field existed reads as (see
+    /// `init(from:)`). It is persisted with the request, because a cold-started process has no
+    /// starter to ask.
+    package let lifetime: TimeInterval
 
     /// Ten minutes: an authorization code would not outlive that either.
     package static let maxAge: TimeInterval = 600
@@ -26,7 +43,8 @@ package struct PendingAuthorizationRequest: Sendable, Equatable, Codable, Custom
     package init(
         state: String, nonce: String, codeVerifier: String, scopes: [String], redirectUri: String,
         acrValues: [String] = [], maxAge: Int? = nil, createdAt: Date, resources: [String] = [],
-        issRequired: Bool = false, extensions: [String: String] = [:]
+        issRequired: Bool = false, extensions: [String: String] = [:], lifetime: TimeInterval = PendingAuthorizationRequest.maxAge,
+        expectedSubject: String? = nil
     ) {
         self.state = state
         self.nonce = nonce
@@ -39,9 +57,49 @@ package struct PendingAuthorizationRequest: Sendable, Equatable, Codable, Custom
         self.resources = resources
         self.issRequired = issRequired
         self.extensions = extensions
+        self.expectedSubject = expectedSubject
+        self.lifetime = Self.bounded(lifetime)
     }
 
-    package func isExpired(at now: Date) -> Bool { now.timeIntervalSince(createdAt) > Self.maxAge }
+    /// The same request, with the `sub` the sign-in must come back as.
+    package func requiring(subject: String?) -> PendingAuthorizationRequest {
+        PendingAuthorizationRequest(
+            state: state, nonce: nonce, codeVerifier: codeVerifier, scopes: scopes, redirectUri: redirectUri,
+            acrValues: acrValues, maxAge: maxAge, createdAt: createdAt, resources: resources,
+            issRequired: issRequired, extensions: extensions, lifetime: lifetime, expectedSubject: subject
+        )
+    }
+
+    /// What `lifetime` is held to: at least zero, at most ten minutes. A non-finite value (a damaged
+    /// record) is the shortest, not the longest: the request is refused, never kept alive by it.
+    private static func bounded(_ lifetime: TimeInterval) -> TimeInterval {
+        lifetime.isFinite ? min(max(lifetime, 0), maxAge) : 0
+    }
+
+    /// A record written before `lifetime` existed has none and reads as the ten minutes it always had.
+    package init(from decoder: any Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        state = try values.decode(String.self, forKey: .state)
+        nonce = try values.decode(String.self, forKey: .nonce)
+        codeVerifier = try values.decode(String.self, forKey: .codeVerifier)
+        scopes = try values.decode([String].self, forKey: .scopes)
+        redirectUri = try values.decode(String.self, forKey: .redirectUri)
+        acrValues = try values.decode([String].self, forKey: .acrValues)
+        maxAge = try values.decodeIfPresent(Int.self, forKey: .maxAge)
+        createdAt = try values.decode(Date.self, forKey: .createdAt)
+        resources = try values.decode([String].self, forKey: .resources)
+        issRequired = try values.decode(Bool.self, forKey: .issRequired)
+        extensions = try values.decode([String: String].self, forKey: .extensions)
+        expectedSubject = try values.decodeIfPresent(String.self, forKey: .expectedSubject)
+        lifetime = Self.bounded(try values.decodeIfPresent(TimeInterval.self, forKey: .lifetime) ?? Self.maxAge)
+    }
+
+    package func isExpired(at now: Date) -> Bool { now.timeIntervalSince(createdAt) > lifetime }
+
+    /// What is left of the request's life at `now`: at most its lifetime, at least zero.
+    package func remaining(at now: Date) -> TimeInterval {
+        min(max(lifetime - now.timeIntervalSince(createdAt), 0), lifetime)
+    }
 
     package var description: String { "PendingAuthorizationRequest(redacted)" }
 }

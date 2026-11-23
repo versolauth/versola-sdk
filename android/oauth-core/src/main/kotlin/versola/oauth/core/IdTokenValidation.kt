@@ -45,6 +45,7 @@ public class JwksIdTokenValidator(
 ) : IdTokenValidator {
 
     private val verifier = JwsVerifier(jwksUri, allowedAlgorithms, jwks)
+    private val claims = IdTokenClaimCheck(clientId, clockSkewTolerance, clock)
 
     override suspend fun validate(
         idToken: String,
@@ -60,13 +61,26 @@ public class JwksIdTokenValidator(
             throw rejected(e.reason)
         }
         try {
-            return check(token, expectedNonce, accessToken, maxAge, previous, issuer(), serverTime)
+            return claims.check(token, expectedNonce, accessToken, maxAge, previous, issuer(), serverTime)
         } catch (e: JwsRejection) {
             throw rejected(e.reason)
         }
     }
 
-    private fun check(
+    private fun rejected(reason: IdTokenRejection): VersolaError.Configuration =
+        VersolaError.Configuration(VersolaError.Configuration.Detail.IdTokenRejected(reason))
+}
+
+/**
+ * The claim checks of an ID token, apart from its signature: what both validators of this file
+ * apply once they have a parsed token, in one place so that they cannot drift.
+ */
+internal class IdTokenClaimCheck(
+    private val clientId: String,
+    private val clockSkewTolerance: Duration,
+    private val clock: () -> Instant,
+) {
+    fun check(
         token: ParsedJws,
         expectedNonce: String?,
         accessToken: String?,
@@ -163,7 +177,11 @@ public class JwksIdTokenValidator(
         // being the one the JWS algorithm uses. Optional in the code flow, so absent is fine;
         // present and wrong is not.
         if (atHash != null && accessToken != null) {
-            val algorithm = JwsAlgorithm.forName(token.alg!!)!!
+            // A validator that verified the signature has already refused an algorithm outside the
+            // closed set; one that did not (below) may meet any name, and a hash it cannot name the
+            // digest of is a claim it cannot check, which is a refusal and not a pass.
+            val algorithm = token.alg?.let(JwsAlgorithm::forName)
+                ?: throw JwsRejection(IdTokenRejection.Algorithm, "at_hash under an algorithm that names no digest")
             val digest = MessageDigest.getInstance(algorithm.digest).digest(accessToken.toByteArray(Charsets.US_ASCII))
             val expected = Base64Url.encode(digest.copyOfRange(0, digest.size / 2))
             if (!constantTimeEquals(atHash, expected)) {
@@ -185,9 +203,49 @@ public class JwksIdTokenValidator(
             all = payload.filterKeys { it != "nonce" }.mapValues { (_, value) -> value.asText() },
         )
     }
+}
 
-    private fun rejected(reason: IdTokenRejection): VersolaError.Configuration =
-        VersolaError.Configuration(VersolaError.Configuration.Detail.IdTokenRejected(reason))
+/**
+ * The ID-token checks for a token that reached the device from the party that redeemed the code,
+ * over TLS, where no key set can be fetched to verify its signature with: the Versola facade,
+ * whose tokens are relayed by edge and whose issuer serves no JWKS to a native app
+ * (`spec/versola-sdk-api.md` section 9). OpenID Connect Core 3.1.3.7 step 6 allows the TLS server
+ * validation to stand in for the signature for a token received from the token endpoint.
+ *
+ * Everything else is checked as [JwksIdTokenValidator] checks it: `iss`, `aud` and `azp`, `exp`,
+ * `iat`, `nbf`, `nonce`, `auth_time` under `max_age`, `at_hash`, and on a refresh the unchanged
+ * `sub`. `alg: none` is refused, since a token that says it is unsigned is not one a provider
+ * issues to this client.
+ *
+ * Not a mode of the other validator and not offered by the generic facade: a facade that can
+ * reach a key set verifies the signature, always.
+ */
+@VersolaInternalApi
+public class TlsTrustedIdTokenValidator(
+    private val issuer: String,
+    clientId: String,
+    clockSkewTolerance: Duration = 60.seconds,
+    clock: () -> Instant = { Instant.now() },
+) : IdTokenValidator {
+
+    private val claims = IdTokenClaimCheck(clientId, clockSkewTolerance, clock)
+
+    override suspend fun validate(
+        idToken: String,
+        expectedNonce: String?,
+        accessToken: String?,
+        maxAge: Long?,
+        previous: IdTokenClaims?,
+        serverTime: Instant?,
+    ): IdTokenClaims = try {
+        val token = Jws.parse(idToken)
+        if (token.alg.equals("none", ignoreCase = true)) {
+            throw JwsRejection(IdTokenRejection.Algorithm, "alg is none")
+        }
+        claims.check(token, expectedNonce, accessToken, maxAge, previous, issuer, serverTime)
+    } catch (e: JwsRejection) {
+        throw VersolaError.Configuration(VersolaError.Configuration.Detail.IdTokenRejected(e.reason))
+    }
 }
 
 private fun constantTimeEquals(a: String, b: String): Boolean =

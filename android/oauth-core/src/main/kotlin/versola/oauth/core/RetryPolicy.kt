@@ -415,7 +415,8 @@ internal suspend fun <T> outsideRetryBudget(block: suspend () -> T): T {
  * integrator's own wiring): one request, as before the budget reached every client, because a
  * retry with no operation to bound it is exactly the unbounded loop the policy exists to prevent.
  */
-internal suspend fun <T> retrying(
+@VersolaInternalApi
+public suspend fun <T> retrying(
     origin: String,
     mayRepeat: (VersolaError.Recoverable) -> Boolean = { true },
     call: suspend () -> T,

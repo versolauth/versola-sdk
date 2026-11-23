@@ -39,10 +39,10 @@ two errors of one case carry the same `code`. The set is closed and shared by ev
 
 | Category | Codes |
 |---|---|
-| `Recoverable` | `recoverable.user_cancelled`, `recoverable.system_cancelled`, `recoverable.pending_request_expired`, `recoverable.network`, `recoverable.server`, `recoverable.unlock_required`, `recoverable.nonce_loop` |
+| `Recoverable` | `recoverable.user_cancelled`, `recoverable.system_cancelled`, `recoverable.pending_request_expired`, `recoverable.network`, `recoverable.server`, `recoverable.unlock_required`, `recoverable.nonce_loop`, `recoverable.account_mismatch` |
 | `Reauthenticate` | `reauthenticate.authorization_denied`, `reauthenticate.interaction_required`, `reauthenticate.credentials_invalidated`, `reauthenticate.grant_rejected`, `reauthenticate.session_rejected`, `reauthenticate.session_expired` |
 | `StepUp` | `step_up` |
-| `Configuration` | `configuration.state_mismatch`, `configuration.issuer_mismatch`, `configuration.malformed_authorization_response`, `configuration.authorization_rejected`, `configuration.token_request_rejected`, `configuration.token_response_malformed`, `configuration.discovery_field_missing`, `configuration.discovery_issuer_mismatch`, `configuration.discovery_malformed`, `configuration.invalid_configuration`, `configuration.no_browser_available`, `configuration.id_token_rejected`, `configuration.user_info_rejected`, `configuration.provider_unsupported`, `configuration.hardware_binding_unavailable`, and `configuration.<name>` for a case a facade adds (the Versola facade's edge errors name theirs) |
+| `Configuration` | `configuration.state_mismatch`, `configuration.issuer_mismatch`, `configuration.malformed_authorization_response`, `configuration.authorization_rejected`, `configuration.token_request_rejected`, `configuration.token_response_malformed`, `configuration.discovery_field_missing`, `configuration.discovery_issuer_mismatch`, `configuration.discovery_malformed`, `configuration.invalid_configuration`, `configuration.no_browser_available`, `configuration.id_token_rejected`, `configuration.user_info_rejected`, `configuration.provider_unsupported`, `configuration.hardware_binding_unavailable`, and `configuration.<name>` for a case a facade adds (the Versola facade's is `configuration.edge_client_unknown`) |
 
 ## A body that is not JSON
 
@@ -83,12 +83,13 @@ Two things about the wire shape, both from `TokenEndpointController`: **`/token`
 body and the nonce in `DPoP-Nonce`, and `invalid_client` is a bare `401`. And on a `fapi2`
 tenant a public client gets `invalid_client` for every request, because FAPI 2.0 admits
 confidential clients only: that is not a registration typo but the signal that the deployment
-needs `BackChannel.Edge`, and the `Configuration` message says so.
+needs edge's native endpoints, which is the `Versola` facade, and the `Configuration` message says
+so.
 
 ## Edge's native endpoints — `POST /native/{start,complete,token,revoke}/{clientId}`
 
-Under `BackChannel.Edge` (#40). From `NativeController` and `NativeService`. Every endpoint
-demands exactly one `DPoP` header.
+The `Versola` facade's back channel (`versola-sdk-api.md`, #40). From `NativeController`,
+`NativeService` and `NativeAuthClient`. Every endpoint demands exactly one `DPoP` header.
 
 | Response | Category | Notes |
 |---|---|---|
@@ -97,10 +98,18 @@ demands exactly one `DPoP` header.
 | 400 `invalid_request` on `/native/start` | `Configuration`, detail `AuthorizationRejected` | Auth's `/par` refusing the pushed request, relayed: unregistered `redirect_uri`, unknown scope, and the rest of the authorization-endpoint table. This is the precise error scenario 17 cannot give under `BackChannel.Auth`. |
 | 400 `invalid_request` on `/native/complete` | `Configuration` | A missing `code`, `state`, `iss` or blob. SDK fault. |
 | 400 `invalid_grant` from edge on `/native/complete` | `Reauthenticate(GrantRejected)` | The blob is not edge's, is expired, names another client or `state`, `iss` is not the server edge pushed to, or the proof is by a different key than the flow started with. Edge refuses these *before* calling auth, so the code is not spent. |
-| 400 `invalid_dpop_proof` from edge | handled internally, then `Reauthenticate` | Edge checked the forwarded proof's signature, `htm`, `htu` and `iat` against auth's endpoint and refused it. One retry with a fresh proof, as at the token endpoint. |
+| 400 `invalid_dpop_proof` from edge | handled internally, then `Reauthenticate` | Edge checked the proof's signature, `htm`, `htu` and `iat` (against its own address on `/native/start`, against auth's endpoint on the other three) and refused it. One retry with a fresh proof after reading the response's `Date`, as at the token endpoint; `/native/start` is held to this like the rest, since a device whose clock is off meets it there first. |
 | 400 `unsupported_grant_type` on `/native/token` | `Configuration` | Only `refresh_token` is served there. |
 | Anything relayed from auth | as the token endpoint table | Status, body, `DPoP-Nonce` and `WWW-Authenticate` are relayed unchanged — including auth's `400` + JSON `use_dpop_nonce`, whose nonce is cached under the **`htu`'s** origin (auth's mutual-TLS listener), never under edge's. |
 | 200 on `/native/revoke` | — | RFC 7009: says the request was taken, not that the token was live. |
+| 400 `invalid_grant` from edge with no `error_description`, on `/native/complete`, `/native/token` or `/native/revoke` | `Reauthenticate(GrantRejected)` | The value names a cell the deployment does not have: it was never issued here. Read on the `error` value like any `invalid_grant`; the SDK does not look at the value to find out why (`versola-sdk-api.md` section 8). On `/native/revoke` it only makes `tokenRevoked` false. |
+| 429 or 503 from edge, no body, `Retry-After` in seconds | `Recoverable(Server(status, retryAfter))` after the policy | Edge's own rate limit (per address) and its overload admission. `/native/start`, `/native/token` and `/native/revoke` are repeated under the budget and honour the header; `/native/complete` is made once (`retry-policy.md`). The cooldown is edge's origin's. Edge relays no `Retry-After` of auth's. |
+| 500 from edge | `Recoverable(Server(500))` after the policy | Among its causes: no cell is open to place a new sign-in, or the cell a value names cannot be reached. |
+
+A redirect that arrives after the pending request's expiry (`expires_in` of `/native/start`) is not
+sent to `/native/complete` at all: the wait has already ended with
+`Recoverable(PendingRequestExpired)`, and edge would only answer `invalid_grant` for the expired
+blob, which is not what happened to the user.
 
 ## Authorization endpoint — `GET /authorize`
 
@@ -132,8 +141,8 @@ in practice: the SDK has no visibility into that page.** Custom Tabs and
 redirect URI is indistinguishable from the user closing the tab — see scenario 17. An
 unregistered redirect URI is still the single most common first-run mistake; the SDK cannot
 fix the integrator's afternoon here, only PAR (RFC 9126) can, by moving the check to a plain
-HTTPS response the app makes itself — which is exactly what `BackChannel.Edge` gets from
-`/native/start`, see the native table below.
+HTTPS response the app makes itself — which is exactly what the `Versola` facade gets from
+`/native/start`, see the native table above.
 
 ## UserInfo — `GET /userinfo`
 
@@ -215,8 +224,11 @@ Not every error comes from a server.
 | Storage key's authentication window has elapsed | `Recoverable`, cause `UnlockRequired` | `UnlockPolicy.OnAppUnlock` only. The app presents the prompt and retries; the grant is intact. On iOS the cause is the device being locked and there is no window or prompt (`state-machine.md`, iOS deviation): the app retries after the device is unlocked. |
 | iOS: the Keychain or the Secure Enclave is out of reach for now (`errSecInteractionNotAllowed`: locked, or not unlocked since boot; `errSecNotAvailable`; `errSecAuthFailed`), on a read, on a DPoP signature or when the key is generated | `Recoverable`, cause `UnlockRequired` | The grant and the DPoP key are intact and are never wiped or replaced for it: a key refused only because the device is locked is not generated as a software key. Any other Keychain status is `Configuration`, detail `InvalidConfiguration`. |
 | Hardware key unavailable while `requireHardware = true` | `Configuration` | The app asked for a guarantee this device cannot provide. |
-| `BackChannel.Edge` without `edgeBaseUrl`, with `TokenBinding.Bearer`, or with a non-`https` redirect URI | `Configuration` | Refused at `configure()`. Edge's native endpoints are edge's, accept no bearer presentation, and front clients registered with `https` redirect URIs only. |
-| A grant started through one back channel redeemed through the other | `Configuration` | Wiring. Refused before the code is spent. |
+| The `Versola` facade configured with an `edgeUrl` that is not an origin, or a `redirectUri` or `postLogoutRedirectUri` that is not `https` with a host | `Configuration`, detail `InvalidConfiguration` | Refused at `create()`. Edge computes a proof's `htu` from its own origin, and fronts clients registered with `https` redirect URIs only (`versola-sdk-api.md` section 3). |
+| `/native/start` answers without `request_uri`, `state`, `blob`, one of its three endpoints or a positive `expires_in`, or with an endpoint that is not `https` | `Configuration`, detail `TokenResponseMalformed` | Before the browser opens. The `authorization_endpoint` is opened in the browser and the other two are signed for, never called; none is taken on trust in the clear. |
+| A grant started by one facade's starter redeemed through another token client | `Configuration` | Wiring. Refused before the code is spent. |
+| A step-up whose ID token names another `sub` than the session's (the `Versola` facade) | `Recoverable`, cause `AccountMismatch` | Nothing of the new grant is stored, its refresh token is revoked best effort, the session is untouched. Not `Reauthenticate`: the grant the app holds is still good, and sending the user through `login()` is not the remedy. Never retried by the SDK; the app tells the user which account to continue with (`state-machine.md`, scenario 43). |
+| A stored grant whose `token_endpoint` and `revocation_endpoint` are gone (the `Versola` facade) | `Reauthenticate`, reason `CredentialsInvalidated` | A proof cannot be addressed. A damaged store; treated as the DPoP key being gone. |
 | Discovery document missing a required field | `Configuration` | A missing `dpop_signing_alg_values_supported` is **not** this: it means bearer mode, logged, not failed. |
 | Discovery document names an `authorization_endpoint`, `token_endpoint` or `jwks_uri` that is not `https`, or one that is not an absolute URL with a host; or an optional endpoint (`userinfo_endpoint`, `revocation_endpoint`, `end_session_endpoint`, `pushed_authorization_request_endpoint`) that is not, at the moment it is used | `Configuration`, detail `DiscoveryMalformed` | The three endpoints every session needs are refused where the document is read, and in a cached copy, so a refresh token is never POSTed in the clear because a document said so. The optional ones are refused where they are used (the operation that needs one fails; `logout()` stays best effort and reports it as a failed revocation or `sessionEnded = false`), so one an app never calls does not make the whole provider unusable. `http` is accepted on a loopback host only, as for the issuer (`oauth-sdk-api.md` section 3). An endpoint on another https origin than the issuer is allowed: the rule is the scheme, not the origin. |
 | Pending authorization request older than 10 minutes | `Recoverable`, cause `PendingRequestExpired` | Discarded on restore. |
@@ -224,8 +236,9 @@ Not every error comes from a server.
 ## Generic facade additions
 
 The generic facade (`oauth-sdk-api.md`) adds conditions the Versola facade cannot meet, each in
-exactly one category. The Versola facade may raise the ID-token and UserInfo rows too once it
-validates ID tokens (architecture review F5).
+exactly one category. The Versola facade raises the ID-token row for every reason but `Signature`
+(it checks the claims and cannot reach a key set, `versola-sdk-api.md` section 9; `Algorithm` is
+raised for `none` only), and has no UserInfo.
 
 | Condition | Category | Detail / reason | Notes |
 |---|---|---|---|

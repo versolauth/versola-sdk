@@ -38,6 +38,12 @@ public enum OAuthError: Error, Sendable, Equatable {
         case server(status: Int, retryAfterMillis: Int64?, attempts: Int, elapsedMillis: Int64)
         case unlockRequired
         case nonceLoop(origin: String)
+        /// A step-up was answered by another user than the one the session belongs to: the person
+        /// signed in as someone else in the browser. Nothing of that sign-in was kept and the
+        /// session is as it was. Tell the user which account to continue with and let them try
+        /// again; a `login()` is not the remedy, the grant held is still good
+        /// (`spec/state-machine.md`, scenario 43). Nothing is retried by the SDK.
+        case accountMismatch
     }
 
     public enum Reauthenticate: Sendable, Equatable {
@@ -71,6 +77,12 @@ public enum OAuthError: Error, Sendable, Equatable {
         case userInfoRejected(detail: String)
         case providerUnsupported(capability: String)
         case hardwareBindingUnavailable(detail: String)
+        /// A condition only one facade has, carried as that facade's own code and text so that this
+        /// shared type gains no vocabulary of it (ADR 0001). `name` is a stable snake_case
+        /// identifier and becomes the code `configuration.<name>`; `detail` is text safe to log.
+        /// The Versola facade uses `name: "edge_client_unknown"`, with the client id as `detail`,
+        /// when edge answers 404 to a native call: the client is not registered there.
+        case facade(name: String, detail: String)
     }
 }
 
@@ -104,6 +116,7 @@ extension OAuthError {
             case .server: return "recoverable.server"
             case .unlockRequired: return "recoverable.unlock_required"
             case .nonceLoop: return "recoverable.nonce_loop"
+            case .accountMismatch: return "recoverable.account_mismatch"
             }
         case .reauthenticate(let reason):
             switch reason {
@@ -133,6 +146,7 @@ extension OAuthError {
             case .userInfoRejected: return "configuration.user_info_rejected"
             case .providerUnsupported: return "configuration.provider_unsupported"
             case .hardwareBindingUnavailable: return "configuration.hardware_binding_unavailable"
+            case .facade(let name, _): return "configuration." + name
             }
         }
     }

@@ -1,26 +1,23 @@
 package versola.sdk.core
 
 import versola.oauth.core.AuthorizationGrant
-import versola.oauth.core.DiscoveryService
 import versola.oauth.core.DpopProofSource
 import versola.oauth.core.FormBody
-import versola.oauth.core.ProviderMetadata
 import versola.oauth.core.TokenBinding
 import versola.oauth.core.TokenClient
-import versola.oauth.core.TokenErrorPayload
 import versola.oauth.core.TokenRequestExecutor
 import versola.oauth.core.TokenResponse
 import versola.oauth.core.VersolaConfiguration
 import versola.oauth.core.VersolaError
 import versola.oauth.core.acceptIssued
-import versola.oauth.core.discoveryJson
-import versola.oauth.core.originOf
-import versola.oauth.core.requireSecureEndpoint
-import versola.oauth.core.wwwAuthenticateError
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.OkHttpClient
+import versola.oauth.core.VersolaInternalApi
 
 /**
- * The token endpoint through edge ([BackChannel.Edge]): `/native/complete` for the code,
+ * The token endpoint through edge: `/native/complete` for the code,
  * `/native/token` for refreshes, `/native/revoke` for logout.
  *
  * Edge authenticates to auth over mutual TLS and relays auth's answer as it stands — status,
@@ -33,15 +30,19 @@ import okhttp3.OkHttpClient
  * edge's, which the authenticated client fills on API calls (scenario 04, the other way
  * round).
  *
- * The `Idempotency-Key` is forwarded too (`NativeAuthClient.ForwardedHeaders`), so the
- * refresh path keeps the same retry safety it has against auth directly.
+ * The `Idempotency-Key` is forwarded too (`NativeAuthClient.ForwardedHeaders`). A native grant is
+ * DPoP-bound and auth renews it in place, so the key changes nothing today; it is still sent, and
+ * holds if a bound grant is ever rotated (`spec/versola-sdk-api.md` section 16).
+ *
+ * Every value is sent as it was received: a code, a refresh token and a blob may name the cell
+ * that issued them, edge routes by that, and nothing here reads one (section 8).
  */
+@VersolaInternalApi
 public class EdgeNativeTokenClient(
     private val configuration: VersolaConfiguration,
     edgeBaseUrl: String,
     httpClient: OkHttpClient,
     dpop: DpopProofSource,
-    private val discovery: DiscoveryService,
     private val endpoints: NativeEndpointsStore,
     private val tokenBinding: TokenBinding.Dpop = TokenBinding.Dpop(),
 ) : TokenClient {
@@ -72,11 +73,12 @@ public class EdgeNativeTokenClient(
         // user's problem, and it fails before the code is spent on anything.
         val blob = grant.extension[EdgeAuthorizationStarter.BLOB]
         val tokenEndpoint = EdgeAuthorizationStarter.tokenEndpointOf(grant.extension)
+        val revocationEndpoint = EdgeAuthorizationStarter.revocationEndpointOf(grant.extension)
         val iss = grant.iss
         if (blob == null || tokenEndpoint == null) {
             throw VersolaError.Configuration(
                 VersolaError.Configuration.Detail.InvalidConfiguration(
-                    "the authorization was not started through edge; redeem it with HttpTokenClient",
+                    "the authorization was not started through edge's /native/start",
                 ),
             )
         }
@@ -84,6 +86,17 @@ public class EdgeNativeTokenClient(
             // Unreachable through AuthorizationResponseValidator, which requires `iss` for a
             // request started through edge; kept as a check because /native/complete does.
             throw VersolaError.Configuration(VersolaError.Configuration.Detail.IssuerMismatch(configuration.issuer, null))
+        }
+        // Both endpoints, and both `https`: they come from a record `NativeStart.validate` already
+        // held to that, so anything else here is a record this flow did not write. Nothing is
+        // inferred from one about the other, and the code is not spent on a proof addressed in the
+        // clear.
+        if (revocationEndpoint == null || !isSecureEndpoint(tokenEndpoint) || !isSecureEndpoint(revocationEndpoint)) {
+            throw VersolaError.Configuration(
+                VersolaError.Configuration.Detail.InvalidConfiguration(
+                    "the pending authorization names no usable token and revocation endpoint",
+                ),
+            )
         }
         val body = FormBody()
             .add("code", grant.code)
@@ -95,9 +108,33 @@ public class EdgeNativeTokenClient(
         tokenBinding.acceptIssued(issued)
         // Remembered for the refreshes and the revocation that follow, in this process and
         // the next: a refresh does not go through /native/start and has no other way to learn
-        // what to sign for.
-        endpoints.save(NativeEndpoints(tokenEndpoint, EdgeAuthorizationStarter.revocationEndpointOf(grant.extension) ?: tokenEndpoint.replaceAfterLast('/', "revoke")))
+        // what to sign for. Written here, before the coordinator stores the refresh token, so a
+        // grant on disk always has them beside it, and under NonCancellable for the same reason
+        // the token is persisted that way: the code is spent.
+        withContext(NonCancellable) {
+            try {
+                endpoints.save(NativeEndpoints(tokenEndpoint, revocationEndpoint))
+            } catch (e: Throwable) {
+                // The code is spent and the server issued a refresh token that nobody will hold:
+                // the coordinator never sees `issued` (this call throws), so its discard-and-revoke
+                // path cannot collect it. Revoked here, best effort and bounded, at the endpoint
+                // this very response was addressed to, since the store that would have said so is
+                // the thing that failed.
+                revokeUnheld(issued, revocationEndpoint)
+                throw e
+            }
+        }
         return issued
+    }
+
+    private suspend fun revokeUnheld(issued: TokenResponse, revocationEndpoint: String) {
+        try {
+            withTimeoutOrNull(UNHELD_REVOCATION_TIMEOUT_MILLIS) {
+                executor.revokeIssued(issued, revokeUrl, revocationEndpoint, onStatus = unknownClient)
+            }
+        } catch (e: Exception) {
+            // Nothing more to do: the token dies at its expiry, and the error that matters is the store's.
+        }
     }
 
     override suspend fun refresh(refreshToken: ByteArray, idempotencyKey: String): TokenResponse {
@@ -110,8 +147,12 @@ public class EdgeNativeTokenClient(
             val body = form.toByteArray()
             form.clear()
             try {
-                return executor.execute(tokenUrl, body, idempotencyKey, htu, onStatus = unknownClient)
-                    .also(tokenBinding::acceptIssued)
+                // The answer of a refresh must not be lost to a cancelled caller, as in
+                // `HttpTokenClient.refresh` (`AUDIT C1`): the caller waits for it, bounded by the
+                // HTTP client's timeouts, and the coordinator persists it.
+                return withContext(NonCancellable) {
+                    executor.execute(tokenUrl, body, idempotencyKey, htu, onStatus = unknownClient)
+                }.also(tokenBinding::acceptIssued)
             } finally {
                 body.fill(0)
             }
@@ -145,23 +186,17 @@ public class EdgeNativeTokenClient(
     }
 
     /**
-     * What `/native/start` said, when this installation has completed a login through edge;
-     * otherwise discovery's mutual-TLS aliases, which name the same listener in any
-     * deployment where edge and auth agree on `external-url`; otherwise the plain endpoints,
-     * which are right wherever auth terminates TLS itself. The first is edge's own
-     * configuration and the others are inferences, so the order is not negotiable.
+     * What `/native/start` said at the login this grant came from. There is nothing to infer them
+     * from when they are gone: the facade reads no discovery document. They are written before
+     * the refresh token is, so a grant without them is a damaged store, and the proof a refresh
+     * needs cannot be addressed: the same verdict as a DPoP key that is gone (`spec/errors.md`).
      */
-    private suspend fun resolveEndpoints(): NativeEndpoints {
-        endpoints.load()?.let { return it }
-        val metadata = discovery.metadata()
-        val aliases = metadata.mtlsEndpointAliases
-        // Proofs and refresh tokens are about to be sent to whichever of these is chosen.
-        requireSecureEndpoint("mtls_endpoint_aliases.token_endpoint", aliases?.tokenEndpoint)
-        requireSecureEndpoint("mtls_endpoint_aliases.revocation_endpoint", aliases?.revocationEndpoint)
-        return NativeEndpoints(
-            tokenEndpoint = aliases?.tokenEndpoint ?: metadata.tokenEndpoint,
-            revocationEndpoint = aliases?.revocationEndpoint ?: metadata.revocationEndpoint
-                ?: metadata.tokenEndpoint.replaceAfterLast('/', "revoke"),
-        )
+    private suspend fun resolveEndpoints(): NativeEndpoints =
+        endpoints.load()?.takeIf { isSecureEndpoint(it.tokenEndpoint) && isSecureEndpoint(it.revocationEndpoint) }
+            ?: throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.CredentialsInvalidated)
+
+    private companion object {
+        /** One attempt and a few seconds: the login is already failing, and a radio is not worth more. */
+        const val UNHELD_REVOCATION_TIMEOUT_MILLIS = 5_000L
     }
 }

@@ -8,10 +8,21 @@ A scenario names preconditions, a request sequence and machine-checkable asserti
 not describe intent — intent belongs in [`../state-machine.md`](../state-machine.md) and
 [`../errors.md`](../errors.md), which every scenario is derived from.
 
-Scenarios 01–20 run with `BackChannel.Auth` on a `standard`-profile tenant. Where a step
-exists under `BackChannel.Edge` as well — refresh, revocation, the edge API call, logout,
-nonce handling — the harness runs it there too, against a `fapi2` tenant, and the observable
-behaviour must be the same. Scenarios 21–23 exist for what only the edge flow has.
+Scenarios 01–20 were written when the `Versola` facade also had a direct back channel to `auth`
+(`BackChannel.Auth`, a `standard`-profile tenant). The facade now signs in through edge's native
+endpoints only (`../versola-sdk-api.md`, ADR 0002), so under it a step of those scenarios that
+names `/token` or `/revoke` is the same step through `/native/token` or `/native/revoke` on a
+`fapi2` tenant, and the observable behaviour must be the same. Scenarios 21–23 and 39–44 exist for
+what only the edge flow has. Until Android's `Versola` drops the direct back channel, its driver
+still runs 01 as it was written.
+
+Four scenarios describe bearer tokens, which no native client of edge has: 07, 09, 10 and 13. 07
+and 10 hold for the generic facade. 09 and 13 rest on the `Idempotency-Key` that only the
+`Versola` facade sends, on a rotation only a bearer grant has; no facade can run them against a
+real stack any more, and the rule they hold is proven against stubs only (the core's unit tests).
+They stay in the catalogue because the core still implements the rule.
+
+Number 38 is taken by pull request 142 (app attestation on `/native/start`).
 
 ## Index
 
@@ -54,6 +65,12 @@ behaviour must be the same. Scenarios 21–23 exist for what only the edge flow 
 | 35 | `Retry-After` on 429 and 503 is honoured, bounded and never fails the request when malformed | any | 22, 46 |
 | 36 | After a `Retry-After`, the SDK sends nothing to that origin until it has passed | any | 22, 46 |
 | 37 | A refresh whose ID token is rejected keeps the rotated refresh token | any | 46 |
+| 39 | Values that name a cell are stored and sent byte for byte | dpop | 40 |
+| 40 | A sign-in placed in the wrong cell is handed to the home cell and completes as one login | dpop | 40 |
+| 41 | Edge's 429 and 503 on the native endpoints honoured by `Retry-After` | dpop | 22, 40 |
+| 42 | A sign-in that outlives the lifetime edge gave its request ends as expired | dpop | 40 |
+| 43 | A step-up that comes back as another user is refused | dpop | 40, 9, 14 |
+| 44 | Login options reach the pushed request as the parameters edge forwards | dpop | 128, 40 |
 
 ## Facades
 
@@ -64,7 +81,9 @@ the default when the key is absent) and `oauth` (the generic facade of
 actor stands for whichever OpenID Provider is staged. Scenarios 24 to 36 exist for what only the
 generic facade does (explicit endpoints, PAR policy, providers without an `end_session_endpoint`
 or without refresh tokens, protected origins, DPoP against a provider that requires it, the retry
-policy and `Retry-After`) and, in 25 to 27, for ID-token validation, which both facades share.
+policy and `Retry-After`) and, in 25 to 27, for ID-token validation, which both facades share
+except for the signature: the `Versola` facade cannot reach a key set (`../versola-sdk-api.md`
+section 9), so 26 holds for it only in the refusal of `alg: none`.
 
 `applies_to` lists the platforms that meet every assertion of a scenario. A platform that lacks a
 surface the assertions need leaves it out, or, when only part of a scenario needs the surface, the
