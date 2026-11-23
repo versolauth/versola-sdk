@@ -11,6 +11,7 @@ import versola.oauth.core.VersolaConfiguration
 import versola.oauth.core.VersolaError
 import java.io.File
 import java.net.URLDecoder
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
@@ -524,8 +525,11 @@ class EdgeNativeTokenClientTest {
 
     // The coordinator never sees a response this call throws instead of returning, so the refresh
     // token the server issued is a live credential nobody holds unless the client revokes it.
+    // Not `runTest`: the revocation is bounded by a timeout, and under virtual time that timeout
+    // fires as soon as the scheduler idles, which it does while the real socket is still answering.
+    // The request then went out or not by a race. Real time here, with the answer already enqueued.
     @Test
-    fun `an endpoints store that cannot save after the token response revokes the issued refresh token and raises its own error`() = runTest {
+    fun `an endpoints store that cannot save after the token response revokes the issued refresh token and raises its own error`(): Unit = runBlocking {
         server.enqueue(issued())
         server.enqueue(MockResponse.Builder().code(200).build())
         val storeError = VersolaError.Recoverable(VersolaError.Recoverable.Cause.Network("native endpoints store: write failed"))
@@ -544,8 +548,11 @@ class EdgeNativeTokenClientTest {
         assertEquals("$AUTH_MTLS/revoke", proofs.proofsFor.last())
     }
 
+    // Not `runTest`: the revocation is bounded by a timeout, and under virtual time that timeout
+    // fires as soon as the scheduler idles, which it does while the real socket is still answering.
+    // The request then went out or not by a race. Real time here, with the answer already enqueued.
     @Test
-    fun `a revocation that fails too does not replace the store's error`() = runTest {
+    fun `a revocation that fails too does not replace the store's error`(): Unit = runBlocking {
         server.enqueue(issued())
         server.enqueue(MockResponse.Builder().code(500).build())
         val storeError = VersolaError.Recoverable(VersolaError.Recoverable.Cause.Network("native endpoints store: write failed"))

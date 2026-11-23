@@ -90,9 +90,10 @@ public class EdgeAuthorizationStarter(
             // `/native/complete` requires `iss`, and auth always emits it.
             issRequired = true,
             resources = request.parameters.resources,
+        ).withLifetime(
             // Seconds to milliseconds without overflow for an absurd value; the request caps it
             // at ten minutes whatever edge says.
-            lifetimeMillis = started.expiresIn.coerceAtMost(PendingAuthorizationRequest.MAX_AGE_MILLIS / 1000) * 1000,
+            started.expiresIn.coerceAtMost(PendingAuthorizationRequest.MAX_AGE_MILLIS / 1000) * 1000,
         )
         // The `request_uri` is percent-encoded as a query value and not otherwise touched: with
         // cells it names the cell that holds the request, and edge routes by it.
