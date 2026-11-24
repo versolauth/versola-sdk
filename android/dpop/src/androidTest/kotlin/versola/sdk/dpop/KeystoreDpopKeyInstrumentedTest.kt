@@ -138,6 +138,92 @@ class KeystoreDpopKeyInstrumentedTest {
         assertEquals(tier != KeyAttestation.StrongBox, fellThrough)
     }
 
+    // The Android half of #423: Key Attestation of the DPoP key itself, which is what an edge that asks
+    // the app to prove what it is reads. What a JVM cannot show is that the Keystore really makes the
+    // chain, for this key, with this challenge in it -- and that a key from before is replaced only
+    // while nothing is bound to it. An emulator attests in software, which is enough for all of this.
+
+    private val challenge = ByteArray(32) { (it * 7 + 1).toByte() }
+
+    private fun attested(isGrantHeld: suspend () -> Boolean = { false }) =
+        KeystoreDpopKey(alias, false, logger, isGrantHeld, challenge)
+
+    @Test
+    fun aKeyGeneratedWithAChallengeHasAnAttestationChainForItselfWithTheChallengeInIt() = runTest {
+        val key = attested()
+
+        val chain = key.attestationChain()
+
+        assertTrue("an attested key has a chain of more than its own certificate", chain != null && chain.size >= 2)
+        val factory = java.security.cert.CertificateFactory.getInstance("X.509")
+        val leaf = factory.generateCertificate(chain!!.first().inputStream()) as java.security.cert.X509Certificate
+        // The leaf is the DPoP key: the chain is about the key every proof is signed with.
+        val leafJkt = Jose.thumbprint(Jose.canonicalJwk(leaf.publicKey as java.security.interfaces.ECPublicKey))
+        assertEquals(key.jkt(), leafJkt)
+        // The Key Attestation extension carries the challenge the key was generated with.
+        val extension = leaf.getExtensionValue("1.3.6.1.4.1.11129.2.1.17")
+        assertTrue("the leaf has no key description", extension != null)
+        assertTrue(
+            "the challenge is not in the key description",
+            extension!!.toList().windowed(challenge.size).any { it == challenge.toList() },
+        )
+    }
+
+    @Test
+    fun aKeyGeneratedWithoutAChallengeHasNoChain() = runTest {
+        assertNull(KeystoreDpopKey(alias, logger = logger).attestationChain())
+    }
+
+    @Test
+    fun aKeyFromBeforeAttestationWasAskedForIsReplacedByAnAttestedOneWhenALoginStartsWithNoGrantHeld() = runTest {
+        val before = KeystoreDpopKey(alias, logger = logger).jkt()
+
+        val key = attested(isGrantHeld = { false })
+        val chain = key.attestationChain()
+
+        assertTrue("an attested key took the place of the old one", chain != null)
+        assertNotEquals("nothing was bound to the old key, so an attested one takes its place", before, key.jkt())
+    }
+
+    @Test
+    fun aKeyFromBeforeAttestationWasAskedForIsKeptWhileAGrantIsBoundToIt() = runTest {
+        val before = KeystoreDpopKey(alias, logger = logger).jkt()
+
+        val key = attested(isGrantHeld = { true })
+
+        // A grant is bound to the thumbprint: replacing the key would end that session to gain evidence
+        // the server may not even ask for. No chain is sent for it, and the policy decides.
+        assertNull(key.attestationChain())
+        assertEquals(before, key.jkt())
+    }
+
+    @Test
+    fun aKeyIsNeverReplacedByReadingItOrSigningWithIt() = runTest {
+        // Between `/native/start` and `/native/complete` a login is in flight, perhaps across the death
+        // of the process; its blob is bound to this key. A cold process that signs the exchange must
+        // sign with it, grant or no grant.
+        val before = KeystoreDpopKey(alias, logger = logger).jkt()
+        val key = attested(isGrantHeld = { false })
+
+        val jkt = key.jkt()
+        key.attestation()
+        key.publicJwk()
+        key.sign(byteArrayOf(1, 2, 3))
+
+        assertEquals(before, jkt)
+        assertEquals(before, key.jkt())
+    }
+
+    @Test
+    fun aStoreThatCannotAnswerKeepsTheKey() = runTest {
+        val before = KeystoreDpopKey(alias, logger = logger).jkt()
+
+        val key = attested(isGrantHeld = { throw java.io.IOException("the store is unreadable") })
+
+        assertNull(key.attestationChain())
+        assertEquals(before, key.jkt())
+    }
+
     /** RFC 7515 §A.3.2 in reverse: fixed-width `R‖S` back to the DER sequence JCA verifies. */
     private fun joseToDer(jose: ByteArray): ByteArray {
         val half = jose.size / 2

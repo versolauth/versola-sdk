@@ -66,6 +66,20 @@ class NativeAuthorizationStarterTest {
         dpop = proofs,
     )
 
+    private fun attestedStarter(attestation: NativeStartAttestation?) = HttpNativeAuthorizationStarter(
+        configuration = VersolaConfiguration.create("https://id.versola.io", "mobile-app", "https://app.example.com/oauth"),
+        edgeBaseUrl = edge,
+        httpClient = OkHttpClient(),
+        dpop = proofs,
+        attestation = attestation,
+    )
+
+    /** The values the body carries under [name], URL-decoded, in order. */
+    private fun fieldsOf(body: String, name: String): List<String> =
+        body.split('&').map { it.substringBefore('=') to it.substringAfter('=') }
+            .filter { it.first == name }
+            .map { java.net.URLDecoder.decode(it.second, "UTF-8") }
+
     private fun request() = NativeStartRequest(
         redirectUri = "https://app.example.com/oauth",
         scopes = setOf("openid", "offline_access"),
@@ -110,6 +124,79 @@ class NativeAuthorizationStarterTest {
         assertEquals("sealed", start.blob)
         assertEquals("https://id.versola.io:9008/token", start.tokenEndpoint)
         assertEquals("urn:ietf:params:oauth:request_uri:abc", start.requestUri)
+    }
+
+    @Test
+    fun `the evidence an app has goes with the request, a certificate per field, and nothing else changes`() = runTest {
+        server.enqueue(started())
+        val leaf = byteArrayOf(0x30, 0x82.toByte(), 0xfb.toByte(), 0xff.toByte(), 0x3e)
+        val root = byteArrayOf(0x30, 0x03, 0x3f, 0x2f, 0x2b)
+
+        attestedStarter { NativeAttestation.androidFields(listOf(leaf, root)) }.start(request())
+
+        val body = server.takeRequest().body!!.utf8()
+        assertEquals(listOf("android"), fieldsOf(body, "attestation_platform"))
+        // Standard base64, which has `+`, `/` and `=`: they have to survive the form encoding intact.
+        assertEquals(
+            listOf(java.util.Base64.getEncoder().encodeToString(leaf), java.util.Base64.getEncoder().encodeToString(root)),
+            fieldsOf(body, "attestation_chain"),
+        )
+        assertEquals(listOf("the-nonce"), fieldsOf(body, "nonce"))
+        assertEquals(listOf("300"), fieldsOf(body, "max_age"))
+        assertFalse(body.contains("attestation_key_id"))
+    }
+
+    @Test
+    fun `a device with no evidence, and an app with no source, send no attestation field at all`() = runTest {
+        server.enqueue(started())
+        server.enqueue(started())
+
+        attestedStarter { NativeAttestation.androidFields(null) }.start(request())
+        attestedStarter(null).start(request())
+
+        assertFalse(server.takeRequest().body!!.utf8().contains("attestation"))
+        assertFalse(server.takeRequest().body!!.utf8().contains("attestation"))
+    }
+
+    @Test
+    fun `the evidence is read once per start, and a nonce retry carries the same`() = runTest {
+        server.enqueue(
+            MockResponse.Builder().code(401)
+                .setHeader("WWW-Authenticate", """DPoP error="use_dpop_nonce"""")
+                .setHeader("DPoP-Nonce", "edge-nonce-1")
+                .build(),
+        )
+        server.enqueue(started())
+        var reads = 0
+
+        attestedStarter { reads++; NativeAttestation.androidFields(listOf(byteArrayOf(1, 2, 3))) }.start(request())
+
+        assertEquals(1, reads)
+        val first = server.takeRequest().body!!.utf8()
+        val second = server.takeRequest().body!!.utf8()
+        assertEquals(first, second)
+        assertTrue(first.contains("attestation_chain="))
+    }
+
+    @Test
+    fun `a refused attestation is the authorization refusal an integrator can read, not a retry`() = runTest {
+        server.enqueue(
+            MockResponse.Builder().code(400).setHeader("Content-Type", "application/json")
+                .body("""{"error":"invalid_client_attestation","error_description":"the attestation is for an app this client does not accept"}""")
+                .build(),
+        )
+
+        val error = failure { attestedStarter { NativeAttestation.androidFields(listOf(byteArrayOf(1))) }.start(request()) }
+            as VersolaError.Configuration
+
+        assertEquals(
+            VersolaError.Configuration.Detail.AuthorizationRejected(
+                "invalid_client_attestation",
+                "the attestation is for an app this client does not accept",
+            ),
+            error.detail,
+        )
+        assertEquals(1, server.requestCount)
     }
 
     @Test

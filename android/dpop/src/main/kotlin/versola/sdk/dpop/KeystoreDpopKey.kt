@@ -5,6 +5,7 @@ import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyInfo
 import android.security.keystore.KeyProperties
 import android.security.keystore.StrongBoxUnavailableException
+import java.security.InvalidAlgorithmParameterException
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.KeyStore
@@ -13,11 +14,13 @@ import java.security.ProviderException
 import java.security.Signature
 import java.security.interfaces.ECPublicKey
 import java.security.spec.ECGenParameterSpec
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import versola.oauth.core.SdkDispatchers
 import versola.oauth.core.VersolaError
+import versola.oauth.core.VersolaInternalApi
 import versola.oauth.core.VersolaLogger
 
 /**
@@ -51,11 +54,43 @@ public class KeystoreDpopKey(
     private val isGrantHeld: suspend () -> Boolean = { false },
 ) : DpopKey {
 
+    /**
+     * As the primary constructor, and a key that is also generated with an Android Key Attestation
+     * [attestationChallenge], so that [attestationChain] has a certificate chain to hand an edge
+     * that asks the app to prove what it is (`spec/server-dependencies.md`, "App attestation on
+     * `/native/start`"). The challenge names the client the chain is for; it is not a secret.
+     *
+     * A secondary constructor and not a parameter of the primary one: a new parameter, even a
+     * defaulted one, is a different constructor to an app compiled against the last release.
+     */
+    @VersolaInternalApi
+    public constructor(
+        alias: String,
+        requireHardware: Boolean,
+        logger: VersolaLogger?,
+        isGrantHeld: suspend () -> Boolean,
+        attestationChallenge: ByteArray?,
+    ) : this(alias, requireHardware, logger, isGrantHeld) {
+        this.attestationChallenge = attestationChallenge?.copyOf()
+    }
+
+    private var attestationChallenge: ByteArray? = null
+
+    /**
+     * Set when this device could not attest the key it was asked to: it is generated without, and
+     * replacing it for another try on every login would be a key generated for nothing. Per process,
+     * so a device that was only briefly unable is asked again after a restart.
+     */
+    @Volatile
+    private var attestationUnavailable = false
+
     private class Material(
         val privateKey: PrivateKey,
         val jwk: String,
         val jkt: String,
         val attestation: KeyAttestation,
+        /** The Keystore's attestation chain, leaf first, as DER; null for a key that was generated without a challenge. */
+        val chain: List<ByteArray>?,
     )
 
     private val mutex = Mutex()
@@ -66,6 +101,48 @@ public class KeystoreDpopKey(
     override suspend fun publicJwk(): String = material(mayGenerate = false).jwk
 
     override suspend fun attestation(): KeyAttestation = material(mayGenerate = true).attestation
+
+    /**
+     * The certificate chain the Keystore made for this key, leaf first, each certificate as DER, or
+     * null when the key has none: it was generated without an attestation challenge (by a release
+     * that did not ask for one, and kept because a grant is bound to it), or this device cannot
+     * attest keys.
+     *
+     * Null is not an error and not a downgrade: the SDK sends what it has and the server's policy
+     * decides whether a request without evidence is acceptable. The chain is public (certificates),
+     * and says nothing to anyone who does not hold the key.
+     *
+     * **The one place an existing key is replaced by an attested one**, and only when this is asked
+     * for -- which the edge flow does at the start of a login, when a new pending request is about
+     * to be bound to whatever key is current -- and only while no grant is held. Never while signing
+     * a proof or reading the key: a login is in flight between `/native/start` and `/native/complete`,
+     * possibly across the death of the process, and its blob is bound to this key's thumbprint, so a
+     * proof for the exchange signed by another key ends it as `invalid_grant`. A grant is bound to the
+     * thumbprint too, which is why it keeps the key as well.
+     */
+    @VersolaInternalApi
+    public suspend fun attestationChain(): List<ByteArray>? = mutex.withLock {
+        var current = loadOrGenerate(mayGenerate = true)
+        if (current.chain == null && attestationChallenge != null && !attestationUnavailable && !grantHeld()) {
+            withContext(SdkDispatchers.blocking) { destroy(alias) }
+            material = null
+            current = loadOrGenerate(mayGenerate = true)
+        }
+        current.chain
+    }
+
+    /**
+     * Whether a grant is bound to the key. A store that cannot answer is read as "held": keeping a key
+     * costs a login without evidence, replacing one under a grant costs the session.
+     */
+    private suspend fun grantHeld(): Boolean =
+        try {
+            isGrantHeld()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            true
+        }
 
     /**
      * Destroys the key and forgets it, so the next proof is signed by a freshly generated one
@@ -95,13 +172,16 @@ public class KeystoreDpopKey(
         }
     }
 
-    private suspend fun material(mayGenerate: Boolean): Material = mutex.withLock {
-        material?.let { return@withLock it }
+    private suspend fun material(mayGenerate: Boolean): Material = mutex.withLock { loadOrGenerate(mayGenerate) }
+
+    /** [material], for a caller that already holds [mutex]. */
+    private suspend fun loadOrGenerate(mayGenerate: Boolean): Material {
+        material?.let { return it }
         val loaded = withContext(SdkDispatchers.blocking) { load() }
         if (loaded == null && !mayGenerate && isGrantHeld()) {
             throw VersolaError.Reauthenticate(VersolaError.Reauthenticate.Reason.CredentialsInvalidated)
         }
-        (loaded ?: withContext(SdkDispatchers.blocking) { generate() })
+        return (loaded ?: withContext(SdkDispatchers.blocking) { generate() })
             .also {
                 if (requireHardware && !it.attestation.isHardwareBacked) {
                     throw VersolaError.Configuration(
@@ -123,22 +203,43 @@ public class KeystoreDpopKey(
     private fun load(): Material? {
         val keyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
         val entry = keyStore.getEntry(alias, null) as? KeyStore.PrivateKeyEntry ?: return null
-        return material(entry.privateKey, entry.certificate.publicKey as ECPublicKey)
+        return material(entry.privateKey, entry.certificate.publicKey as ECPublicKey, chainOf(keyStore))
     }
 
     private fun generate(): Material {
+        val challenge = attestationChallenge
+        if (challenge != null) {
+            try {
+                return generate(challenge)
+            } catch (e: ProviderException) {
+                // A device that cannot attest keys fails the generation itself. Not being able to
+                // prove the key must not mean not having one: it is generated without, and the
+                // server's policy decides about a request that carries no evidence.
+                attestationUnavailable = true
+                logger?.warn("This device could not attest the DPoP key, generating it without attestation: ${e.message}")
+            } catch (e: InvalidAlgorithmParameterException) {
+                // The same, refused at `initialize` rather than at generation.
+                attestationUnavailable = true
+                logger?.warn("This device refused the attestation challenge, generating the DPoP key without it: ${e.message}")
+            }
+        }
+        return generate(challenge = null)
+    }
+
+    private fun generate(challenge: ByteArray?): Material {
         // StrongBox first, and the fall-through is the whole reason this is runtime work:
         // asking for it on a device without the chip throws rather than degrading, and a
         // compile-time decision would either exclude API 26–27 or never use StrongBox at all.
         val pair = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-            withStrongBoxFallback(logger, isAbsent = { it is StrongBoxUnavailableException }) { strongBox -> generate(strongBox) }
+            withStrongBoxFallback(logger, isAbsent = { it is StrongBoxUnavailableException }) { strongBox -> generate(strongBox, challenge) }
         } else {
-            generate(strongBox = false)
+            generate(strongBox = false, challenge = challenge)
         }
-        return material(pair.private, pair.public as ECPublicKey)
+        val keyStore = KeyStore.getInstance(KEYSTORE).apply { load(null) }
+        return material(pair.private, pair.public as ECPublicKey, chainOf(keyStore))
     }
 
-    private fun generate(strongBox: Boolean): java.security.KeyPair {
+    private fun generate(strongBox: Boolean, challenge: ByteArray?): java.security.KeyPair {
         val generator = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_EC, KEYSTORE)
         val spec = KeyGenParameterSpec.Builder(alias, KeyProperties.PURPOSE_SIGN)
             .setAlgorithmParameterSpec(ECGenParameterSpec(CURVE))
@@ -147,6 +248,7 @@ public class KeystoreDpopKey(
             // line a future reader will look for when asking why refresh works in the
             // background. See the class comment and #1 §4.
             .setUserAuthenticationRequired(false)
+            .apply { challenge?.let { setAttestationChallenge(it) } }
             .apply {
                 if (strongBox && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                     setIsStrongBoxBacked(true)
@@ -157,15 +259,25 @@ public class KeystoreDpopKey(
         return generator.generateKeyPair()
     }
 
-    private fun material(privateKey: PrivateKey, publicKey: ECPublicKey): Material {
+    private fun material(privateKey: PrivateKey, publicKey: ECPublicKey, chain: List<ByteArray>?): Material {
         val jwk = Jose.canonicalJwk(publicKey)
         return Material(
             privateKey = privateKey,
             jwk = jwk,
             jkt = Jose.thumbprint(jwk),
             attestation = attestationOf(privateKey),
+            chain = chain,
         )
     }
+
+    /**
+     * The chain the Keystore keeps beside the key. A key made without an attestation challenge has
+     * only its own self-signed certificate, which attests nothing, so one certificate is "no chain".
+     */
+    private fun chainOf(keyStore: KeyStore): List<ByteArray>? =
+        keyStore.getCertificateChain(alias)
+            ?.takeIf { it.size >= 2 }
+            ?.map { it.encoded }
 
     /**
      * Read back from the key the Keystore actually produced, never from what was requested:
