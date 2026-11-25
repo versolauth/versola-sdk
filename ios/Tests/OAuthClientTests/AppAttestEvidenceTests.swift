@@ -69,19 +69,19 @@ final class AppAttestEvidenceTests: XCTestCase {
 
     // MARK: evidence is never a reason to fail
 
-    func testADeviceWithoutAppAttestSendsNoEvidenceAndTouchesNothing() async throws {
+    func testADeviceWithoutAppAttestSaysSoAndTouchesNothing() async throws {
         let service = FakeAppAttest(supported: false)
         let store = InMemoryAppAttestKeyStore()
 
         let result = try await evidence(service, store).fields(clientId: "mobile-app", jkt: "JKT", jti: "j1")
 
-        XCTAssertTrue(result.isEmpty)
+        XCTAssertEqual(result, NativeAttestation.unavailable("unsupported"))
         XCTAssertTrue(service.calls.isEmpty)
         let state = try await store.load()
         XCTAssertNil(state)
     }
 
-    func testAppleServiceOutOfReachIsNoEvidenceAndTheKeyIsKeptForTheNextTry() async throws {
+    func testAppleServiceOutOfReachIsSaidAndTheKeyIsKeptForTheNextTry() async throws {
         let service = FakeAppAttest()
         let store = InMemoryAppAttestKeyStore()
         let source = evidence(service, store)
@@ -91,25 +91,36 @@ final class AppAttestEvidenceTests: XCTestCase {
         let state = try await store.load()
         let back = try await fields(source, jti: "j2")
 
-        XCTAssertTrue(down.isEmpty)
+        XCTAssertEqual(down, NativeAttestation.unavailable("service_unavailable"))
         XCTAssertEqual(state, AppAttestKeyState(keyId: "key-1", attested: false))
         XCTAssertEqual(back["attestation_key_id"], "key-1", "the key was never attested, so it is attested now")
         XCTAssertNotNil(back["attestation_object"])
         XCTAssertEqual(service.calls.filter { $0 == "generateKey" }.count, 1)
     }
 
-    func testAnUnsupportedOrUnknownFailureIsNoEvidenceAndChangesNothing() async throws {
-        for failure in [AppAttestFailure.unsupported, .other] {
+    func testAnUnsupportedFailureIsSaidAndAnUnknownOneIsNoEvidence_AndNeitherChangesAnything() async throws {
+        let cases: [(AppAttestFailure, [NativeStartField])] = [(.unsupported, NativeAttestation.unavailable("unsupported")), (.other, [])]
+        for (failure, expected) in cases {
             let service = FakeAppAttest()
             let store = InMemoryAppAttestKeyStore()
             service.failNext("generateKey", with: failure)
 
             let result = try await evidence(service, store).fields(clientId: "mobile-app", jkt: "JKT", jti: "j1")
 
-            XCTAssertTrue(result.isEmpty, "\(failure)")
+            XCTAssertEqual(result, expected, "\(failure)")
             let state = try await store.load()
             XCTAssertNil(state, "\(failure)")
         }
+    }
+
+    func testTheNonceOfTheProofIsWhatTheAssertionIsMadeOver() async throws {
+        let service = FakeAppAttest()
+        let store = InMemoryAppAttestKeyStore(AppAttestKeyState(keyId: "key-1", attested: true))
+
+        _ = try await evidence(service, store).fields(clientId: "mobile-app", jkt: "JKT", jti: "j1", nonce: "n-1")
+
+        let expected = NativeAttestation.clientDataHash(clientId: "mobile-app", jkt: "JKT", jti: "j1", nonce: "n-1")
+        XCTAssertEqual(service.calls, ["generateAssertion:key-1:\(expected.map { String(format: "%02x", $0) }.joined())"])
     }
 
     func testAKeyAppAttestDoesNotKnowIsDroppedAndTheNextRequestAttestsANewOne() async throws {

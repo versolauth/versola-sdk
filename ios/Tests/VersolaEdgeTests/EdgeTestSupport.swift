@@ -26,7 +26,8 @@ actor ProofSource: DpopProofSource {
 
     func proof(method: String, url: URL, nonce: String?, accessToken: String?) async throws -> String {
         minted.append((url, nonce))
-        let payload = Data(#"{"jti":"jti-\#(minted.count)"}"#.utf8).base64EncodedString()
+        let claims = nonce.map { #"{"jti":"jti-\#(minted.count)","nonce":"\#($0)"}"# } ?? #"{"jti":"jti-\#(minted.count)"}"#
+        let payload = Data(claims.utf8).base64EncodedString()
             .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
         return "e30.\(payload).sig"
@@ -40,12 +41,12 @@ actor ProofSource: DpopProofSource {
 
 /// Hands out `attestation_object` once, then assertions; counts refusals it was told about.
 actor FakeEvidence: NativeStartAttestation {
-    private(set) var asked: [(clientId: String, jkt: String, jti: String)] = []
+    private(set) var asked: [(clientId: String, jkt: String, jti: String, nonce: String?)] = []
     private(set) var notAccepted = 0
     private var attested = false
 
-    func fields(clientId: String, jkt: String, jti: String) async throws -> [NativeStartField] {
-        asked.append((clientId, jkt, jti))
+    func fields(clientId: String, jkt: String, jti: String, nonce: String?) async throws -> [NativeStartField] {
+        asked.append((clientId, jkt, jti, nonce))
         defer { attested = true }
         return attested
             ? NativeAttestation.fields(keyId: "key", assertion: Data([1, 2, 3]))

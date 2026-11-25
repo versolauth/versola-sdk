@@ -362,12 +362,19 @@ package struct TokenErrorPayload: Sendable {
     package var error: String = ""
     package var errorDescription: String?
 
+    /// Edge's `attestation_error`, with `invalid_client_attestation`: why the app attestation was not accepted, a closed set an SDK may act on
+    /// (the description is for people and may be reworded).
+    package var attestationError: String?
+
     package static func parse(_ body: Data) -> TokenErrorPayload { parseStrict(body) ?? TokenErrorPayload() }
 
     /// nil when the body is not a JSON object at all.
     package static func parseStrict(_ body: Data) -> TokenErrorPayload? {
         guard let object = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else { return nil }
-        return TokenErrorPayload(error: object["error"] as? String ?? "", errorDescription: object["error_description"] as? String)
+        return TokenErrorPayload(
+            error: object["error"] as? String ?? "", errorDescription: object["error_description"] as? String,
+            attestationError: object["attestation_error"] as? String
+        )
     }
 }
 

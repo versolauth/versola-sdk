@@ -93,6 +93,26 @@ key the request is signed with, which is the key every token of the flow is boun
 | Android, when the build's policy requires Play Integrity | `attestation_integrity_token`, beside the chain: the Play Integrity token the app got for the nonce `base64url(SHA-256("versola-attest-v1\n" + clientId + "\n" + jkt + "\n" + jti))`, no padding | The nonce is the iOS client data hash in URL-safe base64, so the verdict is good for one request by one DPoP key. Edge has Google decode it and requires the package, the nonce, a recent timestamp, `PLAY_RECOGNIZED`, one of the policy's certificate digests and `MEETS_DEVICE_INTEGRITY`. `attestation_platform` is sent once, not once per kind of evidence. |
 | iOS | `attestation_platform=ios`, `attestation_key_id` (the App Attest key id, base64) and **either** `attestation_object` (the first request of a key) **or** `attestation_assertion` (every later one) | App Attest signs only what it is handed, so the DPoP key cannot be the attested key. The app hands App Attest `clientDataHash = SHA-256("versola-attest-v1\n" + clientId + "\n" + jkt + "\n" + jti)`, `jkt` and `jti` being the thumbprint of the DPoP key and the `jti` of the proof sent on the same request. An assertion is good for exactly one proof, and its counter must move forward. |
 
+**The server's nonce.** When the proof carries a server `nonce` (edge asks for one with `use_dpop_nonce`), it follows the `jti`
+in everything hashed: `SHA-256("versola-attest-v1\n" + clientId + "\n" + jkt + "\n" + jti + "\n" + nonce)`, for the iOS client data
+hash and for the Play Integrity nonce alike. It is the one value in what the app signs that the server chose, so an assertion cannot
+be made ahead of time for a `jti` the app picked. A proof without a nonce hashes as above. Edge checks the nonce before it looks at the
+evidence, so a `use_dpop_nonce` answer consumes no key on edge's side. The SDK, though, makes evidence for every attempt, the first
+included: when its nonce cache is empty (after a restart) the first proof has no nonce, the evidence made for it is useless against an
+edge that requires one, and an attestation object that rode on it is discarded with its key (the retry attests a new one). Skipping
+evidence until a nonce is known is a follow-up.
+
+**Saying why it cannot.** An app that cannot give evidence may say so, in `attestation_unavailable`, instead of sending nothing:
+`unsupported` (the device does not support the platform's attestation) or `service_unavailable` (the platform's service could not be
+reached; Apple's, for App Attest). Edge counts each as an outcome of its own, so an operator can tell them from an old SDK, and under
+`enforce` refuses the request all the same. It is ignored when the request carries evidence. The iOS evidence source sends it; the
+Android one sends nothing in its place yet, since a missing chain has causes that are not "unsupported".
+
+**The refusal.** `400 invalid_client_attestation` carries `attestation_error`, a closed set: `absent`, `malformed`,
+`untrusted_chain`, `revoked`, `mismatch`, `app_not_accepted`, `device_not_accepted`, `unknown_key`, `replay`, `bad_signature`,
+`unsupported`, `declared_unsupported`, `declared_service_unavailable`, `declared_not_configured`. An SDK acts on `unknown_key`
+only (forget the key, attest a new one); the description says nothing of which check failed.
+
 The Play Integrity token is asked for **after** the proof is minted, since its nonce needs the proof's `jti`, and again for
 every proof: a retry after a `use_dpop_nonce` challenge carries a new proof and so a new token. It is made only when the
 app was configured with a Google Cloud project number; a device or Play Store that cannot give one sends none, which the
@@ -121,8 +141,8 @@ Rules for the app, whichever platform:
 - An iOS attestation object is made for one request's proof and App Attest attests a key once, so it
   is never re-sent: after a refusal the app attests a new key; after a request that failed once edge
   had accepted it, the key is known and the app asserts with it next. An assertion for a key edge has
-  not been shown is refused with the description `this key has not been attested: send the attestation
-  object`, which is what tells the app to attest it.
+  not been shown is refused with `attestation_error: unknown_key` (the description is for people and may be
+  reworded; the code is the contract), which is what tells the app to attest it.
 
 **Platform status.** The Android `Versola` facade sends the Android evidence under `BackChannel.Edge`
 (scenario 38, which has no driver yet).
@@ -136,7 +156,7 @@ product) carries the edge channel itself, `/native/start|complete|token|revoke`,
 evidence second, because an assertion is for that proof's `jti`. Edge checks the proof and its nonce
 before it looks at the evidence, so a `use_dpop_nonce` answer does not consume it, but an attestation
 object that rode on such a request was not seen: the starter forgets that key and the retry attests a
-new one, and the same is done on the refusal `this key has not been attested`. Any other refusal keeps
+new one, and the same is done on the refusal `attestation_error: unknown_key`. Any other refusal keeps
 the key. The facade that assembles these takes them as they are.
 
 On iOS, as on Android, what the device cannot give is no evidence and no error: a device or build

@@ -14,6 +14,35 @@ final class NativeAttestationTests: XCTestCase {
         XCTAssertEqual(hex(hash), "59241b9875b6c77d3d24ca23f08be296ecd13f10e52a5ffa3e7be2e6f07b6860")
     }
 
+    func testClientDataHashCarriesTheServerNonceWhenTheProofHasOne() {
+        // `SHA-256("versola-attest-v1\nmobile-app\nJKT\nJTI\nNONCE")`, computed with `hashlib` as above.
+        let hash = NativeAttestation.clientDataHash(clientId: "mobile-app", jkt: "JKT", jti: "JTI", nonce: "NONCE")
+
+        XCTAssertEqual(hex(hash), "bda9f0ccbe60a8a6b5a36b34cd30adae2383d9a2ba06171d3e55d4133da9366f")
+        XCTAssertEqual(
+            NativeAttestation.clientDataHash(clientId: "mobile-app", jkt: "JKT", jti: "JTI", nonce: nil),
+            NativeAttestation.clientDataHash(clientId: "mobile-app", jkt: "JKT", jti: "JTI"),
+            "a proof without a nonce hashes as it always did"
+        )
+        XCTAssertNotEqual(hash, NativeAttestation.clientDataHash(clientId: "mobile-app", jkt: "JKT", jti: "JTI", nonce: "OTHER"))
+    }
+
+    func testTheNonceOfAProofIsReadFromItsPayload() {
+        func proof(_ claims: String) -> String {
+            let payload = Data(claims.utf8).base64EncodedString()
+                .replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+            return "e30.\(payload).sig"
+        }
+
+        XCTAssertEqual(NativeAttestation.nonce(ofProof: proof(#"{"jti":"j","nonce":"n-1"}"#)), "n-1")
+        XCTAssertNil(NativeAttestation.nonce(ofProof: proof(#"{"jti":"j"}"#)))
+        XCTAssertNil(NativeAttestation.nonce(ofProof: "not a proof"))
+    }
+
+    func testAnUnavailableDeviceSaysWhyInsteadOfSendingEvidence() {
+        XCTAssertEqual(NativeAttestation.unavailable("unsupported"), [NativeStartField(name: "attestation_unavailable", value: "unsupported")])
+    }
+
     func testClientDataHashIsBoundToTheClientTheKeyAndTheProof() {
         let base = NativeAttestation.clientDataHash(clientId: "a", jkt: "k", jti: "j")
 

@@ -71,6 +71,8 @@ final class EdgeStarterTests: XCTestCase {
         _ = try await starter(http, proofs, evidence).start(request: try request(), metadata: metadata, now: Date())
         let asked = await evidence.asked
         XCTAssertEqual(asked.map(\.jti), ["jti-1", "jti-2"])
+        // The server's nonce is part of what the retried evidence is made over; the first proof had none.
+        XCTAssertEqual(asked.map(\.nonce), [nil, "n1"])
         let value1 = await evidence.notAccepted
         XCTAssertEqual(value1, 1)
         let sent = await http.requests
@@ -100,7 +102,7 @@ final class EdgeStarterTests: XCTestCase {
     }
 
     func testAKeyEdgeNeverSawAttestedIsForgottenAndTheRefusalIsReported() async throws {
-        let http = RecordingHTTP([json(400, #"{"error":"invalid_client_attestation","error_description":"this key has not been attested: send the attestation object"}"#)])
+        let http = RecordingHTTP([json(400, #"{"error":"invalid_client_attestation","error_description":"the app attestation was not accepted","attestation_error":"unknown_key"}"#)])
         let evidence = FakeEvidence()
         do {
             _ = try await starter(http, ProofSource(), evidence).start(request: try request(), metadata: metadata, now: Date())
@@ -112,8 +114,47 @@ final class EdgeStarterTests: XCTestCase {
         XCTAssertEqual(value3, 1)
     }
 
+    func testAnEdgeThatSendsOnlyTheSentenceStillGetsItsKeyForgotten() async throws {
+        // An edge that predates the code: the sentence is all there is, and a key not forgotten would be asserted for on every later login.
+        let http = RecordingHTTP([json(400, #"{"error":"invalid_client_attestation","error_description":"this key has not been attested: send the attestation object"}"#)])
+        let evidence = FakeEvidence()
+        do {
+            _ = try await starter(http, ProofSource(), evidence).start(request: try request(), metadata: metadata, now: Date())
+            XCTFail("no error")
+        } catch OAuthError.configuration(.authorizationRejected) {}
+        let forgotten = await evidence.notAccepted
+        XCTAssertEqual(forgotten, 1)
+    }
+
+    func testTheRefusalReasonReachesTheIntegrator() async throws {
+        let http = RecordingHTTP([json(400, #"{"error":"invalid_client_attestation","error_description":"the app attestation was not accepted","attestation_error":"device_not_accepted"}"#)])
+        do {
+            _ = try await starter(http, ProofSource(), FakeEvidence()).start(request: try request(), metadata: metadata, now: Date())
+            XCTFail("no error")
+        } catch OAuthError.configuration(.authorizationRejected(let code, let description)) {
+            XCTAssertEqual(code, "invalid_client_attestation")
+            XCTAssertEqual(description, "the app attestation was not accepted (attestation_error: device_not_accepted)")
+        }
+    }
+
+    func testTheCodeDecidesNotTheSentence() async throws {
+        // A description that happens to say the old words, with another code: the key stays. A reworded description with the code: it goes.
+        let reworded = RecordingHTTP([json(400, #"{"error":"invalid_client_attestation","error_description":"something else entirely","attestation_error":"unknown_key"}"#)])
+        let kept = RecordingHTTP([json(400, #"{"error":"invalid_client_attestation","error_description":"this key has not been attested","attestation_error":"mismatch"}"#)])
+        let forgotten = FakeEvidence()
+        let remembered = FakeEvidence()
+        do { _ = try await starter(reworded, ProofSource(), forgotten).start(request: try request(), metadata: metadata, now: Date()); XCTFail("no error") }
+        catch OAuthError.configuration(.authorizationRejected) {}
+        do { _ = try await starter(kept, ProofSource(), remembered).start(request: try request(), metadata: metadata, now: Date()); XCTFail("no error") }
+        catch OAuthError.configuration(.authorizationRejected) {}
+        let forgottenCount = await forgotten.notAccepted
+        let rememberedCount = await remembered.notAccepted
+        XCTAssertEqual(forgottenCount, 1)
+        XCTAssertEqual(rememberedCount, 0)
+    }
+
     func testAnyOtherAttestationRefusalKeepsTheKey() async throws {
-        let http = RecordingHTTP([json(400, #"{"error":"invalid_client_attestation","error_description":"the app is not one this client accepts"}"#)])
+        let http = RecordingHTTP([json(400, #"{"error":"invalid_client_attestation","error_description":"the app attestation was not accepted","attestation_error":"app_not_accepted"}"#)])
         let evidence = FakeEvidence()
         do {
             _ = try await starter(http, ProofSource(), evidence).start(request: try request(), metadata: metadata, now: Date())

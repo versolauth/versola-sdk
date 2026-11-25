@@ -31,6 +31,13 @@ public fun interface NativeStartAttestation {
 @VersolaInternalApi
 public fun interface NativeStartProofEvidence {
     public suspend fun fields(jti: String): List<Pair<String, String>>
+
+    /**
+     * As [fields], for a proof that carries a server `nonce` (edge asks for one with `use_dpop_nonce`): the nonce is part of what the
+     * evidence is made over, so that it cannot be made ahead of time for a `jti` the app chose. An implementation that does not use it
+     * need not override this.
+     */
+    public suspend fun fields(jti: String, nonce: String?): List<Pair<String, String>> = fields(jti)
 }
 
 /** The parts of the attestation contract that are bytes and names, fixed by the spec and shared with edge. */
@@ -51,11 +58,13 @@ public object NativeAttestation {
 
     /**
      * The Play Integrity nonce of one request: `SHA-256("versola-attest-v1\n" + clientId + "\n" + jkt + "\n" + jti)` in URL-safe
-     * base64 without padding or wrapping, which is what Play Integrity requires of a nonce. `jkt` is the thumbprint of the DPoP key
-     * and `jti` the `jti` of the proof sent on the same request, so a verdict is good for one request by one key.
+     * base64 without padding or wrapping, which is what Play Integrity requires of a nonce, and when the proof carries a server
+     * `nonce`, `... + "\n" + jti + "\n" + nonce`. `jkt` is the thumbprint of the DPoP key and `jti` the `jti` of the proof sent on the
+     * same request, so a verdict is good for one request by one key.
      */
-    public fun integrityNonce(clientId: String, jkt: String, jti: String): String {
-        val hash = MessageDigest.getInstance("SHA-256").digest("$DOMAIN\n$clientId\n$jkt\n$jti".toByteArray(Charsets.UTF_8))
+    public fun integrityNonce(clientId: String, jkt: String, jti: String, nonce: String? = null): String {
+        val tail = if (nonce.isNullOrEmpty()) "" else "\n$nonce"
+        val hash = MessageDigest.getInstance("SHA-256").digest("$DOMAIN\n$clientId\n$jkt\n$jti$tail".toByteArray(Charsets.UTF_8))
         return Base64.getUrlEncoder().withoutPadding().encodeToString(hash)
     }
 
@@ -76,6 +85,18 @@ public object NativeAttestation {
         return try {
             val payload = String(Base64.getUrlDecoder().decode(parts[1]), Charsets.UTF_8)
             Regex("\"jti\"\\s*:\\s*\"([^\"]+)\"").find(payload)?.groupValues?.get(1)
+        } catch (e: IllegalArgumentException) {
+            null
+        }
+    }
+
+    /** The `nonce` of a DPoP proof, read as [jtiOf] reads the `jti`. Null for a proof without one. */
+    public fun nonceOf(proof: String): String? {
+        val parts = proof.split('.')
+        if (parts.size != 3) return null
+        return try {
+            val payload = String(Base64.getUrlDecoder().decode(parts[1]), Charsets.UTF_8)
+            Regex("\"nonce\"\\s*:\\s*\"([^\"]+)\"").find(payload)?.groupValues?.get(1)
         } catch (e: IllegalArgumentException) {
             null
         }

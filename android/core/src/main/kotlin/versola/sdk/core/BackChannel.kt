@@ -269,7 +269,7 @@ public class HttpNativeAuthorizationStarter(
         val proof = dpop.proof("POST", url)
         val perRequest = proofEvidence?.let { source ->
             try {
-                NativeAttestation.jtiOf(proof)?.let { source.fields(it) }.orEmpty()
+                NativeAttestation.jtiOf(proof)?.let { source.fields(it, NativeAttestation.nonceOf(proof)) }.orEmpty()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
@@ -364,10 +364,22 @@ public class HttpNativeAuthorizationStarter(
                 e,
             )
         }
+        // Edge's `attestation_error` goes to the integrator with the refusal: the description is generic, and which check failed is
+        // what they need. Read from the body as it is, since it is edge's field and not one of the token error's.
+        val attestationError = if (error.error == "invalid_client_attestation") {
+            Regex("\"attestation_error\"\\s*:\\s*\"([a-z_]+)\"").find(payload)?.groupValues?.get(1)
+        } else {
+            null
+        }
+        val description = if (attestationError == null) {
+            error.errorDescription
+        } else {
+            listOfNotNull(error.errorDescription, "(attestation_error: $attestationError)").joinToString(" ")
+        }
         return VersolaError.Configuration(
             VersolaError.Configuration.Detail.AuthorizationRejected(
                 error.error.ifBlank { "(no error code in a HTTP $status response to /native/start)" },
-                error.errorDescription,
+                description,
             ),
         )
     }

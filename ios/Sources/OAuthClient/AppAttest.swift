@@ -170,7 +170,7 @@ package actor InMemoryAppAttestKeyStore: AppAttestKeyStore {
 /// An attestation object is made for one request and App Attest attests a key once, so it is never
 /// handed out twice: the state is saved as attested before the object is returned. If the request
 /// then fails before edge sees it, the next assertion is for a key edge has not been shown, which edge
-/// refuses as `this key has not been attested: send the attestation object`; the facade calls
+/// refuses with `attestation_error: unknown_key`; the facade calls
 /// [`discardKey`] on that answer and the next request attests a new key.
 ///
 /// Calls are served one at a time, in order, **across their suspension points**: an actor alone does not do
@@ -209,11 +209,11 @@ package actor AppAttestEvidence: NativeStartAttestation {
         }
     }
 
-    package func fields(clientId: String, jkt: String, jti: String) async throws -> [NativeStartField] {
-        guard service.isSupported else { return [] }
+    package func fields(clientId: String, jkt: String, jti: String, nonce: String?) async throws -> [NativeStartField] {
+        guard service.isSupported else { return NativeAttestation.unavailable("unsupported") }
         await acquire()
         defer { release() }
-        let hash = NativeAttestation.clientDataHash(clientId: clientId, jkt: jkt, jti: jti)
+        let hash = NativeAttestation.clientDataHash(clientId: clientId, jkt: jkt, jti: jti, nonce: nonce)
         // A key App Attest does not know is often our own state's doing (the process died between the attestation
         // and the save, or an item outlived its app), so a new key is made and attested in the same call, once.
         for attempt in 0..<2 {
@@ -228,6 +228,9 @@ package actor AppAttestEvidence: NativeStartAttestation {
                     if attempt == 0 { continue }
                 } else {
                     logger?.info("App Attest gave no evidence for this request: \(failure)")
+                    // What the device can say about why, edge counts apart from "the app sent nothing".
+                    if failure == .unsupported { return NativeAttestation.unavailable("unsupported") }
+                    if failure == .unavailable { return NativeAttestation.unavailable("service_unavailable") }
                 }
                 return []
             }

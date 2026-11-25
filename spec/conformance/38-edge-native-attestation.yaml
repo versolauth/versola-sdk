@@ -23,7 +23,7 @@ steps:
     action: Log out, then configure the SDK with the second client's id and call login.
   - actor: sdk
     action: POST edge's native start endpoint for the second client with the same kind of evidence, made for that client.
-    expect: 400 with error invalid_client_attestation and an error_description naming what was wrong.
+    expect: 400 with error invalid_client_attestation and an attestation_error naming what was wrong, a code from the closed set.
 assertions:
   - The first start request carries exactly one attestation_platform field with the value android, and at least two attestation_chain fields, each the standard base64 of a DER certificate.
   - The public key of the first certificate of the chain has the RFC 7638 thumbprint of the DPoP key the start request's proof is signed with, and the Key Attestation extension of that certificate carries SHA-256("versola-attest-v1\n" + client id) as its challenge.

@@ -18,7 +18,7 @@ import OAuthCore
 /// key of the object that was not seen is forgotten (`evidenceNotAccepted`) and a new one attested.
 /// Nothing here repeats a request that carried evidence for any other reason: its `jti` is single-use. An
 /// object refused or lost for any other reason (a network failure, a 5xx) leaves its key marked attested, and
-/// the next login is refused once with `this key has not been attested`, which discards it: one failed login
+/// the next login is refused once with `attestation_error: unknown_key`, which discards it: one failed login
 /// instead of a discard on every transient error.
 package struct EdgeAuthorizationStarter: AuthorizationStarter {
     private let configuration: CoreConfiguration
@@ -86,7 +86,9 @@ package struct EdgeAuthorizationStarter: AuthorizationStarter {
 
     private func evidenceFor(proof: String) async throws -> [NativeStartField] {
         guard let attestation, let jti = NativeAttestation.jti(ofProof: proof) else { return [] }
-        return try await attestation.fields(clientId: configuration.clientId, jkt: try await dpop.thumbprint(), jti: jti)
+        return try await attestation.fields(
+            clientId: configuration.clientId, jkt: try await dpop.thumbprint(), jti: jti, nonce: NativeAttestation.nonce(ofProof: proof)
+        )
     }
 
     private func send(body: Data, proof: String) async throws -> HTTPResponse {
@@ -170,13 +172,22 @@ package struct EdgeAuthorizationStarter: AuthorizationStarter {
         guard let error = TokenErrorPayload.parseStrict(response.body) else {
             return OAuthError.configuration(.tokenRequestRejected(code: "(no OAuth error in a HTTP \(status) response to /native/start)", description: nil))
         }
-        // Edge never saw the attestation object this key was attested with: the next request attests a new key.
-        if error.error == "invalid_client_attestation", error.errorDescription?.contains("has not been attested") == true {
+        // Edge never saw the attestation object this key was attested with: the next request attests a new key. The code, not the
+        // sentence: `attestation_error` is the closed set edge promises, and the description may be reworded. An edge that predates the
+        // code sends only the sentence, and a key that is not forgotten there would be asserted for, and refused, on every later login.
+        let unknownKey = error.attestationError == "unknown_key"
+            || (error.attestationError == nil && error.errorDescription?.contains("has not been attested") == true)
+        if error.error == "invalid_client_attestation", unknownKey {
             await attestation?.evidenceNotAccepted()
+        }
+        // The code goes to the integrator with the refusal: the description is generic, and which check failed is what they need.
+        var description = error.errorDescription
+        if error.error == "invalid_client_attestation", let code = error.attestationError {
+            description = [description, "(attestation_error: \(code))"].compactMap { $0 }.joined(separator: " ")
         }
         return OAuthError.configuration(.authorizationRejected(
             code: error.error.isEmpty ? "(no error code in a HTTP \(status) response to /native/start)" : error.error,
-            description: error.errorDescription
+            description: description
         ))
     }
 }

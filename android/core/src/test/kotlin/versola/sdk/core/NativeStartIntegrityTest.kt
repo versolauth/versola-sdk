@@ -19,14 +19,19 @@ import org.junit.Test
 /** Proofs that carry a `jti`, `jti-1`, `jti-2`, ..., as a JWS the way a real one does. */
 private class JtiProofSource : DpopProofSource {
     var minted = 0
+    private var nonce: String? = null
 
     override suspend fun proof(method: String, url: String, accessToken: String?): String {
         minted++
-        val payload = Base64.getUrlEncoder().withoutPadding().encodeToString("""{"jti":"jti-$minted","htm":"POST"}""".toByteArray())
+        // As the SDK's own factory: the nonce claim is there once a nonce has been observed.
+        val claims = nonce?.let { """{"jti":"jti-$minted","htm":"POST","nonce":"$it"}""" } ?: """{"jti":"jti-$minted","htm":"POST"}"""
+        val payload = Base64.getUrlEncoder().withoutPadding().encodeToString(claims.toByteArray())
         return "e30.$payload.sig"
     }
 
-    override fun observe(url: String, dateHeader: String?, nonceHeader: String?) {}
+    override fun observe(url: String, dateHeader: String?, nonceHeader: String?) {
+        if (!nonceHeader.isNullOrEmpty()) nonce = nonceHeader
+    }
 }
 
 /** The evidence that is about the request itself (a Play Integrity token), and the nonce it is made for (#423). */
@@ -83,6 +88,22 @@ class NativeStartIntegrityTest {
     }
 
     @Test
+    fun `the nonce carries the server's nonce when the proof has one, and is the same as before when it has none`() {
+        // SHA-256("versola-attest-v1\nmobile-app\nJKT\nJTI\nNONCE") in URL-safe base64, computed with hashlib.
+        assertEquals("vanwzL5gqKa1o2s0zTCtriOD2aK6BhcdPlXUEz2pNm8", NativeAttestation.integrityNonce("mobile-app", "JKT", "JTI", "NONCE"))
+        assertEquals(NativeAttestation.integrityNonce("mobile-app", "JKT", "JTI"), NativeAttestation.integrityNonce("mobile-app", "JKT", "JTI", null))
+        assertFalse(NativeAttestation.integrityNonce("mobile-app", "JKT", "JTI", "NONCE") == NativeAttestation.integrityNonce("mobile-app", "JKT", "JTI", "OTHER"))
+    }
+
+    @Test
+    fun `the nonce of a proof is read from its payload, and from nothing else`() {
+        val proof = "e30." + Base64.getUrlEncoder().withoutPadding().encodeToString("""{"jti":"j","nonce": "n-1"}""".toByteArray()) + ".sig"
+        assertEquals("n-1", NativeAttestation.nonceOf(proof))
+        assertNull(NativeAttestation.nonceOf("e30." + Base64.getUrlEncoder().withoutPadding().encodeToString("""{"jti":"j"}""".toByteArray()) + ".sig"))
+        assertNull(NativeAttestation.nonceOf("proof-1"))
+    }
+
+    @Test
     fun `the jti is read from a proof, and from nothing else`() {
         val proof = "e30." + Base64.getUrlEncoder().withoutPadding().encodeToString("""{"typ":"x","jti": "abc-123"}""".toByteArray()) + ".sig"
         assertEquals("abc-123", NativeAttestation.jtiOf(proof))
@@ -103,6 +124,25 @@ class NativeStartIntegrityTest {
         assertEquals(listOf("android"), fieldsOf(body, "attestation_platform"))
         assertEquals(1, fieldsOf(body, "attestation_chain").size)
         assertEquals(listOf("tok%2Ben%2F%3D"), fieldsOf(body, "attestation_integrity_token"))
+    }
+
+    @Test
+    fun `the server nonce of the retry's proof reaches the evidence, and the first proof had none`() = runTest {
+        server.enqueue(challenge())
+        server.enqueue(started())
+        val asked = mutableListOf<Pair<String, String?>>()
+        val evidence = object : NativeStartProofEvidence {
+            override suspend fun fields(jti: String): List<Pair<String, String>> = emptyList()
+
+            override suspend fun fields(jti: String, nonce: String?): List<Pair<String, String>> {
+                asked += jti to nonce
+                return emptyList()
+            }
+        }
+
+        starter(proofEvidence = evidence).start(request())
+
+        assertEquals(listOf("jti-1" to null, "jti-2" to "edge-nonce-1"), asked)
     }
 
     @Test
