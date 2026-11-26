@@ -95,16 +95,16 @@ tasks.withType<KotlinCompile>().configureEach {
 dependencies {
     // The generic facade itself, for the driver's wiring (the opt-in create); the composite
     // build in settings.gradle.kts substitutes the repository's :oauth for these coordinates.
-    testImplementation("io.versola:oauth-android:0.1.0")
+    testImplementation("io.versola:oauth-android:0.3.1")
     // The six pins below are a second copy of android/conformance-oauth/build.gradle.kts, whose
     // support classes are compiled into this module too: keep them equal, in the same change.
     // Dependabot watches /android only, so a bump there does not reach this file by itself.
     testImplementation("junit:junit:4.13.2")
-    testImplementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.13.0")
     testImplementation("com.squareup.okhttp3:okhttp:5.5.1")
     // The proxy in front of the provider and the protected resources are MockWebServers.
     testImplementation("com.squareup.okhttp3:mockwebserver3:5.5.1")
-    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("org.robolectric:robolectric:4.18.1")
     testImplementation("androidx.test:core:1.7.0")
 }
 
